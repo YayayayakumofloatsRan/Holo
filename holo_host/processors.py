@@ -27,6 +27,45 @@ class ReplyProcessor(Protocol):
         ...
 
 
+def _clamp_int(value: int, lower: int, upper: int) -> int:
+    return max(lower, min(upper, value))
+
+
+def _dynamic_wechat_bubble_target(context: TurnContext, *, fast_path: bool, mind_tier: str) -> int:
+    text_len = len(str(context.user_text or "").strip())
+    focus = str(context.attention_state.primary_focus or "").strip()
+    target = 1
+    if not fast_path or text_len > 8:
+        target += 1
+    if text_len > 22:
+        target += 1
+    if text_len > 56:
+        target += 1
+    if focus in {"shared_imagery", "system_design"}:
+        target = max(target, 4)
+    elif focus in {"companionship", "direct_answer"} and text_len > 12:
+        target = max(target, 2)
+    playfulness = float(context.persona_blend.get("playfulness", 0.0) or 0.0)
+    initiative_window = float(context.game_state.get("initiative_window", 0.0) or 0.0)
+    teasing_tolerance = float(context.game_state.get("teasing_tolerance", 0.0) or 0.0)
+    if playfulness >= 0.62 or initiative_window >= 0.58 or teasing_tolerance >= 0.56:
+        target += 1
+    beats = list(context.utterance_plan.get("beats", []))
+    if len(beats) >= 4:
+        target = max(target, 4)
+    elif len(beats) >= 3:
+        target = max(target, 3)
+    if mind_tier == "deep_recall":
+        target = max(target, 3)
+    elif mind_tier == "recall":
+        target = max(target, 2)
+    if focus == "emotional_load":
+        target = min(max(target, 2), 3)
+    if fast_path and text_len <= 10 and focus not in {"shared_imagery", "system_design", "companionship"}:
+        target = 1
+    return _clamp_int(target, 1, 5)
+
+
 def build_turn_plan(context: TurnContext, config: HostConfig) -> TurnPlan:
     mind_tier = str(context.mind_packet.get("tier", "") or "").strip().lower() or "fast"
     recall_tier = mind_tier in {"recall", "deep_recall"}
@@ -43,20 +82,10 @@ def build_turn_plan(context: TurnContext, config: HostConfig) -> TurnPlan:
         tool_mode = "web_preview"
     else:
         tool_mode = "none" if fast_path else "bounded"
-    if context.attention_state.primary_focus == "emotional_load":
-        bubble_target = 2
-    elif fast_path and len(context.user_text.strip()) <= 14:
-        bubble_target = 1
-    elif context.attention_state.primary_focus in {"shared_imagery", "system_design"}:
-        bubble_target = 3
-    else:
-        bubble_target = 2
-    if len(context.utterance_plan.get("beats", [])) >= 3:
-        bubble_target = max(bubble_target, 2)
+    bubble_target = _dynamic_wechat_bubble_target(context, fast_path=fast_path, mind_tier=mind_tier)
     if mind_tier == "deep_recall":
         history_window = config.memory.recall_history_messages
         latency_tier = "deep_recall"
-        bubble_target = max(bubble_target, 2)
     elif mind_tier == "recall":
         history_window = config.memory.recall_history_messages
         latency_tier = "recall"
@@ -271,14 +300,24 @@ def build_reply_bubbles(
             segments = natural
             split_long_segment = True
 
-    if len(segments) >= 3 and attention_state.primary_focus == "direct_answer":
+    if len(segments) >= 3 and attention_state.primary_focus == "direct_answer" and target_count <= 2:
         segments = segments[:2]
 
-    allowed_count = max(1, min(target_count, 4))
-    if len(plan.get("beats", [])) >= 3:
-        allowed_count = max(allowed_count, 2)
+    allowed_count = max(1, min(target_count, 5))
+    if len(plan.get("beats", [])) >= 4:
+        allowed_count = max(allowed_count, 4)
+    elif len(plan.get("beats", [])) >= 3:
+        allowed_count = max(allowed_count, 3)
     if channel == "wechat" and (split_long_segment or (len(segments) >= 2 and len(normalized) > 34)):
         allowed_count = max(allowed_count, 2)
+    if len(normalized) > 72:
+        allowed_count = max(allowed_count, 3)
+    if len(normalized) > 120:
+        allowed_count = max(allowed_count, 4)
+    if len(normalized) > 180:
+        allowed_count = max(allowed_count, 5)
+    if str(emotion_state.get("playfulness", "")).lower() == "high" and len(normalized) > 48:
+        allowed_count = max(allowed_count, 3)
 
     if len(segments) > allowed_count:
         segments = segments[: allowed_count - 1] + ["，".join(item for item in segments[allowed_count - 1:] if item)]
@@ -296,7 +335,7 @@ def build_reply_bubbles(
     if str(emotion_state.get("playfulness", "")).lower() == "high":
         gap_floor = max(140, gap_floor - 40)
 
-    for index, segment in enumerate(segments[:4]):
+    for index, segment in enumerate(segments[:5]):
         delay = base
         if index > 0:
             previous = segments[index - 1]

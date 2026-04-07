@@ -401,6 +401,50 @@ class HoloReplyService:
         self._wechat_history_bridge: dict[str, Any] | None = None
         self._wechat_history_state_path = self.config.runtime.state_dir / "active_wechat_history_state.json"
 
+    def _load_wechat_helper_runtime(self) -> dict[str, Any]:
+        repo_root = self.config.runtime.repo_root
+        helper_config_raw = str(self.config.autonomy.wechat_helper_config_path or "").strip()
+        helper_config_path = Path(helper_config_raw).expanduser() if helper_config_raw else repo_root / "windows_helper" / "wechat_helper.live.json"
+        if not helper_config_path.is_absolute():
+            helper_config_path = (repo_root / helper_config_path).resolve()
+        payload: dict[str, Any] = {}
+        if helper_config_path.exists():
+            try:
+                loaded = json.loads(helper_config_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except (OSError, ValueError, json.JSONDecodeError):
+                payload = {}
+
+        def _path_for(key: str) -> Path | None:
+            raw = str(payload.get(key, "") or "").strip()
+            if not raw:
+                return None
+            coerced = _coerce_helper_artifact_path(raw)
+            try:
+                return Path(coerced).expanduser()
+            except OSError:
+                return None
+
+        transport_state = {}
+        transport_path = _path_for("transport_state_file")
+        if transport_path and transport_path.exists():
+            try:
+                loaded = json.loads(transport_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    transport_state = loaded
+            except (OSError, ValueError, json.JSONDecodeError):
+                transport_state = {}
+        return {
+            "config_path": str(helper_config_path),
+            "whitelist": [str(item).strip() for item in payload.get("whitelist", []) if str(item).strip()],
+            "send_queue_dir": _path_for("send_queue_dir"),
+            "sent_dir": _path_for("sent_dir"),
+            "failed_dir": _path_for("failed_dir"),
+            "transport_state_file": str(transport_path) if transport_path else "",
+            "transport_state": transport_state,
+        }
+
     def health(self) -> dict[str, Any]:
         brain_status = self.memory.brain_status()
         return {
@@ -557,7 +601,84 @@ class HoloReplyService:
             chat_name=str(chat_name or thread_key or "").strip(),
             channel=channel,
             query=query or "initiative_probe",
+            mode=str(self.memory.brain_status().get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default),
         )
+
+    def initiative_status(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or "").strip()
+        mode = str(self.memory.brain_status().get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default)
+        probe = build_initiative_probe(
+            config=self.config,
+            policy=self.policy,
+            memory=self.memory,
+            store=self.store,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            query="initiative_status",
+            mode=mode,
+        )
+        thread = self.store.find_thread(channel=channel, thread_key=normalized_thread_key) if normalized_thread_key else None
+        contact = None
+        if thread:
+            contact = self.store._fetchone("SELECT * FROM contacts WHERE id = ?", (int(thread["contact_id"]),))
+        helper = self._load_wechat_helper_runtime() if channel == "wechat" else {}
+        send_queue_dir = helper.get("send_queue_dir")
+        sent_dir = helper.get("sent_dir")
+        failed_dir = helper.get("failed_dir")
+        candidates = [
+            row
+            for row in self.memory.list_initiative_candidates(limit=max(limit * 3, 12))
+            if str(row.get("channel", "")).strip().lower() == channel
+            and str(row.get("thread_key", "")).strip() == normalized_thread_key
+        ][:limit]
+        pending_jobs = [
+            row
+            for row in self.store.list_jobs(limit=50)
+            if str(row.get("task_type", "")).strip() == "initiative_ping"
+            and str(row.get("status", "")).strip() in {"pending", "retry_wait", "running", "queued_transport", "sent"}
+            and (not thread or int(row.get("thread_id", 0) or 0) == int(thread["id"]))
+        ][:limit]
+        queue_counts = {
+            "pending": len(list(send_queue_dir.glob("*.json"))) if isinstance(send_queue_dir, Path) and send_queue_dir.exists() else 0,
+            "sent": len(list(sent_dir.glob("*.json"))) if isinstance(sent_dir, Path) and sent_dir.exists() else 0,
+            "failed": len(list(failed_dir.glob("*.json"))) if isinstance(failed_dir, Path) and failed_dir.exists() else 0,
+        }
+        return {
+            "mode": mode,
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "probe": probe,
+            "thread": {
+                "exists": bool(thread),
+                "allow_proactive": bool(thread.get("allow_proactive", 1)) if thread else False,
+                "last_message_at": str(thread.get("last_message_at", "") or "") if thread else "",
+            },
+            "contact": {
+                "exists": bool(contact),
+                "initiative_enabled": bool(contact.get("initiative_enabled", 1)) if contact else False,
+                "last_initiative_at": str(contact.get("last_initiative_at", "") or "") if contact else "",
+                "initiative_note": str(contact.get("initiative_note", "") or "") if contact else "",
+            },
+            "queue": {
+                "send_queue_available": isinstance(send_queue_dir, Path),
+                "send_queue_dir": str(send_queue_dir) if isinstance(send_queue_dir, Path) else "",
+                "counts": queue_counts,
+            },
+            "transport_state": dict(helper.get("transport_state", {})),
+            "whitelist": list(helper.get("whitelist", [])),
+            "candidates": candidates,
+            "pending_jobs": pending_jobs,
+        }
 
     def run_self_revision(
         self,
@@ -1458,6 +1579,16 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/brain-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.brain_status())
+                    return
+                if parsed.path == "/initiative-status":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.initiative_status(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["5"])[0]),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
                     return
                 if parsed.path == "/stream-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.stream_status())

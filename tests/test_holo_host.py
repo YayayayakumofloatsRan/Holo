@@ -11,10 +11,10 @@ from holo_host.config import load_config
 from holo_host.codex_runner import CodexRunner
 from holo_host.daemon import HoloDaemon
 from holo_host.mail_gateway import MaildirGateway
-from holo_host.models import CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult
+from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, TurnContext
 from holo_host.policy import AutonomyPolicy
 from holo_host.reply_api import HoloReplyService, shape_wechat_reply
-from holo_host.processors import build_attention_state, build_reply_bubbles
+from holo_host.processors import build_attention_state, build_reply_bubbles, build_turn_plan
 from holo_host.store import QueueStore
 
 
@@ -56,6 +56,13 @@ class FakeMemory:
         self.stream_records: list[dict] = []
         self.brain_mode = "companion"
         self.active_history_refreshes: list[dict] = []
+        self.game_state_data = {
+            "trust_score": 0.6,
+            "teasing_tolerance": 0.55,
+            "pressure_level": 0.2,
+            "initiative_window": 0.5,
+            "correction_sensitivity": 0.4,
+        }
         self.graph = self
 
     def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
@@ -167,6 +174,19 @@ class FakeMemory:
 
     def vector_health(self) -> dict:
         return {"backend": "milvus", "available": False, "ready": False, "last_error": ""}
+
+    def game_state(self, *, thread_key: str, chat_name: str, channel: str = "wechat") -> dict:
+        return dict(self.game_state_data)
+
+    def relationship_snapshot(self, *, thread_key: str, chat_name: str, channel: str = "wechat", limit: int = 3) -> dict:
+        return {
+            "summary": "Keep the continuity alive without flattening the tone.",
+            "recurring_motifs": ["continuity", "companionship"],
+            "tone_tendency": "continuity_guard",
+            "unfinished_threads": ["keep going"],
+            "continuity_score": 0.8,
+            "trust_score": float(self.game_state_data.get("trust_score", 0.6)),
+        }
 
     def sync_private_memory(self, *, label: str | None = None) -> dict:
         self.private_sync_calls += 1
@@ -662,6 +682,32 @@ class ReplyBubbleTests(unittest.TestCase):
         self.assertFalse(any(b.text.endswith("道") for b in bubbles))
         self.assertFalse(any(b.text.startswith("理") for b in bubbles))
 
+    def test_build_turn_plan_can_expand_bubble_target_for_playful_companionship(self) -> None:
+        attention = AttentionState(
+            primary_focus="companionship",
+            secondary_focus="tone",
+            reply_goal="answer_then_extend",
+            pressure_level="low",
+            salience_sources=["question"],
+        )
+        context = TurnContext(
+            channel="wechat",
+            thread_key="Nemoqi",
+            chat_name="Nemoqi",
+            sender="Nemoqi",
+            user_text="咱别总两句就停，继续顺着这点苹果酒意和打趣往下聊聊看",
+            sidecar={"tier": "fast"},
+            attention_state=attention,
+            emotion_state={"playfulness": "high"},
+            history=[],
+            mind_packet={"tier": "fast"},
+            utterance_plan={"beats": ["receive", "pivot", "landing", "echo"]},
+            persona_blend={"playfulness": 0.78},
+            game_state={"initiative_window": 0.64, "teasing_tolerance": 0.61},
+        )
+        plan = build_turn_plan(context, load_config(repo_root=tempfile.mkdtemp()))
+        self.assertGreaterEqual(plan.bubble_target, 4)
+
     def test_poll_inbox_skips_corrupt_json_mail(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -809,6 +855,54 @@ class DaemonFlowTests(unittest.TestCase):
                 payload = json.loads(queued[0].read_text(encoding="utf-8"))
                 self.assertEqual(payload["chat_name"], "Nemoqi")
                 self.assertTrue(str(payload["text"]).strip())
+            finally:
+                close_daemon_handles(daemon)
+
+    def test_daemon_cycle_blocks_initiative_when_probe_gate_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            send_queue_dir = root / "send_queue"
+            helper_dir = root / "windows_helper"
+            helper_dir.mkdir(parents=True, exist_ok=True)
+            (helper_dir / "wechat_helper.live.json").write_text(
+                json.dumps(
+                    {
+                        "whitelist": ["Nemoqi"],
+                        "send_queue_dir": str(send_queue_dir),
+                        "pywinauto_process_path": "C:/Program Files/Tencent/WeChat/WeChat.exe",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            gateway = MaildirGateway(config)
+            runner = FakeRunner("What are you busy with?")
+            memory = FakeMemory()
+            memory.game_state_data = {
+                "trust_score": 0.2,
+                "teasing_tolerance": 0.2,
+                "pressure_level": 0.9,
+                "initiative_window": 0.1,
+                "correction_sensitivity": 0.4,
+            }
+            memory.initiatives.append(
+                {
+                    "channel": "wechat",
+                    "thread_key": "wechat:Nemoqi",
+                    "chat_name": "Nemoqi",
+                    "reason": "Old thread still warm",
+                    "prompt": "Lightly poke this thread",
+                    "priority": 66,
+                }
+            )
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
+            try:
+                result = daemon.run_cycle()
+                self.assertEqual(result["initiative"]["scheduled_job_ids"], [])
+                self.assertTrue(result["initiative"]["blocked_candidates"])
+                self.assertFalse(send_queue_dir.exists() and list(send_queue_dir.glob("*.json")))
             finally:
                 close_daemon_handles(daemon)
     def test_daemon_reply_job_passes_richer_metadata_to_memory_bridge(self) -> None:

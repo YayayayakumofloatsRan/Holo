@@ -232,6 +232,42 @@ def run_self_revision(
     }
 
 
+def effective_initiative_cooldown_hours(
+    *,
+    config,
+    game_state: dict[str, Any] | None,
+    mode: str = "companion",
+) -> int:
+    base = max(1, int(getattr(config.autonomy, "initiative_cooldown_hours", 48) or 48))
+    state = dict(game_state or {})
+    multiplier = 1.0
+    normalized_mode = str(mode or "companion").strip().lower()
+    if normalized_mode == "full_brain":
+        multiplier *= 0.45
+    elif normalized_mode == "companion":
+        multiplier *= 0.6
+    elif normalized_mode == "dream_only":
+        multiplier *= 1.15
+    elif normalized_mode == "silent":
+        multiplier *= 1.35
+    trust_score = float(state.get("trust_score", 0.0) or 0.0)
+    initiative_window = float(state.get("initiative_window", 0.0) or 0.0)
+    teasing_tolerance = float(state.get("teasing_tolerance", 0.0) or 0.0)
+    pressure_level = float(state.get("pressure_level", 0.0) or 0.0)
+    if trust_score >= 0.72:
+        multiplier *= 0.7
+    if initiative_window >= 0.62:
+        multiplier *= 0.7
+    if teasing_tolerance >= 0.58:
+        multiplier *= 0.85
+    if pressure_level >= 0.7:
+        multiplier *= 1.3
+    if pressure_level >= 0.85:
+        multiplier *= 1.4
+    effective = int(round(base * multiplier))
+    return max(2, min(base, effective))
+
+
 def initiative_probe(
     *,
     config,
@@ -242,17 +278,23 @@ def initiative_probe(
     chat_name: str,
     channel: str,
     query: str,
+    mode: str = "companion",
 ) -> dict[str, Any]:
     thread = store.find_thread(channel=channel, thread_key=thread_key) if thread_key else None
     game_state = memory.graph.game_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
     relationship = memory.graph.relationship_snapshot(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=3)
+    effective_cooldown_hours = effective_initiative_cooldown_hours(
+        config=config,
+        game_state=game_state,
+        mode=mode,
+    )
     contact = None
     cooldown_ready = True
     cooldown_reason = "contact_unavailable"
     if thread:
         contact = store._fetchone("SELECT * FROM contacts WHERE id = ?", (int(thread["contact_id"]),))
     if contact:
-        cooldown_ready = store.initiative_available(int(contact["id"]), cooldown_hours=config.autonomy.initiative_cooldown_hours)
+        cooldown_ready = store.initiative_available(int(contact["id"]), cooldown_hours=effective_cooldown_hours)
         cooldown_reason = "cooldown_ready" if cooldown_ready else "cooldown_active"
     policy_decision = policy.outbound_decision(
         incoming_text=query,
@@ -263,18 +305,20 @@ def initiative_probe(
         channel=channel,
     )
     game_ok = (
-        float(game_state.get("trust_score", 0.0) or 0.0) >= 0.45
-        and float(game_state.get("initiative_window", 0.0) or 0.0) >= 0.42
-        and float(game_state.get("pressure_level", 0.0) or 0.0) <= 0.68
+        float(game_state.get("trust_score", 0.0) or 0.0) >= 0.42
+        and float(game_state.get("initiative_window", 0.0) or 0.0) >= 0.36
+        and float(game_state.get("pressure_level", 0.0) or 0.0) <= 0.78
     )
     allowed = bool(config.autonomy.initiative_probe_enabled) and cooldown_ready and policy_decision.allowed and game_ok
     return {
         "allowed": allowed,
         "blocked": not allowed,
+        "mode": mode,
         "game_state": game_state,
         "relationship_state": relationship,
         "game_rationale": {
             "trust_score": float(game_state.get("trust_score", 0.0) or 0.0),
+            "teasing_tolerance": float(game_state.get("teasing_tolerance", 0.0) or 0.0),
             "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
             "pressure_level": float(game_state.get("pressure_level", 0.0) or 0.0),
             "ok": game_ok,
@@ -287,6 +331,7 @@ def initiative_probe(
         "cooldown_rationale": {
             "ready": cooldown_ready,
             "reason": cooldown_reason,
-            "cooldown_hours": int(config.autonomy.initiative_cooldown_hours),
+            "cooldown_hours": effective_cooldown_hours,
+            "base_cooldown_hours": int(config.autonomy.initiative_cooldown_hours),
         },
     }

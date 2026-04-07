@@ -99,14 +99,14 @@ class MemoryConfig:
     auto_observe: bool = True
     promote_batch_size: int = 8
     promote_interval_seconds: int = 300
-    maintenance_stream_interval_seconds: int = 300
+    maintenance_stream_interval_seconds: int = 60
     dream_interval_seconds: int = 1800
     thought_interval_seconds: int = 900
     reflection_interval_seconds: int = 1800
     initiative_interval_seconds: int = 1800
-    association_stream_interval_seconds: int = 900
-    social_stream_interval_seconds: int = 1800
-    deep_dream_cycle_interval_seconds: int = 21600
+    association_stream_interval_seconds: int = 180
+    social_stream_interval_seconds: int = 300
+    deep_dream_cycle_interval_seconds: int = 3600
     dream_sample_size: int = 6
     thought_sample_size: int = 4
     reflection_window_hours: float = 12.0
@@ -138,7 +138,7 @@ class AutonomyConfig:
     initiative_probe_enabled: bool = True
     game_state_enabled: bool = True
     proactive_after_hours: int = 72
-    initiative_cooldown_hours: int = 48
+    initiative_cooldown_hours: int = 12
     max_auto_replies_per_contact_per_hour: int = 4
     wechat_helper_config_path: str = ""
     wechat_helper_windows_repo_root: str = ""

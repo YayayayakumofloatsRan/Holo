@@ -388,6 +388,43 @@ def _initiative_probe_payload(
     )
 
 
+def _initiative_status_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/initiative-status",
+        params={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "limit": limit,
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return (
+        daemon.initiative_status(
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+            limit=limit,
+        ),
+        "local_process",
+    )
+
+
 def _backfill_vector_memory_payload(
     config_path: str | None,
     *,
@@ -1056,6 +1093,42 @@ def command_initiative_probe(
         query=query,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_initiative_status(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _initiative_status_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_dispatch_initiatives(
+    config_path: str | None,
+    *,
+    process_jobs: bool,
+    limit: int | None,
+) -> int:
+    daemon = build_daemon(config_path)
+    print(
+        json.dumps(
+            daemon.dispatch_initiatives(process_jobs=process_jobs, limit=limit),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -2023,6 +2096,14 @@ def main(argv: list[str] | None = None) -> int:
     initiative_probe_parser.add_argument("--chat-name", default=None)
     initiative_probe_parser.add_argument("--channel", default="wechat")
     initiative_probe_parser.add_argument("--query", default=STAGE2_PLAYFUL_QUERY)
+    initiative_status_parser = subparsers.add_parser("show-initiative-status", help="Inspect proactive initiative gate, queue, and recent candidates")
+    initiative_status_parser.add_argument("--thread-key", default=None)
+    initiative_status_parser.add_argument("--chat-name", default=None)
+    initiative_status_parser.add_argument("--channel", default="wechat")
+    initiative_status_parser.add_argument("--limit", type=int, default=5)
+    initiative_dispatch_parser = subparsers.add_parser("dispatch-initiatives", help="Run one explicit initiative scheduling pass and optionally process jobs")
+    initiative_dispatch_parser.add_argument("--no-process-jobs", action="store_true")
+    initiative_dispatch_parser.add_argument("--limit", type=int, default=None)
     inspect_parser = subparsers.add_parser("inspect-mind", help="Inspect the structured mind packet for a thread/query")
     inspect_parser.add_argument("--query", required=True)
     inspect_parser.add_argument("--thread-key", default=None)
@@ -2190,6 +2271,20 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
             query=args.query,
+        )
+    if args.command == "show-initiative-status":
+        return command_show_initiative_status(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    if args.command == "dispatch-initiatives":
+        return command_dispatch_initiatives(
+            args.config,
+            process_jobs=not args.no_process_jobs,
+            limit=args.limit,
         )
     if args.command == "inspect-mind":
         return command_inspect_mind(

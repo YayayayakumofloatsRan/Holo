@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .brain_ops import effective_initiative_cooldown_hours
 from .brain_ops import initiative_probe as build_initiative_probe
 from .brain_ops import run_self_revision as run_self_revision_cycle
 from .common import atomic_write_text, compact_text, stable_digest, utc_now
@@ -667,6 +668,25 @@ class HoloDaemon:
         contact = bundle["contact"]
         payload = dict(bundle["payload"])
         reason = str(payload.get("reason", "") or payload.get("prompt", "") or "initiative_ping")
+        probe = build_initiative_probe(
+            config=self.config,
+            policy=self.policy,
+            memory=self.memory,
+            store=self.store,
+            thread_key=str(thread.get("thread_key") or payload.get("thread_key") or ""),
+            chat_name=str(payload.get("chat_name") or contact.get("display_name") or thread.get("subject") or ""),
+            channel="wechat",
+            query=reason,
+            mode=self.brain_mode(),
+        )
+        if not bool(probe.get("allowed", False)):
+            block_reason = str(
+                probe.get("cooldown_rationale", {}).get("reason")
+                or probe.get("policy_rationale", {}).get("reason")
+                or "initiative_probe_blocked"
+            )
+            self.store.block_job(int(job["id"]), block_reason)
+            return f"blocked:{job['id']}:initiative_probe_blocked"
         decision = self.policy.outbound_decision(
             incoming_text=reason,
             reply_text="initiative_ping",
@@ -832,6 +852,8 @@ class HoloDaemon:
             return cycle_report
 
         scheduled: list[int] = []
+        blocked: list[dict[str, Any]] = []
+        mode = self.brain_mode()
         for row in reversed(self.memory.list_initiative_candidates(limit=max(self.config.runtime.max_jobs_per_cycle, 4))):
             channel = str(row.get("channel", "")).strip().lower()
             chat_name = str(row.get("chat_name", "")).strip()
@@ -852,12 +874,47 @@ class HoloDaemon:
                 )
             if not bool(thread.get("allow_proactive", 1)):
                 continue
+            game_state = self.memory.graph.game_state(thread_key=thread_key, chat_name=chat_name, channel="wechat")
+            cooldown_hours = effective_initiative_cooldown_hours(
+                config=self.config,
+                game_state=game_state,
+                mode=mode,
+            )
             if not self.store.initiative_available(
                 int(contact["id"]),
-                cooldown_hours=self.config.autonomy.initiative_cooldown_hours,
+                cooldown_hours=cooldown_hours,
             ):
+                blocked.append(
+                    {
+                        "thread_key": thread_key,
+                        "chat_name": chat_name,
+                        "reason": "cooldown_active",
+                        "cooldown_hours": cooldown_hours,
+                    }
+                )
                 continue
             if self.store.has_pending_initiative(int(thread["id"])):
+                continue
+            probe = build_initiative_probe(
+                config=self.config,
+                policy=self.policy,
+                memory=self.memory,
+                store=self.store,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel="wechat",
+                query=str(row.get("prompt", "") or row.get("reason", "") or "initiative_ping"),
+                mode=mode,
+            )
+            if not bool(probe.get("allowed", False)):
+                blocked.append(
+                    {
+                        "thread_key": thread_key,
+                        "chat_name": chat_name,
+                        "reason": "initiative_probe_blocked",
+                        "probe": probe,
+                    }
+                )
                 continue
             job_id = self.store.enqueue_job(
                 task_type="initiative_ping",
@@ -870,6 +927,7 @@ class HoloDaemon:
             if len(scheduled) >= self.config.runtime.max_jobs_per_cycle:
                 break
         cycle_report["scheduled_job_ids"] = scheduled
+        cycle_report["blocked_candidates"] = blocked
         if scheduled:
             self.logger.info("initiative cycle: staged=%s scheduled=%s", cycle_report.get("initiative_added", 0), ",".join(str(item) for item in scheduled))
         return cycle_report
@@ -902,7 +960,86 @@ class HoloDaemon:
             chat_name=chat_name,
             channel=channel,
             query=query or "initiative_probe",
+            mode=self.brain_mode(),
         )
+
+    def initiative_status(
+        self,
+        *,
+        thread_key: str,
+        chat_name: str,
+        channel: str = "wechat",
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        mode = self.brain_mode()
+        probe = self.initiative_probe(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            query="initiative_status",
+        )
+        thread = self.store.find_thread(channel=channel, thread_key=thread_key) if thread_key else None
+        contact = None
+        if thread:
+            contact = self.store._fetchone("SELECT * FROM contacts WHERE id = ?", (int(thread["contact_id"]),))
+        helper = self._wechat_settings() if channel == "wechat" else {}
+        send_queue_dir = helper.get("send_queue_dir")
+        sent_dir = helper.get("sent_dir")
+        failed_dir = helper.get("failed_dir")
+        candidates = [
+            row
+            for row in self.memory.list_initiative_candidates(limit=max(limit * 3, 12))
+            if str(row.get("channel", "")).strip().lower() == channel
+            and str(row.get("thread_key", "")).strip() == thread_key
+        ][:limit]
+        pending_jobs = [
+            row
+            for row in self.store.list_jobs(limit=50)
+            if str(row.get("task_type", "")).strip() == "initiative_ping"
+            and str(row.get("status", "")).strip() in {"pending", "retry_wait", "running", "queued_transport", "sent"}
+            and (not thread or int(row.get("thread_id", 0) or 0) == int(thread["id"]))
+        ][:limit]
+        queue_counts = {
+            "pending": len(list(send_queue_dir.glob("*.json"))) if isinstance(send_queue_dir, Path) and send_queue_dir.exists() else 0,
+            "sent": len(list(sent_dir.glob("*.json"))) if isinstance(sent_dir, Path) and sent_dir.exists() else 0,
+            "failed": len(list(failed_dir.glob("*.json"))) if isinstance(failed_dir, Path) and failed_dir.exists() else 0,
+        }
+        return {
+            "mode": mode,
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "channel": channel,
+            "probe": probe,
+            "thread": {
+                "exists": bool(thread),
+                "allow_proactive": bool(thread.get("allow_proactive", 1)) if thread else False,
+                "last_message_at": str(thread.get("last_message_at", "") or "") if thread else "",
+            },
+            "contact": {
+                "exists": bool(contact),
+                "initiative_enabled": bool(contact.get("initiative_enabled", 1)) if contact else False,
+                "last_initiative_at": str(contact.get("last_initiative_at", "") or "") if contact else "",
+                "initiative_note": str(contact.get("initiative_note", "") or "") if contact else "",
+            },
+            "queue": {
+                "send_queue_available": isinstance(send_queue_dir, Path),
+                "send_queue_dir": str(send_queue_dir) if isinstance(send_queue_dir, Path) else "",
+                "counts": queue_counts,
+            },
+            "candidates": candidates,
+            "pending_jobs": pending_jobs,
+        }
+
+    def dispatch_initiatives(self, *, process_jobs: bool = True, limit: int | None = None) -> dict[str, Any]:
+        social = self._run_social_cycle()
+        processed: list[str] = []
+        if process_jobs:
+            processed = self._process_jobs(limit or self.config.runtime.max_jobs_per_cycle)
+        return {
+            "mode": self.brain_mode(),
+            "social_stream": social,
+            "processed_jobs": processed,
+        }
 
     def run_self_revision(
         self,
