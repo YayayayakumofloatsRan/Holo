@@ -34,7 +34,7 @@ image_enabled = true
 codex_timeout_seconds = 900
 resume_sessions = true
 dry_run = false
-api_bind_host = "127.0.0.1"
+api_bind_host = "0.0.0.0"
 api_port = 8004
 
 [mail]
@@ -128,7 +128,23 @@ PY
 ensure_default_config
 cd "$ROOT_DIR"
 
-start_detached "reply_api" "$PYTHON_BIN" -m holo_host --config "$CONFIG_PATH" serve-api
+"$PYTHON_BIN" - <<'PY' "$CONFIG_PATH"
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+text = config_path.read_text(encoding="utf-8")
+updated = text
+if re.search(r'(?m)^\s*api_bind_host\s*=\s*"([^"]+)"', text):
+    updated = re.sub(r'(?m)^(\s*api_bind_host\s*=\s*")([^"]+)(".*)$', r'\g<1>0.0.0.0\3', text, count=1)
+else:
+    updated = text.replace('api_port = 8004', 'api_bind_host = "0.0.0.0"\napi_port = 8004', 1)
+if updated != text:
+    config_path.write_text(updated, encoding="utf-8")
+PY
+
+start_detached "reply_api" "$PYTHON_BIN" -m holo_host --config "$CONFIG_PATH" serve-api --host 0.0.0.0
 start_detached "daemon" "$PYTHON_BIN" -m holo_host --config "$CONFIG_PATH" daemon
 
 echo

@@ -384,6 +384,12 @@ class HoloReplyService:
             graph_led_reply=config.memory.graph_led_reply,
             graph_fallback=config.memory.graph_fallback,
             deep_recall_on_memory_queries=config.memory.deep_recall_on_memory_queries,
+            vector_backend=config.memory.vector_backend,
+            milvus_uri=config.memory.milvus_uri,
+            milvus_collection_prefix=config.memory.milvus_collection_prefix,
+            activation_cache_enabled=config.memory.activation_cache_enabled,
+            private_memory_sync_enabled=config.memory.private_memory_sync_enabled,
+            private_memory_repo_path=config.memory.private_memory_repo_path,
         )
         self.policy = policy or AutonomyPolicy(config)
         self.capabilities = CapabilityBroker(config)
@@ -408,6 +414,9 @@ class HoloReplyService:
             "mind_graph_db_path": str(getattr(getattr(self.memory, "graph", None), "db_path", self.config.memory.mind_graph_db_path)),
             "graph_led_reply_enabled": self.config.memory.graph_led_reply,
             "fallback_enabled": self.config.memory.graph_fallback,
+            "vector_backend": self.config.memory.vector_backend,
+            "vector_health": self.memory.vector_health(),
+            "activation_cache_enabled": self.config.memory.activation_cache_enabled,
             "processor_mesh_tasks": getattr(self.runner, "supported_tasks", lambda: [])(),
         }
 
@@ -457,13 +466,96 @@ class HoloReplyService:
         with self._memory_lock:
             return self.memory.inspect_graph(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
 
+    def inspect_mind(
+        self,
+        *,
+        query: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        include_graph_trace: bool = True,
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        turn = ChatTurn(
+            chat_name=str(chat_name or normalized_thread_key),
+            text=query,
+            sender=str(sender or chat_name or normalized_thread_key),
+            channel=channel,
+            thread_key=normalized_thread_key,
+        )
+        incoming = turn.to_incoming_message()
+        thread = self.store.find_thread(channel=channel, thread_key=incoming.thread_key)
+        history = list(reversed(self.store.recent_thread_messages(int(thread["id"]), self.config.memory.history_messages))) if thread else []
+        contact = self.store.find_contact(turn.synthetic_contact) or {
+            "display_name": turn.chat_name,
+            "email": turn.synthetic_contact,
+        }
+        context = self._mind_context(
+            turn=turn,
+            incoming=incoming,
+            thread=thread or {"thread_key": incoming.thread_key},
+            contact=contact,
+            history=history,
+        )
+        started_at = time.perf_counter()
+        with self._memory_lock:
+            payload = self.memory.inspect_mind(query, context=context, include_graph_trace=include_graph_trace)
+        payload["build_ms"] = round((time.perf_counter() - started_at) * 1000.0, 2)
+        return payload
+
     def trace_recall(self, *, query: str, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8) -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.trace_recall(query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit, record=False)
 
+    def trace_hybrid_recall(self, *, query: str, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8) -> dict[str, Any]:
+        started_at = time.perf_counter()
+        with self._memory_lock:
+            payload = self.memory.trace_hybrid_recall(query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit, record=False)
+        payload["build_ms"] = round((time.perf_counter() - started_at) * 1000.0, 2)
+        return payload
+
+    def activation_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.activation_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def vector_health(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.vector_health()
+
     def stream_status(self) -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.stream_status()
+
+    def stream_tick(self, *, stream_name: str, dry_run: bool = False) -> dict[str, Any]:
+        with self._memory_lock:
+            stream_name = str(stream_name or "").strip()
+            if stream_name == "maintenance_stream":
+                result = self.memory.run_reflect_cycle(window_hours=self.config.memory.reflection_window_hours, dry_run=dry_run)
+            elif stream_name == "association_stream":
+                result = self.memory.run_think_cycle(sample_size=self.config.memory.thought_sample_size, dry_run=dry_run)
+            elif stream_name == "social_stream":
+                result = self.memory.run_initiative_cycle(dry_run=dry_run)
+            elif stream_name == "deep_dream_cycle":
+                result = self.memory.run_dream_cycle(sample_size=self.config.memory.dream_sample_size, dry_run=dry_run)
+            else:
+                raise ValueError(f"unsupported stream_name: {stream_name}")
+            record = self.memory.record_stream_run(stream_name, status="ok", note="stream_tick", payload=result)
+            return {"stream_name": stream_name, "dry_run": bool(dry_run), "result": result, "record": record}
+
+    def backfill_vector_memory(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str | None = None,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.backfill_vector_memory(channel=channel, thread_key=thread_key, chat_name=chat_name)
+
+    def sync_private_memory(self, *, label: str | None = None) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.sync_private_memory(label=label)
 
     def reply_probe(self, payload: dict[str, Any]) -> dict[str, Any]:
         turn = self._parse_turn(payload)
@@ -484,7 +576,8 @@ class HoloReplyService:
         capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata)
         attention_state = build_attention_state(turn.text, channel=turn.channel, metadata=turn.metadata)
         with self._memory_lock:
-            graph_packet = self.memory.sidecar_packet(turn.text, context=mind_context)
+            hybrid_packet = self.memory.sidecar_packet(turn.text, context=mind_context)
+            graph_packet = self.memory.graph_sidecar_packet(turn.text, context=mind_context)
             legacy_packet = self.memory.legacy_sidecar_packet(turn.text, context=mind_context)
 
         def _render_probe(packet: dict[str, Any]) -> dict[str, Any]:
@@ -511,6 +604,8 @@ class HoloReplyService:
                 "graph_confidence": float(packet.get("graph_confidence", 0.0) or 0.0),
                 "fallback_lanes": list(packet.get("fallback_lanes", [])),
                 "activation_trace_ids": list(packet.get("activation_trace_ids", [])),
+                "memory_route": str(packet.get("memory_route", "")),
+                "recall_confidence": float(packet.get("recall_confidence", 0.0) or 0.0),
                 "relationship_summary": str(packet.get("relationship_state", {}).get("summary", "")),
                 "relationship_motifs": list(packet.get("relationship_state", {}).get("recurring_motifs", [])),
                 "unfinished_threads": list(packet.get("relationship_state", {}).get("unfinished_threads", [])),
@@ -520,7 +615,10 @@ class HoloReplyService:
                 "continuity_score": float(packet.get("relationship_state", {}).get("continuity_score", 0.0) or 0.0),
                 "episodic_lines": list(packet.get("episodic_recall", {}).get("lines", [])),
                 "consciousness_lines": list(packet.get("consciousness_stream", {}).get("lines", [])),
-                "recall_reconstruction": dict(packet.get("recall_reconstruction", {})),
+                "vector_hits": list(packet.get("vector_hits", [])),
+                "activation_state": dict(packet.get("activation_state", {})),
+                "retrieval_trace": dict(packet.get("retrieval_trace", {})),
+                "recall_reconstruction": dict((context.mind_packet or {}).get("recall_reconstruction", {})),
                 "reply_plan": reply_plan.to_dict(),
             }
 
@@ -529,7 +627,9 @@ class HoloReplyService:
             "thread_key": incoming.thread_key,
             "channel": turn.channel,
             "query": turn.text,
+            "hybrid": _render_probe(hybrid_packet),
             "graph_led": _render_probe(graph_packet),
+            "graph": _render_probe(graph_packet),
             "legacy": _render_probe(legacy_packet),
         }
 
@@ -1229,6 +1329,22 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/inspect-mind":
+                    params = parse_qs(parsed.query)
+                    query = params.get("query", [""])[0]
+                    if not str(query).strip():
+                        self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": "`query` is required"})
+                        return
+                    payload = self.server.reply_service.inspect_mind(
+                        query=query,
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        sender=params.get("sender", [None])[0],
+                        include_graph_trace=params.get("include_graph_trace", ["1"])[0] not in {"0", "false", "False"},
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/trace-recall":
                     params = parse_qs(parsed.query)
                     query = params.get("query", [""])[0]
@@ -1244,8 +1360,65 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/trace-hybrid-recall":
+                    params = parse_qs(parsed.query)
+                    query = params.get("query", [""])[0]
+                    if not str(query).strip():
+                        self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": "`query` is required"})
+                        return
+                    payload = self.server.reply_service.trace_hybrid_recall(
+                        query=query,
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["8"])[0]),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/activation-state":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.activation_state(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/vector-health":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.vector_health())
+                    return
                 if parsed.path == "/stream-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.stream_status())
+                    return
+                if parsed.path == "/reply-probe":
+                    params = parse_qs(parsed.query)
+                    query = params.get("query", [""])[0]
+                    chat_name = params.get("chat_name", [None])[0] or params.get("thread_key", [""])[0]
+                    if not str(query).strip() or not str(chat_name).strip():
+                        self._write_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"error": "bad_request", "detail": "`query` and `chat_name` or `thread_key` are required"},
+                        )
+                        return
+                    payload = self.server.reply_service.reply_probe(
+                        {
+                            "chat_name": chat_name,
+                            "thread_key": params.get("thread_key", [None])[0] or "",
+                            "channel": params.get("channel", ["wechat"])[0],
+                            "sender": params.get("sender", [None])[0] or chat_name,
+                            "text": query,
+                        }
+                    )
+                    mode = str(params.get("mode", ["all"])[0] or "all")
+                    if mode != "all":
+                        payload = {
+                            "chat_name": payload.get("chat_name", ""),
+                            "thread_key": payload.get("thread_key", ""),
+                            "channel": payload.get("channel", ""),
+                            "query": payload.get("query", ""),
+                            mode: payload.get(mode, {}),
+                        }
+                    self._write_json(HTTPStatus.OK, payload)
                     return
             except ValueError as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(exc)})
@@ -1274,6 +1447,34 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/refresh-wechat-history":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.refresh_wechat_history(payload))
+                    return
+                if parsed.path == "/backfill-vector-memory":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.backfill_vector_memory(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "")).strip() or None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/sync-private-memory":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.sync_private_memory(label=str(payload.get("label", "")).strip() or None),
+                    )
+                    return
+                if parsed.path == "/reply-probe":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.reply_probe(payload))
+                    return
+                if parsed.path == "/stream-tick":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.stream_tick(
+                            stream_name=str(payload.get("stream_name", "")).strip(),
+                            dry_run=bool(payload.get("dry_run", False)),
+                        ),
+                    )
                     return
             except ValueError as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(exc)})

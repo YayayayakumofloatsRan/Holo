@@ -163,7 +163,7 @@ def load_config(path: str | None) -> HelperConfig:
     if not config_path.exists():
         raise FileNotFoundError(f"config not found: {config_path}")
     try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
+        data = json.loads(config_path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid helper config: {config_path}: {exc}") from exc
     return HelperConfig(

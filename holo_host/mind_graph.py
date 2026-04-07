@@ -149,6 +149,18 @@ UNFINISHED_HINTS = (
     "next",
     "upgrade",
 )
+FAST_PING_HINTS = {
+    "在吗",
+    "你在吗",
+    "嗯",
+    "好",
+    "收到",
+    "说吧",
+    "继续",
+    "接着说",
+    "ok",
+    "okay",
+}
 
 
 def _tokenize(text: str) -> list[str]:
@@ -170,6 +182,19 @@ def _dedupe_strings(lines: Iterable[str]) -> list[str]:
 def _has_hint(text: str, hints: Iterable[str]) -> bool:
     lowered = str(text or "").lower()
     return any(str(hint).lower() in lowered for hint in hints)
+
+
+def _is_fast_ping_query(text: str) -> bool:
+    current = " ".join(str(text or "").strip().split())
+    lowered = current.lower()
+    compact = lowered.replace(" ", "")
+    if compact in FAST_PING_HINTS:
+        return True
+    if _has_hint(current, RECALL_HINTS) or _has_hint(current, ORIGIN_RECALL_HINTS):
+        return False
+    if any(marker in lowered for marker in ("system", "memory", "dream", "attention", "为什么", "怎么", "如何", "what", "why", "how")):
+        return False
+    return _meaningful_char_count(current) <= 4
 
 
 def _origin_signal_score(text: str) -> int:
@@ -1344,6 +1369,45 @@ class MindGraph:
             "nodes": rows,
         }
 
+    def export_vector_documents(
+        self,
+        *,
+        channel: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        self._ensure_materialized()
+        args: list[Any] = []
+        conditions = ["node_type NOT IN ('thread', 'contact')"]
+        current_channel = str(channel or "").strip()
+        current_thread_key = str(thread_key or "").strip()
+        current_chat_name = str(chat_name or "").strip()
+        if current_channel:
+            conditions.append("channel = ?")
+            args.append(current_channel)
+        selectors: list[str] = []
+        if current_thread_key:
+            selectors.append("thread_key = ?")
+            args.append(current_thread_key)
+        if current_chat_name and current_chat_name != current_thread_key:
+            selectors.append("chat_name = ?")
+            args.append(current_chat_name)
+        if selectors:
+            conditions.append("(" + " OR ".join(selectors) + ")")
+        query = (
+            "SELECT id, channel, thread_key, chat_name, memory_class, source_store, source_id, text, importance, confidence "
+            "FROM mind_nodes WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY updated_at DESC"
+        )
+        if limit is not None:
+            query += " LIMIT ?"
+            args.append(max(1, int(limit)))
+        with self._lock:
+            rows = [dict(row) for row in self.conn.execute(query, tuple(args)).fetchall()]
+        return rows
+
     def relationship_snapshot(
         self,
         *,
@@ -1812,7 +1876,14 @@ class MindGraph:
                 break
         selected = selected[: max(1, limit)]
         top_score = selected[0][0] if selected else 0.0
-        tier = "deep_recall" if recall_hint or origin_hint or top_score < 1.08 else "recall"
+        if origin_hint or recall_hint:
+            tier = "deep_recall"
+        elif _is_fast_ping_query(query):
+            tier = "fast"
+        elif top_score < 1.08:
+            tier = "deep_recall"
+        else:
+            tier = "recall"
         confidence = round(min(top_score / 2.5, 1.0), 4) if top_score else 0.0
         with self._lock:
             thread_state = {}
@@ -1916,6 +1987,7 @@ class MindGraph:
         return {"updated": updated, "thread_updates": len(touched_threads), "last_recalled_at": recalled_at}
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        influence = {"updated_nodes": 0, "updated_threads": 0, "motifs": [], "unfinished_threads": []}
         with self._lock:
             row = self.conn.execute("SELECT * FROM mind_stream_state WHERE stream_name = ?", (stream_name,)).fetchone()
             cadence = int(row["cadence_seconds"]) if row else int(self.stream_cadences.get(stream_name, {}).get("cadence_seconds", 0))
@@ -1938,8 +2010,153 @@ class MindGraph:
                 """,
                 (stream_name, cadence, str(self.stream_cadences.get(stream_name, {}).get("description", "")), now, now, status, note, str(cadence)),
             )
+            influence = self._apply_stream_influence(stream_name, payload or {}, note=note, now=now)
             self.conn.commit()
-        return {"stream_name": stream_name, "status": status, "note": note, "cadence_seconds": cadence}
+        return {
+            "stream_name": stream_name,
+            "status": status,
+            "note": note,
+            "cadence_seconds": cadence,
+            "influence": influence,
+        }
+
+    def _apply_stream_influence(self, stream_name: str, payload: dict[str, Any], *, note: str, now: str) -> dict[str, Any]:
+        profile = {
+            "maintenance_stream": {"thread_delta": 0.03, "affinity_delta": 0.04, "emotion_delta": 0.02},
+            "association_stream": {"thread_delta": 0.05, "affinity_delta": 0.07, "emotion_delta": 0.05},
+            "social_stream": {"thread_delta": 0.08, "affinity_delta": 0.09, "emotion_delta": 0.04},
+            "deep_dream_cycle": {"thread_delta": 0.05, "affinity_delta": 0.06, "emotion_delta": 0.08},
+        }.get(stream_name, {"thread_delta": 0.02, "affinity_delta": 0.03, "emotion_delta": 0.02})
+
+        node_refs: set[str] = set()
+        motifs: list[str] = []
+        thread_hints: dict[tuple[str, str], dict[str, Any]] = {}
+
+        def _add_thread(channel: str, thread_key: str, chat_name: str, *, motif: str = "", unfinished: str = "") -> None:
+            normalized_channel = str(channel or "").strip()
+            normalized_thread_key = str(thread_key or "").strip()
+            if not normalized_channel or not normalized_thread_key:
+                return
+            bucket = thread_hints.setdefault(
+                (normalized_channel, normalized_thread_key),
+                {"chat_name": str(chat_name or "").strip(), "motifs": [], "unfinished": []},
+            )
+            if str(chat_name or "").strip() and not bucket["chat_name"]:
+                bucket["chat_name"] = str(chat_name or "").strip()
+            if str(motif).strip():
+                bucket["motifs"].append(str(motif).strip())
+                motifs.append(str(motif).strip())
+            if str(unfinished).strip():
+                bucket["unfinished"].append(compact_text(str(unfinished).strip(), 120))
+
+        for value in list(payload.get("sampled_archive_ids", [])) + list(payload.get("selected_memory_ids", [])):
+            text = str(value or "").strip()
+            if text:
+                node_refs.add(text)
+
+        for key in ("seed", "motif"):
+            text = str(payload.get(key, "")).strip()
+            if text:
+                motifs.append(text)
+
+        if note.strip():
+            motifs.append(note.strip())
+
+        for field in ("thoughts", "initiatives"):
+            for item in payload.get(field, []):
+                if not isinstance(item, dict):
+                    continue
+                source_archive_id = str(item.get("source_archive_id", "")).strip()
+                if source_archive_id:
+                    node_refs.add(source_archive_id)
+                _add_thread(
+                    str(item.get("channel", "")),
+                    str(item.get("thread_key", "")),
+                    str(item.get("chat_name", "")),
+                    motif=str(item.get("motif", "")),
+                    unfinished=str(item.get("reason", "") or item.get("prompt", "") or item.get("text", "")),
+                )
+
+        resolved_node_ids: list[str] = []
+        touched_threads: set[tuple[str, str]] = set()
+        for ref in sorted(node_refs):
+            rows = self.conn.execute(
+                "SELECT id, channel, thread_key, chat_name FROM mind_nodes WHERE source_id = ? OR id = ?",
+                (ref, ref),
+            ).fetchall()
+            for row in rows:
+                node_id = str(row["id"]).strip()
+                if node_id:
+                    resolved_node_ids.append(node_id)
+                _add_thread(
+                    str(row["channel"] or ""),
+                    str(row["thread_key"] or ""),
+                    str(row["chat_name"] or ""),
+                    motif="",
+                    unfinished="",
+                )
+
+        unique_node_ids = _dedupe_strings(resolved_node_ids)
+        for node_id in unique_node_ids:
+            self.conn.execute(
+                """
+                UPDATE mind_nodes
+                SET thread_affinity = MIN(1.0, thread_affinity + ?),
+                    emotion_salience = MIN(1.0, emotion_salience + ?),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (float(profile["affinity_delta"]), float(profile["emotion_delta"]), now, node_id),
+            )
+
+        for (channel, thread_key), info in thread_hints.items():
+            row = self.conn.execute(
+                "SELECT * FROM mind_thread_state WHERE channel = ? AND thread_key = ?",
+                (channel, thread_key),
+            ).fetchone()
+            if row is None:
+                continue
+            touched_threads.add((channel, thread_key))
+            metadata = _safe_json_dict(row["metadata_json"])
+            recurring_motifs = _dedupe_strings(list(metadata.get("recurring_motifs", [])) + list(info.get("motifs", [])) + motifs)[:4]
+            unfinished_threads = _dedupe_strings(list(metadata.get("unfinished_threads", [])) + list(info.get("unfinished", [])))[:4]
+            metadata["recurring_motifs"] = recurring_motifs
+            metadata["unfinished_threads"] = unfinished_threads
+            metadata["last_stream_influence"] = {
+                "stream_name": stream_name,
+                "note": note,
+                "updated_at": now,
+            }
+            self.conn.execute(
+                """
+                UPDATE mind_thread_state
+                SET relationship_score = MIN(1.0, relationship_score + ?),
+                    metadata_json = ?,
+                    summary = CASE
+                        WHEN summary = '' THEN ?
+                        ELSE summary
+                    END
+                WHERE channel = ? AND thread_key = ?
+                """,
+                (
+                    float(profile["thread_delta"]),
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    str(row["summary"] or ""),
+                    channel,
+                    thread_key,
+                ),
+            )
+
+        return {
+            "updated_nodes": len(unique_node_ids),
+            "updated_threads": len(touched_threads),
+            "motifs": _dedupe_strings(motifs)[:6],
+            "unfinished_threads": _dedupe_strings(
+                hint
+                for info in thread_hints.values()
+                for hint in info.get("unfinished", [])
+            )[:6],
+        }
 
     def stream_status(self) -> dict[str, Any]:
         with self._lock:

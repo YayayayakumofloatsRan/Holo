@@ -30,6 +30,8 @@ The real continuity lives in:
 - `canonical -> durable -> candidate -> working -> archive`
 - archive is the full turn ledger
 - durable is the normal prompt-facing long-term memory
+- JSONL is the portable journal and sync layer
+- `.holo_runtime/mind_graph.sqlite3` is the live retrieval and relationship-computation layer
 
 3. Host kernel
 - `holo_host/reply_api.py`
@@ -95,6 +97,7 @@ Current relationship-memory rule:
 - Do not depend on one Codex chat thread to keep Holo alive
 - Do not treat `codex_session_id` as memory; it is only a resumable compute cache
 - Do not let WeChat single chats split into `wechat:<name>` and `<name>` alias threads
+- Do not publish live memory JSONL or runtime graph state to a public remote; memory sync belongs only on trusted local/private paths
 
 ## Current Weak Spots
 - `pyweixin_dialog` on `Weixin 4.1` is usable but still the most fragile part

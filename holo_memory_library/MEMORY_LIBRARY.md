@@ -29,6 +29,7 @@ Its job is not just to store notes. Its job is to preserve persona consistency a
    - Durable file: memories/memory_store.jsonl
    - Priority: candidate and working are lower than durable; durable is lower than canonical.
    - Purpose: let raw observations be consolidated before they become prompt-eligible long-term memory.
+   - Role note: these JSONL files are the portable journal and sync substrate, not the best hot-query substrate.
 
 4. Full conversation archive
    - File: memories/conversation_archive.jsonl
@@ -48,7 +49,7 @@ Its job is not just to store notes. Its job is to preserve persona consistency a
 
 7. Mind Graph substrate
    - File: .holo_runtime/mind_graph.sqlite3
-   - Priority: operational substrate for retrieval diagnostics and future graph-led recall
+   - Priority: operational substrate for live retrieval, relationship state, and graph-led recall
    - Purpose: materialize archive, stores, helper history exports, thread state, and stream audit into one inspectable SQLite layer
 
 ## Memory Kinds
@@ -98,9 +99,9 @@ Its job is not just to store notes. Its job is to preserve persona consistency a
 - Backfill archived turns from the host SQLite store with: python3 rag_memory.py backfill-archive [--db-path .holo_runtime/holo_host.sqlite3]
 - Run one replay/dream pass with: python3 rag_memory.py dream-cycle [--sample-size 6] [--seed "..."]
 - Inspect callback candidates with: python3 rag_memory.py show-callbacks --limit 12
-- Inspect the host-facing structured packet with: python3 -m holo_host inspect-mind --thread-key ContactAlpha --chat-name ContactAlpha --query "你还记得重新上线前吗"
-- Inspect the materialized Mind Graph with: python3 -m holo_host inspect-graph --thread-key ContactAlpha --chat-name ContactAlpha
-- Trace graph recall with: python3 -m holo_host trace-recall --thread-key ContactAlpha --chat-name ContactAlpha --query "你还记得重新上线前吗"
+- Inspect the host-facing structured packet with: python3 -m holo_host inspect-mind --thread-key Nemoqi --chat-name Nemoqi --query "你还记得重新上线前吗"
+- Inspect the materialized Mind Graph with: python3 -m holo_host inspect-graph --thread-key Nemoqi --chat-name Nemoqi
+- Trace graph recall with: python3 -m holo_host trace-recall --thread-key Nemoqi --chat-name Nemoqi --query "你还记得重新上线前吗"
 - Read a local file into memory with: python3 rag_memory.py ingest-artifact --path ./notes.md [--note "..."] [--dry-run]
 - When you cannot control the host API, use the black-box sidecar with: python3 rag_memory.py sidecar-turn --user "..." [--draft "..."] [--dry-run]
 - Review pending candidates with: python3 rag_memory.py review-candidates
@@ -121,6 +122,9 @@ Its job is not just to store notes. Its job is to preserve persona consistency a
 - This system is intentionally lightweight and local.
 - The retrieval model is lexical, weighted, and deterministic.
 - Persona consistency matters more than broad recall.
+- JSONL is kept because it is append-friendly, diffable, easy to snapshot, and resilient when Holo needs to recover from a broken runtime.
+- JSONL is not treated as the best sole storage engine for live recall. Hot retrieval, relationship state, and activation now belong to the SQLite Mind Graph.
+- Operational rule: sync trusted local/private memory stores across Windows and WSL, but do not publish live memory JSONL or runtime graph state to a public remote.
 - Durable memory is the only structured tier that participates in normal prompt assembly.
 - Canonical persona memory is hand-authored and should not be written through the structured-store CLI.
 - `state` is a derived machine-facing layer, not a durable store; it is rebuilt from memory each time.

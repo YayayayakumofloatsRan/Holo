@@ -46,7 +46,7 @@ This is intentional for the unattended local Holo runtime. The previous `--full-
 
 1. Rebuild or move the distro onto an internal drive such as `D:`.
 2. Keep Holo's compute kernel in WSL.
-3. Keep the Windows helper pointed at `http://127.0.0.1:8004`.
+3. Keep the Windows helper routed to the WSL reply API. On machines where WSL localhost forwarding is unavailable, the start script now rewrites the live helper runtime config to the current WSL IP automatically.
 4. Use the PowerShell bridge scripts so your daily commands stay on the Windows side.
 
 New bridge scripts:
@@ -129,8 +129,9 @@ If you want to push code over without restarting the host, run:
 - `holo-online.ps1` still supports native Windows host mode with `pythonw` plus log redirection when WSL is unavailable.
 - `holo-wsl-sync.ps1` treats the Windows repo as the source of truth for core code and the Linux repo as the runtime copy.
 - The Windows helper start script now honors `HOLO_WECHAT_HELPER_CONFIG`, `HOLO_HELPER_PYTHON`, and `HOLO_HELPER_PYTHONW`.
+- In WSL mode, `start_holo_wechat.ps1` now writes a runtime helper config under `.holo_runtime/wechat-helper/` and rewrites `agent_url` from `127.0.0.1` to the active WSL IP when needed.
 - Manual active-memory probe from WSL:
-  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml refresh-wechat-history --chat-name ContactAlpha --query "你还记得重新上线前吗"`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml refresh-wechat-history --chat-name Nemoqi --query "你还记得重新上线前吗"`
 - If this repo moves again, rerun `scripts\sync-codex-hooks.ps1`.
 - The current machine is on `Weixin 4.1.8.29`, so `wcferry 39.x` is not the live path here; use `pyweixin_dialog`.
 - The live helper timeout is still `180s` because the Windows-native fallback can exceed the old `90s` budget.

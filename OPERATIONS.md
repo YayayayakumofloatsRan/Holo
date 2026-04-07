@@ -38,6 +38,7 @@
 
 - WSL 配置：
   - `/home/ran_yakumo/holo/.holo_host.toml`
+- WSL `reply_api` 在 Windows 桥接场景下应绑定 `0.0.0.0`；Windows helper 会在启动时把 runtime `agent_url` 重写到当前 WSL IP（若 localhost forwarding 不可用）。
 - Codex CLI 归档 hooks：
   - `/home/ran_yakumo/holo/.codex/hooks.json`
   - `/home/ran_yakumo/holo/holo_memory_library/codex_hooks/user_prompt_submit.py`
@@ -90,10 +91,34 @@
 - Rebuild graph:
   - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml backfill-mind-graph`
 - Inspect one thread graph:
-  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml inspect-graph --thread-key ContactAlpha --chat-name ContactAlpha`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml inspect-graph --thread-key Nemoqi --chat-name Nemoqi`
 - Trace recall:
-  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml trace-recall --thread-key ContactAlpha --chat-name ContactAlpha --query "你还记得重新上线前吗"`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml trace-recall --thread-key Nemoqi --chat-name Nemoqi --query "你还记得重新上线前吗"`
 - Stream status:
   - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-stream-status`
 - Processor mesh tasks:
   - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-processor-mesh`
+
+## Memory Fabric Stage-1 Live Diagnostics
+- Vector DB:
+  - `/home/holo/holo/.holo_runtime/milvus/memory_fabric.db`
+- Hybrid recall trace:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml trace-hybrid-recall --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "浣犺繕璁板緱閲嶆柊涓婄嚎鍓嶅悧"`
+- Inspect mind packet:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml inspect-mind --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "你还记得重新上线前吗"`
+- Activation state:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-activation-state --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Vector health:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml vector-health`
+- Stream tick:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml stream-tick --stream-name association_stream`
+- Reply probe:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml reply-probe --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "浣犺繕璁板緱閲嶆柊涓婄嚎鍓嶅悧" --mode hybrid`
+- Memory-fabric benchmark:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml benchmark-memory-fabric --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "你还记得重新上线前吗" --iterations 5 --warmup 1 --probe mind`
+- Stage-1 acceptance gate:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml accept-memory-fabric-stage1 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+
+说明：
+- 如果 WSL `reply_api` 已在线，这些诊断会优先走 live HTTP 服务，而不是再起一个新的本地进程。
+- 这样可以避免第二个进程再次打开 `/home/holo/holo/.holo_runtime/milvus/memory_fabric.db`，撞上 Milvus Lite 的本地文件占用。

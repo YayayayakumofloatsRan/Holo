@@ -174,6 +174,12 @@ class HoloDaemon:
             graph_led_reply=config.memory.graph_led_reply,
             graph_fallback=config.memory.graph_fallback,
             deep_recall_on_memory_queries=config.memory.deep_recall_on_memory_queries,
+            vector_backend=config.memory.vector_backend,
+            milvus_uri=config.memory.milvus_uri,
+            milvus_collection_prefix=config.memory.milvus_collection_prefix,
+            activation_cache_enabled=config.memory.activation_cache_enabled,
+            private_memory_sync_enabled=config.memory.private_memory_sync_enabled,
+            private_memory_repo_path=config.memory.private_memory_repo_path,
         )
         self.policy = policy or AutonomyPolicy(config)
         self.logger = logger or _build_logger(config.runtime.log_dir)

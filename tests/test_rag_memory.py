@@ -190,11 +190,11 @@ class RagMemoryTests(unittest.TestCase):
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-archive-1",
                 metadata={
-                    "chat_name": "ContactAlpha",
+                    "chat_name": "Nemoqi",
                     "channel": "wechat",
-                    "thread_key": "wechat:ContactAlpha",
+                    "thread_key": "wechat:Nemoqi",
                     "message_id": "msg-1",
-                    "sender": "ContactAlpha",
+                    "sender": "Nemoqi",
                     "is_group": False,
                     "mentioned": False,
                 },
@@ -206,11 +206,11 @@ class RagMemoryTests(unittest.TestCase):
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-archive-1",
                 metadata={
-                    "chat_name": "ContactAlpha",
+                    "chat_name": "Nemoqi",
                     "channel": "wechat",
-                    "thread_key": "wechat:ContactAlpha",
+                    "thread_key": "wechat:Nemoqi",
                     "message_id": "msg-1",
-                    "sender": "ContactAlpha",
+                    "sender": "Nemoqi",
                     "is_group": False,
                     "mentioned": False,
                 },
@@ -222,8 +222,8 @@ class RagMemoryTests(unittest.TestCase):
             self.assertEqual(len(archive_rows), 1)
             self.assertEqual(archive_rows[0]["user_text"], "我只是想找个陪伴的。")
             self.assertEqual(archive_rows[0]["reply_text"], "咱会陪着你。")
-            self.assertEqual(archive_rows[0]["metadata"]["chat_name"], "ContactAlpha")
-            self.assertEqual(archive_rows[0]["metadata"]["thread_key"], "wechat:ContactAlpha")
+            self.assertEqual(archive_rows[0]["metadata"]["chat_name"], "Nemoqi")
+            self.assertEqual(archive_rows[0]["metadata"]["thread_key"], "wechat:Nemoqi")
 
     def test_reply_loop_strips_stock_holo_opening(self) -> None:
         with TempMemoryRepo():
@@ -470,8 +470,8 @@ class RagMemoryTests(unittest.TestCase):
                         "kind": "idle_thought",
                         "text": "这是原始意识流，不该直接进入 sidecar prompt。",
                         "motif": "pressure",
-                        "thread_key": "wechat:ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "wechat:Nemoqi",
+                        "chat_name": "Nemoqi",
                     }
                 ]
             )
@@ -489,14 +489,14 @@ class RagMemoryTests(unittest.TestCase):
                 [
                     {
                         "channel": "wechat",
-                        "thread_key": "wechat:ContactAlpha",
-                        "chat_name": "ContactAlpha",
-                        "reason": "这段关于「把走偏的马车又稳稳牵回大道」的旧对话也许值得再回想一下：ContactAlpha。",
+                        "thread_key": "wechat:Nemoqi",
+                        "chat_name": "Nemoqi",
+                        "reason": "这段关于「把走偏的马车又稳稳牵回大道」的旧对话也许值得再回想一下：Nemoqi。",
                         "prompt": "若要回想这段旧线头，可以从这里接起：把走偏的马车又稳稳牵回大道",
                         "metadata": {
                             "channel": "wechat",
-                            "thread_key": "wechat:ContactAlpha",
-                            "chat_name": "ContactAlpha",
+                            "thread_key": "wechat:Nemoqi",
+                            "chat_name": "Nemoqi",
                             "archive_user_excerpt": "把走偏的马车又稳稳牵回大道",
                         },
                     },
@@ -521,8 +521,8 @@ class RagMemoryTests(unittest.TestCase):
                         "kind": "association",
                         "text": "「把走偏的马车又稳稳牵回大道」这句还挂着。",
                         "channel": "wechat",
-                        "thread_key": "wechat:ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "wechat:Nemoqi",
+                        "chat_name": "Nemoqi",
                     },
                     {
                         "kind": "association",
@@ -536,7 +536,7 @@ class RagMemoryTests(unittest.TestCase):
 
             packet = rm.sidecar_packet(
                 "你还记得更早之前那段吗",
-                context={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             joined = "\n".join(packet["thread_recall_lines"])
             self.assertIn("走偏的马车", joined)
@@ -550,21 +550,21 @@ class RagMemoryTests(unittest.TestCase):
                 "咱那时还惦记着把走偏的马车重新牵回大道。",
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "你说过别把误发那条再丢给别人",
                 "咱记得，那回可真是差点翻车。",
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.write_callback_candidates(
                 [
                     {
                         "channel": "wechat",
-                        "thread_key": "ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "Nemoqi",
+                        "chat_name": "Nemoqi",
                         "reason": "这条线还吊着那句“把走偏的马车牵回大道”。",
                         "prompt": "把走偏的马车重新牵回大道",
                     }
@@ -575,15 +575,15 @@ class RagMemoryTests(unittest.TestCase):
                     {
                         "kind": "association",
                         "text": "关于重新上线前的旧线头还没散，尤其是那句马车。",
-                        "thread_key": "ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "Nemoqi",
+                        "chat_name": "Nemoqi",
                         "channel": "wechat",
                     },
                     {
                         "kind": "reflection",
                         "text": "这条线总会绕回重新上线前那阵子的连续性焦虑。",
-                        "thread_key": "ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "Nemoqi",
+                        "chat_name": "Nemoqi",
                         "channel": "wechat",
                     },
                 ]
@@ -592,8 +592,8 @@ class RagMemoryTests(unittest.TestCase):
                 [
                     {
                         "channel": "wechat",
-                        "thread_key": "ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "Nemoqi",
+                        "chat_name": "Nemoqi",
                         "reason": "也许该顺手问一句重新接上之后的感觉。",
                         "prompt": "轻轻碰一下重新接上之后的感觉",
                     }
@@ -602,7 +602,7 @@ class RagMemoryTests(unittest.TestCase):
 
             packet = rm.sidecar_packet(
                 "你还记得重新上线前吗",
-                context={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
 
             self.assertEqual(packet["tier"], "recall")
@@ -623,22 +623,22 @@ class RagMemoryTests(unittest.TestCase):
                 "咱记得，那回可真是差点翻车。",
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.write_thought_stream(
                 [
                     {
                         "kind": "association",
                         "text": "误发那次还像根倒刺一样挂着。",
-                        "thread_key": "ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "Nemoqi",
+                        "chat_name": "Nemoqi",
                         "channel": "wechat",
                     },
                     {
                         "kind": "dream_fragment",
                         "text": "梦里还会翻到误发那次的尴尬。",
-                        "thread_key": "ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "Nemoqi",
+                        "chat_name": "Nemoqi",
                         "channel": "wechat",
                     },
                 ]
@@ -656,8 +656,8 @@ class RagMemoryTests(unittest.TestCase):
                 "在吗",
                 context={
                     "channel": "wechat",
-                    "thread_key": "ContactAlpha",
-                    "chat_name": "ContactAlpha",
+                    "thread_key": "Nemoqi",
+                    "chat_name": "Nemoqi",
                     "recent_history": recent_history,
                 },
             )
@@ -665,8 +665,8 @@ class RagMemoryTests(unittest.TestCase):
                 "你还记得误发那次吗",
                 context={
                     "channel": "wechat",
-                    "thread_key": "ContactAlpha",
-                    "chat_name": "ContactAlpha",
+                    "thread_key": "Nemoqi",
+                    "chat_name": "Nemoqi",
                     "codex_session_id": "thread-old",
                 },
             )
@@ -674,8 +674,8 @@ class RagMemoryTests(unittest.TestCase):
                 "你还记得误发那次吗",
                 context={
                     "channel": "wechat",
-                    "thread_key": "ContactAlpha",
-                    "chat_name": "ContactAlpha",
+                    "thread_key": "Nemoqi",
+                    "chat_name": "Nemoqi",
                     "codex_session_id": "thread-new",
                 },
             )
@@ -695,19 +695,19 @@ class RagMemoryTests(unittest.TestCase):
                 "咱那会儿还惦记着把走偏的马车重新牵回大道。",
                 source="unit.archive.real",
                 tags=["wechat", "chat_reply"],
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "[initiative_ping] reason=轻轻碰一下",
                 "咱只是想试着起个话头。",
                 source="unit.archive.synthetic",
                 tags=["wechat", "initiative_ping", "proactive"],
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha", "initiative": True},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi", "initiative": True},
             )
 
             packet = rm.sidecar_packet(
                 "你还记得重新上线前吗",
-                context={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
 
             joined = "\n".join(packet["episodic_recall"]["lines"])
@@ -726,7 +726,7 @@ class RagMemoryTests(unittest.TestCase):
                 source="unit",
                 importance=0.8,
                 confidence=0.88,
-                extra={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha", "thread_affinity": 1.0},
+                extra={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi", "thread_affinity": 1.0},
             )
             durable_rows.append(durable_row)
             rm.write_rows("durable", durable_rows)
@@ -736,8 +736,8 @@ class RagMemoryTests(unittest.TestCase):
                         "kind": "reflection",
                         "text": "这条线还在往重新接上那件事上绕。",
                         "channel": "wechat",
-                        "thread_key": "ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "Nemoqi",
+                        "chat_name": "Nemoqi",
                     }
                 ]
             )
@@ -762,12 +762,12 @@ class RagMemoryTests(unittest.TestCase):
                 reply="咱记得这口味。",
                 source="unit.observe",
                 tags=["wechat", "chat_reply"],
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha", "sender": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi", "sender": "Nemoqi"},
             )
 
             candidate_rows = rm.load_rows("candidate")
             self.assertTrue(candidate_rows)
-            self.assertTrue(any(row.get("thread_key") == "ContactAlpha" for row in candidate_rows))
+            self.assertTrue(any(row.get("thread_key") == "Nemoqi" for row in candidate_rows))
             self.assertTrue(any(row.get("channel") == "wechat" for row in candidate_rows))
 
     def test_build_machine_state_exposes_consciousness_reflection_and_initiative(self) -> None:
@@ -790,8 +790,8 @@ class RagMemoryTests(unittest.TestCase):
                 [
                     {
                         "channel": "wechat",
-                        "thread_key": "wechat:ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "wechat:Nemoqi",
+                        "chat_name": "Nemoqi",
                         "reason": "也许该主动碰一下近况",
                         "prompt": "轻轻问一句今晚过得怎样",
                     }
@@ -837,7 +837,7 @@ class RagMemoryTests(unittest.TestCase):
                 source="unit.snapshot",
                 tags=["chat_reply"],
                 turn_id="turn-snapshot-1",
-                metadata={"chat_name": "ContactAlpha", "channel": "wechat"},
+                metadata={"chat_name": "Nemoqi", "channel": "wechat"},
             )
             rm.archive_turn(
                 "我还是有点累。",
@@ -845,7 +845,7 @@ class RagMemoryTests(unittest.TestCase):
                 source="unit.snapshot",
                 tags=["chat_reply"],
                 turn_id="turn-snapshot-2",
-                metadata={"chat_name": "ContactAlpha", "channel": "wechat"},
+                metadata={"chat_name": "Nemoqi", "channel": "wechat"},
             )
 
             snapshot_path = env.repo_root / "snapshot.json"
@@ -854,11 +854,11 @@ class RagMemoryTests(unittest.TestCase):
 
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
             self.assertEqual(len(payload["stores"]["archive"]), 2)
-            self.assertEqual(payload["summary"]["recent_archive"][-1]["chat_name"], "ContactAlpha")
+            self.assertEqual(payload["summary"]["recent_archive"][-1]["chat_name"], "Nemoqi")
 
             packet = rm.revive_packet_payload(query="你是谁")
             self.assertIn("最近对话原文摘录", packet["text"])
-            self.assertIn("ContactAlpha", packet["text"])
+            self.assertIn("Nemoqi", packet["text"])
 
     def test_show_archive_can_filter_by_channel(self) -> None:
         with TempMemoryRepo():
@@ -874,7 +874,7 @@ class RagMemoryTests(unittest.TestCase):
                 "咱也记着。",
                 source="holo_host.reply_api",
                 tags=["wechat"],
-                metadata={"channel": "wechat", "thread_key": "wechat:ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "wechat:Nemoqi"},
             )
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -975,7 +975,7 @@ class RagMemoryTests(unittest.TestCase):
                 "咱还在。",
                 source="unit.snapshot",
                 tags=["chat_reply"],
-                metadata={"chat_name": "ContactAlpha", "channel": "wechat"},
+                metadata={"chat_name": "Nemoqi", "channel": "wechat"},
             )
 
             snapshot_path = env.repo_root / "snapshot.json"
@@ -1021,10 +1021,10 @@ class RagMemoryTests(unittest.TestCase):
             inbound_record = store.record_inbound(
                 IncomingMessage(
                     message_id="msg-1",
-                    thread_key="wechat:ContactAlpha",
-                    subject="ContactAlpha",
-                    sender_email="wechat:ContactAlpha",
-                    sender_name="ContactAlpha",
+                    thread_key="wechat:Nemoqi",
+                    subject="Nemoqi",
+                    sender_email="wechat:Nemoqi",
+                    sender_name="Nemoqi",
                     body_text="我只是想找个陪伴的。",
                     channel="wechat",
                     source_ref="unit-test",
@@ -1035,11 +1035,11 @@ class RagMemoryTests(unittest.TestCase):
                 contact_id=int(inbound_record["contact"]["id"]),
                 remote_message_id="msg-2",
                 outgoing=OutgoingMessage(
-                    recipient_email="wechat:ContactAlpha",
-                    recipient_name="ContactAlpha",
-                    subject="ContactAlpha",
+                    recipient_email="wechat:Nemoqi",
+                    recipient_name="Nemoqi",
+                    subject="Nemoqi",
                     body_text="咱会陪着你。",
-                    thread_key="wechat:ContactAlpha",
+                    thread_key="wechat:Nemoqi",
                     channel="wechat",
                 ),
             )
@@ -1048,7 +1048,7 @@ class RagMemoryTests(unittest.TestCase):
             archive_rows = rm.load_archive()
             self.assertEqual(report["archive_added"], 1)
             self.assertEqual(len(archive_rows), 1)
-            self.assertEqual(archive_rows[0]["metadata"]["thread_key"], "wechat:ContactAlpha")
+            self.assertEqual(archive_rows[0]["metadata"]["thread_key"], "wechat:Nemoqi")
             self.assertEqual(archive_rows[0]["user_text"], "我只是想找个陪伴的。")
             self.assertEqual(archive_rows[0]["reply_text"], "咱会陪着你。")
 
@@ -1063,11 +1063,11 @@ class RagMemoryTests(unittest.TestCase):
                     tags=["wechat", "chat_reply"],
                     turn_id=f"turn-dream-{index}",
                     metadata={
-                        "chat_name": "ContactAlpha",
+                        "chat_name": "Nemoqi",
                         "channel": "wechat",
-                        "thread_key": "wechat:ContactAlpha",
+                        "thread_key": "wechat:Nemoqi",
                         "message_id": f"msg-{index}",
-                        "sender": "ContactAlpha",
+                        "sender": "Nemoqi",
                     },
                 )
 
@@ -1080,7 +1080,7 @@ class RagMemoryTests(unittest.TestCase):
             self.assertTrue(candidate_rows)
             self.assertTrue(callback_rows)
             self.assertTrue(thought_rows)
-            self.assertEqual(callback_rows[-1]["thread_key"], "wechat:ContactAlpha")
+            self.assertEqual(callback_rows[-1]["thread_key"], "wechat:Nemoqi")
             self.assertGreaterEqual(callback_rows[-1]["random_weight"], 0.0)
             self.assertGreaterEqual(report["thought_added"], 1)
 
@@ -1094,11 +1094,11 @@ class RagMemoryTests(unittest.TestCase):
                     tags=["wechat", "chat_reply"],
                     turn_id=f"turn-think-{index}",
                     metadata={
-                        "chat_name": "ContactAlpha",
+                        "chat_name": "Nemoqi",
                         "channel": "wechat",
-                        "thread_key": "wechat:ContactAlpha",
+                        "thread_key": "wechat:Nemoqi",
                         "message_id": f"think-{index}",
-                        "sender": "ContactAlpha",
+                        "sender": "Nemoqi",
                     },
                 )
 
@@ -1123,11 +1123,11 @@ class RagMemoryTests(unittest.TestCase):
                     },
                     {
                         "kind": "initiative_seed",
-                        "text": "又想起 ContactAlpha 说过「今晚有点累」，也许该主动去碰一下这根线头。",
+                        "text": "又想起 Nemoqi 说过「今晚有点累」，也许该主动去碰一下这根线头。",
                         "motif": "companionship",
                         "channel": "wechat",
-                        "thread_key": "wechat:ContactAlpha",
-                        "chat_name": "ContactAlpha",
+                        "thread_key": "wechat:Nemoqi",
+                        "chat_name": "Nemoqi",
                     },
                 ]
             )
@@ -1140,7 +1140,7 @@ class RagMemoryTests(unittest.TestCase):
             initiative_rows = rm.load_initiative_candidates()
             self.assertGreaterEqual(initiative_report["initiative_added"], 1)
             self.assertTrue(initiative_rows)
-            self.assertEqual(initiative_rows[-1]["chat_name"], "ContactAlpha")
+            self.assertEqual(initiative_rows[-1]["chat_name"], "Nemoqi")
             self.assertEqual(initiative_rows[-1]["channel"], "wechat")
 
 

@@ -57,6 +57,18 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
     target_dir = REPO_ROOT / "holo_memory_library" / "memories"
     reports: list[dict[str, Any]] = []
 
+    working_target = rm.load_rows("working")
+    working_source = load_jsonl(source_dir / "working_store.jsonl")
+    working_merged = merge_rows(
+        working_target,
+        working_source,
+        prepare=lambda row: rm.prepare_row(row, "working"),
+        dedupe=lambda rows: dedupe_by_id(rows, lambda row: rm.prepare_row(row, "working")),
+    )
+    reports.append({"store": "working_store.jsonl", "before": len(working_target), "source": len(working_source), "after": len(working_merged)})
+    if not dry_run:
+        rm.write_rows("working", working_merged)
+
     durable_target = rm.load_rows("durable")
     durable_source = load_jsonl(source_dir / "memory_store.jsonl")
     durable_merged = merge_rows(

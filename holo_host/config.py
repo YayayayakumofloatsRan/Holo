@@ -83,6 +83,12 @@ class MemoryConfig:
     graph_fallback: bool = True
     deep_recall_on_memory_queries: bool = True
     recall_reconstruct_enabled: bool = True
+    vector_backend: str = "milvus"
+    milvus_uri: str = ".holo_runtime/milvus/memory_fabric.db"
+    milvus_collection_prefix: str = "holo_memory"
+    activation_cache_enabled: bool = True
+    private_memory_sync_enabled: bool = False
+    private_memory_repo_path: str = ""
     auto_observe: bool = True
     promote_batch_size: int = 8
     promote_interval_seconds: int = 300
@@ -220,6 +226,13 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         graph_fallback=bool(memory_data.get("graph_fallback", True)),
         deep_recall_on_memory_queries=bool(memory_data.get("deep_recall_on_memory_queries", True)),
         recall_reconstruct_enabled=bool(memory_data.get("recall_reconstruct_enabled", True)),
+        vector_backend=str(memory_data.get("vector_backend", "milvus")).strip() or "milvus",
+        milvus_uri=str(memory_data.get("milvus_uri", ".holo_runtime/milvus/memory_fabric.db")).strip()
+        or ".holo_runtime/milvus/memory_fabric.db",
+        milvus_collection_prefix=str(memory_data.get("milvus_collection_prefix", "holo_memory")).strip() or "holo_memory",
+        activation_cache_enabled=bool(memory_data.get("activation_cache_enabled", True)),
+        private_memory_sync_enabled=bool(memory_data.get("private_memory_sync_enabled", False)),
+        private_memory_repo_path=str(memory_data.get("private_memory_repo_path", "")).strip(),
         auto_observe=bool(memory_data.get("auto_observe", True)),
         promote_batch_size=int(memory_data.get("promote_batch_size", 8)),
         promote_interval_seconds=int(memory_data.get("promote_interval_seconds", 300)),

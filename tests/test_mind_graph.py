@@ -18,7 +18,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-1",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.write_rows(
                 "durable",
@@ -27,7 +27,7 @@ class MindGraphTests(unittest.TestCase):
                         status="durable",
                         rows=[],
                         kind="social_model",
-                        text="When talking to ContactAlpha, reconnect the old thread before expanding.",
+                        text="When talking to Nemoqi, reconnect the old thread before expanding.",
                         tags=["relationship", "wechat"],
                         source="unit",
                         importance=0.95,
@@ -37,14 +37,14 @@ class MindGraphTests(unittest.TestCase):
             )
             graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
             report = graph.rebuild()
-            inspect = graph.inspect_graph(thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat")
+            inspect = graph.inspect_graph(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
 
             self.assertEqual(report["status"], "ok")
             self.assertGreater(report["node_count"], 0)
             self.assertIn("relationship_memory", report["memory_class_counts"])
-            self.assertEqual(inspect["filters"]["thread_key"], "ContactAlpha")
+            self.assertEqual(inspect["filters"]["thread_key"], "Nemoqi")
             self.assertGreaterEqual(inspect["thread_state"].get("relationship_score", 0.0), 1.0)
-            self.assertTrue(any(node["thread_key"] == "ContactAlpha" for node in inspect["nodes"]))
+            self.assertTrue(any(node["thread_key"] == "Nemoqi" for node in inspect["nodes"]))
             graph.close()
 
     def test_trace_recall_prefers_current_thread(self) -> None:
@@ -55,7 +55,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-nemoqi",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "remember before",
@@ -67,12 +67,30 @@ class MindGraphTests(unittest.TestCase):
             )
             graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
             graph.rebuild()
-            trace = graph.trace_recall("remember before", thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat", record=False)
+            trace = graph.trace_recall("remember before", thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", record=False)
 
-            self.assertEqual(trace["thread_key"], "ContactAlpha")
+            self.assertEqual(trace["thread_key"], "Nemoqi")
             self.assertGreater(len(trace["trace"]), 0)
-            self.assertEqual(trace["trace"][0]["thread_key"], "ContactAlpha")
+            self.assertEqual(trace["trace"][0]["thread_key"], "Nemoqi")
             self.assertIn(trace["tier"], {"recall", "deep_recall"})
+            graph.close()
+
+    def test_trace_recall_marks_fast_ping_as_fast_tier(self) -> None:
+        with TempMemoryRepo() as temp:
+            rm.archive_turn(
+                "hello",
+                "we are still here",
+                source="unit.archive",
+                tags=["wechat", "chat_reply"],
+                turn_id="turn-fast",
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
+            )
+            graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
+            graph.rebuild()
+            trace = graph.trace_recall("在吗", thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", record=False)
+
+            self.assertEqual(trace["tier"], "fast")
+            self.assertEqual(trace["query_focus"], "recent")
             graph.close()
 
     def test_trace_recall_origin_query_surfaces_earliest_thread_events(self) -> None:
@@ -83,7 +101,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-early-1",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "can you keep replies shorter",
@@ -91,7 +109,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-early-2",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "what was at the beginning",
@@ -99,7 +117,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-late-recall",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             archive_path = Path(rm.ARCHIVE_STORE_PATH)
             rows = [
@@ -123,8 +141,8 @@ class MindGraphTests(unittest.TestCase):
             graph.rebuild()
             trace = graph.trace_recall(
                 "at the beginning, what do you remember",
-                thread_key="ContactAlpha",
-                chat_name="ContactAlpha",
+                thread_key="Nemoqi",
+                chat_name="Nemoqi",
                 channel="wechat",
                 record=False,
             )
@@ -143,7 +161,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-early-knock",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "[ThumbsUp][ThumbsUp][ThumbsUp]",
@@ -151,7 +169,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-early-thumb",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "可以简短一点，毕竟wechat上长篇大论会很严肃",
@@ -159,7 +177,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-early-shorter",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "开头过于公式化了，可以省掉",
@@ -167,7 +185,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-early-formal",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             archive_path = Path(rm.ARCHIVE_STORE_PATH)
             rows = [
@@ -193,12 +211,12 @@ class MindGraphTests(unittest.TestCase):
             graph.rebuild()
             trace = graph.trace_recall(
                 "最开始的时候，你还记得什么",
-                thread_key="ContactAlpha",
-                chat_name="ContactAlpha",
+                thread_key="Nemoqi",
+                chat_name="Nemoqi",
                 channel="wechat",
                 record=False,
             )
-            window = graph.origin_dialogue_window(thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat", limit=4)
+            window = graph.origin_dialogue_window(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", limit=4)
 
             self.assertEqual(trace["query_focus"], "origin")
             self.assertTrue(any("你在吗" in line for line in trace["memory_lines"][:3]))
@@ -229,18 +247,61 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-nemoqi",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
             graph.rebuild()
-            trace = graph.trace_recall("remember before", thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat", record=False)
+            trace = graph.trace_recall("remember before", thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", record=False)
             report = graph.record_recall(trace["activated_node_ids"], success=True)
-            inspect = graph.inspect_graph(thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat")
+            inspect = graph.inspect_graph(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
 
             self.assertGreater(report["updated"], 0)
             self.assertGreaterEqual(report["thread_updates"], 1)
             self.assertTrue(inspect["thread_state"].get("last_recalled_at"))
             graph.close()
+
+    def test_record_stream_run_applies_thread_influence(self) -> None:
+        with TempMemoryRepo() as temp:
+            rm.archive_turn(
+                "remember before",
+                "we were still trying to pull the old line back together",
+                source="unit.archive",
+                tags=["wechat", "chat_reply"],
+                turn_id="turn-stream",
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
+            )
+            graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
+            try:
+                graph.rebuild()
+                inspect_before = graph.inspect_graph(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
+                archive_node = next(node for node in inspect_before["nodes"] if node["source_store"] == "archive")
+
+                report = graph.record_stream_run(
+                    "social_stream",
+                    status="ok",
+                    note="initiative_cycle",
+                    payload={
+                        "initiatives": [
+                            {
+                                "channel": "wechat",
+                                "thread_key": "Nemoqi",
+                                "chat_name": "Nemoqi",
+                                "motif": "continuity",
+                                "reason": "follow the old line before it cools",
+                                "source_archive_id": archive_node.get("source_id", archive_node["id"]),
+                            }
+                        ]
+                    },
+                )
+                inspect_after = graph.inspect_graph(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
+                metadata = json.loads(inspect_after["thread_state"].get("metadata_json", "{}") or "{}")
+                self.assertEqual(report["status"], "ok")
+                self.assertGreaterEqual(report["influence"]["updated_nodes"], 1)
+                self.assertGreaterEqual(report["influence"]["updated_threads"], 1)
+                self.assertIn("continuity", metadata.get("recurring_motifs", []))
+                self.assertTrue(any("follow the old line" in item for item in metadata.get("unfinished_threads", [])))
+            finally:
+                graph.close()
 
     def test_sync_archive_entry_incrementally_materializes_observed_turn(self) -> None:
         with TempMemoryRepo() as temp:
@@ -250,11 +311,11 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.observe",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-1",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
             sync_report = graph.sync_archive_entry(result.get("archive_entry"))
-            inspect = graph.inspect_graph(thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat")
+            inspect = graph.inspect_graph(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
 
             self.assertEqual(sync_report["status"], "ok")
             self.assertGreater(sync_report["node_count"], 0)
@@ -269,11 +330,11 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-1",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
             graph.rebuild()
-            trace = graph.trace_recall("remember before", thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat", record=False)
+            trace = graph.trace_recall("remember before", thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", record=False)
             graph.record_recall(trace["activated_node_ids"], success=True)
 
             rm.archive_turn(
@@ -282,10 +343,10 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-2",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
-            report = graph.sync_thread(channel="wechat", thread_key="ContactAlpha", chat_name="ContactAlpha")
-            inspect = graph.inspect_graph(thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat")
+            report = graph.sync_thread(channel="wechat", thread_key="Nemoqi", chat_name="Nemoqi")
+            inspect = graph.inspect_graph(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
 
             self.assertEqual(report["status"], "ok")
             self.assertGreaterEqual(report["deleted_nodes"], 1)
@@ -301,7 +362,7 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-1",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             rm.archive_turn(
                 "那就继续把这套系统往前推吧",
@@ -309,11 +370,11 @@ class MindGraphTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-2",
-                metadata={"channel": "wechat", "thread_key": "ContactAlpha", "chat_name": "ContactAlpha"},
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
             graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
             graph.rebuild()
-            snapshot = graph.relationship_snapshot(thread_key="ContactAlpha", chat_name="ContactAlpha", channel="wechat", limit=4)
+            snapshot = graph.relationship_snapshot(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", limit=4)
 
             self.assertTrue(snapshot["summary"])
             self.assertIn("continuity", snapshot["recurring_motifs"])

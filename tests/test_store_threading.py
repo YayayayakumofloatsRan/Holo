@@ -18,10 +18,10 @@ class QueueStoreThreadingTests(unittest.TestCase):
                 message = IncomingMessage(
                     message_id="thread-test",
                     channel="wechat",
-                    thread_key="ContactAlpha",
-                    subject="ContactAlpha",
-                    sender_email="wechat:ContactAlpha",
-                    sender_name="ContactAlpha",
+                    thread_key="Nemoqi",
+                    subject="Nemoqi",
+                    sender_email="wechat:Nemoqi",
+                    sender_name="Nemoqi",
                     body_text="你在吗",
                 )
 
@@ -30,6 +30,6 @@ class QueueStoreThreadingTests(unittest.TestCase):
                     record = future.result(timeout=5)
 
                 self.assertFalse(record["duplicate"])
-                self.assertEqual(record["thread"]["thread_key"], "ContactAlpha")
+                self.assertEqual(record["thread"]["thread_key"], "Nemoqi")
             finally:
                 store.close()

@@ -79,8 +79,8 @@ This file exists so Holo development can continue across threads without relying
 - `./scripts/holo-stop-all.sh`
 - `./scripts/holo-status.sh`
 - `python3 -m holo_host backfill-mind-graph --dry-run`
-- `python3 -m holo_host inspect-graph --thread-key ContactAlpha --chat-name ContactAlpha`
-- `python3 -m holo_host trace-recall --thread-key ContactAlpha --chat-name ContactAlpha --query "你还记得重新上线前吗"`
+- `python3 -m holo_host inspect-graph --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host trace-recall --thread-key Nemoqi --chat-name Nemoqi --query "你还记得重新上线前吗"`
 - `python3 -m holo_host show-processor-mesh`
 - `python3 -m unittest discover -v tests`
 - `python3 holo_memory_library/rag_memory.py audit`

@@ -64,13 +64,13 @@ class WindowsHelperTests(unittest.TestCase):
     def test_contact_match_prefers_exact_remark(self) -> None:
         contacts = [
             {"wxid": "wxid_alice", "name": "Alice", "remark": "", "code": "alice_1"},
-            {"wxid": "wxid_contactalpha", "name": "ContactAlpha", "remark": "ContactAlpha", "code": "contact_alpha"},
+            {"wxid": "wxid_nemo", "name": "Nemoqi", "remark": "Nemoqi", "code": "nemo_qi"},
             {"wxid": "wxid_other", "name": "Nemo", "remark": "", "code": "nemo"},
         ]
-        match = best_contact_match(contacts, "ContactAlpha")
+        match = best_contact_match(contacts, "Nemoqi")
         self.assertIsNotNone(match)
-        self.assertEqual(match["wxid"], "wxid_contactalpha")
-        self.assertGreater(contact_match_score(match, "ContactAlpha"), 0)
+        self.assertEqual(match["wxid"], "wxid_nemo")
+        self.assertGreater(contact_match_score(match, "Nemoqi"), 0)
 
     def test_chat_turn_from_wcf_msg_maps_group_fields(self) -> None:
         class FakeMsg:
@@ -96,7 +96,7 @@ class WindowsHelperTests(unittest.TestCase):
         turn = chat_turn_from_wcf_msg(
             FakeMsg(),
             contacts_by_wxid={
-                "wxid_friend": {"wxid": "wxid_friend", "remark": "ContactAlpha", "name": "ContactAlpha", "code": "contact_alpha"},
+                "wxid_friend": {"wxid": "wxid_friend", "remark": "Nemoqi", "name": "Nemoqi", "code": "nemo_qi"},
                 "123@chatroom": {"wxid": "123@chatroom", "remark": "", "name": "测试群", "code": ""},
             },
             self_wxid="wxid_self",
@@ -104,7 +104,7 @@ class WindowsHelperTests(unittest.TestCase):
         self.assertIsNotNone(turn)
         assert turn is not None
         self.assertEqual(turn.chat_name, "测试群")
-        self.assertEqual(turn.sender, "ContactAlpha")
+        self.assertEqual(turn.sender, "Nemoqi")
         self.assertEqual(turn.thread_key, "123@chatroom")
         self.assertTrue(turn.is_group)
         self.assertTrue(turn.mentioned)
@@ -123,19 +123,19 @@ class WindowsHelperTests(unittest.TestCase):
     def test_state_store_stable_message_id_ignores_ts_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             state = StateStore(Path(tmpdir) / "state.json")
-            first = ChatTurn(chat_name="ContactAlpha", text="在吗", message_id="msg-1", thread_key="ContactAlpha", ts=111)
-            second = ChatTurn(chat_name="ContactAlpha", text="在吗", message_id="msg-1", thread_key="ContactAlpha", ts=999)
+            first = ChatTurn(chat_name="Nemoqi", text="在吗", message_id="msg-1", thread_key="Nemoqi", ts=111)
+            second = ChatTurn(chat_name="Nemoqi", text="在吗", message_id="msg-1", thread_key="Nemoqi", ts=999)
             state.remember(first)
             self.assertTrue(state.already_seen(second))
 
     def test_state_store_tracks_history_sync_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             state = StateStore(Path(tmpdir) / "state.json")
-            self.assertEqual(state.last_history_sync_digest("ContactAlpha"), "")
-            state.mark_history_synced("ContactAlpha", digest="abc123", export_path="C:/wechat-helper/export.md", now=123)
+            self.assertEqual(state.last_history_sync_digest("Nemoqi"), "")
+            state.mark_history_synced("Nemoqi", digest="abc123", export_path="C:/wechat-helper/export.md", now=123)
             state.save()
             loaded = StateStore(Path(tmpdir) / "state.json")
-            self.assertEqual(loaded.last_history_sync_digest("ContactAlpha"), "abc123")
+            self.assertEqual(loaded.last_history_sync_digest("Nemoqi"), "abc123")
 
     def test_state_store_quarantines_corrupt_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -201,7 +201,7 @@ class WindowsHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = HelperConfig(
-                whitelist=["ContactAlpha"],
+                whitelist=["Nemoqi"],
                 cooldown_seconds=0,
                 state_file=root / "state.json",
             )
@@ -223,7 +223,7 @@ class WindowsHelperTests(unittest.TestCase):
                     return {"send_result": {"ok": True}}
 
             adapter = BubbleAdapter()
-            turn = ChatTurn(chat_name="ContactAlpha", text="在吗", message_id="m-bubbles")
+            turn = ChatTurn(chat_name="Nemoqi", text="在吗", message_id="m-bubbles")
             result = process_one_turn(turn, client=BubbleClient(text="ignored"), state=state, adapter=adapter, config=config)
             self.assertEqual(result["action"], "reply")
             self.assertEqual(adapter.calls[0][0], ["咱在。", "慢慢说。"])
@@ -233,7 +233,7 @@ class WindowsHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = HelperConfig(
-                whitelist=["ContactAlpha"],
+                whitelist=["Nemoqi"],
                 draft_only=False,
                 cooldown_seconds=5,
                 state_file=root / "state.json",
@@ -245,7 +245,7 @@ class WindowsHelperTests(unittest.TestCase):
                 def send_reply(self, turn: ChatTurn, text: str, *, draft_only: bool) -> dict[str, object]:
                     return {"send_result": {"ok": False, "error": "bad_target"}}
 
-            turn = ChatTurn(chat_name="ContactAlpha", text="在吗", message_id="m-2")
+            turn = ChatTurn(chat_name="Nemoqi", text="在吗", message_id="m-2")
             result = process_one_turn(turn, client=client, state=state, adapter=FailingAdapter(), config=config)
             self.assertEqual(result["reason"], "send_failed")
             self.assertFalse(state.already_seen(turn))
@@ -257,18 +257,18 @@ class WindowsHelperTests(unittest.TestCase):
                 send_queue_dir=root / "send_queue",
                 pywinauto_process_path=r"D:\Weixin\Weixin.exe",
             )
-            result = queue_send_task(config, chat_name="ContactAlpha", text="咱来找你了。")
+            result = queue_send_task(config, chat_name="Nemoqi", text="咱来找你了。")
             self.assertTrue(result["queued"])
             task_path = Path(result["path"])
             self.assertTrue(task_path.exists())
             payload = json.loads(task_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["chat_name"], "ContactAlpha")
-            self.assertEqual(payload["search"], "ContactAlpha")
+            self.assertEqual(payload["chat_name"], "Nemoqi")
+            self.assertEqual(payload["search"], "Nemoqi")
 
     def test_parse_pyweixin_session_unread_extracts_chat_and_count(self) -> None:
-        parsed = parse_pyweixin_session_unread("session_item_ContactAlpha", "ContactAlpha\n[3条]\nbring holo back!")
-        self.assertEqual(parsed, ("ContactAlpha", 3))
-        muted = parse_pyweixin_session_unread("session_item_ContactAlpha", "ContactAlpha\n消息免打扰\n[2条]")
+        parsed = parse_pyweixin_session_unread("session_item_Nemoqi", "Nemoqi\n[3条]\nbring holo back!")
+        self.assertEqual(parsed, ("Nemoqi", 3))
+        muted = parse_pyweixin_session_unread("session_item_Nemoqi", "Nemoqi\n消息免打扰\n[2条]")
         self.assertIsNone(muted)
 
     def test_load_config_maps_windows_paths_on_posix(self) -> None:
@@ -304,7 +304,7 @@ class WindowsHelperTests(unittest.TestCase):
             root = Path(tmpdir)
             config_path = root / "wechat_helper.live.json"
             config_path.write_text(
-                json.dumps({"draft_only": False, "whitelist": ["ContactAlpha"]}, ensure_ascii=False),
+                json.dumps({"draft_only": False, "whitelist": ["Nemoqi"]}, ensure_ascii=False),
                 encoding="utf-8",
             )
             previous = os.environ.get("HOLO_WECHAT_HELPER_CONFIG")
@@ -317,7 +317,7 @@ class WindowsHelperTests(unittest.TestCase):
                 else:
                     os.environ["HOLO_WECHAT_HELPER_CONFIG"] = previous
             self.assertFalse(config.draft_only)
-            self.assertEqual(config.whitelist, ["ContactAlpha"])
+            self.assertEqual(config.whitelist, ["Nemoqi"])
 
     def test_wcf_runtime_info_flags_weixin_4x_against_39x(self) -> None:
         fake_module = types.SimpleNamespace(__version__="39.5.2.0")
@@ -338,6 +338,22 @@ class WindowsHelperTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid helper config"):
                 load_config(str(config_path))
 
+    def test_load_config_accepts_utf8_bom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "wechat_helper.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "agent_url": "http://127.0.0.1:8004",
+                        "transport_state_file": str(Path(tmpdir) / "transport_state.json"),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8-sig",
+            )
+            config = load_config(str(config_path))
+            self.assertEqual(config.agent_url, "http://127.0.0.1:8004")
+
     def test_latest_pyweixin_turn_prefers_latest_non_timestamp_row(self) -> None:
         import windows_helper.wechat_helper as helper
 
@@ -356,20 +372,20 @@ class WindowsHelperTests(unittest.TestCase):
                         "direction": "incoming",
                         "direction_confidence": 0.93,
                         "is_self": False,
-                        "sender_hint": "ContactAlpha",
+                        "sender_hint": "Nemoqi",
                     },
                 ],
             }
-            turn = latest_pyweixin_turn({}, chat_name="ContactAlpha", unread_count=2)
+            turn = latest_pyweixin_turn({}, chat_name="Nemoqi", unread_count=2)
             self.assertIsNotNone(turn)
             assert turn is not None
-            self.assertEqual(turn.chat_name, "ContactAlpha")
+            self.assertEqual(turn.chat_name, "Nemoqi")
             self.assertEqual(turn.text, "图片 2026年4月3日 16:17")
             self.assertEqual(turn.metadata["unread_count"], 2)
             self.assertEqual(turn.metadata["pyweixin_kind"], "image_ref")
             self.assertEqual(turn.metadata["capture_path"], "/tmp/capture.png")
             self.assertEqual(turn.metadata["direction"], "incoming")
-            self.assertEqual(turn.sender, "ContactAlpha")
+            self.assertEqual(turn.sender, "Nemoqi")
             self.assertTrue(turn.metadata["visible_digest"])
         finally:
             helper.read_pyweixin_visible_messages = original
@@ -379,15 +395,15 @@ class WindowsHelperTests(unittest.TestCase):
             {
                 "kind": "text",
                 "text": "你好呀",
-                "button_texts": ["ContactAlpha"],
+                "button_texts": ["Nemoqi"],
                 "content_bounds": {"left": 40, "right": 260},
             },
-            chat_name="ContactAlpha",
+            chat_name="Nemoqi",
             list_rect={"left": 0, "right": 600, "width": 600, "center_x": 300},
         )
         self.assertEqual(payload["direction"], "incoming")
         self.assertFalse(payload["is_self"])
-        self.assertEqual(payload["sender_hint"], "ContactAlpha")
+        self.assertEqual(payload["sender_hint"], "Nemoqi")
 
     def test_annotate_pyweixin_message_uses_geometry_for_outgoing(self) -> None:
         payload = annotate_pyweixin_message(
@@ -397,7 +413,7 @@ class WindowsHelperTests(unittest.TestCase):
                 "button_texts": [],
                 "content_bounds": {"left": 420, "right": 560},
             },
-            chat_name="ContactAlpha",
+            chat_name="Nemoqi",
             list_rect={"left": 0, "right": 600, "width": 600, "center_x": 300},
         )
         self.assertEqual(payload["direction"], "outgoing")
@@ -411,11 +427,11 @@ class WindowsHelperTests(unittest.TestCase):
             helper.read_pyweixin_visible_messages = lambda loaded, chat_name, limit=40, capture_dir=None: {
                 "chat_name": chat_name,
                 "messages": [
-                    {"kind": "text", "text": "你先前那句", "timestamp": "2026年4月3日 16:20", "direction": "incoming", "is_self": False, "sender_hint": "ContactAlpha"},
+                    {"kind": "text", "text": "你先前那句", "timestamp": "2026年4月3日 16:20", "direction": "incoming", "is_self": False, "sender_hint": "Nemoqi"},
                     {"kind": "text", "text": "咱刚回过的话", "timestamp": "2026年4月3日 16:21", "direction": "outgoing", "is_self": True, "sender_hint": "self"},
                 ],
             }
-            turn = latest_pyweixin_turn({}, chat_name="ContactAlpha", unread_count=1)
+            turn = latest_pyweixin_turn({}, chat_name="Nemoqi", unread_count=1)
             self.assertIsNotNone(turn)
             assert turn is not None
             self.assertEqual(turn.text, "你先前那句")
@@ -468,7 +484,7 @@ class WindowsHelperTests(unittest.TestCase):
             root = Path(tmpdir)
             config = HelperConfig(outbox_file=root / "outbox.jsonl")
             adapter = PyweixinReplyAdapter(config)
-            turn = ChatTurn(chat_name="ContactAlpha", text="你好", sender="ContactAlpha", message_id="m-1")
+            turn = ChatTurn(chat_name="Nemoqi", text="你好", sender="Nemoqi", message_id="m-1")
 
             draft_record = adapter.send_reply(turn, "咱在。", draft_only=True)
             self.assertEqual(draft_record["draft_only"], True)
@@ -476,7 +492,7 @@ class WindowsHelperTests(unittest.TestCase):
 
             original = helper.send_via_pyweixin
             try:
-                helper.send_via_pyweixin = lambda *_args, **_kwargs: {"ok": True, "chat_name": "ContactAlpha"}
+                helper.send_via_pyweixin = lambda *_args, **_kwargs: {"ok": True, "chat_name": "Nemoqi"}
                 sent_record = adapter.send_reply(turn, "咱还在。", draft_only=False)
                 self.assertEqual(sent_record["send_result"]["ok"], True)
             finally:
@@ -520,7 +536,7 @@ class WindowsHelperTests(unittest.TestCase):
                     {
                         "watch_mode": "pyweixin_dialog",
                         "allow_transport_fallback": False,
-                        "whitelist": ["ContactAlpha"],
+                        "whitelist": ["Nemoqi"],
                     },
                     ensure_ascii=False,
                 ),
@@ -536,7 +552,7 @@ class WindowsHelperTests(unittest.TestCase):
 
     def test_is_pyweixin_transient_error_matches_login_and_com_failures(self) -> None:
         self.assertTrue(_is_pyweixin_transient_error(RuntimeError("微信未登录,请先点击登录后再使用pyweixin!")))
-        self.assertTrue(_is_pyweixin_transient_error(RuntimeError("unable to open dedicated dialog for ContactAlpha: 事件无法调用任何订户")))
+        self.assertTrue(_is_pyweixin_transient_error(RuntimeError("unable to open dedicated dialog for Nemoqi: 事件无法调用任何订户")))
         self.assertFalse(_is_pyweixin_transient_error(RuntimeError("some other failure")))
 
     def test_watch_pyweixin_dialog_once_degrades_instead_of_raising_for_transient_error(self) -> None:
@@ -550,7 +566,7 @@ class WindowsHelperTests(unittest.TestCase):
                     {
                         "watch_mode": "pyweixin_dialog",
                         "allow_transport_fallback": False,
-                        "whitelist": ["ContactAlpha"],
+                        "whitelist": ["Nemoqi"],
                         "state_file": str(root / "state.json"),
                         "outbox_file": str(root / "outbox.jsonl"),
                         "transport_state_file": str(root / "transport_state.json"),
@@ -600,7 +616,7 @@ class WindowsHelperTests(unittest.TestCase):
                     {
                         "watch_mode": "pyweixin_dialog",
                         "allow_transport_fallback": False,
-                        "whitelist": ["ContactAlpha"],
+                        "whitelist": ["Nemoqi"],
                         "state_file": str(root / "state.json"),
                         "outbox_file": str(root / "outbox.jsonl"),
                         "transport_state_file": str(root / "transport_state.json"),
@@ -634,17 +650,17 @@ class WindowsHelperTests(unittest.TestCase):
 
                 helper.PyweixinDialogAdapter = ReadyAdapter
                 helper.latest_pyweixin_dialog_turn = lambda *_args, **_kwargs: ChatTurn(
-                    chat_name="ContactAlpha",
+                    chat_name="Nemoqi",
                     text="你在吗",
-                    sender="ContactAlpha",
+                    sender="Nemoqi",
                     message_id="msg-1",
-                    thread_key="ContactAlpha",
+                    thread_key="Nemoqi",
                     metadata={"visible_digest": "abc123"},
                 )
 
                 self.assertEqual(command_watch_pyweixin_dialog(str(config_path), once=True, max_messages=1), 0)
                 state = json.loads((root / "state.json").read_text(encoding="utf-8"))
-                self.assertTrue(state["seen_by_chat"]["ContactAlpha"])
+                self.assertTrue(state["seen_by_chat"]["Nemoqi"])
             finally:
                 helper.import_pyweixin = original_import
                 helper.AgentClient = original_agent
@@ -669,15 +685,15 @@ class WindowsHelperTests(unittest.TestCase):
                         "direction": "incoming",
                         "direction_confidence": 0.9,
                         "is_self": False,
-                        "sender_hint": "ContactAlpha",
+                        "sender_hint": "Nemoqi",
                     },
                 ],
             )
-            turn = latest_pyweixin_dialog_turn({"MenuItems": object()}, dialog_window=object(), chat_name="ContactAlpha")
+            turn = latest_pyweixin_dialog_turn({"MenuItems": object()}, dialog_window=object(), chat_name="Nemoqi")
             self.assertIsNotNone(turn)
             assert turn is not None
             self.assertEqual(turn.text, "咱在")
-            self.assertEqual(turn.source_ref, "pyweixin_dialog:ContactAlpha")
+            self.assertEqual(turn.source_ref, "pyweixin_dialog:Nemoqi")
             self.assertTrue(turn.metadata["visible_digest"])
         finally:
             helper.pyweixin_find_message_list = original_find
@@ -700,7 +716,7 @@ class WindowsHelperTests(unittest.TestCase):
                         "direction": "incoming",
                         "direction_confidence": 0.9,
                         "is_self": False,
-                        "sender_hint": "ContactAlpha",
+                        "sender_hint": "Nemoqi",
                     },
                     {
                         "kind": "text",
@@ -713,7 +729,7 @@ class WindowsHelperTests(unittest.TestCase):
                     },
                 ],
             )
-            turn = latest_pyweixin_dialog_turn({"MenuItems": object()}, dialog_window=object(), chat_name="ContactAlpha")
+            turn = latest_pyweixin_dialog_turn({"MenuItems": object()}, dialog_window=object(), chat_name="Nemoqi")
             self.assertIsNotNone(turn)
             assert turn is not None
             self.assertEqual(turn.text, "你在吗")
@@ -733,12 +749,12 @@ class WindowsHelperTests(unittest.TestCase):
                 mode="live",
                 transport="wcf",
                 detail="receiving messages",
-                extra={"last_chat_name": "ContactAlpha"},
+                extra={"last_chat_name": "Nemoqi"},
             )
             self.assertEqual(payload["status"], "online")
             written = json.loads(config.transport_state_file.read_text(encoding="utf-8"))
             self.assertEqual(written["transport"], "wcf")
-            self.assertEqual(written["last_chat_name"], "ContactAlpha")
+            self.assertEqual(written["last_chat_name"], "Nemoqi")
 
     def test_write_transport_state_retries_transient_replace_permission_error(self) -> None:
         import windows_helper.wechat_helper as helper
@@ -790,13 +806,13 @@ class WindowsHelperTests(unittest.TestCase):
         try:
             helper.import_pyweixin = lambda _repo="": {"repo_path": "//repo", "GlobalConfig": DummyGlobalConfig}
             helper.pyweixin_navigate_visible_chat = lambda _loaded, _chat: object()
-            helper.pyweixin_current_chat_name = lambda _main: "ContactAlpha"
+            helper.pyweixin_current_chat_name = lambda _main: "Nemoqi"
             helper.send_current_chat_via_pyweixin = lambda **_kwargs: {"used_current_chat_fallback": True}
             helper.probe_pyweixin_state = lambda _config: {"ok": True}
-            result = send_via_pyweixin(HelperConfig(pyweixin_repo_path="//repo"), chat_name="ContactAlpha", text="咱在。")
+            result = send_via_pyweixin(HelperConfig(pyweixin_repo_path="//repo"), chat_name="Nemoqi", text="咱在。")
             self.assertTrue(result["ok"])
             self.assertEqual(result["send_mode"], "current_chat_only")
-            self.assertEqual(result["resolved_chat"], "ContactAlpha")
+            self.assertEqual(result["resolved_chat"], "Nemoqi")
         finally:
             helper.import_pyweixin = original_import
             helper.pyweixin_navigate_visible_chat = original_navigate
@@ -825,9 +841,9 @@ class WindowsHelperTests(unittest.TestCase):
             helper.pyweixin_current_chat_name = lambda _main: "别的聊天"
             helper.send_current_chat_via_pyweixin = lambda **_kwargs: {"used_current_chat_fallback": True}
             helper.probe_pyweixin_state = lambda _config: {"ok": True}
-            result = send_via_pyweixin(HelperConfig(pyweixin_repo_path="//repo"), chat_name="ContactAlpha", text="咱在。")
+            result = send_via_pyweixin(HelperConfig(pyweixin_repo_path="//repo"), chat_name="Nemoqi", text="咱在。")
             self.assertFalse(result["ok"])
-            self.assertIn("expected current chat ContactAlpha", result["error"])
+            self.assertIn("expected current chat Nemoqi", result["error"])
         finally:
             helper.import_pyweixin = original_import
             helper.pyweixin_navigate_visible_chat = original_navigate
@@ -863,7 +879,7 @@ class WindowsHelperTests(unittest.TestCase):
             report = sync_history_payload_to_memory(
                 config,
                 client,
-                chat_name="ContactAlpha",
+                chat_name="Nemoqi",
                 payload={
                     "messages": [
                         {"kind": "text", "timestamp": "2026年4月3日 16:16", "text": "我最近有点累"},
@@ -874,19 +890,19 @@ class WindowsHelperTests(unittest.TestCase):
                 include_captures=True,
                 dry_run=False,
             )
-            self.assertEqual(report["chat_name"], "ContactAlpha")
+            self.assertEqual(report["chat_name"], "Nemoqi")
             self.assertEqual(report["status"], "ingested")
             self.assertEqual(len(client.artifact_calls), 2)
             export_name = Path(client.artifact_calls[0]["path"]).name
-            self.assertIn("_ContactAlpha_", export_name)
+            self.assertIn("_Nemoqi_", export_name)
             self.assertTrue(export_name.endswith("_history.md"))
             self.assertEqual(client.artifact_calls[1]["path"], str(capture))
-            self.assertTrue(state.last_history_sync_digest("ContactAlpha"))
+            self.assertTrue(state.last_history_sync_digest("Nemoqi"))
 
             again = sync_history_payload_to_memory(
                 config,
                 client,
-                chat_name="ContactAlpha",
+                chat_name="Nemoqi",
                 payload={
                     "messages": [
                         {"kind": "text", "timestamp": "2026年4月3日 16:16", "text": "我最近有点累"},
@@ -902,11 +918,11 @@ class WindowsHelperTests(unittest.TestCase):
 
     def test_maybe_ingest_turn_artifact_only_for_rich_media(self) -> None:
         client = FakeClient()
-        plain = ChatTurn(chat_name="ContactAlpha", text="你好", metadata={"pyweixin_kind": "text"})
+        plain = ChatTurn(chat_name="Nemoqi", text="你好", metadata={"pyweixin_kind": "text"})
         self.assertIsNone(maybe_ingest_turn_artifact(plain, client=client))
 
         rich = ChatTurn(
-            chat_name="ContactAlpha",
+            chat_name="Nemoqi",
             text="图片 2026年4月3日 16:17",
             metadata={
                 "pyweixin_kind": "image_ref",
@@ -923,7 +939,7 @@ class WindowsHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = HelperConfig(
-                whitelist=["ContactAlpha"],
+                whitelist=["Nemoqi"],
                 state_file=root / "state.json",
                 outbox_file=root / "outbox.jsonl",
             )
@@ -936,7 +952,7 @@ class WindowsHelperTests(unittest.TestCase):
             )
             state = StateStore(config.state_file)
             client = FakeClient()
-            turn = ChatTurn(chat_name="ContactAlpha", text="咱刚说的话", metadata={"is_self": True})
+            turn = ChatTurn(chat_name="Nemoqi", text="咱刚说的话", metadata={"is_self": True})
             result = process_one_turn(turn, client=client, state=state, adapter=adapter, config=config)
             self.assertEqual(result["reason"], "self_message")
             self.assertEqual(len(client.calls), 0)
@@ -945,7 +961,7 @@ class WindowsHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = HelperConfig(
-                whitelist=["ContactAlpha"],
+                whitelist=["Nemoqi"],
                 state_file=root / "state.json",
                 outbox_file=root / "outbox.jsonl",
             )
@@ -959,8 +975,8 @@ class WindowsHelperTests(unittest.TestCase):
             state = StateStore(config.state_file)
             client = FakeClient()
             visible_digest = "digest-001"
-            state.remember_outbound("ContactAlpha", text="咱在。", digest=visible_digest, now=123)
-            turn = ChatTurn(chat_name="ContactAlpha", text="咱在。", metadata={"visible_digest": visible_digest})
+            state.remember_outbound("Nemoqi", text="咱在。", digest=visible_digest, now=123)
+            turn = ChatTurn(chat_name="Nemoqi", text="咱在。", metadata={"visible_digest": visible_digest})
             result = process_one_turn(turn, client=client, state=state, adapter=adapter, config=config)
             self.assertEqual(result["reason"], "outbound_echo")
             self.assertEqual(len(client.calls), 0)
@@ -969,7 +985,7 @@ class WindowsHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = HelperConfig(
-                whitelist=["ContactAlpha"],
+                whitelist=["Nemoqi"],
                 state_file=root / "state.json",
                 outbox_file=root / "outbox.jsonl",
             )
@@ -983,13 +999,13 @@ class WindowsHelperTests(unittest.TestCase):
             state = StateStore(config.state_file)
             client = FakeClient()
             state.remember_outbound(
-                "ContactAlpha",
+                "Nemoqi",
                 text="咱在。 慢慢说。",
                 bubbles=["咱在。", "慢慢说。"],
                 now=123,
             )
             turn = ChatTurn(
-                chat_name="ContactAlpha",
+                chat_name="Nemoqi",
                 text="慢慢说。",
                 metadata={"direction": "unknown", "direction_confidence": 0.0},
             )

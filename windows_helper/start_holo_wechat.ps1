@@ -17,6 +17,35 @@ $pythonw = if ($env:HOLO_HELPER_PYTHONW) {
   $python
 }
 $killer = Join-Path $here 'kill_watchers.ps1'
+$runtimeConfig = Join-Path $repo '.holo_runtime\wechat-helper\wechat_helper.runtime.json'
+
+function Resolve-WslAgentUrl([string]$BaseUrl) {
+  if (-not $env:HOLO_WSL_DISTRO) {
+    return $BaseUrl
+  }
+  try {
+    $uri = [Uri]$BaseUrl
+  } catch {
+    return $BaseUrl
+  }
+  if ($uri.Host -notin @('127.0.0.1', 'localhost')) {
+    return $BaseUrl
+  }
+  try {
+    $ipRaw = & wsl.exe -d $env:HOLO_WSL_DISTRO -- bash -lc "hostname -I | awk '{print `$1}'"
+  } catch {
+    return $BaseUrl
+  }
+  if ($LASTEXITCODE -ne 0) {
+    return $BaseUrl
+  }
+  $ip = ($ipRaw | Select-Object -First 1).Trim()
+  if (-not $ip) {
+    return $BaseUrl
+  }
+  $port = if ($uri.Port -gt 0) { $uri.Port } else { 8004 }
+  return "http://$ip`:$port"
+}
 
 if (Test-Path $killer) {
   powershell.exe -ExecutionPolicy Bypass -NoProfile -File $killer | Out-Null
@@ -29,9 +58,18 @@ if (-not (Test-Path $config)) {
 $mode = 'auto'
 try {
   $cfgJson = Get-Content -Raw -Encoding UTF8 $config | ConvertFrom-Json
+  if ($cfgJson.agent_url) {
+    $cfgJson.agent_url = Resolve-WslAgentUrl ([string]$cfgJson.agent_url)
+  }
   if ($cfgJson.watch_mode) {
     $mode = [string]$cfgJson.watch_mode
   }
+  $runtimeDir = Split-Path -Parent $runtimeConfig
+  if (-not (Test-Path $runtimeDir)) {
+    New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+  }
+  $cfgJson | ConvertTo-Json -Depth 20 | Set-Content -Path $runtimeConfig -Encoding UTF8
+  $config = $runtimeConfig
 } catch {
   Write-Output "failed to parse live config"
   exit 1

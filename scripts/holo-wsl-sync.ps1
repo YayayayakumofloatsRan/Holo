@@ -102,6 +102,7 @@ Write-Output 'memory merge complete'
 $memoryMirrorCommand = @"
 mkdir -p "$sourceRepo/holo_memory_library/memories"
 rsync -a \
+  "$($settings.Repo)/holo_memory_library/memories/working_store.jsonl" \
   "$($settings.Repo)/holo_memory_library/memories/memory_store.jsonl" \
   "$($settings.Repo)/holo_memory_library/memories/candidate_store.jsonl" \
   "$($settings.Repo)/holo_memory_library/memories/conversation_archive.jsonl" \

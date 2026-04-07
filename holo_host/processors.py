@@ -394,8 +394,20 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     consciousness_lines = [str(line).strip() for line in packet.get("consciousness_stream", {}).get("lines", []) if str(line).strip()][:3]
     graph_trace_summary = str(packet.get("graph_trace_summary", "")).strip()
     activation_trace_ids = [str(item).strip() for item in packet.get("activation_trace_ids", []) if str(item).strip()][:8]
+    vector_hits = [str(item.get("text", "")).strip() for item in packet.get("vector_hits", []) if str(item.get("text", "")).strip()][:4]
+    activation_state = dict(packet.get("activation_state", {}))
+    activation_block = "\n".join(
+        f"- {line}"
+        for line in (
+            [f"heat={activation_state.get('heat', 0.0)}"]
+            + [f"motif: {item}" for item in activation_state.get("motifs", [])[:3]]
+            + [f"active: {item}" for item in activation_state.get("active_node_ids", [])[:4]]
+        )
+        if str(line).strip()
+    ) or "- none"
     episodic_block = "\n".join(f"- {line}" for line in episodic_lines) if episodic_lines else "- none"
     consciousness_block = "\n".join(f"- {line}" for line in consciousness_lines) if consciousness_lines else "- none"
+    vector_block = "\n".join(f"- {line}" for line in vector_hits) if vector_hits else "- none"
     chronology_instruction = (
         "Prioritize the earliest chronological events in this thread. Later conversations about remembering do not outrank the original early events. Prefer the earliest substantive turns, corrections, preferences, and framing requests over low-signal greetings, emoji-only messages, or acknowledgements unless those low-signal moments are essential to the memory beat.\n\n"
         if query_focus == "origin"
@@ -415,6 +427,8 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         f"Graph trace summary:\n{graph_trace_summary}\n\n"
         f"Activated memory ids:\n{', '.join(activation_trace_ids)}\n\n"
         f"Episodic anchors:\n{episodic_block}\n\n"
+        f"Vector hits:\n{vector_block}\n\n"
+        f"Activation state:\n{activation_block}\n\n"
         f"Consciousness lines:\n{consciousness_block}\n"
     )
 
@@ -446,6 +460,15 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     if thread_summary:
         consciousness_lines = [thread_summary] + consciousness_lines
     consciousness_block = _render_section("Consciousness Lines:", consciousness_lines)
+    vector_lines = [str(item.get("text", "")).strip() for item in packet.get("vector_hits", []) if str(item.get("text", "")).strip()]
+    vector_block = _render_section("Vector Echoes:", vector_lines[:4])
+    activation_state = dict(packet.get("activation_state", {}))
+    activation_lines = [
+        f"heat={activation_state.get('heat', 0.0)}",
+        *[f"motif: {item}" for item in activation_state.get("motifs", [])[:3]],
+        *[f"active: {item}" for item in activation_state.get("active_node_ids", [])[:4]],
+    ]
+    activation_block = _render_section("Activation State:", activation_lines)
     recall_reconstruction = dict(packet.get("recall_reconstruction", {}))
     recall_reconstruction_lines: list[str] = []
     summary = str(recall_reconstruction.get("summary", "")).strip()
@@ -469,6 +492,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         f"Current User Turn:\n{context.user_text}",
         f"{history_label}\n{_history_block(context, turn_plan)}",
         episodic_block,
+        vector_block,
+        activation_block,
         consciousness_block,
         recall_reconstruction_block,
         reply_constraints_block,

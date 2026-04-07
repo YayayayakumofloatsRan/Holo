@@ -33,6 +33,8 @@ With `HOLO_WSL_DISTRO` set, the existing PowerShell entrypoints automatically ro
 - `scripts/holo-online.ps1`
 - `scripts/holo-offline.ps1`
 - `scripts/holo-start-all.ps1`
+
+If Windows cannot reach the WSL kernel through `127.0.0.1`, `start_holo_wechat.ps1` now writes a runtime helper config under `.holo_runtime/wechat-helper/` and rewrites `agent_url` to the current WSL IP before starting the watcher.
 - `scripts/holo-stop-all.ps1`
 - `scripts/holo-restart-all.ps1`
 
@@ -119,7 +121,7 @@ Directly firing keyboard automation from the same visible terminal that launches
 To avoid that, this repo now includes a detached Windows-side sender:
 
 - queue a task:
-  - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json queue-send --chat-name ContactAlpha --text "咱来找你了。"`
+  - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json queue-send --chat-name Nemoqi --text "咱来找你了。"`
 - run the hidden sender loop from Windows:
   - `pythonw.exe windows_helper\weixin_sender.pyw --config C:\wechat-helper\wechat_helper.json`
 - or run one task explicitly:
@@ -167,7 +169,7 @@ If `wcferry` is installed on the Windows Python you are using, the helper can by
 
 Useful commands:
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json wcf-info`
-- `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json wcf-contacts --needle ContactAlpha`
+- `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json wcf-contacts --needle Nemoqi`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json watch-wcf`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json watch-wcf --once`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json watch-live`
@@ -199,13 +201,13 @@ Useful commands:
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json prime-pyweixin --restart-weixin --wait-seconds 8`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json watch-pyweixin`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json watch-pyweixin --once`
-- `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json send-pyweixin --chat-name ContactAlpha --text "咱来找你了。"`
+- `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json send-pyweixin --chat-name Nemoqi --text "咱来找你了。"`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json read-pyweixin-visible --chat-name 文件传输助手 --limit 10 --capture-dir C:\wechat-helper\history_captures`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json read-pyweixin-history --chat-name 文件传输助手 --limit 20 --page-turns 10 --capture-dir C:\wechat-helper\history_captures`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json ingest-pyweixin-history --chat-name 文件传输助手 --limit 20 --page-turns 10 --dry-run`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json ingest-pyweixin-history --chat-name 文件传输助手 --limit 20 --page-turns 10 --force`
 - `py -3 windows_helper\wechat_helper.py --config C:\wechat-helper\wechat_helper.json ingest-artifact --path C:\wechat-helper\history_exports\travel.md --dry-run`
-- `powershell.exe -ExecutionPolicy Bypass -NoProfile -File windows_helper\invoke_wechat_history.ps1 -ConfigPath D:\Holo\holo\windows_helper\wechat_helper.live.json -ChatName ContactAlpha -Limit 40 -PageTurns 8`
+- `powershell.exe -ExecutionPolicy Bypass -NoProfile -File windows_helper\invoke_wechat_history.ps1 -ConfigPath D:\Holo\holo\windows_helper\wechat_helper.live.json -ChatName Nemoqi -Limit 40 -PageTurns 8`
 
 What these do:
 - `watch-pyweixin-dialog`: opens one dedicated dialog window per whitelisted chat, minimizes it, then listens on those windows for new text and forwards each turn to the WSL reply API
@@ -222,12 +224,12 @@ What these do:
 Active-recall path:
 - the WSL `reply_api` can now invoke `windows_helper\invoke_wechat_history.ps1` on its own before a recall-heavy WeChat reply
 - that path is used for prompts such as “记得 / 之前 / 更早 / 上线前” and logs its steps in the Ubuntu-visible `reply_api.log`
-- manual WSL probe: `python3 -m holo_host --config /home/holo/holo/.holo_host.toml refresh-wechat-history --chat-name ContactAlpha --query "你还记得重新上线前吗"`
+- manual WSL probe: `python3 -m holo_host --config /home/holo/holo/.holo_host.toml refresh-wechat-history --chat-name Nemoqi --query "你还记得重新上线前吗"`
 
 This is now the preferred `Weixin 4.1+` lane for live Holo work. The older `watch-pyweixin` main-window polling path remains a maintenance tool, but the new dialog-based lane better matches upstream `pyweixin`'s own listening examples and avoids forcing the main session list into the foreground all the time.
 
 If you want Holo to react only to one person first, put that name in `whitelist`. The current safe starter is:
-- `ContactAlpha`
+- `Nemoqi`
 
 ## JSON Inbox Adapter
 The current safe adapter is file-backed.

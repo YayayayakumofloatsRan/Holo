@@ -38,10 +38,16 @@ It keeps the processor as a replaceable "compute brain", while a local daemon ha
 - `python3 -m holo_host backfill-archive [--db-path .holo_runtime/holo_host.sqlite3]`
 - `python3 -m holo_host dream-cycle [--sample-size 6]`
 - `python3 -m holo_host show-callbacks --limit 20`
-- `python3 -m holo_host inspect-mind --thread-key ContactAlpha --chat-name ContactAlpha --query "你还记得重新上线前吗"`
+- `python3 -m holo_host inspect-mind --thread-key Nemoqi --chat-name Nemoqi --query "你还记得重新上线前吗"`
 - `python3 -m holo_host backfill-mind-graph [--dry-run]`
-- `python3 -m holo_host inspect-graph --thread-key ContactAlpha --chat-name ContactAlpha`
-- `python3 -m holo_host trace-recall --thread-key ContactAlpha --chat-name ContactAlpha --query "你还记得重新上线前吗"`
+- `python3 -m holo_host inspect-graph --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host trace-recall --thread-key Nemoqi --chat-name Nemoqi --query "你还记得重新上线前吗"`
+- `python3 -m holo_host trace-hybrid-recall --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "你还记得重新上线前吗"`
+- `python3 -m holo_host show-activation-state --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host vector-health`
+- `python3 -m holo_host stream-tick --stream-name association_stream`
+- `python3 -m holo_host benchmark-memory-fabric --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "你还记得重新上线前吗" --probe mind`
+- `python3 -m holo_host accept-memory-fabric-stage1 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-stream-status`
 - `python3 -m holo_host show-processor-mesh`
 - `python3 -m holo_host processor-task --task-type self_check --prompt "..."`
@@ -104,9 +110,18 @@ Run it with:
 Available endpoints:
 - `GET /health`
 - `GET /mind-graph`
+- `GET /inspect-mind`
 - `GET /trace-recall`
+- `GET /trace-hybrid-recall`
+- `GET /activation-state`
+- `GET /vector-health`
+- `GET /reply-probe`
 - `GET /stream-status`
 - `POST /reply`
+- `POST /reply-probe`
+- `POST /stream-tick`
+- `POST /backfill-vector-memory`
+- `POST /sync-private-memory`
 - `POST /snapshot`
 - `POST /restore-snapshot`
 - `POST /ingest-artifact`
@@ -117,6 +132,8 @@ Available endpoints:
 `inspect-graph` and `trace-recall` are the new Mind OS observability pair:
 - `inspect-graph` shows what the SQLite Mind Graph materialized for a thread
 - `trace-recall` shows which nodes would activate for a recall-style query
+
+When the WSL reply API is already online, CLI diagnostics should prefer that live service instead of instantiating a second local process. This matters after Stage-1 because the local Milvus file is owned by the live kernel and should not be reopened by a parallel diagnostic process unless you intentionally take the kernel offline first.
 
 The processor mesh foundation now lives in `holo_host/codex_runner.py`. `reply` is still the live task, but the runtime now has explicit task types for recall reconstruction, consolidation, dream/reflect, initiative planning, and self-check.
 
@@ -182,7 +199,7 @@ Useful Windows-side commands:
 - `wechat_helper.py send-turn --chat-name 测试联系人 --text 我最近有点累`
 - `wechat_helper.py ingest-artifact --path C:\wechat-helper\exports\notes.md --dry-run`
 - `wechat_helper.py wcf-info`
-- `wechat_helper.py wcf-contacts --needle ContactAlpha`
+- `wechat_helper.py wcf-contacts --needle Nemoqi`
 - `wechat_helper.py watch-live`
 - `wechat_helper.py watch-wcf`
 - `wechat_helper.py watch-pyweixin-dialog`
@@ -191,7 +208,7 @@ Useful Windows-side commands:
 - `pythonw.exe windows_helper\\pyweixin_watcher.pyw --config C:\wechat-helper\wechat_helper.json`
 - `wechat_helper.py probe-pyweixin`
 - `wechat_helper.py prime-pyweixin --restart-weixin --wait-seconds 8`
-- `wechat_helper.py send-pyweixin --chat-name ContactAlpha --text "咱来找你了。"`
+- `wechat_helper.py send-pyweixin --chat-name Nemoqi --text "咱来找你了。"`
 - `wechat_helper.py read-pyweixin-visible --chat-name 文件传输助手 --limit 10 --capture-dir C:\wechat-helper\history_captures`
 - `wechat_helper.py read-pyweixin-history --chat-name 文件传输助手 --limit 20 --page-turns 10 --capture-dir C:\wechat-helper\history_captures`
 - `wechat_helper.py ingest-pyweixin-history --chat-name 文件传输助手 --limit 20 --page-turns 10 --dry-run`

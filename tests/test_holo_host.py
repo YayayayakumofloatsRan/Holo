@@ -52,17 +52,33 @@ class FakeMemory:
         self.recalled: list[dict] = []
         self.mind_graph_rebuild_calls = 0
         self.sidecar_tier = "fast"
+        self.private_sync_calls = 0
+        self.stream_records: list[dict] = []
 
     def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
         self.sidecar_requests.append({"query": query, "context": dict(context or {})})
         return {
             "addendum": f"隐式约束：{query}",
             "tier": self.sidecar_tier,
+            "mind_packet_version": "v4",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
             "recent_dialogue_window": {"lines": [], "messages": [], "window_size": 0},
             "consciousness_stream": {"lines": [], "items": [], "thread_summary": ""},
+            "graph_hits": [],
+            "vector_hits": [],
+            "activation_state": {
+                "heat": 0.0,
+                "active_node_ids": [],
+                "motifs": [],
+                "recall_priors": {},
+                "contributor_counts": {},
+                "recent_events": [],
+            },
+            "retrieval_trace": {},
+            "memory_route": "hybrid",
+            "recall_confidence": 0.0,
             "reply_constraints": {
                 "lines": ["先直接回应，再自然延伸。"],
                 "human_recall_style": "回忆时先概括，再给锚点。",
@@ -74,6 +90,9 @@ class FakeMemory:
             },
         }
 
+    def inspect_mind(self, query: str, *, context: dict | None = None) -> dict:
+        return self.sidecar_packet(query, context=context)
+
     def legacy_sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
         packet = self.sidecar_packet(query, context=context)
         packet["retrieval_mode"] = "legacy"
@@ -81,6 +100,13 @@ class FakeMemory:
         packet["fallback_lanes"] = ["relationship_state", "episodic_recall", "recent_dialogue_window", "consciousness_stream"]
         packet["activation_trace_ids"] = []
         packet["selected_memory_ids"] = []
+        packet["memory_route"] = "legacy"
+        return packet
+
+    def graph_sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
+        packet = self.sidecar_packet(query, context=context)
+        packet["retrieval_mode"] = "graph-led"
+        packet["memory_route"] = "graph"
         return packet
 
     def repair_reply(self, query: str, draft: str, *, max_passes: int = 2) -> dict:
@@ -88,11 +114,59 @@ class FakeMemory:
 
     def backfill_mind_graph(self, *, dry_run: bool = False) -> dict:
         self.mind_graph_rebuild_calls += 1
-        return {"status": "ok", "node_count": 42, "edge_count": 84, "thread_count": 1}
+        return {"status": "ok", "node_count": 42, "edge_count": 84, "thread_count": 1, "vector_sync": {"status": "ok"}}
+
+    def backfill_vector_memory(self, *, channel: str | None = None, thread_key: str | None = None, chat_name: str | None = None) -> dict:
+        return {"status": "ok", "channel": channel, "thread_key": thread_key, "chat_name": chat_name}
 
     def record_recall(self, selected_ids: list[str], *, success: bool = True) -> dict:
         report = {"selected_ids": list(selected_ids), "success": success}
         self.recalled.append(report)
+        return report
+
+    def trace_hybrid_recall(self, query: str, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8, record: bool = True) -> dict:
+        return {
+            "query": query,
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "retrieval_mode": "hybrid-led",
+            "memory_route": "hybrid",
+            "graph_hits": [],
+            "vector_hits": [],
+            "activation_state": self.activation_state(thread_key=thread_key, chat_name=chat_name, channel=channel),
+            "trace": [],
+        }
+
+    def activation_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
+        return {
+            "channel": channel,
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "heat": 0.0,
+            "active_node_ids": [],
+            "motifs": [],
+            "recall_priors": {},
+            "contributor_counts": {},
+            "recent_events": [],
+        }
+
+    def vector_health(self) -> dict:
+        return {"backend": "milvus", "available": False, "ready": False, "last_error": ""}
+
+    def sync_private_memory(self, *, label: str | None = None) -> dict:
+        self.private_sync_calls += 1
+        return {"status": "ok", "label": label or "", "snapshot_dir": "/tmp/fake"}
+
+    def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict | None = None) -> dict:
+        report = {
+            "stream_name": stream_name,
+            "status": status,
+            "note": note,
+            "influence": {"updated_nodes": 1, "updated_threads": 1, "motifs": ["continuity"], "unfinished_threads": ["keep going"]},
+            "payload": dict(payload or {}),
+        }
+        self.stream_records.append(report)
         return report
 
     def observe_turn(
@@ -169,6 +243,9 @@ class FakeMemory:
     def list_initiative_candidates(self, *, limit: int = 12) -> list[dict]:
         return self.initiatives[-limit:]
 
+    def stream_status(self) -> dict:
+        return {"db_path": "fake", "streams": [], "recent_runs": [], "activation_events": [], "vector": self.vector_health()}
+
 
 def close_service_handles(service: HoloReplyService) -> None:
     service.store.close()
@@ -212,7 +289,7 @@ class QueueStoreTests(unittest.TestCase):
             store = QueueStore(db_path)
             try:
                 store.initialize()
-                contact = store.ensure_contact("wechat:wechat:ContactAlpha", "ContactAlpha")
+                contact = store.ensure_contact("wechat:wechat:Nemoqi", "Nemoqi")
                 self.assertTrue(store.initiative_available(int(contact["id"]), cooldown_hours=48))
                 store.mark_initiative_sent(int(contact["id"]), note="unit")
                 self.assertFalse(store.initiative_available(int(contact["id"]), cooldown_hours=48))
@@ -234,7 +311,7 @@ class QueueStoreTests(unittest.TestCase):
                     email, display_name, initiative_enabled, created_at, updated_at, last_inbound_at, last_outbound_at
                 ) VALUES (?, ?, 1, ?, ?, ?, ?)
                 """,
-                ("wechat:wechat:ContactAlpha", "ContactAlpha", now, now, now, now),
+                ("wechat:wechat:Nemoqi", "Nemoqi", now, now, now, now),
             ).lastrowid
             canonical_contact_id = conn.execute(
                 """
@@ -242,14 +319,14 @@ class QueueStoreTests(unittest.TestCase):
                     email, display_name, initiative_enabled, created_at, updated_at, last_inbound_at, last_outbound_at
                 ) VALUES (?, ?, 1, ?, ?, ?, ?)
                 """,
-                ("wechat:ContactAlpha", "ContactAlpha", now, now, now, now),
+                ("wechat:Nemoqi", "Nemoqi", now, now, now, now),
             ).lastrowid
             legacy_thread_id = conn.execute(
                 """
                 INSERT INTO threads(
                     channel, contact_id, thread_key, subject, codex_session_id, allow_auto_reply, allow_proactive,
                     created_at, updated_at, last_message_at, last_direction
-                ) VALUES ('wechat', ?, 'wechat:ContactAlpha', 'ContactAlpha', 'legacy-session', 1, 1, ?, ?, ?, 'inbound')
+                ) VALUES ('wechat', ?, 'wechat:Nemoqi', 'Nemoqi', 'legacy-session', 1, 1, ?, ?, ?, 'inbound')
                 """,
                 (legacy_contact_id, now, now, now),
             ).lastrowid
@@ -258,7 +335,7 @@ class QueueStoreTests(unittest.TestCase):
                 INSERT INTO threads(
                     channel, contact_id, thread_key, subject, codex_session_id, allow_auto_reply, allow_proactive,
                     created_at, updated_at, last_message_at, last_direction
-                ) VALUES ('wechat', ?, 'ContactAlpha', 'ContactAlpha', '', 1, 1, ?, ?, ?, 'outbound')
+                ) VALUES ('wechat', ?, 'Nemoqi', 'Nemoqi', '', 1, 1, ?, ?, ?, 'outbound')
                 """,
                 (canonical_contact_id, now, now, now),
             ).lastrowid
@@ -268,9 +345,9 @@ class QueueStoreTests(unittest.TestCase):
                     event_id, channel, direction, contact_id, thread_id, message_id,
                     in_reply_to, references_header, subject, body_text, body_html,
                     sender_email, sender_name, recipient_email, payload_json, created_at
-                ) VALUES (?, 'wechat', 'inbound', ?, ?, ?, '', '', 'ContactAlpha', '你还记得重新上线前吗', '', ?, 'ContactAlpha', '', '{}', ?)
+                ) VALUES (?, 'wechat', 'inbound', ?, ?, ?, '', '', 'Nemoqi', '你还记得重新上线前吗', '', ?, 'Nemoqi', '', '{}', ?)
                 """,
-                ("wechat:legacy-msg", legacy_contact_id, legacy_thread_id, "legacy-msg", "wechat:wechat:ContactAlpha", now),
+                ("wechat:legacy-msg", legacy_contact_id, legacy_thread_id, "legacy-msg", "wechat:wechat:Nemoqi", now),
             ).lastrowid
             job_id = conn.execute(
                 """
@@ -287,14 +364,14 @@ class QueueStoreTests(unittest.TestCase):
             store = QueueStore(db_path)
             store.initialize()
 
-            contact = store.find_contact("wechat:ContactAlpha")
+            contact = store.find_contact("wechat:Nemoqi")
             self.assertIsNotNone(contact)
             contacts = store._fetchall("SELECT * FROM contacts WHERE email LIKE 'wechat:%'")
             self.assertEqual(len(contacts), 1)
 
-            thread = store.find_thread(channel="wechat", thread_key="wechat:ContactAlpha")
+            thread = store.find_thread(channel="wechat", thread_key="wechat:Nemoqi")
             self.assertIsNotNone(thread)
-            self.assertEqual(thread["thread_key"], "ContactAlpha")
+            self.assertEqual(thread["thread_key"], "Nemoqi")
             self.assertEqual(thread["codex_session_id"], "legacy-session")
 
             merged_message = store._fetchone("SELECT * FROM messages WHERE id = ?", (message_row_id,))
@@ -596,7 +673,7 @@ class DaemonFlowTests(unittest.TestCase):
             (helper_dir / "wechat_helper.live.json").write_text(
                 json.dumps(
                     {
-                        "whitelist": ["ContactAlpha"],
+                        "whitelist": ["Nemoqi"],
                         "send_queue_dir": str(send_queue_dir),
                         "pywinauto_process_path": "C:/Program Files/Tencent/WeChat/WeChat.exe",
                     },
@@ -612,8 +689,8 @@ class DaemonFlowTests(unittest.TestCase):
             memory.initiatives.append(
                 {
                     "channel": "wechat",
-                    "thread_key": "wechat:ContactAlpha",
-                    "chat_name": "ContactAlpha",
+                    "thread_key": "wechat:Nemoqi",
+                    "chat_name": "Nemoqi",
                     "reason": "又想起这条旧线头",
                     "prompt": "轻轻碰一下近况",
                     "priority": 66,
@@ -627,7 +704,7 @@ class DaemonFlowTests(unittest.TestCase):
             queued = sorted(send_queue_dir.glob("*.json"))
             self.assertEqual(len(queued), 1)
             payload = json.loads(queued[0].read_text(encoding="utf-8"))
-            self.assertEqual(payload["chat_name"], "ContactAlpha")
+            self.assertEqual(payload["chat_name"], "Nemoqi")
             self.assertIn("忙什么", payload["text"])
 
     def test_daemon_reply_job_passes_richer_metadata_to_memory_bridge(self) -> None:
@@ -742,8 +819,8 @@ class ReplyServiceTests(unittest.TestCase):
 
             result = service.handle_reply(
                 {
-                    "chat_name": "ContactAlpha",
-                    "sender": "ContactAlpha",
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
                     "text": "可以简短一点",
                     "channel": "wechat",
                     "message_id": "wechat-short-1",
@@ -768,8 +845,8 @@ class ReplyServiceTests(unittest.TestCase):
 
             result = service.handle_reply(
                 {
-                    "chat_name": "ContactAlpha",
-                    "sender": "ContactAlpha",
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
                     "text": "我有点累",
                     "channel": "wechat",
                     "message_id": "wechat-bubble-1",
@@ -798,8 +875,8 @@ class ReplyServiceTests(unittest.TestCase):
 
             first = service.handle_reply(
                 {
-                    "chat_name": "ContactAlpha",
-                    "sender": "ContactAlpha",
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
                     "text": "在吗",
                     "channel": "wechat",
                     "message_id": "wechat-echo-in-1",
@@ -810,8 +887,8 @@ class ReplyServiceTests(unittest.TestCase):
 
             echoed = service.handle_reply(
                 {
-                    "chat_name": "ContactAlpha",
-                    "sender": "ContactAlpha",
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
                     "text": first["text"],
                     "channel": "wechat",
                     "message_id": "wechat-echo-in-2",
@@ -832,12 +909,12 @@ class ReplyServiceTests(unittest.TestCase):
 
             result = service.handle_reply(
                 {
-                    "chat_name": "ContactAlpha",
-                    "sender": "ContactAlpha",
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
                     "text": "我只是想找个陪伴的",
                     "channel": "wechat",
                     "message_id": "wechat-msg-1",
-                    "thread_key": "wechat:ContactAlpha",
+                    "thread_key": "wechat:Nemoqi",
                     "source_ref": "window:weixin",
                     "is_group": False,
                     "mentioned": True,
@@ -850,18 +927,18 @@ class ReplyServiceTests(unittest.TestCase):
             self.assertEqual(len(memory.observed_records), 1)
             record = memory.observed_records[0]
             self.assertEqual(record["turn_id"], "wechat-msg-1")
-            self.assertEqual(record["metadata"]["chat_name"], "ContactAlpha")
-            self.assertEqual(record["metadata"]["sender"], "ContactAlpha")
+            self.assertEqual(record["metadata"]["chat_name"], "Nemoqi")
+            self.assertEqual(record["metadata"]["sender"], "Nemoqi")
             self.assertEqual(record["metadata"]["channel"], "wechat")
-            self.assertEqual(record["metadata"]["thread_key"], "ContactAlpha")
+            self.assertEqual(record["metadata"]["thread_key"], "Nemoqi")
             self.assertEqual(record["metadata"]["message_id"], "wechat-msg-1")
             self.assertEqual(record["metadata"]["source_ref"], "window:weixin")
             self.assertEqual(record["metadata"]["capture_path"], "C:/capture.png")
             self.assertTrue(record["metadata"]["mentioned"])
             self.assertFalse(record["metadata"]["is_group"])
             self.assertEqual(record["metadata"]["utterance_plan"]["beats"], ["receive", "pivot", "landing"])
-            self.assertEqual(memory.sidecar_requests[0]["context"]["thread_key"], "ContactAlpha")
-            self.assertEqual(memory.sidecar_requests[0]["context"]["incoming_thread_key"], "ContactAlpha")
+            self.assertEqual(memory.sidecar_requests[0]["context"]["thread_key"], "Nemoqi")
+            self.assertEqual(memory.sidecar_requests[0]["context"]["incoming_thread_key"], "Nemoqi")
 
     def test_reply_service_refreshes_wechat_history_before_recall_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -876,8 +953,8 @@ class ReplyServiceTests(unittest.TestCase):
 
             result = service.handle_reply(
                 {
-                    "chat_name": "ContactAlpha",
-                    "sender": "ContactAlpha",
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
                     "text": "你还记得重新上线前吗",
                     "channel": "wechat",
                     "message_id": "wechat-recall-1",
@@ -926,11 +1003,11 @@ class ReplyServiceTests(unittest.TestCase):
 
             report = service.reply_probe(
                 {
-                    "chat_name": "ContactAlpha",
-                    "sender": "ContactAlpha",
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
                     "text": "你还记得重新上线前吗",
                     "channel": "wechat",
-                    "thread_key": "ContactAlpha",
+                    "thread_key": "Nemoqi",
                 }
             )
 
@@ -938,6 +1015,7 @@ class ReplyServiceTests(unittest.TestCase):
             self.assertEqual(report["legacy"]["retrieval_mode"], "legacy")
             self.assertTrue(runner.task_calls)
             self.assertEqual(runner.task_calls[0]["task_type"], "recall_reconstruct")
+            self.assertIn("summary", report["graph_led"]["recall_reconstruction"])
             self.assertIn("summary", report["graph_led"]["reply_plan"]["debug"]["recall_reconstruction"])
             close_service_handles(service)
 
@@ -967,8 +1045,8 @@ class ReplyServiceTests(unittest.TestCase):
             completed.stderr = ""
 
             with mock.patch("holo_host.reply_api.subprocess.run", return_value=completed) as run_mock:
-                first = service.refresh_wechat_history({"chat_name": "ContactAlpha", "thread_key": "ContactAlpha", "query": "before"})
-                second = service.refresh_wechat_history({"chat_name": "ContactAlpha", "thread_key": "ContactAlpha", "query": "before"})
+                first = service.refresh_wechat_history({"chat_name": "Nemoqi", "thread_key": "Nemoqi", "query": "before"})
+                second = service.refresh_wechat_history({"chat_name": "Nemoqi", "thread_key": "Nemoqi", "query": "before"})
 
             self.assertEqual(first["status"], "ingested")
             self.assertEqual(second["status"], "skipped_cooldown")
@@ -976,12 +1054,36 @@ class ReplyServiceTests(unittest.TestCase):
             command = run_mock.call_args.args[0]
             self.assertIn("powershell.exe", command[0].lower())
             self.assertIn("-ChatName", command)
-            self.assertIn("ContactAlpha", command)
+            self.assertIn("Nemoqi", command)
             self.assertIn("-NoCaptures", command)
             state_payload = json.loads((config.runtime.state_dir / "active_wechat_history_state.json").read_text(encoding="utf-8"))
-            self.assertIn("ContactAlpha", state_payload)
+            self.assertIn("Nemoqi", state_payload)
             self.assertEqual(service.memory.mind_graph_rebuild_calls, 1)
             close_service_handles(service)
+
+    def test_stream_tick_records_influence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+api_port = 8010
+
+[autonomy]
+wechat_helper_config_path = ""
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(config_path=str(config_path), repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory(), policy=AutonomyPolicy(config))
+            try:
+                payload = service.stream_tick(stream_name="association_stream", dry_run=False)
+                self.assertEqual(payload["stream_name"], "association_stream")
+                self.assertEqual(payload["record"]["influence"]["updated_threads"], 1)
+                self.assertEqual(payload["record"]["influence"]["motifs"], ["continuity"])
+            finally:
+                close_service_handles(service)
 
     def test_refresh_wechat_history_origin_query_uses_deeper_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1011,7 +1113,7 @@ class ReplyServiceTests(unittest.TestCase):
             try:
                 with mock.patch("holo_host.reply_api.subprocess.run", return_value=completed) as run_mock:
                     report = service.refresh_wechat_history(
-                        {"chat_name": "ContactAlpha", "thread_key": "ContactAlpha", "query": "at the beginning, what do you remember"}
+                        {"chat_name": "Nemoqi", "thread_key": "Nemoqi", "query": "at the beginning, what do you remember"}
                     )
 
                 command = run_mock.call_args.args[0]
@@ -1054,8 +1156,8 @@ class ReplyServiceTests(unittest.TestCase):
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
 
             incoming = {
-                "chat_name": "ContactAlpha",
-                "sender": "ContactAlpha",
+                "chat_name": "Nemoqi",
+                "sender": "Nemoqi",
                 "text": "可以简短一点",
                 "channel": "wechat",
                 "message_id": "retry-wechat-1",
@@ -1063,10 +1165,10 @@ class ReplyServiceTests(unittest.TestCase):
             store.record_inbound(
                 IncomingMessage(
                     message_id="retry-wechat-1",
-                    thread_key="wechat:ContactAlpha",
-                    subject="ContactAlpha",
-                    sender_email="wechat:wechat:ContactAlpha",
-                    sender_name="ContactAlpha",
+                    thread_key="wechat:Nemoqi",
+                    subject="Nemoqi",
+                    sender_email="wechat:wechat:Nemoqi",
+                    sender_name="Nemoqi",
                     body_text="可以简短一点",
                     channel="wechat",
                 )
