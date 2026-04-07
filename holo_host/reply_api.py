@@ -282,6 +282,15 @@ def _windows_repo_root_from_path(raw: str | None) -> str:
 
 def _coerce_helper_artifact_path(raw: str | None) -> str:
     text = str(raw or "").strip()
+    if not text:
+        return text
+    if os.name == "nt":
+        mnt_match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", text)
+        if mnt_match:
+            drive = mnt_match.group(1).upper()
+            tail = str(mnt_match.group(2) or "").replace("/", "\\")
+            return f"{drive}:\\" + tail if tail else f"{drive}:\\"
+        return text
     if not _is_windows_abs_path(text):
         return text
     try:

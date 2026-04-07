@@ -360,18 +360,105 @@ class AgentClient:
 
     def _execute(self, req: request.Request) -> dict[str, Any]:
         parsed = parse.urlparse(req.full_url)
-        opener = None
-        if parsed.hostname in {"127.0.0.1", "localhost"}:
-            opener = request.build_opener(request.ProxyHandler({}))
+        suffix = parsed.path or "/"
+        if parsed.query:
+            suffix += f"?{parsed.query}"
+        last_error: Exception | None = None
+        for base_url in self._candidate_base_urls(parsed):
+            full_url = base_url.rstrip("/") + suffix
+            attempt = request.Request(
+                full_url,
+                data=req.data,
+                headers=dict(req.header_items()),
+                method=req.get_method(),
+            )
+            opener = None
+            parsed_attempt = parse.urlparse(full_url)
+            if parsed_attempt.hostname in {"127.0.0.1", "localhost"}:
+                opener = request.build_opener(request.ProxyHandler({}))
+            try:
+                execute = opener.open if opener is not None else request.urlopen
+                with execute(attempt, timeout=self.timeout_seconds) as response:  # noqa: S310
+                    self.base_url = base_url.rstrip("/")
+                    return json.loads(response.read().decode("utf-8"))
+            except error.HTTPError as exc:  # noqa: PERF203
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"http {exc.code}: {detail}") from exc
+            except error.URLError as exc:
+                last_error = exc
+                continue
+        raise RuntimeError(f"agent unreachable: {last_error}") from last_error
+
+    def _candidate_base_urls(self, parsed: parse.ParseResult) -> list[str]:
+        bases = [self.base_url]
+        if os.name != "nt" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+            return bases
+        fallback = _resolve_wsl_agent_base_url(self.base_url)
+        if fallback and fallback not in bases:
+            bases.append(fallback)
+        return bases
+
+
+def _candidate_wsl_distros() -> list[str]:
+    seen: set[str] = set()
+    distros: list[str] = []
+    env_name = str(os.environ.get("HOLO_WSL_DISTRO", "") or "").strip()
+    if env_name:
+        seen.add(env_name.casefold())
+        distros.append(env_name)
+    try:
+        proc = subprocess.run(
+            ["wsl.exe", "-l", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return distros
+    for raw in str(proc.stdout or "").splitlines():
+        name = raw.strip()
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        distros.append(name)
+    distros.sort(key=lambda item: (0 if item.casefold() == "holoubuntu" else 1, item.casefold()))
+    return distros
+
+
+def _resolve_wsl_agent_base_url(base_url: str) -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        parsed = parse.urlparse(base_url)
+    except Exception:  # noqa: BLE001
+        return ""
+    if parsed.hostname not in {"127.0.0.1", "localhost"}:
+        return ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    for distro in _candidate_wsl_distros():
         try:
-            execute = opener.open if opener is not None else request.urlopen
-            with execute(req, timeout=self.timeout_seconds) as response:  # noqa: S310
-                return json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:  # noqa: PERF203
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"http {exc.code}: {detail}") from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"agent unreachable: {exc}") from exc
+            proc = subprocess.run(
+                ["wsl.exe", "-d", distro, "--", "bash", "-lc", "hostname -I | awk '{print $1}'"],
+                capture_output=True,
+                text=True,
+                timeout=6,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        ip_tokens = str(proc.stdout or "").strip().split()
+        if not ip_tokens:
+            continue
+        return f"{parsed.scheme or 'http'}://{ip_tokens[0]}:{port}"
+    return ""
+
+
+def _is_agent_unreachable_error(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and "agent unreachable" in str(exc).lower()
 
 
 def append_outbox_record(path: Path, record: dict[str, Any]) -> dict[str, Any]:
@@ -2943,6 +3030,7 @@ def command_watch_pyweixin_dialog(config_path: str | None, *, once: bool = False
             saw_message = False
             dialog_ready = False
             transient_errors: list[str] = []
+            agent_error: Exception | None = None
             for chat_name in config.whitelist:
                 try:
                     dialog = adapter.ensure_dialog(chat_name)
@@ -2976,6 +3064,19 @@ def command_watch_pyweixin_dialog(config_path: str | None, *, once: bool = False
                         return 0
                 except Exception as exc:  # noqa: BLE001
                     state.save()
+                    if _is_agent_unreachable_error(exc):
+                        agent_error = exc
+                        transient_errors.append(f"{chat_name}:{type(exc).__name__}:{exc}")
+                        write_transport_state(
+                            config,
+                            status="degraded",
+                            mode="live",
+                            transport="pyweixin_dialog",
+                            detail=str(exc),
+                            error_type=type(exc).__name__,
+                            extra={"last_chat_name": chat_name, "watch_chats": list(config.whitelist)},
+                        )
+                        break
                     if _is_pyweixin_transient_error(exc):
                         transient_errors.append(f"{chat_name}:{type(exc).__name__}:{exc}")
                         continue
@@ -2997,6 +3098,19 @@ def command_watch_pyweixin_dialog(config_path: str | None, *, once: bool = False
                         }
                     )
                     raise
+            if agent_error is not None:
+                if once:
+                    print_json(
+                        {
+                            "handled": handled,
+                            "status": "agent_unreachable",
+                            "watch_chats": list(config.whitelist),
+                            "error": str(agent_error),
+                        }
+                    )
+                    break
+                time.sleep(max(config.poll_seconds, 1.0))
+                continue
             if dialog_ready:
                 detail = "turn handled" if saw_message else "polling dedicated dialog windows"
                 extra: dict[str, Any] = {"watch_chats": list(config.whitelist)}

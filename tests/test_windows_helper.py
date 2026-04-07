@@ -667,6 +667,117 @@ class WindowsHelperTests(unittest.TestCase):
                 helper.PyweixinDialogAdapter = original_adapter
                 helper.latest_pyweixin_dialog_turn = original_latest
 
+    def test_agent_client_tries_wsl_fallback_when_localhost_unreachable(self) -> None:
+        import windows_helper.wechat_helper as helper
+
+        class FakeResponse:
+            def __init__(self, payload: dict[str, object]):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+        attempted: list[str] = []
+
+        def fake_open(req, timeout=0):
+            attempted.append(req.full_url)
+            if req.full_url.startswith("http://127.0.0.1:8004"):
+                raise helper.error.URLError("boom")
+            return FakeResponse({"status": "ok"})
+
+        client = helper.AgentClient("http://127.0.0.1:8004", timeout_seconds=1)
+        with mock.patch.object(helper, "_resolve_wsl_agent_base_url", return_value="http://172.28.44.15:8004"), mock.patch(
+            "windows_helper.wechat_helper.request.build_opener",
+            return_value=types.SimpleNamespace(open=fake_open),
+        ), mock.patch("windows_helper.wechat_helper.request.urlopen", side_effect=fake_open):
+            payload = client.get_json("/health")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            attempted,
+            [
+                "http://127.0.0.1:8004/health",
+                "http://172.28.44.15:8004/health",
+            ],
+        )
+
+    def test_watch_pyweixin_dialog_agent_unreachable_degrades_without_crash(self) -> None:
+        import windows_helper.wechat_helper as helper
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "wechat_helper.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "watch_mode": "pyweixin_dialog",
+                        "allow_transport_fallback": False,
+                        "whitelist": ["Nemoqi"],
+                        "state_file": str(root / "state.json"),
+                        "outbox_file": str(root / "outbox.jsonl"),
+                        "transport_state_file": str(root / "transport_state.json"),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            original_import = helper.import_pyweixin
+            original_agent = helper.AgentClient
+            original_adapter = helper.PyweixinDialogAdapter
+            original_latest = helper.latest_pyweixin_dialog_turn
+            statuses: list[dict[str, object]] = []
+
+            def fake_write_transport_state(config, **kwargs):
+                payload = {"status": kwargs.get("status", ""), "detail": kwargs.get("detail", "")}
+                statuses.append(payload)
+                return payload
+
+            try:
+                helper.import_pyweixin = lambda _repo="": {"MenuItems": object()}
+
+                class UnreachableClient:
+                    def reply(self, _turn):
+                        raise RuntimeError("agent unreachable: test")
+
+                helper.AgentClient = lambda *_args, **_kwargs: UnreachableClient()
+
+                class ReadyAdapter:
+                    def __init__(self, config, loaded):
+                        self.config = config
+                        self.loaded = loaded
+
+                    def ensure_dialog(self, _chat_name: str) -> object:
+                        return object()
+
+                    def close(self) -> None:
+                        return None
+
+                helper.PyweixinDialogAdapter = ReadyAdapter
+                helper.latest_pyweixin_dialog_turn = lambda *_args, **_kwargs: ChatTurn(
+                    chat_name="Nemoqi",
+                    text="你在吗",
+                    sender="Nemoqi",
+                    message_id="msg-1",
+                    thread_key="Nemoqi",
+                    metadata={"visible_digest": "abc123"},
+                )
+                with mock.patch("windows_helper.wechat_helper.write_transport_state", side_effect=fake_write_transport_state):
+                    self.assertEqual(command_watch_pyweixin_dialog(str(config_path), once=True, max_messages=1), 0)
+            finally:
+                helper.import_pyweixin = original_import
+                helper.AgentClient = original_agent
+                helper.PyweixinDialogAdapter = original_adapter
+                helper.latest_pyweixin_dialog_turn = original_latest
+
+            self.assertTrue(any(str(item.get("status")) == "degraded" for item in statuses))
+
     def test_latest_pyweixin_dialog_turn_uses_visible_rows(self) -> None:
         import windows_helper.wechat_helper as helper
 

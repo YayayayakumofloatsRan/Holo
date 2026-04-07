@@ -13,7 +13,7 @@ from holo_host.daemon import HoloDaemon
 from holo_host.mail_gateway import MaildirGateway
 from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, TurnContext
 from holo_host.policy import AutonomyPolicy
-from holo_host.reply_api import HoloReplyService, shape_wechat_reply
+from holo_host.reply_api import HoloReplyService, _coerce_helper_artifact_path, shape_wechat_reply
 from holo_host.processors import build_attention_state, build_reply_bubbles, build_turn_plan
 from holo_host.store import QueueStore
 
@@ -707,6 +707,11 @@ class ReplyBubbleTests(unittest.TestCase):
         )
         plan = build_turn_plan(context, load_config(repo_root=tempfile.mkdtemp()))
         self.assertGreaterEqual(plan.bubble_target, 4)
+
+    def test_coerce_helper_artifact_path_converts_mnt_path_on_windows(self) -> None:
+        converted = _coerce_helper_artifact_path("/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history.md")
+        self.assertTrue(converted.lower().startswith("d:\\"))
+        self.assertIn(".holo_runtime\\wechat-helper\\receipts\\history.md".lower(), converted.lower())
 
     def test_poll_inbox_skips_corrupt_json_mail(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
