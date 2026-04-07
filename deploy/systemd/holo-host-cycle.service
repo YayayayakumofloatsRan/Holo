@@ -1,0 +1,8 @@
+[Unit]
+Description=One Holo host cycle
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/holo
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env python3 -m holo_host cycle --config %h/holo/.holo_host.toml

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run one Holo host cycle every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+Unit=holo-host-cycle.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,91 @@
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "codex_cli"
+poll_interval_seconds = 60
+max_jobs_per_cycle = 4
+codex_binary = "codex"
+# For unattended Windows runs, these extra args avoid approval/sandbox stalls.
+# codex_extra_args = ["--dangerously-bypass-approvals-and-sandbox"]
+# If Python cannot launch `codex` directly on Windows, pin the PowerShell wrapper:
+# codex_command_prefix = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/<you>/AppData/Roaming/npm/codex.ps1"]
+codex_model = "gpt-5.4"
+codex_reasoning_effort = "low"
+fast_model = "gpt-5.4-mini"
+fast_reasoning_effort = "low"
+fast_history_messages = 3
+responses_model = "gpt-5.4"
+responses_fast_model = "gpt-5.4-mini"
+network_enabled = true
+image_enabled = true
+codex_timeout_seconds = 900
+resume_sessions = true
+dry_run = false
+api_bind_host = "127.0.0.1"
+api_port = 8000
+
+[mail]
+transport = "maildir"
+poll_limit = 10
+maildir_inbox = ".holo_runtime/mail/inbox"
+maildir_processed = ".holo_runtime/mail/processed"
+maildir_outbox = ".holo_runtime/mail/outbox"
+
+# To use real email instead, switch the transport and fill these:
+# transport = "imap_smtp"
+# imap_host = "imap.example.com"
+# imap_port = 993
+# smtp_host = "smtp.example.com"
+# smtp_port = 587
+# username = "you@example.com"
+# sent_from = "you@example.com"
+# password_env = "HOLO_MAIL_PASSWORD"
+
+[memory]
+prompt_top_k = 4
+mind_graph_db_path = ".holo_runtime/mind_graph.sqlite3"
+graph_led_reply = true
+graph_fallback = true
+deep_recall_on_memory_queries = true
+recall_reconstruct_enabled = true
+auto_observe = true
+recall_trigger_mode = "adaptive"
+promote_batch_size = 8
+promote_interval_seconds = 300
+maintenance_stream_interval_seconds = 300
+thought_interval_seconds = 900
+reflection_interval_seconds = 1800
+dream_interval_seconds = 1800
+initiative_interval_seconds = 1800
+association_stream_interval_seconds = 900
+social_stream_interval_seconds = 1800
+deep_dream_cycle_interval_seconds = 21600
+dream_sample_size = 6
+thought_sample_size = 4
+reflection_window_hours = 12.0
+history_messages = 8
+fast_history_messages = 4
+recall_history_messages = 8
+fast_episodic_k = 2
+recall_episodic_k = 4
+fast_consciousness_k = 1
+recall_consciousness_k = 2
+active_wechat_history_enabled = true
+active_wechat_history_limit = 40
+active_wechat_history_page_turns = 8
+active_wechat_history_cooldown_seconds = 180
+active_wechat_history_timeout_seconds = 180
+active_wechat_history_include_visible = true
+active_wechat_history_include_captures = false
+
+[autonomy]
+auto_send_mode = "full_auto"
+allow_proactive_existing_threads = true
+allow_initiative_whitelist_contacts = true
+proactive_after_hours = 72
+initiative_cooldown_hours = 48
+wechat_helper_config_path = "windows_helper/wechat_helper.live.json"
+# Optional: pin the Windows checkout if the WSL live repo lives elsewhere.
+# wechat_helper_windows_repo_root = "D:/Holo/holo"
+max_auto_replies_per_contact_per_hour = 120

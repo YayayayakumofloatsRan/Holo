@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.holo_host.toml
+.holo_runtime/
+*.sqlite3
+.vendor/pywechat-upstream/.git/
+injector.log
+.codex/
+.tmp-smoke/
+.tmp-tests/
+codex-smoke-output.txt
+windows_helper/wechat_helper.live.json
+holo_memory_library/memories/*.jsonl
+!holo_memory_library/memories/README.md

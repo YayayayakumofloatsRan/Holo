@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Mind OS Bootstrap
+    url: ../docs/GITHUB_BOOTSTRAP.md
+    about: Follow this guide first when wiring the new private GitHub repo.

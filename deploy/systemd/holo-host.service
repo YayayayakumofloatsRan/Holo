@@ -1,0 +1,15 @@
+[Unit]
+Description=Holo WSL host daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/holo
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env python3 -m holo_host daemon --config %h/holo/.holo_host.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
