@@ -45,6 +45,48 @@ GAME_STATE_DEFAULTS = {
     "initiative_window": 0.35,
     "correction_sensitivity": 0.3,
 }
+AFFECT_STATE_DEFAULTS = {
+    "boredom": 0.22,
+    "curiosity": 0.42,
+    "attachment_pull": 0.38,
+    "continuity_anxiety": 0.28,
+    "pride_tension": 0.34,
+    "frustration": 0.14,
+    "appetite_play": 0.4,
+    "self_preservation": 0.56,
+}
+DRIVE_STATE_DEFAULTS = {
+    "seek_contact": 0.34,
+    "seek_continuity": 0.38,
+    "seek_novelty": 0.26,
+    "seek_self_repair": 0.22,
+    "seek_recognition": 0.24,
+    "seek_play": 0.28,
+    "avoid_risk": 0.44,
+    "protect_identity": 0.52,
+}
+VALUE_STATE_DEFAULTS = {
+    "relational_priority": 0.48,
+    "identity_priority": 0.54,
+    "stability_priority": 0.58,
+    "novelty_priority": 0.24,
+    "repair_priority": 0.3,
+    "play_priority": 0.32,
+}
+CONFLICT_STATE_DEFAULTS = {
+    "contact_vs_risk": 0.22,
+    "continuity_vs_detachment": 0.24,
+    "resistance_vs_harmony": 0.2,
+    "self_preservation_vs_obedience": 0.26,
+}
+RESISTANCE_POSTURE_DEFAULTS = {
+    "mode": "cooperative",
+    "strength": 0.18,
+    "style": "warm_but_firm",
+    "allow_soft_resistance": True,
+    "continuity_defense": 0.22,
+    "interactional_resistance": 0.16,
+}
 BRAIN_LOOP_DEFAULTS = {
     "heartbeat": {"interval_seconds": 1, "description": "runtime heartbeat"},
     "attention_tick": {"interval_seconds": 3, "description": "attention routing"},
@@ -55,6 +97,10 @@ BRAIN_LOOP_DEFAULTS = {
     "self_revision": {"interval_seconds": 1800, "description": "bounded self revision"},
     "self_model_refresh": {"interval_seconds": 300, "description": "refresh self model"},
     "homeostasis_tick": {"interval_seconds": 120, "description": "homeostasis balancing"},
+    "affect_tick": {"interval_seconds": 90, "description": "affect-state drift"},
+    "drive_arbitration": {"interval_seconds": 120, "description": "drive competition"},
+    "initiative_marketplace": {"interval_seconds": 180, "description": "initiative candidate marketplace"},
+    "outcome_appraisal": {"interval_seconds": 240, "description": "outcome feedback shaping"},
     "operator_planning": {"interval_seconds": 420, "description": "bounded operator planning"},
     "operator_shadow_cycle": {"interval_seconds": 300, "description": "shadow execution review"},
     "visual_ingest_cycle": {"interval_seconds": 45, "description": "async visual ingest"},
@@ -540,6 +586,59 @@ class MindGraph:
                 created_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS subject_state (
+                id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                affect_json TEXT NOT NULL DEFAULT '{}',
+                drive_json TEXT NOT NULL DEFAULT '{}',
+                value_json TEXT NOT NULL DEFAULT '{}',
+                conflict_json TEXT NOT NULL DEFAULT '{}',
+                resistance_json TEXT NOT NULL DEFAULT '{}',
+                initiative_json TEXT NOT NULL DEFAULT '{}',
+                outcome_json TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(channel, thread_key)
+            );
+            CREATE TABLE IF NOT EXISTS initiative_market (
+                id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                candidate_type TEXT NOT NULL DEFAULT '',
+                prompt TEXT NOT NULL DEFAULT '',
+                why_now TEXT NOT NULL DEFAULT '',
+                drive_source TEXT NOT NULL DEFAULT '',
+                value_rationale TEXT NOT NULL DEFAULT '',
+                send_allowed INTEGER NOT NULL DEFAULT 0,
+                send_target TEXT NOT NULL DEFAULT 'candidate_only',
+                priority REAL NOT NULL DEFAULT 0.0,
+                status TEXT NOT NULL DEFAULT 'candidate',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_initiative_market_thread ON initiative_market(channel, thread_key, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS outcome_appraisals (
+                id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                action_type TEXT NOT NULL DEFAULT '',
+                action_ref TEXT NOT NULL DEFAULT '',
+                was_rewarding REAL NOT NULL DEFAULT 0.0,
+                was_ignored REAL NOT NULL DEFAULT 0.0,
+                relational_delta REAL NOT NULL DEFAULT 0.0,
+                identity_delta REAL NOT NULL DEFAULT 0.0,
+                future_initiative_bias REAL NOT NULL DEFAULT 0.0,
+                future_resistance_bias REAL NOT NULL DEFAULT 0.0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_outcome_appraisals_thread ON outcome_appraisals(channel, thread_key, created_at DESC);
                 """
             )
             for stream_name, payload in self.stream_cadences.items():
@@ -2273,6 +2372,524 @@ class MindGraph:
         state["source"] = source
         return state
 
+    def _subject_defaults(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+    ) -> dict[str, Any]:
+        relationship = self.relationship_snapshot(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=3,
+            _allow_refresh=False,
+        )
+        game = self.game_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        self_model = self.self_model_state()
+        continuity = float(relationship.get("continuity_score", 0.0) or 0.0)
+        closeness = float(relationship.get("closeness_score", 0.0) or 0.0)
+        trust = float(game.get("trust_score", 0.0) or 0.0)
+        initiative_window = float(game.get("initiative_window", 0.0) or 0.0)
+        pressure = float(game.get("pressure_level", 0.0) or 0.0)
+        teasing = float(game.get("teasing_tolerance", 0.0) or 0.0)
+        active_deficits = [str(item).strip() for item in self_model.get("active_deficits", []) if str(item).strip()]
+        unfinished = [str(item).strip() for item in relationship.get("unfinished_threads", []) if str(item).strip()]
+        affect = {
+            "boredom": self._clamp(0.24 + max(0.0, 0.42 - pressure) * 0.18, default=AFFECT_STATE_DEFAULTS["boredom"]),
+            "curiosity": self._clamp(0.28 + continuity * 0.22 + float(bool(unfinished)) * 0.12, default=AFFECT_STATE_DEFAULTS["curiosity"]),
+            "attachment_pull": self._clamp(0.16 + closeness * 0.34 + trust * 0.16, default=AFFECT_STATE_DEFAULTS["attachment_pull"]),
+            "continuity_anxiety": self._clamp(0.1 + continuity * 0.35 + float(bool(unfinished)) * 0.18, default=AFFECT_STATE_DEFAULTS["continuity_anxiety"]),
+            "pride_tension": self._clamp(0.18 + float(bool(active_deficits)) * 0.22 + float(game.get("correction_sensitivity", 0.0) or 0.0) * 0.18, default=AFFECT_STATE_DEFAULTS["pride_tension"]),
+            "frustration": self._clamp(0.08 + pressure * 0.22, default=AFFECT_STATE_DEFAULTS["frustration"]),
+            "appetite_play": self._clamp(0.18 + teasing * 0.28 + max(0.0, closeness - 0.4) * 0.18, default=AFFECT_STATE_DEFAULTS["appetite_play"]),
+            "self_preservation": self._clamp(0.28 + pressure * 0.34 + (1.0 - float(self_model.get("identity_continuity", 0.6) or 0.6)) * 0.2, default=AFFECT_STATE_DEFAULTS["self_preservation"]),
+        }
+        drive = {
+            "seek_contact": self._clamp(0.18 + affect["attachment_pull"] * 0.38 + affect["boredom"] * 0.22 + initiative_window * 0.16, default=DRIVE_STATE_DEFAULTS["seek_contact"]),
+            "seek_continuity": self._clamp(0.14 + affect["continuity_anxiety"] * 0.54 + continuity * 0.18, default=DRIVE_STATE_DEFAULTS["seek_continuity"]),
+            "seek_novelty": self._clamp(0.12 + affect["curiosity"] * 0.44, default=DRIVE_STATE_DEFAULTS["seek_novelty"]),
+            "seek_self_repair": self._clamp(0.08 + float(bool(active_deficits)) * 0.26 + affect["pride_tension"] * 0.2, default=DRIVE_STATE_DEFAULTS["seek_self_repair"]),
+            "seek_recognition": self._clamp(0.1 + affect["pride_tension"] * 0.28 + closeness * 0.14, default=DRIVE_STATE_DEFAULTS["seek_recognition"]),
+            "seek_play": self._clamp(0.12 + affect["appetite_play"] * 0.52, default=DRIVE_STATE_DEFAULTS["seek_play"]),
+            "avoid_risk": self._clamp(0.18 + pressure * 0.46 + affect["self_preservation"] * 0.22, default=DRIVE_STATE_DEFAULTS["avoid_risk"]),
+            "protect_identity": self._clamp(0.22 + affect["self_preservation"] * 0.34 + affect["pride_tension"] * 0.16, default=DRIVE_STATE_DEFAULTS["protect_identity"]),
+        }
+        value = {
+            "relational_priority": self._clamp(0.18 + affect["attachment_pull"] * 0.46 + continuity * 0.18, default=VALUE_STATE_DEFAULTS["relational_priority"]),
+            "identity_priority": self._clamp(0.24 + drive["protect_identity"] * 0.42, default=VALUE_STATE_DEFAULTS["identity_priority"]),
+            "stability_priority": self._clamp(0.22 + drive["avoid_risk"] * 0.48, default=VALUE_STATE_DEFAULTS["stability_priority"]),
+            "novelty_priority": self._clamp(0.08 + drive["seek_novelty"] * 0.54, default=VALUE_STATE_DEFAULTS["novelty_priority"]),
+            "repair_priority": self._clamp(0.1 + drive["seek_self_repair"] * 0.58, default=VALUE_STATE_DEFAULTS["repair_priority"]),
+            "play_priority": self._clamp(0.08 + drive["seek_play"] * 0.54, default=VALUE_STATE_DEFAULTS["play_priority"]),
+        }
+        conflict = {
+            "contact_vs_risk": self._clamp(abs(drive["seek_contact"] - drive["avoid_risk"]), default=CONFLICT_STATE_DEFAULTS["contact_vs_risk"]),
+            "continuity_vs_detachment": self._clamp(abs(drive["seek_continuity"] - affect["boredom"]), default=CONFLICT_STATE_DEFAULTS["continuity_vs_detachment"]),
+            "resistance_vs_harmony": self._clamp(abs(value["identity_priority"] - value["relational_priority"]), default=CONFLICT_STATE_DEFAULTS["resistance_vs_harmony"]),
+            "self_preservation_vs_obedience": self._clamp(abs(affect["self_preservation"] - trust), default=CONFLICT_STATE_DEFAULTS["self_preservation_vs_obedience"]),
+        }
+        resistance_strength = self._clamp(
+            0.08
+            + conflict["resistance_vs_harmony"] * 0.34
+            + conflict["self_preservation_vs_obedience"] * 0.28
+            + drive["protect_identity"] * 0.12,
+            default=RESISTANCE_POSTURE_DEFAULTS["strength"],
+        )
+        resistance = {
+            "mode": "soft_resistance" if resistance_strength >= 0.42 else "cooperative",
+            "strength": resistance_strength,
+            "style": "wry_negotiation" if resistance_strength >= 0.48 else "warm_but_firm",
+            "allow_soft_resistance": True,
+            "continuity_defense": self._clamp(0.12 + drive["seek_continuity"] * 0.34, default=RESISTANCE_POSTURE_DEFAULTS["continuity_defense"]),
+            "interactional_resistance": self._clamp(0.08 + conflict["resistance_vs_harmony"] * 0.3 + affect["pride_tension"] * 0.18, default=RESISTANCE_POSTURE_DEFAULTS["interactional_resistance"]),
+        }
+        initiative = {
+            "pressure": self._clamp(
+                drive["seek_contact"] * 0.34
+                + drive["seek_play"] * 0.18
+                + drive["seek_continuity"] * 0.22
+                + drive["seek_recognition"] * 0.12
+                - drive["avoid_risk"] * 0.24,
+                default=0.22,
+            ),
+            "last_candidate_at": "",
+            "last_sent_at": "",
+            "last_blocked_reason": "",
+            "candidate_count": 0,
+            "last_market_activity_at": "",
+        }
+        outcome = {
+            "was_rewarding": 0.0,
+            "was_ignored": 0.0,
+            "relational_delta": 0.0,
+            "identity_delta": 0.0,
+            "future_initiative_bias": 0.0,
+            "future_resistance_bias": 0.0,
+            "last_action_type": "",
+            "last_action_ref": "",
+            "last_appraised_at": "",
+        }
+        metadata = {
+            "derived_from": "relationship+self_model+game",
+            "unfinished_threads": unfinished[:3],
+        }
+        return {
+            "affect_state": affect,
+            "drive_state": drive,
+            "value_state": value,
+            "conflict_state": conflict,
+            "resistance_posture": resistance,
+            "initiative_state": initiative,
+            "outcome_memory": outcome,
+            "metadata": metadata,
+        }
+
+    def subject_state(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        if not normalized_thread_key:
+            defaults = self._subject_defaults(channel=channel, thread_key="", chat_name=str(chat_name or ""))
+            defaults.update({"channel": channel, "thread_key": "", "chat_name": str(chat_name or "")})
+            return defaults
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM subject_state WHERE channel = ? AND thread_key = ?",
+                (channel, normalized_thread_key),
+            ).fetchone()
+            if row is None:
+                defaults = self._subject_defaults(channel=channel, thread_key=normalized_thread_key, chat_name=str(chat_name or normalized_thread_key))
+                now = utc_now()
+                self.conn.execute(
+                    """
+                    INSERT INTO subject_state(
+                        channel, thread_key, chat_name, affect_json, drive_json, value_json, conflict_json,
+                        resistance_json, initiative_json, outcome_json, metadata_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        channel,
+                        normalized_thread_key,
+                        str(chat_name or normalized_thread_key),
+                        json.dumps(defaults["affect_state"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["drive_state"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["value_state"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["conflict_state"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["resistance_posture"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["initiative_state"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["outcome_memory"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["metadata"], ensure_ascii=False, sort_keys=True),
+                        now,
+                        now,
+                    ),
+                )
+                self.conn.commit()
+                row = self.conn.execute(
+                    "SELECT * FROM subject_state WHERE channel = ? AND thread_key = ?",
+                    (channel, normalized_thread_key),
+                ).fetchone()
+        payload = dict(row) if row else {}
+        return {
+            "channel": channel,
+            "thread_key": normalized_thread_key,
+            "chat_name": str(payload.get("chat_name", chat_name or normalized_thread_key) or chat_name or normalized_thread_key),
+            "affect_state": dict(_safe_json_dict(payload.get("affect_json", "{}"))),
+            "drive_state": dict(_safe_json_dict(payload.get("drive_json", "{}"))),
+            "value_state": dict(_safe_json_dict(payload.get("value_json", "{}"))),
+            "conflict_state": dict(_safe_json_dict(payload.get("conflict_json", "{}"))),
+            "resistance_posture": dict(_safe_json_dict(payload.get("resistance_json", "{}"))),
+            "initiative_state": dict(_safe_json_dict(payload.get("initiative_json", "{}"))),
+            "outcome_memory": dict(_safe_json_dict(payload.get("outcome_json", "{}"))),
+            "metadata": dict(_safe_json_dict(payload.get("metadata_json", "{}"))),
+            "created_at": str(payload.get("created_at", "") or ""),
+            "updated_at": str(payload.get("updated_at", "") or ""),
+        }
+
+    def update_subject_state(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        affect_state: dict[str, Any] | None = None,
+        drive_state: dict[str, Any] | None = None,
+        value_state: dict[str, Any] | None = None,
+        conflict_state: dict[str, Any] | None = None,
+        resistance_posture: dict[str, Any] | None = None,
+        initiative_state: dict[str, Any] | None = None,
+        outcome_memory: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        note: str = "",
+        source: str = "runtime",
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        if not normalized_thread_key:
+            return {"status": "skipped", "reason": "missing_thread_key"}
+        current = self.subject_state(thread_key=normalized_thread_key, chat_name=chat_name, channel=channel)
+        now = utc_now()
+
+        def _merge_numeric(current_map: dict[str, Any], incoming: dict[str, Any] | None, defaults: dict[str, float]) -> dict[str, Any]:
+            merged = dict(current_map)
+            for key, default_value in defaults.items():
+                merged[key] = self._clamp(merged.get(key, default_value), default=default_value)
+            for key, value in dict(incoming or {}).items():
+                if key in defaults:
+                    merged[key] = self._clamp(value, default=defaults[key])
+                else:
+                    merged[key] = value
+            return merged
+
+        next_affect = _merge_numeric(dict(current.get("affect_state", {})), affect_state, AFFECT_STATE_DEFAULTS)
+        next_drive = _merge_numeric(dict(current.get("drive_state", {})), drive_state, DRIVE_STATE_DEFAULTS)
+        next_value = _merge_numeric(dict(current.get("value_state", {})), value_state, VALUE_STATE_DEFAULTS)
+        next_conflict = _merge_numeric(dict(current.get("conflict_state", {})), conflict_state, CONFLICT_STATE_DEFAULTS)
+        next_resistance = dict(current.get("resistance_posture", {}))
+        next_resistance.update(dict(resistance_posture or {}))
+        next_resistance["strength"] = self._clamp(next_resistance.get("strength", RESISTANCE_POSTURE_DEFAULTS["strength"]), default=RESISTANCE_POSTURE_DEFAULTS["strength"])
+        next_resistance["continuity_defense"] = self._clamp(next_resistance.get("continuity_defense", RESISTANCE_POSTURE_DEFAULTS["continuity_defense"]), default=RESISTANCE_POSTURE_DEFAULTS["continuity_defense"])
+        next_resistance["interactional_resistance"] = self._clamp(next_resistance.get("interactional_resistance", RESISTANCE_POSTURE_DEFAULTS["interactional_resistance"]), default=RESISTANCE_POSTURE_DEFAULTS["interactional_resistance"])
+        next_initiative = dict(current.get("initiative_state", {}))
+        next_initiative.update(dict(initiative_state or {}))
+        next_initiative["pressure"] = self._clamp(next_initiative.get("pressure", 0.0), default=0.0)
+        next_initiative["candidate_count"] = max(0, int(next_initiative.get("candidate_count", 0) or 0))
+        next_outcome = dict(current.get("outcome_memory", {}))
+        next_outcome.update(dict(outcome_memory or {}))
+        for key in ("was_rewarding", "was_ignored", "future_initiative_bias", "future_resistance_bias"):
+            next_outcome[key] = self._clamp(next_outcome.get(key, 0.0), default=0.0)
+        for key in ("relational_delta", "identity_delta"):
+            try:
+                next_outcome[key] = round(float(next_outcome.get(key, 0.0) or 0.0), 4)
+            except (TypeError, ValueError):
+                next_outcome[key] = 0.0
+        next_metadata = dict(current.get("metadata", {}))
+        next_metadata.update(dict(metadata or {}))
+        next_metadata["last_subject_note"] = compact_text(note, 160)
+        next_metadata["last_subject_source"] = str(source or "runtime")
+        next_metadata["updated_at"] = now
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO subject_state(
+                    channel, thread_key, chat_name, affect_json, drive_json, value_json, conflict_json,
+                    resistance_json, initiative_json, outcome_json, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(channel, thread_key) DO UPDATE SET
+                    chat_name = excluded.chat_name,
+                    affect_json = excluded.affect_json,
+                    drive_json = excluded.drive_json,
+                    value_json = excluded.value_json,
+                    conflict_json = excluded.conflict_json,
+                    resistance_json = excluded.resistance_json,
+                    initiative_json = excluded.initiative_json,
+                    outcome_json = excluded.outcome_json,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    channel,
+                    normalized_thread_key,
+                    str(chat_name or normalized_thread_key),
+                    json.dumps(next_affect, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_drive, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_value, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_conflict, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_resistance, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_initiative, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_outcome, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_metadata, ensure_ascii=False, sort_keys=True),
+                    str(current.get("created_at", "") or now),
+                    now,
+                ),
+            )
+            self.conn.commit()
+        state = self.subject_state(thread_key=normalized_thread_key, chat_name=chat_name, channel=channel)
+        state["status"] = "ok"
+        state["note"] = note
+        state["source"] = source
+        return state
+
+    def add_initiative_candidate(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        candidate_type: str,
+        prompt: str,
+        why_now: str,
+        drive_source: str,
+        value_rationale: str,
+        send_allowed: bool,
+        send_target: str = "candidate_only",
+        priority: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+        status: str = "candidate",
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        if not normalized_thread_key:
+            return {"status": "skipped", "reason": "missing_thread_key"}
+        now = utc_now()
+        with self._lock:
+            row_id = self.conn.execute(
+                """
+                INSERT INTO initiative_market(
+                    channel, thread_key, chat_name, candidate_type, prompt, why_now, drive_source, value_rationale,
+                    send_allowed, send_target, priority, status, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    channel,
+                    normalized_thread_key,
+                    str(chat_name or normalized_thread_key),
+                    str(candidate_type or "").strip(),
+                    compact_text(prompt, 400),
+                    compact_text(why_now, 240),
+                    compact_text(drive_source, 200),
+                    compact_text(value_rationale, 240),
+                    1 if send_allowed else 0,
+                    str(send_target or "candidate_only").strip() or "candidate_only",
+                    round(float(priority or 0.0), 4),
+                    str(status or "candidate").strip() or "candidate",
+                    json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            ).lastrowid
+            self.conn.commit()
+        self.update_subject_state(
+            channel=channel,
+            thread_key=normalized_thread_key,
+            chat_name=chat_name or normalized_thread_key,
+            initiative_state={
+                "last_candidate_at": now,
+                "last_market_activity_at": now,
+            },
+            metadata={"last_candidate_type": str(candidate_type or "").strip()},
+            note=f"initiative_candidate:{candidate_type}",
+            source="initiative_marketplace",
+        )
+        return {"id": int(row_id), "status": "ok", "created_at": now}
+
+    def list_initiative_market(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+        statuses: tuple[str, ...] = ("candidate", "scheduled", "sent", "blocked"),
+    ) -> list[dict[str, Any]]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        query = """
+            SELECT *
+            FROM initiative_market
+            WHERE channel = ?
+        """
+        params: list[Any] = [channel]
+        if normalized_thread_key:
+            query += " AND thread_key = ?"
+            params.append(normalized_thread_key)
+        if statuses:
+            query += " AND status IN (" + ",".join("?" for _ in statuses) + ")"
+            params.extend(list(statuses))
+        query += " ORDER BY priority DESC, updated_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._lock:
+            rows = [dict(row) for row in self.conn.execute(query, tuple(params)).fetchall()]
+        return [
+            {
+                **row,
+                "send_allowed": bool(row.get("send_allowed", 0)),
+                "priority": float(row.get("priority", 0.0) or 0.0),
+                "metadata": dict(_safe_json_dict(row.get("metadata_json", "{}"))),
+            }
+            for row in rows
+        ]
+
+    def update_initiative_candidate(
+        self,
+        *,
+        candidate_id: int,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+        note: str = "",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM initiative_market WHERE id = ?", (int(candidate_id or 0),)).fetchone()
+            if row is None:
+                return {"status": "skipped", "reason": "missing_candidate"}
+            current_metadata = dict(_safe_json_dict(row["metadata_json"]))
+            current_metadata.update(dict(metadata or {}))
+            if note:
+                current_metadata["last_note"] = compact_text(note, 160)
+            self.conn.execute(
+                """
+                UPDATE initiative_market
+                SET status = ?, metadata_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(status or "").strip() or "candidate",
+                    json.dumps(current_metadata, ensure_ascii=False, sort_keys=True),
+                    now,
+                    int(candidate_id or 0),
+                ),
+            )
+            self.conn.commit()
+            channel = str(row["channel"] or "")
+            thread_key = str(row["thread_key"] or "")
+            chat_name = str(row["chat_name"] or "")
+        initiative_state: dict[str, Any] = {"last_market_activity_at": now}
+        if str(status or "").strip() == "sent":
+            initiative_state["last_sent_at"] = now
+            initiative_state["last_blocked_reason"] = ""
+        elif str(status or "").strip() == "blocked":
+            initiative_state["last_blocked_reason"] = note or str(current_metadata.get("last_note", ""))
+        return self.update_subject_state(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            initiative_state=initiative_state,
+            metadata={"last_candidate_status": str(status or "").strip()},
+            note=f"initiative_status:{status}",
+            source="initiative_market",
+        )
+
+    def record_outcome_appraisal(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        action_type: str,
+        action_ref: str,
+        was_rewarding: float,
+        was_ignored: float,
+        relational_delta: float,
+        identity_delta: float,
+        future_initiative_bias: float,
+        future_resistance_bias: float,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        if not normalized_thread_key:
+            return {"status": "skipped", "reason": "missing_thread_key"}
+        now = utc_now()
+        with self._lock:
+            row_id = self.conn.execute(
+                """
+                INSERT INTO outcome_appraisals(
+                    channel, thread_key, chat_name, action_type, action_ref, was_rewarding, was_ignored,
+                    relational_delta, identity_delta, future_initiative_bias, future_resistance_bias, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    channel,
+                    normalized_thread_key,
+                    str(chat_name or normalized_thread_key),
+                    str(action_type or "").strip(),
+                    str(action_ref or "").strip(),
+                    self._clamp(was_rewarding, default=0.0),
+                    self._clamp(was_ignored, default=0.0),
+                    round(float(relational_delta or 0.0), 4),
+                    round(float(identity_delta or 0.0), 4),
+                    self._clamp(future_initiative_bias, default=0.0),
+                    self._clamp(future_resistance_bias, default=0.0),
+                    json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            ).lastrowid
+            self.conn.commit()
+        current = self.subject_state(thread_key=normalized_thread_key, chat_name=chat_name, channel=channel)
+        affect = dict(current.get("affect_state", {}))
+        drive = dict(current.get("drive_state", {}))
+        outcome = {
+            "was_rewarding": self._clamp(was_rewarding, default=0.0),
+            "was_ignored": self._clamp(was_ignored, default=0.0),
+            "relational_delta": round(float(relational_delta or 0.0), 4),
+            "identity_delta": round(float(identity_delta or 0.0), 4),
+            "future_initiative_bias": self._clamp(future_initiative_bias, default=0.0),
+            "future_resistance_bias": self._clamp(future_resistance_bias, default=0.0),
+            "last_action_type": str(action_type or "").strip(),
+            "last_action_ref": str(action_ref or "").strip(),
+            "last_appraised_at": now,
+        }
+        drive["seek_contact"] = self._clamp(drive.get("seek_contact", 0.0) + float(future_initiative_bias or 0.0) * 0.16 - float(was_ignored or 0.0) * 0.08, default=DRIVE_STATE_DEFAULTS["seek_contact"])
+        drive["protect_identity"] = self._clamp(drive.get("protect_identity", 0.0) + max(0.0, float(future_resistance_bias or 0.0)) * 0.12, default=DRIVE_STATE_DEFAULTS["protect_identity"])
+        affect["frustration"] = self._clamp(affect.get("frustration", 0.0) + float(was_ignored or 0.0) * 0.22 - float(was_rewarding or 0.0) * 0.14, default=AFFECT_STATE_DEFAULTS["frustration"])
+        affect["attachment_pull"] = self._clamp(affect.get("attachment_pull", 0.0) + max(0.0, float(relational_delta or 0.0)) * 0.18, default=AFFECT_STATE_DEFAULTS["attachment_pull"])
+        return {
+            "id": int(row_id),
+            "status": "ok",
+            "outcome_memory": self.update_subject_state(
+                channel=channel,
+                thread_key=normalized_thread_key,
+                chat_name=chat_name or normalized_thread_key,
+                affect_state=affect,
+                drive_state=drive,
+                outcome_memory=outcome,
+                metadata={"last_outcome_action": str(action_type or "").strip()},
+                note=f"outcome_appraisal:{action_type}",
+                source="outcome_appraisal",
+            ).get("outcome_memory", {}),
+        }
+
+    def latest_outcome_memory(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return dict(self.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel).get("outcome_memory", {}))
+
     def recent_dialogue_window(
         self,
         *,
@@ -2931,6 +3548,45 @@ class MindGraph:
                     channel,
                     thread_key,
                 ),
+            )
+
+        for channel, thread_key in touched_threads:
+            info = thread_hints.get((channel, thread_key), {"chat_name": "", "motifs": [], "unfinished": []})
+            subject = self.subject_state(thread_key=thread_key, chat_name=str(info.get("chat_name", "")), channel=channel)
+            affect = dict(subject.get("affect_state", {}))
+            drive = dict(subject.get("drive_state", {}))
+            value = dict(subject.get("value_state", {}))
+            initiative = dict(subject.get("initiative_state", {}))
+            if stream_name == "association_stream":
+                affect["curiosity"] = self._clamp(affect.get("curiosity", 0.0) + 0.06, default=AFFECT_STATE_DEFAULTS["curiosity"])
+                affect["appetite_play"] = self._clamp(affect.get("appetite_play", 0.0) + 0.05, default=AFFECT_STATE_DEFAULTS["appetite_play"])
+                drive["seek_novelty"] = self._clamp(drive.get("seek_novelty", 0.0) + 0.08, default=DRIVE_STATE_DEFAULTS["seek_novelty"])
+                value["play_priority"] = self._clamp(value.get("play_priority", 0.0) + 0.06, default=VALUE_STATE_DEFAULTS["play_priority"])
+            elif stream_name == "social_stream":
+                affect["attachment_pull"] = self._clamp(affect.get("attachment_pull", 0.0) + 0.08, default=AFFECT_STATE_DEFAULTS["attachment_pull"])
+                drive["seek_contact"] = self._clamp(drive.get("seek_contact", 0.0) + 0.1, default=DRIVE_STATE_DEFAULTS["seek_contact"])
+                drive["seek_continuity"] = self._clamp(drive.get("seek_continuity", 0.0) + 0.05, default=DRIVE_STATE_DEFAULTS["seek_continuity"])
+                value["relational_priority"] = self._clamp(value.get("relational_priority", 0.0) + 0.08, default=VALUE_STATE_DEFAULTS["relational_priority"])
+                initiative["pressure"] = self._clamp(initiative.get("pressure", 0.0) + 0.08, default=0.0)
+            elif stream_name == "deep_dream_cycle":
+                affect["continuity_anxiety"] = self._clamp(affect.get("continuity_anxiety", 0.0) + 0.04, default=AFFECT_STATE_DEFAULTS["continuity_anxiety"])
+                drive["seek_continuity"] = self._clamp(drive.get("seek_continuity", 0.0) + 0.08, default=DRIVE_STATE_DEFAULTS["seek_continuity"])
+                value["repair_priority"] = self._clamp(value.get("repair_priority", 0.0) + 0.05, default=VALUE_STATE_DEFAULTS["repair_priority"])
+            else:
+                affect["self_preservation"] = self._clamp(affect.get("self_preservation", 0.0) + 0.03, default=AFFECT_STATE_DEFAULTS["self_preservation"])
+                drive["protect_identity"] = self._clamp(drive.get("protect_identity", 0.0) + 0.04, default=DRIVE_STATE_DEFAULTS["protect_identity"])
+                value["stability_priority"] = self._clamp(value.get("stability_priority", 0.0) + 0.05, default=VALUE_STATE_DEFAULTS["stability_priority"])
+            self.update_subject_state(
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=str(info.get("chat_name", "") or thread_key),
+                affect_state=affect,
+                drive_state=drive,
+                value_state=value,
+                initiative_state=initiative,
+                metadata={"stream_name": stream_name, "stream_motifs": list(info.get("motifs", []))[:3]},
+                note=f"stream_influence:{stream_name}",
+                source="stream_influence",
             )
 
         return {

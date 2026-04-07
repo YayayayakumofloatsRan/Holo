@@ -562,6 +562,139 @@ def _initiative_status_payload(
     )
 
 
+def _affect_state_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/affect-state",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+
+
+def _drive_state_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/drive-state",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.drive_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+
+
+def _initiative_market_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/initiative-market",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.initiative_market(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+
+
+def _trace_resistance_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/trace-resistance",
+        payload={"thread_key": thread_key or "", "chat_name": chat_name or "", "channel": channel, "query": query},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_resistance(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query), "local_process"
+
+
+def _initiative_run_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    dry_run: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/initiative-run",
+        payload={"thread_key": thread_key or "", "chat_name": chat_name or "", "channel": channel, "dry_run": dry_run},
+        timeout=60.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.initiative_run(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                dry_run=dry_run,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _ingest_image_payload(
     config_path: str | None,
     *,
@@ -653,6 +786,56 @@ def _accept_stage3_payload(
     try:
         return (
             service.accept_stage3(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_stage4_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage4",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage4(
                 thread_key=thread_key,
                 chat_name=chat_name,
                 channel=channel,
@@ -1346,6 +1529,196 @@ def _evaluate_stage3_acceptance(
     }
 
 
+def _stage4_check(name: str, ok: bool, detail: str, *, severity: str = "failure") -> dict[str, object]:
+    return {"name": name, "ok": bool(ok), "detail": detail, "severity": severity}
+
+
+def _evaluate_stage4_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    brain_status: dict[str, object],
+    self_model: dict[str, object],
+    affect_state: dict[str, object],
+    drive_state: dict[str, object],
+    initiative_market: dict[str, object],
+    initiative_probe: dict[str, object],
+    operator_probe: dict[str, object],
+    resistance_trace: dict[str, object],
+    runtime_cycle: dict[str, object],
+    stream_ticks: list[dict[str, object]],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    loops = {str(item.get("loop_name", "")): dict(item) for item in brain_status.get("loops", []) if str(item.get("loop_name", ""))}
+    required_loops = {
+        "heartbeat",
+        "attention_tick",
+        "maintenance_stream",
+        "association_stream",
+        "social_stream",
+        "deep_dream_cycle",
+        "self_model_refresh",
+        "homeostasis_tick",
+        "operator_planning",
+        "operator_shadow_cycle",
+        "visual_ingest_cycle",
+        "affect_tick",
+        "drive_arbitration",
+        "initiative_marketplace",
+        "outcome_appraisal",
+    }
+    affect = dict(affect_state.get("affect_state", affect_state))
+    drive = dict(drive_state.get("drive_state", drive_state))
+    value_state = dict(drive_state.get("value_state", {}))
+    conflict_state = dict(drive_state.get("conflict_state", {}))
+    outcome_memory = dict(drive_state.get("outcome_memory", initiative_market.get("outcome_memory", {})))
+    market_rows = list(initiative_market.get("initiative_candidates", initiative_market.get("candidates", [])))
+    whitelist_send = any(bool(row.get("send_allowed")) for row in market_rows)
+    checks.append(
+        _stage4_check(
+            "live_endogenous_subject",
+            str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain",
+            f"status={health.get('status')} mode={mode_transition.get('mode')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "runtime_loops_visible",
+            required_loops.issubset(set(loops)),
+            f"visible_loops={sorted(loops)}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "affect_continuity",
+            bool(affect)
+            and sum(float(affect.get(key, 0.0) or 0.0) for key in ("boredom", "curiosity", "attachment_pull", "continuity_anxiety")) > 0.0,
+            f"affect={affect}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "drive_state_present",
+            bool(drive) and bool(value_state) and bool(conflict_state),
+            f"drive_keys={sorted(drive)} value_keys={sorted(value_state)} conflict_keys={sorted(conflict_state)}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "initiative_market_activity",
+            bool(market_rows)
+            and all(
+                bool(str(row.get("why_now", "")).strip())
+                and bool(str(row.get("drive_source", "")).strip())
+                and bool(str(row.get("value_rationale", "")).strip())
+                and "send_allowed" in row
+                for row in market_rows[:4]
+            ),
+            f"candidates={len(market_rows)} sample={market_rows[:2]}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "white_list_auto_send",
+            whitelist_send or bool(initiative_probe.get("allowed")),
+            f"market_send_allowed={whitelist_send} initiative_allowed={initiative_probe.get('allowed')}",
+            severity="warning",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "resistance_trace_explains_conflict",
+            (
+                float(resistance_trace.get("interactional_resistance", 0.0) or 0.0) > 0.0
+                or float(dict(resistance_trace.get("resistance_posture", {})).get("interactional_resistance", 0.0) or 0.0) > 0.0
+            )
+            and bool(resistance_trace.get("affect_state"))
+            and bool(resistance_trace.get("value_state"))
+            and bool(resistance_trace.get("conflict_state")),
+            f"resistance={resistance_trace}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "outcome_appraisal_feedback",
+            bool(runtime_cycle)
+            and str(dict(runtime_cycle.get("outcome_appraisal", {})).get("status", "ok")) in {"ok", "idle", "blocked"}
+            and (
+                "future_initiative_bias" in outcome_memory
+                or "future_resistance_bias" in outcome_memory
+                or bool(dict(runtime_cycle.get("outcome_appraisal", {})).get("latest_outcome"))
+            ),
+            f"outcome={outcome_memory} runtime={runtime_cycle.get('outcome_appraisal')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "subjective_continuity",
+            bool(self_model.get("long_horizon_goals"))
+            and bool(self_model.get("relational_commitments"))
+            and bool(stream_ticks),
+            f"goals={self_model.get('long_horizon_goals')} commitments={self_model.get('relational_commitments')} stream_ticks={len(stream_ticks)}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "operator_and_initiative_share_state",
+            bool(operator_probe.get("goal"))
+            and bool(initiative_probe.get("game_rationale"))
+            and bool(initiative_probe.get("drive_rationale"))
+            and bool(initiative_probe.get("affect_state")),
+            f"operator_goal={operator_probe.get('goal')} drive_rationale={initiative_probe.get('drive_rationale')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "fast_budget",
+            str(fast_benchmark.get("last_tier", "")) == "fast" and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0,
+            f"tier={fast_benchmark.get('last_tier')} max_ms={dict(fast_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "recall_budget",
+            str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0,
+            f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "deep_budget",
+            str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0,
+            f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "stage": "endogenous-drive-subject-stage4",
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "blockers": blockers,
+        "warnings": warnings,
+        "affect_continuity": affect_state,
+        "initiative_marketplace_activity": initiative_market,
+        "resistance_trace": resistance_trace,
+        "outcome_appraisal": outcome_memory,
+        "cache_hit_ratio": float(dict(brain_status.get("cache", {})).get("hit_ratio", 0.0) or 0.0),
+        "reply_latency_budgets": {
+            "fast": dict(fast_benchmark.get("timings_ms", {})),
+            "recall": dict(recall_benchmark.get("timings_ms", {})),
+            "deep_recall": dict(deep_benchmark.get("timings_ms", {})),
+        },
+        "stream_influence_count": len(stream_ticks),
+    }
+
+
 def command_init_db(config_path: str | None) -> int:
     config = load_config(config_path=config_path)
     store = QueueStore(config.runtime.db_path)
@@ -1679,6 +2052,78 @@ def command_trace_visual_recall(
     return 0
 
 
+def command_show_affect_state(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _affect_state_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_drive_state(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _drive_state_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_initiative_market(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _initiative_market_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_resistance(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+) -> int:
+    payload, _transport = _trace_resistance_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_accept_stage3(
     config_path: str | None,
     *,
@@ -1690,6 +2135,29 @@ def command_accept_stage3(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage3_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage4(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage4_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -2630,6 +3098,14 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-brain-status", help="Show Always-On brain runtime state")
     subparsers.add_parser("show-self-model", help="Show the current persisted self-model state")
     subparsers.add_parser("trace-self-model", help="Show the self-model alongside runtime and operator state")
+    affect_state_parser = subparsers.add_parser("show-affect-state", help="Show the current affect-state for one thread")
+    affect_state_parser.add_argument("--thread-key", default=None)
+    affect_state_parser.add_argument("--chat-name", default=None)
+    affect_state_parser.add_argument("--channel", default="wechat")
+    drive_state_parser = subparsers.add_parser("trace-drive-state", help="Show drive/value/conflict state for one thread")
+    drive_state_parser.add_argument("--thread-key", default=None)
+    drive_state_parser.add_argument("--chat-name", default=None)
+    drive_state_parser.add_argument("--channel", default="wechat")
     brain_mode_parser = subparsers.add_parser("set-brain-mode", help="Switch Always-On brain runtime mode without restart")
     brain_mode_parser.add_argument("--mode", required=True, choices=("silent", "companion", "dream_only", "full_brain"))
     brain_mode_parser.add_argument("--note", default="")
@@ -2658,6 +3134,16 @@ def main(argv: list[str] | None = None) -> int:
     initiative_status_parser.add_argument("--chat-name", default=None)
     initiative_status_parser.add_argument("--channel", default="wechat")
     initiative_status_parser.add_argument("--limit", type=int, default=5)
+    initiative_market_parser = subparsers.add_parser("show-initiative-market", help="Inspect the endogenous initiative marketplace")
+    initiative_market_parser.add_argument("--thread-key", default=None)
+    initiative_market_parser.add_argument("--chat-name", default=None)
+    initiative_market_parser.add_argument("--channel", default="wechat")
+    initiative_market_parser.add_argument("--limit", type=int, default=8)
+    resistance_parser = subparsers.add_parser("trace-resistance", help="Explain soft resistance posture for one thread/query")
+    resistance_parser.add_argument("--thread-key", default=None)
+    resistance_parser.add_argument("--chat-name", default=None)
+    resistance_parser.add_argument("--channel", default="wechat")
+    resistance_parser.add_argument("--query", required=True)
     initiative_dispatch_parser = subparsers.add_parser("dispatch-initiatives", help="Run one explicit initiative scheduling pass and optionally process jobs")
     initiative_dispatch_parser.add_argument("--no-process-jobs", action="store_true")
     initiative_dispatch_parser.add_argument("--limit", type=int, default=None)
@@ -2788,6 +3274,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage3_parser.add_argument("--sender", default=None)
     accept_stage3_parser.add_argument("--iterations", type=int, default=3)
     accept_stage3_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage4_parser = subparsers.add_parser("accept-stage4", help="Run the fixed Endogenous Drive Subject Stage-4 acceptance gate")
+    accept_stage4_parser.add_argument("--thread-key", default=None)
+    accept_stage4_parser.add_argument("--chat-name", default=None)
+    accept_stage4_parser.add_argument("--channel", default="wechat")
+    accept_stage4_parser.add_argument("--sender", default=None)
+    accept_stage4_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage4_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -2837,6 +3330,20 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_self_model(args.config)
     if args.command == "trace-self-model":
         return command_trace_self_model(args.config)
+    if args.command == "show-affect-state":
+        return command_show_affect_state(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "trace-drive-state":
+        return command_trace_drive_state(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
     if args.command == "set-brain-mode":
         return command_set_brain_mode(args.config, mode=args.mode, note=args.note)
     if args.command == "run-self-revision":
@@ -2878,6 +3385,22 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
             limit=args.limit,
+        )
+    if args.command == "show-initiative-market":
+        return command_show_initiative_market(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    if args.command == "trace-resistance":
+        return command_trace_resistance(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
         )
     if args.command == "dispatch-initiatives":
         return command_dispatch_initiatives(
@@ -3051,6 +3574,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage3":
         return command_accept_stage3(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage4":
+        return command_accept_stage4(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

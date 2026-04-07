@@ -283,6 +283,11 @@ def initiative_probe(
     thread = store.find_thread(channel=channel, thread_key=thread_key) if thread_key else None
     game_state = memory.graph.game_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
     relationship = memory.graph.relationship_snapshot(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=3)
+    subject_state = memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+    affect_state = dict(subject_state.get("affect_state", {}))
+    drive_state = dict(subject_state.get("drive_state", {}))
+    value_state = dict(subject_state.get("value_state", {}))
+    conflict_state = dict(subject_state.get("conflict_state", {}))
     effective_cooldown_hours = effective_initiative_cooldown_hours(
         config=config,
         game_state=game_state,
@@ -304,17 +309,31 @@ def initiative_probe(
         is_proactive=True,
         channel=channel,
     )
+    drive_pressure = (
+        float(drive_state.get("seek_contact", 0.0) or 0.0) * 0.34
+        + float(drive_state.get("seek_play", 0.0) or 0.0) * 0.16
+        + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.2
+        + float(affect_state.get("attachment_pull", 0.0) or 0.0) * 0.12
+        + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.08
+        - float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.2
+        - float(conflict_state.get("contact_vs_risk", 0.0) or 0.0) * 0.06
+    )
     game_ok = (
         float(game_state.get("trust_score", 0.0) or 0.0) >= 0.42
         and float(game_state.get("initiative_window", 0.0) or 0.0) >= 0.36
         and float(game_state.get("pressure_level", 0.0) or 0.0) <= 0.78
     )
-    allowed = bool(config.autonomy.initiative_probe_enabled) and cooldown_ready and policy_decision.allowed and game_ok
+    drive_ok = float(drive_pressure or 0.0) >= 0.34
+    allowed = bool(config.autonomy.initiative_probe_enabled) and cooldown_ready and policy_decision.allowed and game_ok and drive_ok
     return {
         "allowed": allowed,
         "blocked": not allowed,
         "mode": mode,
         "game_state": game_state,
+        "affect_state": affect_state,
+        "drive_state": drive_state,
+        "value_state": value_state,
+        "conflict_state": conflict_state,
         "relationship_state": relationship,
         "game_rationale": {
             "trust_score": float(game_state.get("trust_score", 0.0) or 0.0),
@@ -322,6 +341,14 @@ def initiative_probe(
             "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
             "pressure_level": float(game_state.get("pressure_level", 0.0) or 0.0),
             "ok": game_ok,
+        },
+        "drive_rationale": {
+            "pressure": round(float(drive_pressure or 0.0), 4),
+            "seek_contact": float(drive_state.get("seek_contact", 0.0) or 0.0),
+            "seek_continuity": float(drive_state.get("seek_continuity", 0.0) or 0.0),
+            "seek_play": float(drive_state.get("seek_play", 0.0) or 0.0),
+            "avoid_risk": float(drive_state.get("avoid_risk", 0.0) or 0.0),
+            "ok": drive_ok,
         },
         "policy_rationale": {
             "allowed": policy_decision.allowed,
@@ -334,4 +361,27 @@ def initiative_probe(
             "cooldown_hours": effective_cooldown_hours,
             "base_cooldown_hours": int(config.autonomy.initiative_cooldown_hours),
         },
+    }
+
+
+def trace_resistance(
+    *,
+    memory,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    query: str = "",
+) -> dict[str, Any]:
+    subject_state = memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+    return {
+        "thread_key": str(subject_state.get("thread_key", thread_key)),
+        "chat_name": str(subject_state.get("chat_name", chat_name)),
+        "channel": channel,
+        "query": str(query or ""),
+        "affect_state": dict(subject_state.get("affect_state", {})),
+        "drive_state": dict(subject_state.get("drive_state", {})),
+        "value_state": dict(subject_state.get("value_state", {})),
+        "conflict_state": dict(subject_state.get("conflict_state", {})),
+        "resistance_posture": dict(subject_state.get("resistance_posture", {})),
+        "outcome_memory": dict(subject_state.get("outcome_memory", {})),
     }

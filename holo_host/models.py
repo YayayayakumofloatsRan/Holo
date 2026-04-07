@@ -219,6 +219,13 @@ class TurnContext:
     homeostasis_state: dict[str, Any] = field(default_factory=dict)
     operator_state: dict[str, Any] = field(default_factory=dict)
     visual_memory: dict[str, Any] = field(default_factory=dict)
+    affect_state: dict[str, Any] = field(default_factory=dict)
+    drive_state: dict[str, Any] = field(default_factory=dict)
+    value_state: dict[str, Any] = field(default_factory=dict)
+    conflict_state: dict[str, Any] = field(default_factory=dict)
+    initiative_candidates: list[dict[str, Any]] = field(default_factory=list)
+    resistance_posture: dict[str, Any] = field(default_factory=dict)
+    outcome_memory: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.mind_packet:
@@ -244,6 +251,20 @@ class TurnContext:
             self.operator_state = dict(packet.get("operator_state", {}))
         if not self.visual_memory:
             self.visual_memory = dict(packet.get("visual_memory", {}))
+        if not self.affect_state:
+            self.affect_state = dict(packet.get("affect_state", {}))
+        if not self.drive_state:
+            self.drive_state = dict(packet.get("drive_state", {}))
+        if not self.value_state:
+            self.value_state = dict(packet.get("value_state", {}))
+        if not self.conflict_state:
+            self.conflict_state = dict(packet.get("conflict_state", {}))
+        if not self.initiative_candidates:
+            self.initiative_candidates = list(packet.get("initiative_candidates", []))
+        if not self.resistance_posture:
+            self.resistance_posture = dict(packet.get("resistance_posture", {}))
+        if not self.outcome_memory:
+            self.outcome_memory = dict(packet.get("outcome_memory", {}))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -270,6 +291,13 @@ class TurnContext:
             "homeostasis_state": dict(self.homeostasis_state),
             "operator_state": dict(self.operator_state),
             "visual_memory": dict(self.visual_memory),
+            "affect_state": dict(self.affect_state),
+            "drive_state": dict(self.drive_state),
+            "value_state": dict(self.value_state),
+            "conflict_state": dict(self.conflict_state),
+            "initiative_candidates": list(self.initiative_candidates),
+            "resistance_posture": dict(self.resistance_posture),
+            "outcome_memory": dict(self.outcome_memory),
         }
 
 

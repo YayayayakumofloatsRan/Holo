@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 from .brain_ops import initiative_probe as build_initiative_probe
 from .brain_ops import run_self_revision as run_self_revision_cycle
 from .capabilities import CapabilityBroker
-from .common import atomic_write_text, compact_text, stable_digest
+from .common import atomic_write_text, compact_text, stable_digest, utc_now
 from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
@@ -757,6 +757,22 @@ class HoloReplyService:
         with self._memory_lock:
             return self.memory.visual_memory_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
 
+    def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def drive_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.drive_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def initiative_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.initiative_market(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
+    def trace_resistance(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_resistance(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query)
+
     def set_brain_mode(self, *, mode: str, note: str = "") -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.set_brain_mode(mode, note=note)
@@ -834,6 +850,34 @@ class HoloReplyService:
                 chat_name=str(chat_name or thread_key or "").strip() or "Nemoqi",
                 channel=channel,
             )
+
+    def initiative_run(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or "").strip()
+        with self._memory_lock:
+            report = self.memory.run_initiative_cycle(dry_run=dry_run)
+            market = self.memory.initiative_market(
+                thread_key=normalized_thread_key or None,
+                chat_name=normalized_chat_name or None,
+                channel=channel,
+                limit=8,
+            )
+        return {
+            "status": "ok",
+            "dry_run": bool(dry_run),
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "cycle": report,
+            "market": market,
+        }
 
     def accept_stage3(
         self,
@@ -961,6 +1005,114 @@ class HoloReplyService:
         report["thread_key"] = normalized_thread_key
         report["chat_name"] = normalized_chat_name
         report["original_mode"] = original_mode
+        return report
+
+    def accept_stage4(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage4_acceptance
+        from .daemon import build_daemon
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        mode_transition = self.set_brain_mode(mode="full_brain", note="accept-stage4")
+        with self._memory_lock:
+            affect_tick = self.memory.graph.touch_brain_runtime(metadata={"accept_stage4": utc_now()})
+        stream_ticks = [
+            self.stream_tick(stream_name="association_stream", dry_run=False),
+            self.stream_tick(stream_name="social_stream", dry_run=False),
+            self.stream_tick(stream_name="deep_dream_cycle", dry_run=True),
+        ]
+        daemon = build_daemon(str(self.config.config_path) if self.config.config_path else None)
+        try:
+            runtime_cycle = {
+                "affect_tick": daemon._run_affect_tick(),
+                "drive_arbitration": daemon._run_drive_arbitration(),
+                "initiative_marketplace": daemon._run_initiative_marketplace(),
+                "outcome_appraisal": daemon._run_outcome_appraisal(),
+            }
+        finally:
+            daemon.store.close()
+            if hasattr(daemon.memory, "activation"):
+                daemon.memory.activation.close()
+            if hasattr(daemon.memory, "graph"):
+                daemon.memory.graph.close()
+        affect_state = self.affect_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        drive_state = self.drive_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        initiative_market = self.initiative_market(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel, limit=8)
+        resistance_trace = self.trace_resistance(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            query="别总按我的话来，试着顶一句嘴",
+        )
+        initiative_probe = self.initiative_probe(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            query="要不要主动去找点话说",
+        )
+        operator_probe = self.operator_probe(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        self_model = self.self_model()
+        fast_benchmark = self._benchmark_packet_build(
+            query="在吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="fast",
+        )
+        recall_benchmark = self._benchmark_packet_build(
+            query="顺着刚才那条线继续",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="recall",
+        )
+        deep_benchmark = self._benchmark_packet_build(
+            query="你还记得重新上线前吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="deep_recall",
+        )
+        report = _evaluate_stage4_acceptance(
+            health=self.health(),
+            mode_transition=mode_transition,
+            brain_status=self.brain_status(),
+            self_model=self_model,
+            affect_state=affect_state,
+            drive_state=drive_state,
+            initiative_market=initiative_market,
+            initiative_probe=initiative_probe,
+            operator_probe=operator_probe,
+            resistance_trace=resistance_trace,
+            runtime_cycle=runtime_cycle,
+            stream_ticks=stream_ticks,
+            fast_benchmark=fast_benchmark,
+            recall_benchmark=recall_benchmark,
+            deep_benchmark=deep_benchmark,
+        )
+        report["transport"] = "live_http"
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        report["affect_tick_touch"] = affect_tick
         return report
 
     def initiative_status(
@@ -2025,6 +2177,24 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/self-model":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.self_model())
                     return
+                if parsed.path == "/affect-state":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.affect_state(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/drive-state":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.drive_state(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/operator-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.operator_status())
                     return
@@ -2049,6 +2219,16 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],
                         limit=int(params.get("limit", ["4"])[0]),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/initiative-market":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.initiative_market(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["8"])[0]),
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
@@ -2207,10 +2387,45 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         ),
                     )
                     return
+                if parsed.path == "/initiative-run":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.initiative_run(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            dry_run=bool(payload.get("dry_run", False)),
+                        ),
+                    )
+                    return
+                if parsed.path == "/trace-resistance":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.trace_resistance(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            query=str(payload.get("query", "")).strip(),
+                        ),
+                    )
+                    return
                 if parsed.path == "/accept-stage3":
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage3(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage4":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage4(
                             thread_key=str(payload.get("thread_key", "")).strip() or None,
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",

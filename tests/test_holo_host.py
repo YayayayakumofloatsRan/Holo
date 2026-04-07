@@ -41,6 +41,27 @@ class FakeRunner:
 
 
 class FakeMemory:
+    @staticmethod
+    def _clamp(value: float, *, default: float = 0.0, minimum: float = 0.0, maximum: float = 1.0) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = float(default)
+        return max(minimum, min(maximum, numeric))
+
+    @staticmethod
+    def _initiative_pressure(affect_state: dict, drive_state: dict, value_state: dict, conflict_state: dict) -> float:
+        return FakeMemory._clamp(
+            float(drive_state.get("seek_contact", 0.0) or 0.0) * 0.34
+            + float(drive_state.get("seek_play", 0.0) or 0.0) * 0.16
+            + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.22
+            + float(affect_state.get("attachment_pull", 0.0) or 0.0) * 0.12
+            + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.08
+            - float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.2
+            - float(conflict_state.get("contact_vs_risk", 0.0) or 0.0) * 0.06,
+            default=0.0,
+        )
+
     def __init__(self):
         self.observed: list[tuple[str, str, str, list[str]]] = []
         self.observed_records: list[dict] = []
@@ -71,7 +92,7 @@ class FakeMemory:
         return {
             "addendum": f"隐式约束：{query}",
             "tier": self.sidecar_tier,
-            "mind_packet_version": "v6",
+            "mind_packet_version": "v7",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
@@ -88,6 +109,63 @@ class FakeMemory:
             },
             "stream_influence": {"influence": {"motifs": ["continuity"], "updated_threads": 1}},
             "self_revision_state": {"latest_status": "reviewed", "applied_patch": {}},
+            "affect_state": {
+                "boredom": 0.41,
+                "curiosity": 0.58,
+                "attachment_pull": 0.62,
+                "continuity_anxiety": 0.49,
+                "pride_tension": 0.37,
+                "frustration": 0.18,
+                "appetite_play": 0.54,
+                "self_preservation": 0.65,
+            },
+            "drive_state": {
+                "seek_contact": 0.69,
+                "seek_continuity": 0.74,
+                "seek_novelty": 0.51,
+                "seek_self_repair": 0.43,
+                "seek_recognition": 0.46,
+                "seek_play": 0.57,
+                "avoid_risk": 0.38,
+                "protect_identity": 0.66,
+            },
+            "value_state": {
+                "relational_priority": 0.81,
+                "identity_priority": 0.72,
+                "stability_priority": 0.63,
+                "novelty_priority": 0.44,
+                "repair_priority": 0.51,
+                "play_priority": 0.59,
+            },
+            "conflict_state": {
+                "contact_vs_intrusion": 0.36,
+                "continuity_vs_dignity": 0.42,
+                "resistance_vs_attachment": 0.33,
+                "self_preservation_vs_compliance": 0.27,
+            },
+            "initiative_candidates": [
+                {
+                    "id": 1,
+                    "candidate_type": "playful_nudge",
+                    "why_now": "boredom and attachment crossed the nudge threshold",
+                    "drive_source": "seek_contact+seek_play",
+                    "value_rationale": "relational_priority stays ahead of avoid_risk",
+                    "send_allowed": True,
+                    "status": "candidate",
+                }
+            ],
+            "resistance_posture": {
+                "interactional_resistance": 0.41,
+                "continuity_defense": 0.56,
+                "negotiation_bias": 0.63,
+                "owner_override_respected": True,
+            },
+            "outcome_memory": {
+                "was_rewarding": True,
+                "was_ignored": False,
+                "future_initiative_bias": 0.61,
+                "future_resistance_bias": 0.46,
+            },
             "self_model": {
                 "identity_continuity": 0.74,
                 "active_deficits": ["stiffness_drift"],
@@ -219,10 +297,98 @@ class FakeMemory:
         return {"status": "ok", "label": label or "", "snapshot_dir": "/tmp/fake"}
 
     def self_model_state(self) -> dict:
-        return dict(self.sidecar_packet("", context={}).get("self_model", {}))
+        return dict(getattr(self, "_self_model_state", self.sidecar_packet("", context={}).get("self_model", {})))
+
+    def latest_self_revision_state(self) -> dict:
+        return {"latest_status": "reviewed", "applied": True, "applied_patch": {"persona_blend": {"playfulness": 0.64}}, "applied_at": "2026-04-07T00:00:00Z"}
+
+    def update_self_model_state(self, payload: dict, *, reason: str = "", source: str = "runtime") -> dict:
+        current = self.self_model_state()
+        self._self_model_state = {
+            **current,
+            **dict(payload),
+            "metadata": {
+                **dict(current.get("metadata", {})),
+                **dict(payload.get("metadata", {})),
+                "last_reason": reason,
+                "last_source": source,
+            },
+        }
+        return dict(self._self_model_state)
+
+    def enqueue_operator_run(
+        self,
+        *,
+        task_type: str,
+        goal: str,
+        scope: str,
+        workspace_mode: str,
+        read_boundary: dict,
+        write_boundary: dict,
+        payload: dict,
+    ) -> dict:
+        run = {
+            "id": 1,
+            "task_type": task_type,
+            "goal": goal,
+            "scope": scope,
+            "workspace_mode": workspace_mode,
+            "read_boundary": dict(read_boundary),
+            "write_boundary": dict(write_boundary),
+            "payload": dict(payload),
+            "status": "planned",
+        }
+        self._pending_operator_run = dict(run)
+        return run
+
+    def pending_operator_run(self) -> dict:
+        return dict(getattr(self, "_pending_operator_run", {}))
+
+    def complete_operator_run(self, *, run_id: int, status: str, result: dict, shadow_workspace: str, applied_live: bool) -> dict:
+        run = dict(getattr(self, "_pending_operator_run", {}))
+        completed = {
+            **run,
+            "id": run_id,
+            "status": status,
+            "result": dict(result),
+            "shadow_workspace": shadow_workspace,
+            "applied_live": applied_live,
+        }
+        self._pending_operator_run = {}
+        self._last_operator_run = dict(completed)
+        return completed
+
+    def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
+        packet = self.sidecar_packet("", context={})
+        return {
+            "channel": channel,
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "affect_state": dict(packet.get("affect_state", {})),
+            "drive_state": dict(packet.get("drive_state", {})),
+            "value_state": dict(packet.get("value_state", {})),
+            "conflict_state": dict(packet.get("conflict_state", {})),
+            "outcome_memory": dict(packet.get("outcome_memory", {})),
+            "resistance_posture": dict(packet.get("resistance_posture", {})),
+        }
+
+    def drive_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
+        payload = self.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        payload["initiative_market"] = self.list_initiative_market(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=8)
+        return payload
 
     def operator_status(self) -> dict:
         return dict(self.sidecar_packet("", context={}).get("operator_state", {}))
+
+    def top_thread_commitments(self, limit: int = 4) -> list[dict]:
+        return [
+            {
+                "thread_key": "Nemoqi",
+                "chat_name": "Nemoqi",
+                "summary": "keep continuity alive without going stiff",
+                "relationship_score": 0.82,
+            }
+        ][:limit]
 
     def visual_memory_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
         normalized = str(thread_key or chat_name or "").strip()
@@ -239,6 +405,9 @@ class FakeMemory:
             "thread_relevance": latest.get("thread_relevance", 0.0),
             "visual_anchors": list(latest.get("visual_anchors", [])),
         }
+
+    def visual_memory(self, *, limit: int = 1) -> list[dict]:
+        return list(self.visual_rows[-limit:])
 
     def brain_status(self) -> dict:
         return {
@@ -257,6 +426,10 @@ class FakeMemory:
                 {"loop_name": "operator_planning"},
                 {"loop_name": "operator_shadow_cycle"},
                 {"loop_name": "visual_ingest_cycle"},
+                {"loop_name": "affect_tick"},
+                {"loop_name": "drive_arbitration"},
+                {"loop_name": "initiative_marketplace"},
+                {"loop_name": "outcome_appraisal"},
             ],
         }
 
@@ -399,6 +572,9 @@ class FakeMemory:
             "activation_sync": {"status": "ok"},
         }
 
+    def drain_visual_ingest_queue(self, *, limit: int = 1) -> dict:
+        return {"status": "blocked", "blocked_reason": "queue_empty", "processed": 0, "limit": limit}
+
     def archive_turn(
         self,
         user_text: str,
@@ -435,7 +611,14 @@ class FakeMemory:
         return {"window_hours": window_hours, "recent_thought_count": 0, "candidate_added": 0, "thought_added": 0}
 
     def run_initiative_cycle(self, *, dry_run: bool = False) -> dict:
-        return {"dry_run": dry_run, "staged": len(self.initiatives), "initiative_added": len(self.initiatives), "initiatives": list(self.initiatives)}
+        return {
+            "status": "ok",
+            "dry_run": dry_run,
+            "staged": len(self.initiatives),
+            "initiative_added": len(self.initiatives),
+            "initiatives": list(self.initiatives),
+            "candidates": self.list_initiative_market(limit=8),
+        }
 
     def list_callback_candidates(self, *, limit: int = 12) -> list[dict]:
         return []
@@ -444,7 +627,93 @@ class FakeMemory:
         return self.thoughts[-limit:]
 
     def list_initiative_candidates(self, *, limit: int = 12) -> list[dict]:
-        return self.initiatives[-limit:]
+        return self.list_initiative_market(limit=limit)
+
+    def list_initiative_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8, statuses=None) -> list[dict]:
+        rows = list(self.sidecar_packet("", context={}).get("initiative_candidates", []))
+        for index, item in enumerate(self.initiatives, start=len(rows) + 1):
+            rows.append(
+                {
+                    "id": index,
+                    "candidate_type": "contact_ping",
+                    "channel": item.get("channel", channel),
+                    "thread_key": item.get("thread_key", thread_key or ""),
+                    "chat_name": item.get("chat_name", chat_name or ""),
+                    "why_now": item.get("reason", "thread still warm"),
+                    "drive_source": "seek_contact",
+                    "value_rationale": "relational priority stays above avoid risk",
+                    "send_allowed": True,
+                    "status": "candidate",
+                    "priority": item.get("priority", 50),
+                    "prompt": item.get("prompt", ""),
+                }
+            )
+        normalized_thread_key = str(thread_key or "").strip()
+        normalized_chat_name = str(chat_name or "").strip()
+        filtered = []
+        for row in rows:
+            row_thread = str(row.get("thread_key", "")).strip()
+            row_chat = str(row.get("chat_name", "")).strip()
+            if normalized_thread_key and row_thread not in {normalized_thread_key, f"wechat:{normalized_thread_key}"}:
+                continue
+            if normalized_chat_name and row_chat != normalized_chat_name:
+                continue
+            if str(row.get("channel", channel)).strip() != channel:
+                continue
+            filtered.append(row)
+        return filtered[:limit]
+
+    def subject_state(self, *, thread_key: str, chat_name: str, channel: str = "wechat") -> dict:
+        packet = self.sidecar_packet("", context={})
+        return {
+            "affect_state": dict(packet.get("affect_state", {})),
+            "drive_state": dict(packet.get("drive_state", {})),
+            "value_state": dict(packet.get("value_state", {})),
+            "conflict_state": dict(packet.get("conflict_state", {})),
+            "resistance_posture": dict(packet.get("resistance_posture", {})),
+            "outcome_memory": dict(packet.get("outcome_memory", {})),
+        }
+
+    def update_subject_state(self, *, thread_key: str, chat_name: str, channel: str = "wechat", **changes) -> dict:
+        return {"status": "ok", "thread_key": thread_key, "chat_name": chat_name, "channel": channel, "changes": changes}
+
+    def add_initiative_candidate(self, **payload) -> dict:
+        return {"status": "ok", "id": payload.get("id", 1), **payload}
+
+    def update_initiative_candidate(self, candidate_id: int, *, status: str, note: str = "", payload: dict | None = None, metadata: dict | None = None, **kwargs) -> dict:
+        return {
+            "status": "ok",
+            "id": candidate_id,
+            "candidate_status": status,
+            "note": note,
+            "payload": dict(payload or {}),
+            "metadata": dict(metadata or {}),
+            **dict(kwargs),
+        }
+
+    def record_outcome_appraisal(self, *, thread_key: str, chat_name: str, channel: str = "wechat", **payload) -> dict:
+        return {"status": "ok", "thread_key": thread_key, "chat_name": chat_name, "channel": channel, **payload}
+
+    def latest_outcome_memory(self, *, thread_key: str, chat_name: str, channel: str = "wechat") -> dict:
+        return dict(self.sidecar_packet("", context={}).get("outcome_memory", {}))
+
+    def appraise_outcome(self, *, channel: str, thread_key: str, chat_name: str, **payload) -> dict:
+        return self.record_outcome_appraisal(channel=channel, thread_key=thread_key, chat_name=chat_name, **payload)
+
+    def trace_resistance(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict:
+        packet = self.sidecar_packet("", context={})
+        return {
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "query": query,
+            "interactional_resistance": float(dict(packet.get("resistance_posture", {})).get("interactional_resistance", 0.0) or 0.0),
+            "continuity_defense": float(dict(packet.get("resistance_posture", {})).get("continuity_defense", 0.0) or 0.0),
+            "affect_state": dict(packet.get("affect_state", {})),
+            "value_state": dict(packet.get("value_state", {})),
+            "conflict_state": dict(packet.get("conflict_state", {})),
+            "resistance_posture": dict(packet.get("resistance_posture", {})),
+        }
 
     def stream_status(self) -> dict:
         return {

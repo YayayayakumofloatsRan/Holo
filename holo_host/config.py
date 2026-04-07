@@ -98,6 +98,10 @@ class MemoryConfig:
     self_revision_min_evidence: int = 3
     self_model_refresh_interval_seconds: int = 300
     homeostasis_tick_interval_seconds: int = 120
+    affect_tick_interval_seconds: int = 90
+    drive_arbitration_interval_seconds: int = 120
+    initiative_marketplace_interval_seconds: int = 180
+    outcome_appraisal_interval_seconds: int = 240
     operator_planning_interval_seconds: int = 420
     operator_shadow_cycle_interval_seconds: int = 300
     visual_ingest_cycle_interval_seconds: int = 45
@@ -259,6 +263,10 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         self_revision_min_evidence=int(memory_data.get("self_revision_min_evidence", 3)),
         self_model_refresh_interval_seconds=int(memory_data.get("self_model_refresh_interval_seconds", 300)),
         homeostasis_tick_interval_seconds=int(memory_data.get("homeostasis_tick_interval_seconds", 120)),
+        affect_tick_interval_seconds=int(memory_data.get("affect_tick_interval_seconds", 90)),
+        drive_arbitration_interval_seconds=int(memory_data.get("drive_arbitration_interval_seconds", 120)),
+        initiative_marketplace_interval_seconds=int(memory_data.get("initiative_marketplace_interval_seconds", 180)),
+        outcome_appraisal_interval_seconds=int(memory_data.get("outcome_appraisal_interval_seconds", 240)),
         operator_planning_interval_seconds=int(memory_data.get("operator_planning_interval_seconds", 420)),
         operator_shadow_cycle_interval_seconds=int(memory_data.get("operator_shadow_cycle_interval_seconds", 300)),
         visual_ingest_cycle_interval_seconds=int(memory_data.get("visual_ingest_cycle_interval_seconds", 45)),

@@ -577,6 +577,111 @@ def _visual_memory_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
     return _dedupe_segments(lines)
 
 
+def _affect_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("affect_state", {}))
+    if not state:
+        return []
+    ordered = (
+        "boredom",
+        "curiosity",
+        "attachment_pull",
+        "continuity_anxiety",
+        "pride_tension",
+        "frustration",
+        "appetite_play",
+        "self_preservation",
+    )
+    return _dedupe_segments([f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}" for key in ordered if key in state])
+
+
+def _drive_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("drive_state", {}))
+    if not state:
+        return []
+    ordered = (
+        "seek_contact",
+        "seek_continuity",
+        "seek_novelty",
+        "seek_self_repair",
+        "seek_recognition",
+        "seek_play",
+        "avoid_risk",
+        "protect_identity",
+    )
+    return _dedupe_segments([f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}" for key in ordered if key in state])
+
+
+def _value_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("value_state", {}))
+    if not state:
+        return []
+    ordered = (
+        "relational_priority",
+        "identity_priority",
+        "stability_priority",
+        "novelty_priority",
+        "repair_priority",
+        "play_priority",
+    )
+    return _dedupe_segments([f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}" for key in ordered if key in state])
+
+
+def _conflict_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("conflict_state", {}))
+    if not state:
+        return []
+    ordered = (
+        "contact_vs_risk",
+        "continuity_vs_detachment",
+        "resistance_vs_harmony",
+        "self_preservation_vs_obedience",
+    )
+    return _dedupe_segments([f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}" for key in ordered if key in state])
+
+
+def _resistance_posture_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("resistance_posture", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    for key in ("mode", "style"):
+        value = str(state.get(key, "")).strip()
+        if value:
+            lines.append(f"{key}={value}")
+    for key in ("strength", "continuity_defense", "interactional_resistance"):
+        if key in state:
+            lines.append(f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}")
+    return _dedupe_segments(lines)
+
+
+def _initiative_candidates_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    candidates = list(packet.get("initiative_candidates", []))
+    lines: list[str] = []
+    for item in candidates[:3]:
+        candidate_type = str(item.get("candidate_type", "")).strip()
+        why_now = str(item.get("why_now", "")).strip()
+        rationale = str(item.get("value_rationale", "")).strip()
+        send_allowed = bool(item.get("send_allowed", False))
+        if candidate_type or why_now:
+            lines.append(f"{candidate_type or 'candidate'} | send_allowed={send_allowed} | why_now={why_now or rationale}")
+    return _dedupe_segments(lines)
+
+
+def _outcome_memory_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("outcome_memory", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    for key in ("last_action_type", "last_action_ref"):
+        value = str(state.get(key, "")).strip()
+        if value:
+            lines.append(f"{key}={value}")
+    for key in ("was_rewarding", "was_ignored", "relational_delta", "identity_delta", "future_initiative_bias", "future_resistance_bias"):
+        if key in state:
+            lines.append(f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}")
+    return _dedupe_segments(lines)
+
+
 def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> bool:
     if not config.memory.recall_reconstruct_enabled:
         return False
@@ -618,6 +723,13 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     self_model_lines = _self_model_lines_for_prompt(packet)
     homeostasis_lines = _homeostasis_lines_for_prompt(packet)
     operator_lines = _operator_state_lines_for_prompt(packet)
+    affect_lines = _affect_state_lines_for_prompt(packet)
+    drive_lines = _drive_state_lines_for_prompt(packet)
+    value_lines = _value_state_lines_for_prompt(packet)
+    conflict_lines = _conflict_state_lines_for_prompt(packet)
+    resistance_lines = _resistance_posture_lines_for_prompt(packet)
+    initiative_lines = _initiative_candidates_lines_for_prompt(packet)
+    outcome_lines = _outcome_memory_lines_for_prompt(packet)
     game_state_lines = _game_state_lines_for_prompt(packet)
     stream_influence_lines = _stream_influence_lines_for_prompt(packet)
     relationship_summary = "\n".join(f"- {line}" for line in relationship_lines) if relationship_lines else "- none"
@@ -625,6 +737,13 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     self_model_block = "\n".join(f"- {line}" for line in self_model_lines) if self_model_lines else "- none"
     homeostasis_block = "\n".join(f"- {line}" for line in homeostasis_lines) if homeostasis_lines else "- none"
     operator_block = "\n".join(f"- {line}" for line in operator_lines) if operator_lines else "- none"
+    affect_block = "\n".join(f"- {line}" for line in affect_lines) if affect_lines else "- none"
+    drive_block = "\n".join(f"- {line}" for line in drive_lines) if drive_lines else "- none"
+    value_block = "\n".join(f"- {line}" for line in value_lines) if value_lines else "- none"
+    conflict_block = "\n".join(f"- {line}" for line in conflict_lines) if conflict_lines else "- none"
+    resistance_block = "\n".join(f"- {line}" for line in resistance_lines) if resistance_lines else "- none"
+    initiative_block = "\n".join(f"- {line}" for line in initiative_lines) if initiative_lines else "- none"
+    outcome_block = "\n".join(f"- {line}" for line in outcome_lines) if outcome_lines else "- none"
     game_block = "\n".join(f"- {line}" for line in game_state_lines) if game_state_lines else "- none"
     stream_block = "\n".join(f"- {line}" for line in stream_influence_lines) if stream_influence_lines else "- none"
     thread_summary = str(packet.get("consciousness_stream", {}).get("thread_summary", "")).strip()
@@ -666,6 +785,13 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         f"Self model:\n{self_model_block}\n\n"
         f"Homeostasis:\n{homeostasis_block}\n\n"
         f"Operator state:\n{operator_block}\n\n"
+        f"Affect state:\n{affect_block}\n\n"
+        f"Drive state:\n{drive_block}\n\n"
+        f"Value state:\n{value_block}\n\n"
+        f"Conflict state:\n{conflict_block}\n\n"
+        f"Resistance posture:\n{resistance_block}\n\n"
+        f"Initiative candidates:\n{initiative_block}\n\n"
+        f"Outcome memory:\n{outcome_block}\n\n"
         f"Game state:\n{game_block}\n\n"
         f"Recent stream influence:\n{stream_block}\n\n"
         f"User query:\n{context.user_text}\n\n"
@@ -706,6 +832,13 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     self_model_block = _render_section("Self Model:", _self_model_lines_for_prompt(packet))
     homeostasis_block = _render_section("Homeostasis State:", _homeostasis_lines_for_prompt(packet))
     operator_state_block = _render_section("Operator State:", _operator_state_lines_for_prompt(packet))
+    affect_block = _render_section("Affect State:", _affect_state_lines_for_prompt(packet))
+    drive_block = _render_section("Drive State:", _drive_state_lines_for_prompt(packet))
+    value_block = _render_section("Value State:", _value_state_lines_for_prompt(packet))
+    conflict_block = _render_section("Conflict State:", _conflict_state_lines_for_prompt(packet))
+    resistance_block = _render_section("Resistance Posture:", _resistance_posture_lines_for_prompt(packet))
+    initiative_candidates_block = _render_section("Initiative Candidates:", _initiative_candidates_lines_for_prompt(packet))
+    outcome_block = _render_section("Outcome Memory:", _outcome_memory_lines_for_prompt(packet))
     game_state_block = _render_section("Game State:", _game_state_lines_for_prompt(packet))
     stream_influence_block = _render_section("Stream Influence:", _stream_influence_lines_for_prompt(packet))
     self_revision_block = _render_section("Self Revision State:", _self_revision_lines_for_prompt(packet))
@@ -750,6 +883,11 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         self_model_block,
         homeostasis_block,
         operator_state_block,
+        affect_block,
+        drive_block,
+        value_block,
+        conflict_block,
+        resistance_block,
         relationship_block,
         game_state_block,
         f"Current User Turn:\n{context.user_text}",
@@ -761,6 +899,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         consciousness_block,
         stream_influence_block,
         self_revision_block,
+        initiative_candidates_block,
+        outcome_block,
         recall_reconstruction_block,
         reply_constraints_block,
     ]

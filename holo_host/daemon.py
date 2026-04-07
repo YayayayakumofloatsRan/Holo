@@ -286,6 +286,10 @@ class HoloDaemon:
             "self_revision": {"interval_seconds": max(300, int(self.config.memory.self_revision_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "self_model_refresh": {"interval_seconds": max(60, int(self.config.memory.self_model_refresh_interval_seconds)), "enabled_modes": {"companion", "dream_only", "full_brain"}},
             "homeostasis_tick": {"interval_seconds": max(30, int(self.config.memory.homeostasis_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "affect_tick": {"interval_seconds": max(30, int(self.config.memory.affect_tick_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "drive_arbitration": {"interval_seconds": max(45, int(self.config.memory.drive_arbitration_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "initiative_marketplace": {"interval_seconds": max(60, int(self.config.memory.initiative_marketplace_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "outcome_appraisal": {"interval_seconds": max(90, int(self.config.memory.outcome_appraisal_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "operator_planning": {"interval_seconds": max(120, int(self.config.memory.operator_planning_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "operator_shadow_cycle": {"interval_seconds": max(90, int(self.config.memory.operator_shadow_cycle_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "visual_ingest_cycle": {"interval_seconds": max(15, int(self.config.memory.visual_ingest_cycle_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
@@ -294,6 +298,10 @@ class HoloDaemon:
             definitions["association_stream"]["interval_seconds"] = max(60, int(definitions["association_stream"]["interval_seconds"] * 0.5))
             definitions["social_stream"]["interval_seconds"] = max(90, int(definitions["social_stream"]["interval_seconds"] * 0.5))
             definitions["self_revision"]["interval_seconds"] = max(600, int(definitions["self_revision"]["interval_seconds"] * 0.5))
+            definitions["affect_tick"]["interval_seconds"] = max(20, int(definitions["affect_tick"]["interval_seconds"] * 0.75))
+            definitions["drive_arbitration"]["interval_seconds"] = max(30, int(definitions["drive_arbitration"]["interval_seconds"] * 0.75))
+            definitions["initiative_marketplace"]["interval_seconds"] = max(45, int(definitions["initiative_marketplace"]["interval_seconds"] * 0.75))
+            definitions["outcome_appraisal"]["interval_seconds"] = max(60, int(definitions["outcome_appraisal"]["interval_seconds"] * 0.75))
             definitions["operator_planning"]["interval_seconds"] = max(90, int(definitions["operator_planning"]["interval_seconds"] * 0.75))
             definitions["operator_shadow_cycle"]["interval_seconds"] = max(60, int(definitions["operator_shadow_cycle"]["interval_seconds"] * 0.75))
         return definitions
@@ -410,6 +418,10 @@ class HoloDaemon:
         self_revision = self._run_loop("self_revision", mode=mode, runner=self._run_self_revision_cycle)
         self_model = self._run_loop("self_model_refresh", mode=mode, runner=self._run_self_model_refresh_cycle)
         homeostasis = self._run_loop("homeostasis_tick", mode=mode, runner=self._run_homeostasis_tick)
+        affect_tick = self._run_loop("affect_tick", mode=mode, runner=self._run_affect_tick)
+        drive_arbitration = self._run_loop("drive_arbitration", mode=mode, runner=self._run_drive_arbitration)
+        initiative_marketplace = self._run_loop("initiative_marketplace", mode=mode, runner=self._run_initiative_marketplace)
+        outcome_appraisal = self._run_loop("outcome_appraisal", mode=mode, runner=self._run_outcome_appraisal)
         operator_plan = self._run_loop("operator_planning", mode=mode, runner=self._run_operator_planning_cycle)
         operator_shadow = self._run_loop("operator_shadow_cycle", mode=mode, runner=self._run_operator_shadow_cycle)
         visual_ingest = self._run_loop("visual_ingest_cycle", mode=mode, runner=self._run_visual_ingest_cycle)
@@ -427,6 +439,10 @@ class HoloDaemon:
             "self_revision": self_revision,
             "self_model_refresh": self_model,
             "homeostasis_tick": homeostasis,
+            "affect_tick": affect_tick,
+            "drive_arbitration": drive_arbitration,
+            "initiative_marketplace": initiative_marketplace,
+            "outcome_appraisal": outcome_appraisal,
             "operator_planning": operator_plan,
             "operator_shadow_cycle": operator_shadow,
             "visual_ingest_cycle": visual_ingest,
@@ -687,6 +703,7 @@ class HoloDaemon:
         thread = bundle["thread"]
         contact = bundle["contact"]
         payload = dict(bundle["payload"])
+        candidate_id = int(payload.get("id", 0) or 0)
         reason = str(payload.get("reason", "") or payload.get("prompt", "") or "initiative_ping")
         probe = build_initiative_probe(
             config=self.config,
@@ -705,6 +722,13 @@ class HoloDaemon:
                 or probe.get("policy_rationale", {}).get("reason")
                 or "initiative_probe_blocked"
             )
+            if candidate_id:
+                self.memory.graph.update_initiative_candidate(
+                    candidate_id=candidate_id,
+                    status="blocked",
+                    metadata={"blocked_reason": block_reason, "probe": probe},
+                    note=block_reason,
+                )
             self.store.block_job(int(job["id"]), block_reason)
             return f"blocked:{job['id']}:initiative_probe_blocked"
         decision = self.policy.outbound_decision(
@@ -716,6 +740,13 @@ class HoloDaemon:
             channel="wechat",
         )
         if not decision.allowed:
+            if candidate_id:
+                self.memory.graph.update_initiative_candidate(
+                    candidate_id=candidate_id,
+                    status="blocked",
+                    metadata={"blocked_reason": decision.reason},
+                    note=decision.reason,
+                )
             self.store.block_job(int(job["id"]), decision.reason)
             return f"blocked:{job['id']}:{decision.reason}"
 
@@ -741,12 +772,26 @@ class HoloDaemon:
         prompt = initiative_prompt(bundle, sidecar)
         codex_result = self.runner.run(prompt, session_id=str(thread.get("codex_session_id", "")))
         if codex_result.returncode != 0 or not codex_result.reply_text.strip():
+            if candidate_id:
+                self.memory.graph.update_initiative_candidate(
+                    candidate_id=candidate_id,
+                    status="blocked",
+                    metadata={"blocked_reason": "codex_failure"},
+                    note="codex_failure",
+                )
             self.store.retry_job(int(job["id"]), codex_result.stderr or codex_result.stdout or "empty_reply", delay_seconds=900)
             return f"retry:{job['id']}:codex_failure"
 
         repaired = self.memory.repair_reply(reason, codex_result.reply_text)
         final_reply = shape_wechat_reply(str(repaired.get("final_draft", codex_result.reply_text)).strip())
         if not final_reply:
+            if candidate_id:
+                self.memory.graph.update_initiative_candidate(
+                    candidate_id=candidate_id,
+                    status="blocked",
+                    metadata={"blocked_reason": "empty_initiative_reply"},
+                    note="empty_initiative_reply",
+                )
             self.store.block_job(int(job["id"]), "empty_initiative_reply")
             return f"blocked:{job['id']}:empty_initiative_reply"
 
@@ -779,6 +824,13 @@ class HoloDaemon:
         )
         self.memory.record_recall(list(sidecar.get("selected_memory_ids", [])), success=True)
         self.store.mark_initiative_sent(int(contact["id"]), note=compact_text(reason, 160))
+        if candidate_id:
+            self.memory.graph.update_initiative_candidate(
+                candidate_id=candidate_id,
+                status="sent",
+                metadata={"remote_message_id": remote_message_id, "queue_path": task_info["path"]},
+                note="sent",
+            )
         pseudo_turn = f"[initiative_ping] reason={reason}"
         archive_metadata = {
             "channel": "wechat",
@@ -880,7 +932,24 @@ class HoloDaemon:
             thread_key = str(row.get("thread_key", "")).strip()
             if channel != "wechat" or not chat_name or not thread_key:
                 continue
+            candidate_id = int(row.get("id", 0) or 0)
+            if not bool(row.get("send_allowed", False)):
+                if candidate_id:
+                    self.memory.graph.update_initiative_candidate(
+                        candidate_id=candidate_id,
+                        status="blocked",
+                        metadata={"blocked_reason": "send_not_allowed"},
+                        note="send_not_allowed",
+                    )
+                continue
             if not self._is_whitelisted_initiative_contact(chat_name):
+                if candidate_id:
+                    self.memory.graph.update_initiative_candidate(
+                        candidate_id=candidate_id,
+                        status="blocked",
+                        metadata={"blocked_reason": "not_whitelisted"},
+                        note="not_whitelisted",
+                    )
                 continue
             contact_email = f"wechat:{thread_key}"
             contact = self.store.find_contact(contact_email) or self.store.ensure_contact(contact_email, chat_name)
@@ -912,6 +981,13 @@ class HoloDaemon:
                         "cooldown_hours": cooldown_hours,
                     }
                 )
+                if candidate_id:
+                    self.memory.graph.update_initiative_candidate(
+                        candidate_id=candidate_id,
+                        status="blocked",
+                        metadata={"blocked_reason": "cooldown_active"},
+                        note="cooldown_active",
+                    )
                 continue
             if self.store.has_pending_initiative(int(thread["id"])):
                 continue
@@ -935,6 +1011,13 @@ class HoloDaemon:
                         "probe": probe,
                     }
                 )
+                if candidate_id:
+                    self.memory.graph.update_initiative_candidate(
+                        candidate_id=candidate_id,
+                        status="blocked",
+                        metadata={"blocked_reason": "initiative_probe_blocked", "probe": probe},
+                        note="initiative_probe_blocked",
+                    )
                 continue
             job_id = self.store.enqueue_job(
                 task_type="initiative_ping",
@@ -944,6 +1027,13 @@ class HoloDaemon:
                 payload=row,
             )
             scheduled.append(job_id)
+            if candidate_id:
+                self.memory.graph.update_initiative_candidate(
+                    candidate_id=candidate_id,
+                    status="scheduled",
+                    metadata={"scheduled_job_id": job_id},
+                    note="scheduled",
+                )
             if len(scheduled) >= self.config.runtime.max_jobs_per_cycle:
                 break
         cycle_report["scheduled_job_ids"] = scheduled
@@ -986,6 +1076,109 @@ class HoloDaemon:
         state = build_homeostasis_state(memory=self.memory, config=self.config)
         self.memory.graph.touch_brain_runtime(metadata={"homeostasis_state": state})
         return state
+
+    def _run_affect_tick(self) -> dict[str, Any]:
+        updated: list[dict[str, Any]] = []
+        for item in self.memory.graph.top_thread_commitments(limit=6):
+            channel = str(item.get("channel", "") or "").strip() or "wechat"
+            thread_key = str(item.get("thread_key", "") or "").strip()
+            chat_name = str(item.get("chat_name", "") or thread_key).strip() or thread_key
+            if not thread_key:
+                continue
+            subject = self.memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+            affect = dict(subject.get("affect_state", {}))
+            drive = dict(subject.get("drive_state", {}))
+            affect["boredom"] = self.memory._clamp(float(affect.get("boredom", 0.0) or 0.0) + 0.03, default=0.0)
+            affect["curiosity"] = self.memory._clamp(float(affect.get("curiosity", 0.0) or 0.0) + 0.02, default=0.0)
+            affect["attachment_pull"] = self.memory._clamp(float(affect.get("attachment_pull", 0.0) or 0.0) + 0.015, default=0.0)
+            drive["seek_contact"] = self.memory._clamp(float(drive.get("seek_contact", 0.0) or 0.0) + 0.02, default=0.0)
+            self.memory.graph.update_subject_state(
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                affect_state=affect,
+                drive_state=drive,
+                metadata={"affect_tick": utc_now()},
+                note="affect_tick",
+                source="daemon",
+            )
+            updated.append({"thread_key": thread_key, "chat_name": chat_name, "boredom": affect["boredom"], "seek_contact": drive["seek_contact"]})
+        return {"status": "ok", "updated_threads": len(updated), "threads": updated[:4]}
+
+    def _run_drive_arbitration(self) -> dict[str, Any]:
+        updated: list[dict[str, Any]] = []
+        for item in self.memory.graph.top_thread_commitments(limit=6):
+            channel = str(item.get("channel", "") or "").strip() or "wechat"
+            thread_key = str(item.get("thread_key", "") or "").strip()
+            chat_name = str(item.get("chat_name", "") or thread_key).strip() or thread_key
+            if not thread_key:
+                continue
+            subject = self.memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+            affect = dict(subject.get("affect_state", {}))
+            drive = dict(subject.get("drive_state", {}))
+            value = dict(subject.get("value_state", {}))
+            conflict = dict(subject.get("conflict_state", {}))
+            pressure = self.memory._initiative_pressure(affect, drive, value, conflict)
+            self.memory.graph.update_subject_state(
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                initiative_state={"pressure": pressure},
+                metadata={"drive_arbitration": utc_now()},
+                note="drive_arbitration",
+                source="daemon",
+            )
+            updated.append({"thread_key": thread_key, "chat_name": chat_name, "pressure": pressure})
+        return {"status": "ok", "updated_threads": len(updated), "pressure": updated[:4]}
+
+    def _run_initiative_marketplace(self) -> dict[str, Any]:
+        return self.memory.run_initiative_cycle(dry_run=False)
+
+    def _run_outcome_appraisal(self) -> dict[str, Any]:
+        appraised: list[dict[str, Any]] = []
+        for item in self.memory.graph.top_thread_commitments(limit=4):
+            channel = str(item.get("channel", "") or "").strip() or "wechat"
+            thread_key = str(item.get("thread_key", "") or "").strip()
+            chat_name = str(item.get("chat_name", "") or thread_key).strip() or thread_key
+            if not thread_key:
+                continue
+            market = self.memory.graph.list_initiative_market(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=3,
+                statuses=("sent",),
+            )
+            if not market:
+                continue
+            latest = dict(market[0])
+            metadata = dict(latest.get("metadata", {}))
+            if bool(metadata.get("outcome_appraised", False)):
+                continue
+            appraisal = self.memory.appraise_outcome(
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                action_type="initiative_ping",
+                action_ref=str(latest.get("id", "")),
+                was_rewarding=0.42,
+                was_ignored=0.08,
+                relational_delta=0.06,
+                identity_delta=0.02,
+                future_initiative_bias=0.08,
+                future_resistance_bias=0.02,
+                metadata={"source_candidate": latest.get("candidate_type", "")},
+            )
+            self.memory.graph.update_initiative_candidate(
+                candidate_id=int(latest.get("id", 0) or 0),
+                status="sent",
+                metadata={"outcome_appraised": True},
+                note="outcome_appraised",
+            )
+            appraised.append({"thread_key": thread_key, "candidate_id": latest.get("id", 0), "outcome": appraisal})
+        if not appraised:
+            return {"status": "blocked", "blocked_reason": "no_pending_outcome"}
+        return {"status": "ok", "appraised": len(appraised), "items": appraised[:3]}
 
     def _run_operator_planning_cycle(self) -> dict[str, Any]:
         pending = self.memory.graph.pending_operator_run()

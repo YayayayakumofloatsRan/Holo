@@ -100,7 +100,7 @@ class MemoryFabricTests(unittest.TestCase):
                 context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
 
-            self.assertEqual(packet["mind_packet_version"], "v6")
+            self.assertEqual(packet["mind_packet_version"], "v7")
             self.assertIn(packet["retrieval_mode"], {"hybrid-led", "hybrid-led+fallback", "graph-led"})
             self.assertIn("graph_hits", packet)
             self.assertIn("vector_hits", packet)
@@ -117,6 +117,13 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertIn("homeostasis_state", packet)
             self.assertIn("operator_state", packet)
             self.assertIn("visual_memory", packet)
+            self.assertIn("affect_state", packet)
+            self.assertIn("drive_state", packet)
+            self.assertIn("value_state", packet)
+            self.assertIn("conflict_state", packet)
+            self.assertIn("initiative_candidates", packet)
+            self.assertIn("resistance_posture", packet)
+            self.assertIn("outcome_memory", packet)
             self.assertTrue(packet["activation_trace_ids"])
             self.assertEqual(packet["memory_route"], "hybrid")
             bridge.activation.close()

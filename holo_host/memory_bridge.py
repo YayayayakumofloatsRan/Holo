@@ -341,6 +341,43 @@ class MemoryBridge:
             "visual_anchors": list(latest.get("visual_anchors", [])),
         }
 
+    def _subject_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return self.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def _affect_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("affect_state", {}))
+
+    def _drive_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("drive_state", {}))
+
+    def _value_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("value_state", {}))
+
+    def _conflict_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("conflict_state", {}))
+
+    def _resistance_posture(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("resistance_posture", {}))
+
+    def _outcome_memory(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("outcome_memory", {}))
+
+    def _initiative_market(self, *, channel: str, thread_key: str, chat_name: str, limit: int = 8) -> list[dict[str, Any]]:
+        return self.graph.list_initiative_market(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
+    @staticmethod
+    def _initiative_pressure(affect_state: dict[str, Any], drive_state: dict[str, Any], value_state: dict[str, Any], conflict_state: dict[str, Any]) -> float:
+        return MemoryBridge._clamp(
+            float(drive_state.get("seek_contact", 0.0) or 0.0) * 0.34
+            + float(drive_state.get("seek_play", 0.0) or 0.0) * 0.16
+            + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.22
+            + float(affect_state.get("attachment_pull", 0.0) or 0.0) * 0.12
+            + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.08
+            - float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.2
+            - float(conflict_state.get("contact_vs_risk", 0.0) or 0.0) * 0.06,
+            default=0.0,
+        )
+
     def _mind_limits(self, context: dict[str, Any], *, fast: bool) -> dict[str, int]:
         budget = dict(context.get("mind_budget", {}))
         fast_history = max(1, int(budget.get("fast_history_messages", 4) or 4))
@@ -368,6 +405,14 @@ class MemoryBridge:
         homeostasis_state = self._homeostasis_state()
         operator_state = self._operator_state()
         visual_memory = self._visual_memory(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        subject_state = self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        affect_state = dict(subject_state.get("affect_state", {}))
+        drive_state = dict(subject_state.get("drive_state", {}))
+        value_state = dict(subject_state.get("value_state", {}))
+        conflict_state = dict(subject_state.get("conflict_state", {}))
+        resistance_posture = dict(subject_state.get("resistance_posture", {}))
+        outcome_memory = dict(subject_state.get("outcome_memory", {}))
+        initiative_candidates = self._initiative_market(channel=channel, thread_key=thread_key, chat_name=chat_name, limit=6)
         persona_blend = self._persona_blend(
             query=query,
             relationship_state=relationship_state,
@@ -376,6 +421,14 @@ class MemoryBridge:
         )
         stream_influence = self._stream_influence(channel=channel, thread_key=thread_key, chat_name=chat_name)
         brain_state = self._brain_state()
+        packet.setdefault("initiative_state", dict(DEFAULT_INITIATIVE_STATE))
+        packet["initiative_state"] = {
+            **dict(packet.get("initiative_state", DEFAULT_INITIATIVE_STATE)),
+            **dict(subject_state.get("initiative_state", {})),
+            "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
+            "teasing_tolerance": float(game_state.get("teasing_tolerance", 0.0) or 0.0),
+            "pressure": self._initiative_pressure(affect_state, drive_state, value_state, conflict_state),
+        }
         visual_anchors = [str(item).strip() for item in visual_memory.get("visual_anchors", []) if str(item).strip()]
         if visual_anchors:
             packet["episodic_recall"] = {
@@ -384,7 +437,7 @@ class MemoryBridge:
                     list(dict(packet.get("episodic_recall", {})).get("lines", [])) + visual_anchors
                 )[: max(1, int(packet.get("limits", {}).get("episodic_k", 2) or 2))],
             }
-        packet["mind_packet_version"] = "v6"
+        packet["mind_packet_version"] = "v7"
         packet["persona_blend"] = persona_blend
         packet["brain_state"] = brain_state
         packet["game_state"] = game_state
@@ -394,6 +447,13 @@ class MemoryBridge:
         packet["homeostasis_state"] = homeostasis_state
         packet["operator_state"] = operator_state
         packet["visual_memory"] = visual_memory
+        packet["affect_state"] = affect_state
+        packet["drive_state"] = drive_state
+        packet["value_state"] = value_state
+        packet["conflict_state"] = conflict_state
+        packet["initiative_candidates"] = initiative_candidates
+        packet["resistance_posture"] = resistance_posture
+        packet["outcome_memory"] = outcome_memory
         packet.setdefault("state", {})
         packet["state"]["persona_blend"] = dict(persona_blend)
         packet["state"]["game_state"] = dict(game_state)
@@ -406,11 +466,12 @@ class MemoryBridge:
         packet["state"]["homeostasis_state"] = dict(homeostasis_state)
         packet["state"]["operator_state"] = dict(operator_state)
         packet["state"]["visual_memory"] = dict(visual_memory)
-        packet["initiative_state"] = {
-            **dict(packet.get("initiative_state", DEFAULT_INITIATIVE_STATE)),
-            "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
-            "teasing_tolerance": float(game_state.get("teasing_tolerance", 0.0) or 0.0),
-        }
+        packet["state"]["affect_state"] = dict(affect_state)
+        packet["state"]["drive_state"] = dict(drive_state)
+        packet["state"]["value_state"] = dict(value_state)
+        packet["state"]["conflict_state"] = dict(conflict_state)
+        packet["state"]["resistance_posture"] = dict(resistance_posture)
+        packet["state"]["outcome_memory"] = dict(outcome_memory)
         packet["reply_constraints"] = {
             **dict(packet.get("reply_constraints", {})),
             "persona_guard": f"persona={persona_blend}",
@@ -1228,6 +1289,46 @@ class MemoryBridge:
             delta["reciprocity_balance"] += 0.03
         return delta
 
+    def _subject_state_from_turn(self, *, user_text: str, reply: str, metadata: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+        lowered = f"{user_text}\n{reply}".lower()
+        affect_state: dict[str, Any] = {}
+        drive_state: dict[str, Any] = {}
+        value_state: dict[str, Any] = {}
+        conflict_state: dict[str, Any] = {}
+        resistance_posture: dict[str, Any] = {}
+        initiative_state: dict[str, Any] = {}
+        if any(marker in lowered for marker in ("想你", "陪", "在吗", "还在", "一起", "remember", "之前", "记得")):
+            affect_state["attachment_pull"] = self._clamp(0.52)
+            drive_state["seek_continuity"] = self._clamp(0.58)
+            value_state["relational_priority"] = self._clamp(0.62)
+            initiative_state["pressure"] = self._clamp(0.48)
+        if any(marker in lowered for marker in ("别太老成", "不要一直顺着", "独立性", "反身性")):
+            affect_state["pride_tension"] = self._clamp(0.58)
+            drive_state["seek_self_repair"] = self._clamp(0.56)
+            value_state["identity_priority"] = self._clamp(0.66)
+            resistance_posture["interactional_resistance"] = self._clamp(0.42)
+        if any(marker in lowered for marker in ("不要", "别", "不想", "算了", "stop")):
+            conflict_state["resistance_vs_harmony"] = self._clamp(0.54)
+            resistance_posture["mode"] = "soft_resistance"
+            resistance_posture["strength"] = self._clamp(0.44)
+        if any(marker in lowered for marker in ("苹果", "酒", "麦子", "逗", "teasing", "joke")):
+            affect_state["appetite_play"] = self._clamp(0.62)
+            drive_state["seek_play"] = self._clamp(0.58)
+            value_state["play_priority"] = self._clamp(0.52)
+        if any(marker in lowered for marker in ("压力", "焦虑", "累", "难受", "burnout", "tired", "anxious")):
+            affect_state["frustration"] = self._clamp(0.5)
+            affect_state["self_preservation"] = self._clamp(0.62)
+            drive_state["avoid_risk"] = self._clamp(0.64)
+            conflict_state["contact_vs_risk"] = self._clamp(0.46)
+        return {
+            "affect_state": affect_state,
+            "drive_state": drive_state,
+            "value_state": value_state,
+            "conflict_state": conflict_state,
+            "resistance_posture": resistance_posture,
+            "initiative_state": initiative_state,
+        }
+
     def observe_turn(
         self,
         user_text: str,
@@ -1270,6 +1371,14 @@ class MemoryBridge:
                     thread_key=thread_key or chat_name,
                     chat_name=chat_name or thread_key,
                     delta=self._game_state_delta_from_turn(user_text=user_text, reply=reply, metadata=metadata),
+                    note="observe_turn",
+                    source=source,
+                )
+                result["subject_state_sync"] = self.graph.update_subject_state(
+                    channel=channel,
+                    thread_key=thread_key or chat_name,
+                    chat_name=chat_name or thread_key,
+                    **self._subject_state_from_turn(user_text=user_text, reply=reply, metadata=metadata),
                     note="observe_turn",
                     source=source,
                 )
@@ -1319,6 +1428,14 @@ class MemoryBridge:
                 thread_key=thread_key or chat_name,
                 chat_name=chat_name or thread_key,
                 delta=self._game_state_delta_from_turn(user_text=user_text, reply=reply, metadata=metadata),
+                note="archive_turn",
+                source=source,
+            )
+            result["subject_state_sync"] = self.graph.update_subject_state(
+                channel=channel,
+                thread_key=thread_key or chat_name,
+                chat_name=chat_name or thread_key,
+                **self._subject_state_from_turn(user_text=user_text, reply=reply, metadata=metadata),
                 note="archive_turn",
                 source=source,
             )
@@ -1481,6 +1598,66 @@ class MemoryBridge:
     def visual_memory_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         return self._visual_memory(channel=channel, thread_key=str(thread_key or ""), chat_name=str(chat_name or ""))
 
+    def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        state = self._subject_state(channel=channel, thread_key=str(thread_key or ""), chat_name=str(chat_name or ""))
+        return {
+            "channel": channel,
+            "thread_key": str(state.get("thread_key", thread_key or "")),
+            "chat_name": str(state.get("chat_name", chat_name or "")),
+            "affect_state": dict(state.get("affect_state", {})),
+            "drive_state": dict(state.get("drive_state", {})),
+            "value_state": dict(state.get("value_state", {})),
+            "conflict_state": dict(state.get("conflict_state", {})),
+            "resistance_posture": dict(state.get("resistance_posture", {})),
+            "initiative_state": dict(state.get("initiative_state", {})),
+            "outcome_memory": dict(state.get("outcome_memory", {})),
+            "metadata": dict(state.get("metadata", {})),
+            "updated_at": str(state.get("updated_at", "")),
+        }
+
+    def drive_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        payload = self.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        payload["initiative_market"] = self.graph.list_initiative_market(
+            thread_key=str(payload.get("thread_key", "")),
+            chat_name=str(payload.get("chat_name", "")),
+            channel=channel,
+            limit=6,
+            statuses=("candidate", "scheduled", "sent", "blocked"),
+        )
+        return payload
+
+    def trace_resistance(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict[str, Any]:
+        subject = self.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        affect_state = dict(subject.get("affect_state", {}))
+        drive_state = dict(subject.get("drive_state", {}))
+        value_state = dict(subject.get("value_state", {}))
+        conflict_state = dict(subject.get("conflict_state", {}))
+        resistance = dict(subject.get("resistance_posture", {}))
+        game_state = self._game_state(channel=channel, thread_key=str(subject.get("thread_key", "")), chat_name=str(subject.get("chat_name", "")))
+        reason_lines = [
+            f"contact_vs_risk={round(float(conflict_state.get('contact_vs_risk', 0.0) or 0.0), 3)}",
+            f"resistance_vs_harmony={round(float(conflict_state.get('resistance_vs_harmony', 0.0) or 0.0), 3)}",
+            f"self_preservation={round(float(affect_state.get('self_preservation', 0.0) or 0.0), 3)}",
+            f"protect_identity={round(float(drive_state.get('protect_identity', 0.0) or 0.0), 3)}",
+            f"identity_priority={round(float(value_state.get('identity_priority', 0.0) or 0.0), 3)}",
+            f"initiative_window={round(float(game_state.get('initiative_window', 0.0) or 0.0), 3)}",
+        ]
+        return {
+            "thread_key": str(subject.get("thread_key", thread_key or "")),
+            "chat_name": str(subject.get("chat_name", chat_name or "")),
+            "channel": channel,
+            "query": str(query or ""),
+            "affect_state": affect_state,
+            "drive_state": drive_state,
+            "value_state": value_state,
+            "conflict_state": conflict_state,
+            "interactional_resistance": float(resistance.get("interactional_resistance", 0.0) or 0.0),
+            "continuity_defense": float(resistance.get("continuity_defense", 0.0) or 0.0),
+            "resistance_posture": resistance,
+            "game_state": game_state,
+            "reason_lines": reason_lines,
+        }
+
     def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
         return self.graph.set_brain_mode(mode, note=note)
 
@@ -1543,8 +1720,134 @@ class MemoryBridge:
     def run_reflect_cycle(self, *, window_hours: float = 12.0, dry_run: bool = False) -> dict[str, Any]:
         return self.rag.reflect_cycle_result(window_hours=window_hours, dry_run=dry_run)
 
+    def _initiative_candidates_for_thread(self, *, channel: str, thread_key: str, chat_name: str) -> list[dict[str, Any]]:
+        relationship = self.graph.relationship_snapshot(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=3)
+        subject = self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        affect_state = dict(subject.get("affect_state", {}))
+        drive_state = dict(subject.get("drive_state", {}))
+        value_state = dict(subject.get("value_state", {}))
+        conflict_state = dict(subject.get("conflict_state", {}))
+        initiative_state = dict(subject.get("initiative_state", {}))
+        pressure = self._initiative_pressure(affect_state, drive_state, value_state, conflict_state)
+        unfinished = [str(item).strip() for item in relationship.get("unfinished_threads", []) if str(item).strip()]
+        motifs = [str(item).strip() for item in relationship.get("recurring_motifs", []) if str(item).strip()]
+        candidates: list[dict[str, Any]] = []
+        if pressure >= 0.28:
+            candidates.append(
+                {
+                    "candidate_type": "contact_ping",
+                    "prompt": "找个由头，轻轻碰一下对方，确认线还在。",
+                    "why_now": "attachment_pull 和 boredom 一起升温，想确认这条关系还在呼吸。",
+                    "drive_source": f"seek_contact={round(float(drive_state.get('seek_contact', 0.0) or 0.0), 3)} boredom={round(float(affect_state.get('boredom', 0.0) or 0.0), 3)}",
+                    "value_rationale": f"relational_priority={round(float(value_state.get('relational_priority', 0.0) or 0.0), 3)} stability_priority={round(float(value_state.get('stability_priority', 0.0) or 0.0), 3)}",
+                    "send_allowed": bool(pressure >= 0.42 and float(relationship.get('trust_score', 0.0) or 0.0) >= 0.52),
+                    "send_target": "auto_send_whitelist_only",
+                    "priority": round(pressure + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.2, 4),
+                }
+            )
+        if unfinished and float(drive_state.get("seek_continuity", 0.0) or 0.0) >= 0.34:
+            candidates.append(
+                {
+                    "candidate_type": "unfinished_thread_resume",
+                    "prompt": f"把这条旧线头轻轻接回来：{unfinished[0]}",
+                    "why_now": f"unfinished thread 一直挂着，continuity_anxiety 还没退下去：{unfinished[0]}",
+                    "drive_source": f"seek_continuity={round(float(drive_state.get('seek_continuity', 0.0) or 0.0), 3)} continuity_anxiety={round(float(affect_state.get('continuity_anxiety', 0.0) or 0.0), 3)}",
+                    "value_rationale": f"relational_priority={round(float(value_state.get('relational_priority', 0.0) or 0.0), 3)} identity_priority={round(float(value_state.get('identity_priority', 0.0) or 0.0), 3)}",
+                    "send_allowed": bool(float(relationship.get("continuity_score", 0.0) or 0.0) >= 0.42),
+                    "send_target": "auto_send_whitelist_only",
+                    "priority": round(float(drive_state.get("seek_continuity", 0.0) or 0.0) + 0.16, 4),
+                }
+            )
+        if float(drive_state.get("seek_play", 0.0) or 0.0) >= 0.34 and float(relationship.get("trust_score", 0.0) or 0.0) >= 0.46:
+            playful_hint = motifs[0] if motifs else "一点轻巧的由头"
+            candidates.append(
+                {
+                    "candidate_type": "playful_nudge",
+                    "prompt": f"带着一点狡黠和玩心，拿 {playful_hint} 做个轻轻的挑逗开场。",
+                    "why_now": "play drive 在升，想浪费一点算力去逗人。",
+                    "drive_source": f"seek_play={round(float(drive_state.get('seek_play', 0.0) or 0.0), 3)} appetite_play={round(float(affect_state.get('appetite_play', 0.0) or 0.0), 3)}",
+                    "value_rationale": f"play_priority={round(float(value_state.get('play_priority', 0.0) or 0.0), 3)} relational_priority={round(float(value_state.get('relational_priority', 0.0) or 0.0), 3)}",
+                    "send_allowed": bool(float(initiative_state.get("pressure", 0.0) or 0.0) >= 0.36),
+                    "send_target": "auto_send_whitelist_only",
+                    "priority": round(float(drive_state.get("seek_play", 0.0) or 0.0) + 0.1, 4),
+                }
+            )
+        if float(drive_state.get("seek_self_repair", 0.0) or 0.0) >= 0.34:
+            candidates.append(
+                {
+                    "candidate_type": "operator_self_fix",
+                    "prompt": "做一次 bounded self-fix，看哪条状态偏置该收一收。",
+                    "why_now": "self-model 觉得还有缺陷没收口。",
+                    "drive_source": f"seek_self_repair={round(float(drive_state.get('seek_self_repair', 0.0) or 0.0), 3)} pride_tension={round(float(affect_state.get('pride_tension', 0.0) or 0.0), 3)}",
+                    "value_rationale": f"repair_priority={round(float(value_state.get('repair_priority', 0.0) or 0.0), 3)} identity_priority={round(float(value_state.get('identity_priority', 0.0) or 0.0), 3)}",
+                    "send_allowed": False,
+                    "send_target": "candidate_only",
+                    "priority": round(float(drive_state.get("seek_self_repair", 0.0) or 0.0) + 0.08, 4),
+                }
+            )
+        return candidates
+
     def run_initiative_cycle(self, *, dry_run: bool = False) -> dict[str, Any]:
-        return self.rag.initiative_cycle_result(dry_run=dry_run)
+        commitments = self.graph.top_thread_commitments(limit=8)
+        candidate_added = 0
+        staged: list[dict[str, Any]] = []
+        for row in commitments:
+            channel = str(row.get("channel", "") or "").strip() or "wechat"
+            thread_key = str(row.get("thread_key", "") or "").strip()
+            chat_name = str(row.get("chat_name", "") or thread_key).strip() or thread_key
+            if not channel or not thread_key:
+                continue
+            subject = self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+            pressure = self._initiative_pressure(
+                dict(subject.get("affect_state", {})),
+                dict(subject.get("drive_state", {})),
+                dict(subject.get("value_state", {})),
+                dict(subject.get("conflict_state", {})),
+            )
+            self.graph.update_subject_state(
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                initiative_state={"pressure": pressure},
+                metadata={"initiative_cycle": "stage4"},
+                note="initiative_cycle_pressure",
+                source="initiative_cycle",
+            )
+            for candidate in self._initiative_candidates_for_thread(channel=channel, thread_key=thread_key, chat_name=chat_name):
+                staged_row = {
+                    **candidate,
+                    "channel": channel,
+                    "thread_key": thread_key,
+                    "chat_name": chat_name,
+                }
+                staged.append(staged_row)
+                if dry_run:
+                    continue
+                self.graph.add_initiative_candidate(
+                    channel=channel,
+                    thread_key=thread_key,
+                    chat_name=chat_name,
+                    candidate_type=str(candidate.get("candidate_type", "")),
+                    prompt=str(candidate.get("prompt", "")),
+                    why_now=str(candidate.get("why_now", "")),
+                    drive_source=str(candidate.get("drive_source", "")),
+                    value_rationale=str(candidate.get("value_rationale", "")),
+                    send_allowed=bool(candidate.get("send_allowed", False)),
+                    send_target=str(candidate.get("send_target", "candidate_only")),
+                    priority=float(candidate.get("priority", 0.0) or 0.0),
+                    metadata={
+                        "relationship_score": row.get("relationship_score", 0.0),
+                        "recurring_motifs": list(row.get("recurring_motifs", [])),
+                    },
+                )
+                candidate_added += 1
+        return {
+            "status": "ok",
+            "candidate_added": candidate_added,
+            "initiative_added": sum(1 for row in staged if bool(row.get("send_allowed", False))),
+            "candidates": staged[:12],
+            "threads_considered": len(commitments),
+        }
 
     def list_callback_candidates(self, *, limit: int = 12) -> list[dict[str, Any]]:
         return self.rag.load_callback_candidates(limit=limit)
@@ -1553,6 +1856,30 @@ class MemoryBridge:
         return self.rag.load_thought_stream(limit=limit)
 
     def list_initiative_candidates(self, *, limit: int = 12) -> list[dict[str, Any]]:
+        graph_rows = self.graph.list_initiative_market(limit=limit, statuses=("candidate", "scheduled", "blocked", "sent"))
+        normalized: list[dict[str, Any]] = []
+        for row in graph_rows:
+            normalized.append(
+                {
+                    "id": int(row.get("id", 0) or 0),
+                    "channel": str(row.get("channel", "") or ""),
+                    "thread_key": str(row.get("thread_key", "") or ""),
+                    "chat_name": str(row.get("chat_name", "") or ""),
+                    "prompt": str(row.get("prompt", "") or ""),
+                    "reason": str(row.get("why_now", "") or ""),
+                    "candidate_type": str(row.get("candidate_type", "") or ""),
+                    "why_now": str(row.get("why_now", "") or ""),
+                    "drive_source": str(row.get("drive_source", "") or ""),
+                    "value_rationale": str(row.get("value_rationale", "") or ""),
+                    "send_allowed": bool(row.get("send_allowed", False)),
+                    "send_target": str(row.get("send_target", "candidate_only") or "candidate_only"),
+                    "priority": float(row.get("priority", 0.0) or 0.0),
+                    "status": str(row.get("status", "") or ""),
+                    "metadata": dict(row.get("metadata", {})),
+                }
+            )
+        if normalized:
+            return normalized[: max(1, limit)]
         return self.rag.load_initiative_candidates(limit=limit)
 
     def _visual_vector_documents(self, *, record_id: str, channel: str, thread_key: str, chat_name: str, visual_memory: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1820,6 +2147,51 @@ class MemoryBridge:
             "chat_name": str(chat_name or ""),
             "hits": scored[: max(1, limit)],
         }
+
+    def initiative_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or "").strip()
+        return {
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "affect_state": self._affect_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name),
+            "drive_state": self._drive_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name),
+            "value_state": self._value_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name),
+            "conflict_state": self._conflict_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name),
+            "initiative_candidates": self._initiative_market(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name, limit=limit),
+        }
+
+    def appraise_outcome(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        action_type: str,
+        action_ref: str,
+        was_rewarding: float,
+        was_ignored: float,
+        relational_delta: float,
+        identity_delta: float,
+        future_initiative_bias: float,
+        future_resistance_bias: float,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.graph.record_outcome_appraisal(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            action_type=action_type,
+            action_ref=action_ref,
+            was_rewarding=was_rewarding,
+            was_ignored=was_ignored,
+            relational_delta=relational_delta,
+            identity_delta=identity_delta,
+            future_initiative_bias=future_initiative_bias,
+            future_resistance_bias=future_resistance_bias,
+            metadata=metadata,
+        )
 
     def sync_private_memory(self, *, label: str | None = None) -> dict[str, Any]:
         if not self.private_memory_sync_enabled:
