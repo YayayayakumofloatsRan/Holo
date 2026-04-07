@@ -484,6 +484,99 @@ def _self_revision_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
     return _dedupe_segments(lines)
 
 
+def _self_model_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("self_model", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    continuity = state.get("identity_continuity", None)
+    if continuity not in (None, ""):
+        try:
+            lines.append(f"identity_continuity={round(float(continuity), 3)}")
+        except (TypeError, ValueError):
+            pass
+    active_deficits = [str(item).strip() for item in state.get("active_deficits", []) if str(item).strip()]
+    if active_deficits:
+        lines.append(f"active_deficits={', '.join(active_deficits[:4])}")
+    commitments = [str(item).strip() for item in state.get("relational_commitments", []) if str(item).strip()]
+    if commitments:
+        lines.append(f"relational_commitments={commitments[0]}")
+    goals = [str(item).strip() for item in state.get("long_horizon_goals", []) if str(item).strip()]
+    if goals:
+        lines.append(f"long_horizon_goal={goals[0]}")
+    metadata = dict(state.get("metadata", {}))
+    summary = str(metadata.get("summary", "")).strip()
+    if summary:
+        lines.append(f"summary={summary}")
+    return _dedupe_segments(lines)
+
+
+def _homeostasis_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("homeostasis_state", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    for key in ("pressure", "stability", "operator_pending_count"):
+        value = state.get(key, None)
+        if value in (None, ""):
+            continue
+        try:
+            lines.append(f"{key}={round(float(value), 3)}")
+        except (TypeError, ValueError):
+            lines.append(f"{key}={value}")
+    deficits = [str(item).strip() for item in state.get("active_deficits", []) if str(item).strip()]
+    if deficits:
+        lines.append(f"homeostasis_deficits={', '.join(deficits[:4])}")
+    mode = str(state.get("brain_mode", "")).strip()
+    if mode:
+        lines.append(f"brain_mode={mode}")
+    return _dedupe_segments(lines)
+
+
+def _operator_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("operator_state", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    pending = state.get("pending_count", None)
+    if pending not in (None, ""):
+        try:
+            lines.append(f"operator_pending={int(pending)}")
+        except (TypeError, ValueError):
+            lines.append(f"operator_pending={pending}")
+    latest = dict(state.get("latest_run", {}))
+    latest_status = str(latest.get("status", "")).strip()
+    if latest_status:
+        lines.append(f"latest_operator_status={latest_status}")
+    latest_goal = str(latest.get("goal", "")).strip()
+    if latest_goal:
+        lines.append(f"latest_operator_goal={latest_goal}")
+    return _dedupe_segments(lines)
+
+
+def _visual_memory_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("visual_memory", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    scene = str(state.get("scene_summary", "")).strip()
+    if scene:
+        lines.append(scene)
+    mood = str(state.get("mood_imagery", "")).strip()
+    if mood:
+        lines.append(f"mood={mood}")
+    text_ocr = str(state.get("text_ocr", "")).strip()
+    if text_ocr:
+        lines.append(f"text={compact_text(text_ocr, 96)}")
+    anchors = [str(item).strip() for item in state.get("visual_anchors", []) if str(item).strip()]
+    if anchors:
+        lines.extend(f"anchor: {item}" for item in anchors[:3])
+    objects = [str(item).strip() for item in state.get("objects", []) if str(item).strip()]
+    if objects:
+        lines.append(f"objects={', '.join(objects[:4])}")
+    return _dedupe_segments(lines)
+
+
 def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> bool:
     if not config.memory.recall_reconstruct_enabled:
         return False
@@ -522,10 +615,16 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     query_focus = str(packet.get("query_focus", "recent") or "recent")
     relationship_lines = _relationship_lines_for_prompt(packet)
     persona_blend_lines = _persona_blend_lines_for_prompt(packet)
+    self_model_lines = _self_model_lines_for_prompt(packet)
+    homeostasis_lines = _homeostasis_lines_for_prompt(packet)
+    operator_lines = _operator_state_lines_for_prompt(packet)
     game_state_lines = _game_state_lines_for_prompt(packet)
     stream_influence_lines = _stream_influence_lines_for_prompt(packet)
     relationship_summary = "\n".join(f"- {line}" for line in relationship_lines) if relationship_lines else "- none"
     persona_block = "\n".join(f"- {line}" for line in persona_blend_lines) if persona_blend_lines else "- none"
+    self_model_block = "\n".join(f"- {line}" for line in self_model_lines) if self_model_lines else "- none"
+    homeostasis_block = "\n".join(f"- {line}" for line in homeostasis_lines) if homeostasis_lines else "- none"
+    operator_block = "\n".join(f"- {line}" for line in operator_lines) if operator_lines else "- none"
     game_block = "\n".join(f"- {line}" for line in game_state_lines) if game_state_lines else "- none"
     stream_block = "\n".join(f"- {line}" for line in stream_influence_lines) if stream_influence_lines else "- none"
     thread_summary = str(packet.get("consciousness_stream", {}).get("thread_summary", "")).strip()
@@ -535,6 +634,8 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     activation_trace_ids = [str(item).strip() for item in packet.get("activation_trace_ids", []) if str(item).strip()][:8]
     vector_hits = [str(item.get("text", "")).strip() for item in packet.get("vector_hits", []) if str(item.get("text", "")).strip()][:4]
     activation_state = dict(packet.get("activation_state", {}))
+    visual_memory_lines = _visual_memory_lines_for_prompt(packet)
+    visual_block = "\n".join(f"- {line}" for line in visual_memory_lines) if visual_memory_lines else "- none"
     activation_block = "\n".join(
         f"- {line}"
         for line in (
@@ -562,6 +663,9 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         "Holo is not only solemn or mature. When the recalled material allows it, keep a little sly pride, lived-in warmth, or wolfish lightness instead of flattening into abstract solemnity.\n\n"
         f"{chronology_instruction}"
         f"Persona blend:\n{persona_block}\n\n"
+        f"Self model:\n{self_model_block}\n\n"
+        f"Homeostasis:\n{homeostasis_block}\n\n"
+        f"Operator state:\n{operator_block}\n\n"
         f"Game state:\n{game_block}\n\n"
         f"Recent stream influence:\n{stream_block}\n\n"
         f"User query:\n{context.user_text}\n\n"
@@ -571,6 +675,7 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         f"Activated memory ids:\n{', '.join(activation_trace_ids)}\n\n"
         f"Episodic anchors:\n{episodic_block}\n\n"
         f"Vector hits:\n{vector_block}\n\n"
+        f"Visual memory:\n{visual_block}\n\n"
         f"Activation state:\n{activation_block}\n\n"
         f"Consciousness lines:\n{consciousness_block}\n"
     )
@@ -598,6 +703,9 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     relationship_lines = _relationship_lines_for_prompt(packet)
     persona_block = _render_section("Persona Blend:", _persona_blend_lines_for_prompt(packet))
     brain_state_block = _render_section("Brain State:", _brain_state_lines_for_prompt(packet))
+    self_model_block = _render_section("Self Model:", _self_model_lines_for_prompt(packet))
+    homeostasis_block = _render_section("Homeostasis State:", _homeostasis_lines_for_prompt(packet))
+    operator_state_block = _render_section("Operator State:", _operator_state_lines_for_prompt(packet))
     game_state_block = _render_section("Game State:", _game_state_lines_for_prompt(packet))
     stream_influence_block = _render_section("Stream Influence:", _stream_influence_lines_for_prompt(packet))
     self_revision_block = _render_section("Self Revision State:", _self_revision_lines_for_prompt(packet))
@@ -610,6 +718,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     consciousness_block = _render_section("Consciousness Lines:", consciousness_lines)
     vector_lines = [str(item.get("text", "")).strip() for item in packet.get("vector_hits", []) if str(item.get("text", "")).strip()]
     vector_block = _render_section("Vector Echoes:", vector_lines[:4])
+    visual_block = _render_section("Visual Memory:", _visual_memory_lines_for_prompt(packet))
     activation_state = dict(packet.get("activation_state", {}))
     activation_lines = [
         f"heat={activation_state.get('heat', 0.0)}",
@@ -638,12 +747,16 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         identity_block,
         persona_block,
         brain_state_block,
+        self_model_block,
+        homeostasis_block,
+        operator_state_block,
         relationship_block,
         game_state_block,
         f"Current User Turn:\n{context.user_text}",
         f"{history_label}\n{_history_block(context, turn_plan)}",
         episodic_block,
         vector_block,
+        visual_block,
         activation_block,
         consciousness_block,
         stream_influence_block,

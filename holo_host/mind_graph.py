@@ -53,6 +53,11 @@ BRAIN_LOOP_DEFAULTS = {
     "social_stream": {"interval_seconds": 300, "description": "social upkeep"},
     "deep_dream_cycle": {"interval_seconds": 3600, "description": "idle dream replay"},
     "self_revision": {"interval_seconds": 1800, "description": "bounded self revision"},
+    "self_model_refresh": {"interval_seconds": 300, "description": "refresh self model"},
+    "homeostasis_tick": {"interval_seconds": 120, "description": "homeostasis balancing"},
+    "operator_planning": {"interval_seconds": 420, "description": "bounded operator planning"},
+    "operator_shadow_cycle": {"interval_seconds": 300, "description": "shadow execution review"},
+    "visual_ingest_cycle": {"interval_seconds": 45, "description": "async visual ingest"},
 }
 ALLOWED_SELF_REVISION_FIELDS = {
     "persona_blend",
@@ -489,6 +494,52 @@ class MindGraph:
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS self_model_state (
+                runtime_id INTEGER PRIMARY KEY CHECK(runtime_id = 1),
+                identity_continuity REAL NOT NULL DEFAULT 0.6,
+                capability_model_json TEXT NOT NULL DEFAULT '{}',
+                active_deficits_json TEXT NOT NULL DEFAULT '[]',
+                long_horizon_goals_json TEXT NOT NULL DEFAULT '[]',
+                relational_commitments_json TEXT NOT NULL DEFAULT '[]',
+                homeostasis_targets_json TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS operator_runs (
+                id INTEGER PRIMARY KEY,
+                task_type TEXT NOT NULL DEFAULT '',
+                goal TEXT NOT NULL DEFAULT '',
+                scope TEXT NOT NULL DEFAULT '',
+                workspace_mode TEXT NOT NULL DEFAULT 'shadow_write',
+                status TEXT NOT NULL DEFAULT 'planned',
+                read_boundary_json TEXT NOT NULL DEFAULT '{}',
+                write_boundary_json TEXT NOT NULL DEFAULT '{}',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                shadow_workspace TEXT NOT NULL DEFAULT '',
+                applied_live INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT '',
+                completed_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS visual_memory (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                artifact_path TEXT NOT NULL DEFAULT '',
+                media_type TEXT NOT NULL DEFAULT '',
+                scene_summary TEXT NOT NULL DEFAULT '',
+                objects_json TEXT NOT NULL DEFAULT '[]',
+                text_ocr TEXT NOT NULL DEFAULT '',
+                mood_imagery TEXT NOT NULL DEFAULT '',
+                thread_relevance REAL NOT NULL DEFAULT 0.0,
+                visual_anchors_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                source TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
                 """
             )
             for stream_name, payload in self.stream_cadences.items():
@@ -506,10 +557,20 @@ class MindGraph:
             self.conn.execute(
                 """
                 INSERT INTO brain_runtime_state(runtime_id, mode, started_at, last_updated_at, idle_since, metadata_json)
-                VALUES (1, 'companion', ?, ?, ?, '{}')
+                VALUES (1, 'full_brain', ?, ?, ?, '{}')
                 ON CONFLICT(runtime_id) DO NOTHING
                 """,
                 (now, now, now),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO self_model_state(
+                    runtime_id, identity_continuity, capability_model_json, active_deficits_json, long_horizon_goals_json,
+                    relational_commitments_json, homeostasis_targets_json, metadata_json, created_at, updated_at
+                ) VALUES (1, 0.6, '{}', '[]', '[]', '[]', '{}', '{}', ?, ?)
+                ON CONFLICT(runtime_id) DO NOTHING
+                """,
+                (now, now),
             )
             self.conn.commit()
 
@@ -530,7 +591,7 @@ class MindGraph:
             numeric = float(default)
         return round(max(lower, min(upper, numeric)), 4)
 
-    def brain_state(self, *, default_mode: str = "companion") -> dict[str, Any]:
+    def brain_state(self, *, default_mode: str = "full_brain") -> dict[str, Any]:
         with self._lock:
             row = self.conn.execute("SELECT * FROM brain_runtime_state WHERE runtime_id = 1").fetchone()
             if row is None:
@@ -574,6 +635,350 @@ class MindGraph:
             "loops": latest_runs,
             "recent_mode_events": mode_events,
         }
+
+    def self_model_state(self) -> dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM self_model_state WHERE runtime_id = 1").fetchone()
+            if row is None:
+                now = utc_now()
+                self.conn.execute(
+                    """
+                    INSERT INTO self_model_state(
+                        runtime_id, identity_continuity, capability_model_json, active_deficits_json, long_horizon_goals_json,
+                        relational_commitments_json, homeostasis_targets_json, metadata_json, created_at, updated_at
+                    ) VALUES (1, 0.6, '{}', '[]', '[]', '[]', '{}', '{}', ?, ?)
+                    """,
+                    (now, now),
+                )
+                self.conn.commit()
+                row = self.conn.execute("SELECT * FROM self_model_state WHERE runtime_id = 1").fetchone()
+        payload = dict(row) if row else {}
+        return {
+            "identity_continuity": float(payload.get("identity_continuity", 0.6) or 0.6),
+            "capability_model": dict(_safe_json_dict(payload.get("capability_model_json", "{}"))),
+            "active_deficits": self._decode_json_array(payload.get("active_deficits_json", "[]")),
+            "long_horizon_goals": self._decode_json_array(payload.get("long_horizon_goals_json", "[]")),
+            "relational_commitments": self._decode_json_array(payload.get("relational_commitments_json", "[]")),
+            "homeostasis_targets": dict(_safe_json_dict(payload.get("homeostasis_targets_json", "{}"))),
+            "metadata": dict(_safe_json_dict(payload.get("metadata_json", "{}"))),
+            "created_at": str(payload.get("created_at", "") or ""),
+            "updated_at": str(payload.get("updated_at", "") or ""),
+        }
+
+    @staticmethod
+    def _decode_json_array(raw: Any) -> list[Any]:
+        if isinstance(raw, list):
+            return list(raw)
+        text = str(raw or "").strip()
+        if not text:
+            return []
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        return list(payload) if isinstance(payload, list) else []
+
+    def update_self_model_state(
+        self,
+        payload: dict[str, Any],
+        *,
+        reason: str = "",
+        source: str = "runtime",
+    ) -> dict[str, Any]:
+        current = self.self_model_state()
+        next_state = {
+            "identity_continuity": self._clamp(payload.get("identity_continuity", current.get("identity_continuity", 0.6)), default=0.6),
+            "capability_model": dict(payload.get("capability_model", current.get("capability_model", {}))),
+            "active_deficits": [str(item).strip() for item in payload.get("active_deficits", current.get("active_deficits", [])) if str(item).strip()],
+            "long_horizon_goals": [str(item).strip() for item in payload.get("long_horizon_goals", current.get("long_horizon_goals", [])) if str(item).strip()],
+            "relational_commitments": [str(item).strip() for item in payload.get("relational_commitments", current.get("relational_commitments", [])) if str(item).strip()],
+            "homeostasis_targets": dict(payload.get("homeostasis_targets", current.get("homeostasis_targets", {}))),
+            "metadata": {
+                **dict(current.get("metadata", {})),
+                **dict(payload.get("metadata", {})),
+                "last_reason": compact_text(reason, 160),
+                "last_source": str(source or "runtime"),
+                "updated_at": utc_now(),
+            },
+        }
+        now = utc_now()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO self_model_state(
+                    runtime_id, identity_continuity, capability_model_json, active_deficits_json, long_horizon_goals_json,
+                    relational_commitments_json, homeostasis_targets_json, metadata_json, created_at, updated_at
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(runtime_id) DO UPDATE SET
+                    identity_continuity = excluded.identity_continuity,
+                    capability_model_json = excluded.capability_model_json,
+                    active_deficits_json = excluded.active_deficits_json,
+                    long_horizon_goals_json = excluded.long_horizon_goals_json,
+                    relational_commitments_json = excluded.relational_commitments_json,
+                    homeostasis_targets_json = excluded.homeostasis_targets_json,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    float(next_state["identity_continuity"]),
+                    json.dumps(next_state["capability_model"], ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_state["active_deficits"], ensure_ascii=False),
+                    json.dumps(next_state["long_horizon_goals"], ensure_ascii=False),
+                    json.dumps(next_state["relational_commitments"], ensure_ascii=False),
+                    json.dumps(next_state["homeostasis_targets"], ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_state["metadata"], ensure_ascii=False, sort_keys=True),
+                    str(current.get("created_at", "") or now),
+                    now,
+                ),
+            )
+            self.conn.commit()
+        updated = self.self_model_state()
+        updated["status"] = "ok"
+        updated["reason"] = reason
+        updated["source"] = source
+        return updated
+
+    def top_thread_commitments(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    """
+                    SELECT channel, thread_key, chat_name, relationship_score, summary, metadata_json, last_message_at
+                    FROM mind_thread_state
+                    ORDER BY relationship_score DESC, last_message_at DESC
+                    LIMIT ?
+                    """,
+                    (max(1, int(limit)),),
+                ).fetchall()
+            ]
+        commitments: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = _safe_json_dict(row.get("metadata_json", "{}"))
+            commitments.append(
+                {
+                    "channel": str(row.get("channel", "")),
+                    "thread_key": str(row.get("thread_key", "")),
+                    "chat_name": str(row.get("chat_name", "")),
+                    "relationship_score": float(row.get("relationship_score", 0.0) or 0.0),
+                    "summary": str(row.get("summary", "")),
+                    "recurring_motifs": list(metadata.get("recurring_motifs", [])) if isinstance(metadata.get("recurring_motifs"), list) else [],
+                    "tone_tendency": str(metadata.get("tone_tendency", "")),
+                    "last_message_at": str(row.get("last_message_at", "")),
+                }
+            )
+        return commitments
+
+    def enqueue_operator_run(
+        self,
+        *,
+        task_type: str,
+        goal: str,
+        scope: str,
+        workspace_mode: str,
+        read_boundary: dict[str, Any],
+        write_boundary: dict[str, Any],
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock:
+            row_id = self.conn.execute(
+                """
+                INSERT INTO operator_runs(
+                    task_type, goal, scope, workspace_mode, status, read_boundary_json, write_boundary_json, payload_json, result_json, shadow_workspace, applied_live, created_at, completed_at
+                ) VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, '{}', '', 0, ?, '')
+                """,
+                (
+                    str(task_type or "").strip(),
+                    str(goal or "").strip(),
+                    str(scope or "").strip(),
+                    str(workspace_mode or "shadow_write").strip() or "shadow_write",
+                    json.dumps(read_boundary or {}, ensure_ascii=False, sort_keys=True),
+                    json.dumps(write_boundary or {}, ensure_ascii=False, sort_keys=True),
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            ).lastrowid
+            self.conn.commit()
+        return {"id": int(row_id), "status": "planned", "created_at": now}
+
+    def pending_operator_run(self) -> dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM operator_runs WHERE status = 'planned' ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return {}
+        payload = dict(row)
+        return {
+            **payload,
+            "read_boundary": dict(_safe_json_dict(payload.get("read_boundary_json", "{}"))),
+            "write_boundary": dict(_safe_json_dict(payload.get("write_boundary_json", "{}"))),
+            "payload": dict(_safe_json_dict(payload.get("payload_json", "{}"))),
+            "result": dict(_safe_json_dict(payload.get("result_json", "{}"))),
+        }
+
+    def complete_operator_run(
+        self,
+        *,
+        run_id: int,
+        status: str,
+        result: dict[str, Any],
+        shadow_workspace: str = "",
+        applied_live: bool = False,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE operator_runs
+                SET status = ?, result_json = ?, shadow_workspace = ?, applied_live = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(status or "").strip() or "reviewed",
+                    json.dumps(result or {}, ensure_ascii=False, sort_keys=True),
+                    str(shadow_workspace or ""),
+                    1 if applied_live else 0,
+                    now,
+                    int(run_id or 0),
+                ),
+            )
+            self.conn.commit()
+            row = self.conn.execute("SELECT * FROM operator_runs WHERE id = ?", (int(run_id or 0),)).fetchone()
+        payload = dict(row) if row else {}
+        return {
+            **payload,
+            "read_boundary": dict(_safe_json_dict(payload.get("read_boundary_json", "{}"))),
+            "write_boundary": dict(_safe_json_dict(payload.get("write_boundary_json", "{}"))),
+            "payload": dict(_safe_json_dict(payload.get("payload_json", "{}"))),
+            "result": dict(_safe_json_dict(payload.get("result_json", "{}"))),
+        }
+
+    def operator_status(self, *, limit: int = 8) -> dict[str, Any]:
+        with self._lock:
+            rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    "SELECT * FROM operator_runs ORDER BY id DESC LIMIT ?",
+                    (max(1, int(limit)),),
+                ).fetchall()
+            ]
+            pending = self.conn.execute("SELECT COUNT(*) AS count FROM operator_runs WHERE status = 'planned'").fetchone()
+        runs: list[dict[str, Any]] = []
+        for row in rows:
+            runs.append(
+                {
+                    **row,
+                    "read_boundary": dict(_safe_json_dict(row.get("read_boundary_json", "{}"))),
+                    "write_boundary": dict(_safe_json_dict(row.get("write_boundary_json", "{}"))),
+                    "payload": dict(_safe_json_dict(row.get("payload_json", "{}"))),
+                    "result": dict(_safe_json_dict(row.get("result_json", "{}"))),
+                }
+            )
+        latest = runs[0] if runs else {}
+        return {
+            "pending_count": int(pending["count"]) if pending else 0,
+            "latest": latest,
+            "recent_runs": runs,
+        }
+
+    def upsert_visual_memory(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        artifact_path: str,
+        media_type: str,
+        scene_summary: str,
+        objects: list[str],
+        text_ocr: str,
+        mood_imagery: str,
+        thread_relevance: float,
+        visual_anchors: list[str],
+        metadata: dict[str, Any] | None = None,
+        source: str = "image_understand",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        record_id = stable_digest(channel, thread_key, artifact_path, limit=24)
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO visual_memory(
+                    id, channel, thread_key, chat_name, artifact_path, media_type, scene_summary, objects_json, text_ocr, mood_imagery,
+                    thread_relevance, visual_anchors_json, metadata_json, source, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    chat_name = excluded.chat_name,
+                    media_type = excluded.media_type,
+                    scene_summary = excluded.scene_summary,
+                    objects_json = excluded.objects_json,
+                    text_ocr = excluded.text_ocr,
+                    mood_imagery = excluded.mood_imagery,
+                    thread_relevance = excluded.thread_relevance,
+                    visual_anchors_json = excluded.visual_anchors_json,
+                    metadata_json = excluded.metadata_json,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    record_id,
+                    str(channel or "").strip(),
+                    str(thread_key or "").strip(),
+                    str(chat_name or "").strip(),
+                    str(artifact_path or "").strip(),
+                    str(media_type or "").strip(),
+                    compact_text(scene_summary, 400),
+                    json.dumps([str(item).strip() for item in objects if str(item).strip()], ensure_ascii=False),
+                    compact_text(text_ocr, 1200),
+                    compact_text(mood_imagery, 240),
+                    float(thread_relevance or 0.0),
+                    json.dumps([str(item).strip() for item in visual_anchors if str(item).strip()], ensure_ascii=False),
+                    json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+                    str(source or "image_understand"),
+                    now,
+                    now,
+                ),
+            )
+            self.conn.commit()
+        return {"id": record_id, "status": "ok", "updated_at": now}
+
+    def visual_memory(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        with self._lock:
+            rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    """
+                    SELECT *
+                    FROM visual_memory
+                    WHERE channel = ?
+                      AND thread_key = ?
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (channel, normalized_thread_key, max(1, int(limit))),
+                ).fetchall()
+            ]
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            items.append(
+                {
+                    **row,
+                    "objects": self._decode_json_array(row.get("objects_json", "[]")),
+                    "visual_anchors": self._decode_json_array(row.get("visual_anchors_json", "[]")),
+                    "metadata": dict(_safe_json_dict(row.get("metadata_json", "{}"))),
+                }
+            )
+        return items
 
     def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
         normalized_mode = str(mode or "").strip() or "companion"

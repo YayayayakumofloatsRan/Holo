@@ -19,6 +19,8 @@ from .codex_runner import CodexRunner
 from .mail_gateway import MailGateway, build_mail_gateway
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .models import IncomingMessage, OutgoingMessage
+from .operator_bus import build_homeostasis_state, operator_probe as run_operator_probe
+from .operator_bus import plan_operator_cycle, refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
 from .reply_api import shape_wechat_reply
 from .store import QueueStore
@@ -198,6 +200,7 @@ class HoloDaemon:
             activation_cache_enabled=config.memory.activation_cache_enabled,
             private_memory_sync_enabled=config.memory.private_memory_sync_enabled,
             private_memory_repo_path=config.memory.private_memory_repo_path,
+            runner=self.runner,
         )
         self.policy = policy or AutonomyPolicy(config)
         self.logger = logger or _build_logger(config.runtime.log_dir)
@@ -281,11 +284,18 @@ class HoloDaemon:
             "social_stream": {"interval_seconds": 300, "enabled_modes": {"companion", "full_brain"}},
             "deep_dream_cycle": {"interval_seconds": 3600, "enabled_modes": {"dream_only", "full_brain"}},
             "self_revision": {"interval_seconds": max(300, int(self.config.memory.self_revision_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "self_model_refresh": {"interval_seconds": max(60, int(self.config.memory.self_model_refresh_interval_seconds)), "enabled_modes": {"companion", "dream_only", "full_brain"}},
+            "homeostasis_tick": {"interval_seconds": max(30, int(self.config.memory.homeostasis_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "operator_planning": {"interval_seconds": max(120, int(self.config.memory.operator_planning_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "operator_shadow_cycle": {"interval_seconds": max(90, int(self.config.memory.operator_shadow_cycle_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "visual_ingest_cycle": {"interval_seconds": max(15, int(self.config.memory.visual_ingest_cycle_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
         }
         if mode == "full_brain":
             definitions["association_stream"]["interval_seconds"] = max(60, int(definitions["association_stream"]["interval_seconds"] * 0.5))
             definitions["social_stream"]["interval_seconds"] = max(90, int(definitions["social_stream"]["interval_seconds"] * 0.5))
             definitions["self_revision"]["interval_seconds"] = max(600, int(definitions["self_revision"]["interval_seconds"] * 0.5))
+            definitions["operator_planning"]["interval_seconds"] = max(90, int(definitions["operator_planning"]["interval_seconds"] * 0.75))
+            definitions["operator_shadow_cycle"]["interval_seconds"] = max(60, int(definitions["operator_shadow_cycle"]["interval_seconds"] * 0.75))
         return definitions
 
     def _loop_due(self, loop_name: str, *, mode: str) -> tuple[bool, str]:
@@ -398,6 +408,11 @@ class HoloDaemon:
         initiative = self._run_loop("social_stream", mode=mode, runner=self._run_social_cycle)
         dream = self._run_loop("deep_dream_cycle", mode=mode, runner=lambda: self._run_deep_dream_cycle(idle_seconds=idle_seconds))
         self_revision = self._run_loop("self_revision", mode=mode, runner=self._run_self_revision_cycle)
+        self_model = self._run_loop("self_model_refresh", mode=mode, runner=self._run_self_model_refresh_cycle)
+        homeostasis = self._run_loop("homeostasis_tick", mode=mode, runner=self._run_homeostasis_tick)
+        operator_plan = self._run_loop("operator_planning", mode=mode, runner=self._run_operator_planning_cycle)
+        operator_shadow = self._run_loop("operator_shadow_cycle", mode=mode, runner=self._run_operator_shadow_cycle)
+        visual_ingest = self._run_loop("visual_ingest_cycle", mode=mode, runner=self._run_visual_ingest_cycle)
         processed = self._process_jobs(self.config.runtime.max_jobs_per_cycle)
         return {
             "mode": mode,
@@ -410,6 +425,11 @@ class HoloDaemon:
             "dream": dream,
             "initiative": initiative,
             "self_revision": self_revision,
+            "self_model_refresh": self_model,
+            "homeostasis_tick": homeostasis,
+            "operator_planning": operator_plan,
+            "operator_shadow_cycle": operator_shadow,
+            "visual_ingest_cycle": visual_ingest,
             "processed_jobs": processed,
         }
 
@@ -950,6 +970,50 @@ class HoloDaemon:
             self.logger.info("self revision applied run_id=%s", report.get("run_id", 0))
         return report
 
+    def _run_self_model_refresh_cycle(self) -> dict[str, Any]:
+        report = refresh_self_model(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            reason="daemon:self_model_refresh",
+            source="daemon",
+        )
+        self.logger.info("self model refreshed continuity=%s deficits=%s", report.get("identity_continuity", 0.0), ",".join(report.get("active_deficits", [])))
+        return report
+
+    def _run_homeostasis_tick(self) -> dict[str, Any]:
+        state = build_homeostasis_state(memory=self.memory, config=self.config)
+        self.memory.graph.touch_brain_runtime(metadata={"homeostasis_state": state})
+        return state
+
+    def _run_operator_planning_cycle(self) -> dict[str, Any]:
+        pending = self.memory.graph.pending_operator_run()
+        if pending:
+            return {"status": "blocked", "blocked_reason": "pending_operator_run_exists", "pending": pending}
+        return plan_operator_cycle(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            reason="daemon:operator_planning",
+        )
+
+    def _run_operator_shadow_cycle(self) -> dict[str, Any]:
+        pending = self.memory.graph.pending_operator_run()
+        if not pending:
+            return {"status": "blocked", "blocked_reason": "no_pending_operator_run"}
+        return run_operator_cycle(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            reason="daemon:operator_shadow_cycle",
+        )
+
+    def _run_visual_ingest_cycle(self) -> dict[str, Any]:
+        return self.memory.drain_visual_ingest_queue(limit=max(1, int(self.config.memory.visual_sync_max_count or 1)))
+
     def initiative_probe(self, *, thread_key: str, chat_name: str, channel: str = "wechat", query: str = "") -> dict[str, Any]:
         return build_initiative_probe(
             config=self.config,
@@ -961,6 +1025,17 @@ class HoloDaemon:
             channel=channel,
             query=query or "initiative_probe",
             mode=self.brain_mode(),
+        )
+
+    def operator_probe(self, *, thread_key: str, chat_name: str, channel: str = "wechat") -> dict[str, Any]:
+        return run_operator_probe(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
         )
 
     def initiative_status(

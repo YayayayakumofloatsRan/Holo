@@ -56,6 +56,7 @@ class FakeMemory:
         self.stream_records: list[dict] = []
         self.brain_mode = "companion"
         self.active_history_refreshes: list[dict] = []
+        self.visual_rows: list[dict] = []
         self.game_state_data = {
             "trust_score": 0.6,
             "teasing_tolerance": 0.55,
@@ -70,7 +71,7 @@ class FakeMemory:
         return {
             "addendum": f"隐式约束：{query}",
             "tier": self.sidecar_tier,
-            "mind_packet_version": "v5",
+            "mind_packet_version": "v6",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
@@ -87,6 +88,17 @@ class FakeMemory:
             },
             "stream_influence": {"influence": {"motifs": ["continuity"], "updated_threads": 1}},
             "self_revision_state": {"latest_status": "reviewed", "applied_patch": {}},
+            "self_model": {
+                "identity_continuity": 0.74,
+                "active_deficits": ["stiffness_drift"],
+                "long_horizon_goals": ["keep continuity alive"],
+                "relational_commitments": ["Nemoqi: keep going"],
+                "homeostasis_targets": {"reply_budget_fast_ms": 350},
+                "metadata": {"observed_at": "2026-04-07T00:00:00Z", "summary": "still coherent"},
+            },
+            "homeostasis_state": {"pressure": 0.32, "stability": 0.7, "active_deficits": ["stiffness_drift"], "brain_mode": self.brain_mode},
+            "operator_state": {"pending_count": 0, "latest_run": {"status": "applied", "goal": "loosen persona stiffness"}},
+            "visual_memory": {"scene_summary": "", "objects": [], "text_ocr": "", "mood_imagery": "", "visual_anchors": [], "items": []},
             "graph_hits": [],
             "vector_hits": [],
             "activation_state": {
@@ -159,6 +171,17 @@ class FakeMemory:
             "trace": [],
         }
 
+    def trace_visual_recall(self, query: str, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 4) -> dict:
+        normalized = str(thread_key or chat_name or "").strip()
+        hits = [item for item in self.visual_rows if str(item.get("thread_key", "")).strip() == normalized]
+        return {
+            "query": query,
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "hits": hits[:limit],
+        }
+
     def activation_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
         return {
             "channel": channel,
@@ -174,6 +197,9 @@ class FakeMemory:
 
     def vector_health(self) -> dict:
         return {"backend": "milvus", "available": False, "ready": False, "last_error": ""}
+
+    def packet_cache_stats(self) -> dict:
+        return {"entries": 1, "hits": 1, "misses": 0, "hit_ratio": 1.0}
 
     def game_state(self, *, thread_key: str, chat_name: str, channel: str = "wechat") -> dict:
         return dict(self.game_state_data)
@@ -192,6 +218,28 @@ class FakeMemory:
         self.private_sync_calls += 1
         return {"status": "ok", "label": label or "", "snapshot_dir": "/tmp/fake"}
 
+    def self_model_state(self) -> dict:
+        return dict(self.sidecar_packet("", context={}).get("self_model", {}))
+
+    def operator_status(self) -> dict:
+        return dict(self.sidecar_packet("", context={}).get("operator_state", {}))
+
+    def visual_memory_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
+        normalized = str(thread_key or chat_name or "").strip()
+        items = [item for item in self.visual_rows if str(item.get("thread_key", "")).strip() == normalized]
+        if not items:
+            return {"items": [], "scene_summary": "", "objects": [], "text_ocr": "", "mood_imagery": "", "visual_anchors": []}
+        latest = dict(items[-1])
+        return {
+            "items": items,
+            "scene_summary": latest.get("scene_summary", ""),
+            "objects": list(latest.get("objects", [])),
+            "text_ocr": latest.get("text_ocr", ""),
+            "mood_imagery": latest.get("mood_imagery", ""),
+            "thread_relevance": latest.get("thread_relevance", 0.0),
+            "visual_anchors": list(latest.get("visual_anchors", [])),
+        }
+
     def brain_status(self) -> dict:
         return {
             "mode": self.brain_mode,
@@ -204,6 +252,11 @@ class FakeMemory:
                 {"loop_name": "association_stream"},
                 {"loop_name": "social_stream"},
                 {"loop_name": "deep_dream_cycle"},
+                {"loop_name": "self_model_refresh"},
+                {"loop_name": "homeostasis_tick"},
+                {"loop_name": "operator_planning"},
+                {"loop_name": "operator_shadow_cycle"},
+                {"loop_name": "visual_ingest_cycle"},
             ],
         }
 
@@ -308,7 +361,43 @@ class FakeMemory:
 
     def ingest_artifact(self, path: str, *, note: str | None, source: str, tags: list[str], dry_run: bool = False) -> dict:
         self.ingested.append((path, note, source, tags, dry_run))
-        return {"path": path, "note": note, "source": source, "tags": tags, "dry_run": dry_run, "artifact_type": "document"}
+        suffix = Path(path).suffix.lower()
+        artifact_type = "image" if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"} else "document"
+        media_type = "image/png" if artifact_type == "image" else "text/plain"
+        return {
+            "path": path,
+            "note": note,
+            "source": source,
+            "tags": tags,
+            "dry_run": dry_run,
+            "artifact_type": artifact_type,
+            "media_type": media_type,
+            "summary_text": note or "visual memory anchor",
+            "extracted_excerpt": note or "",
+        }
+
+    def ingest_image(self, path: str, *, note: str | None, source: str, tags: list[str], channel: str, thread_key: str, chat_name: str, sync: bool = True) -> dict:
+        row = {
+            "id": len(self.visual_rows) + 1,
+            "channel": channel,
+            "thread_key": thread_key or chat_name,
+            "chat_name": chat_name or thread_key,
+            "scene_summary": note or "visual memory anchor",
+            "objects": ["apple", "wine"],
+            "text_ocr": note or "",
+            "mood_imagery": "warm still life",
+            "thread_relevance": 0.78,
+            "visual_anchors": [note or "苹果和酒"],
+        }
+        self.visual_rows.append(row)
+        return {
+            "status": "ok",
+            "artifact": self.ingest_artifact(path, note=note, source=source, tags=tags, dry_run=False),
+            "visual_memory": dict(row),
+            "graph_sync": {"status": "ok", "id": row["id"]},
+            "vector_sync": {"status": "ok", "document_count": 1},
+            "activation_sync": {"status": "ok"},
+        }
 
     def archive_turn(
         self,
@@ -358,7 +447,14 @@ class FakeMemory:
         return self.initiatives[-limit:]
 
     def stream_status(self) -> dict:
-        return {"db_path": "fake", "streams": [], "recent_runs": [], "activation_events": [], "vector": self.vector_health()}
+        return {
+            "db_path": "fake",
+            "streams": [],
+            "recent_runs": [{"run_type": "stream:self_model_refresh"}],
+            "activation_events": [{"id": 1, "contributor": "association_stream"}],
+            "stream_influence": {"motifs": ["continuity"]},
+            "vector": self.vector_health(),
+        }
 
 
 def close_service_handles(service: HoloReplyService) -> None:
@@ -1323,6 +1419,38 @@ wechat_helper_config_path = ""
                 self.assertEqual(payload["stream_name"], "association_stream")
                 self.assertEqual(payload["record"]["influence"]["updated_threads"], 1)
                 self.assertEqual(payload["record"]["influence"]["motifs"], ["continuity"])
+            finally:
+                close_service_handles(service)
+
+    def test_brain_status_merges_stage3_loops_for_live_visibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            memory = FakeMemory()
+            memory.brain_status = mock.Mock(  # type: ignore[method-assign]
+                return_value={
+                    "mode": "full_brain",
+                    "loops": [
+                        {"loop_name": "heartbeat", "status": "ok", "started_at": "2026-04-07T00:00:00Z", "finished_at": "2026-04-07T00:00:00Z"},
+                        {"loop_name": "association_stream", "status": "ok", "started_at": "2026-04-07T00:01:00Z", "finished_at": "2026-04-07T00:01:00Z"},
+                    ],
+                    "cache": {"hit_ratio": 0.0, "hits": 0, "misses": 2},
+                }
+            )
+            service = HoloReplyService(config, runner=FakeRunner(), memory=memory)
+            try:
+                payload = service.brain_status()
+                loop_names = {str(item.get("loop_name", "")) for item in payload["loops"]}
+
+                self.assertIn("self_model_refresh", loop_names)
+                self.assertIn("homeostasis_tick", loop_names)
+                self.assertIn("operator_planning", loop_names)
+                self.assertIn("operator_shadow_cycle", loop_names)
+                self.assertIn("visual_ingest_cycle", loop_names)
+
+                pending = next(item for item in payload["loops"] if str(item.get("loop_name", "")) == "self_model_refresh")
+                self.assertEqual(pending["status"], "never")
+                self.assertIn("idle_seconds", payload)
             finally:
                 close_service_handles(service)
 

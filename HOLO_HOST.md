@@ -4,6 +4,8 @@ Cross-thread handoff docs:
 - `HOLO_HANDOFF.md`
 - `HOLO_SYSTEM.md`
 - `HOLO_DEVELOPMENT.md`
+- `docs/MIND_OS_STAGE2_PERSONA_CONSCIOUSNESS.md`
+- `docs/MIND_OS_STAGE3_REFLECTIVE_SUBJECT.md`
 
 This is the first WSL-native outer body for Holo.
 
@@ -220,16 +222,40 @@ The intended deployment shape stays the same:
 
 ## Stage-2 Runtime Controls
 - `python3 -m holo_host show-brain-status`
+- `python3 -m holo_host show-self-model`
+- `python3 -m holo_host trace-self-model`
 - `python3 -m holo_host set-brain-mode --mode companion`
 - `python3 -m holo_host run-self-revision --thread-key Nemoqi --chat-name Nemoqi`
 - `python3 -m holo_host initiative-probe --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host operator-probe --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host run-operator-cycle --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host ingest-image --path /home/holo/holo/.tmp/stage3.png --note "苹果和酒摆在木桌上" --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host trace-visual-recall --thread-key Nemoqi --chat-name Nemoqi --query "苹果 酒 木桌"`
 - `python3 -m holo_host accept-stage2 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage3 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
 Additional Stage-2 API endpoints:
 - `GET /brain-status`
 - `POST /brain-mode`
 - `POST /self-revision`
 - `POST /initiative-probe`
+
+Stage-3 additions:
+- default brain mode is now `full_brain`
+- `mind_packet` is `v6` and carries `self_model`, `homeostasis_state`, `operator_state`, and `visual_memory`
+- the daemon now also runs `self_model_refresh`, `homeostasis_tick`, `operator_planning`, `operator_shadow_cycle`, and `visual_ingest_cycle`
+- bounded operator work stays inside shadow workspaces; live repo writes are not allowed from runtime
+- image inputs can be understood and remembered, then reused as recall anchors on later turns
+
+Additional Stage-3 API endpoints:
+- `GET /self-model`
+- `GET /operator-status`
+- `GET /visual-memory`
+- `GET /trace-visual-recall`
+- `POST /operator-probe`
+- `POST /operator-cycle`
+- `POST /ingest-image`
+- `POST /accept-stage3`
 
 The old `wcf` path is no longer the intended online path on this machine. `wcf-info` now makes the mismatch explicit: the installed `wcferry 39.x` line is publicly documented around the `3.9.x` client line, while the local desktop client is `Weixin 4.1.x`.
 For `Weixin 4.1+`, the helper now grows a dialog-based `pyweixin_dialog` transport: one dedicated minimized dialog window per whitelisted chat, listened to through upstream `pyweixin`'s own monitor methods. That is the new intended online direction.

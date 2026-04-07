@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +26,8 @@ from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .models import AttentionState, IncomingMessage, OutgoingMessage, ReplyBubble, TurnContext
+from .operator_bus import operator_probe as run_operator_probe
+from .operator_bus import refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
 from .processors import build_attention_state, build_processor, build_reply_bubbles
 from .store import QueueStore
@@ -182,6 +187,17 @@ def _normalize_turn_text(text: str) -> str:
     return current
 
 
+def _parse_utc_timestamp(value: str | None) -> float:
+    current = str(value or "").strip()
+    if not current:
+        return 0.0
+    try:
+        normalized = current.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return 0.0
+
+
 def _trim_wechat_reply(text: str, limit: int = 72) -> str:
     current = text.strip()
     if len(current) <= limit:
@@ -290,7 +306,6 @@ def _coerce_helper_artifact_path(raw: str | None) -> str:
             drive = mnt_match.group(1).upper()
             tail = str(mnt_match.group(2) or "").replace("/", "\\")
             return f"{drive}:\\" + tail if tail else f"{drive}:\\"
-        return text
     if not _is_windows_abs_path(text):
         return text
     try:
@@ -308,6 +323,31 @@ def _coerce_helper_artifact_path(raw: str | None) -> str:
 def _is_origin_recall_query(text: str | None) -> bool:
     lowered = str(text or "").lower()
     return any(str(hint).lower() in lowered for hint in ORIGIN_RECALL_HINTS)
+
+
+def _image_attachments(metadata: dict[str, Any] | None) -> list[dict[str, Any]]:
+    attachments = metadata.get("attachments", []) if isinstance(metadata, dict) else []
+    if not isinstance(attachments, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        media_type = str(item.get("media_type", "") or "").strip().lower()
+        path = str(item.get("path", "") or "").strip()
+        if not path:
+            continue
+        if media_type.startswith("image/") or Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}:
+            rows.append(dict(item))
+    return rows
+
+
+def _attachment_size_mb(attachment: dict[str, Any]) -> float:
+    try:
+        size_bytes = float(attachment.get("size_bytes", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        size_bytes = 0.0
+    return max(0.0, size_bytes / (1024.0 * 1024.0))
 
 
 def _decode_windows_process_output(raw: bytes | str | None) -> str:
@@ -401,6 +441,7 @@ class HoloReplyService:
             activation_cache_enabled=config.memory.activation_cache_enabled,
             private_memory_sync_enabled=config.memory.private_memory_sync_enabled,
             private_memory_repo_path=config.memory.private_memory_repo_path,
+            runner=self.runner,
         )
         self.policy = policy or AutonomyPolicy(config)
         self.capabilities = CapabilityBroker(config)
@@ -409,6 +450,79 @@ class HoloReplyService:
         self._wechat_history_lock = threading.RLock()
         self._wechat_history_bridge: dict[str, Any] | None = None
         self._wechat_history_state_path = self.config.runtime.state_dir / "active_wechat_history_state.json"
+
+    def _brain_loop_definitions(self, mode: str) -> dict[str, dict[str, Any]]:
+        definitions = {
+            "heartbeat": {"interval_seconds": max(1, int(self.config.memory.heartbeat_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "attention_tick": {"interval_seconds": max(1, int(self.config.memory.attention_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "full_brain"}},
+            "maintenance_stream": {"interval_seconds": 60, "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "association_stream": {"interval_seconds": 180, "enabled_modes": {"companion", "full_brain"}},
+            "social_stream": {"interval_seconds": 300, "enabled_modes": {"companion", "full_brain"}},
+            "deep_dream_cycle": {"interval_seconds": 3600, "enabled_modes": {"dream_only", "full_brain"}},
+            "self_revision": {"interval_seconds": max(300, int(self.config.memory.self_revision_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "self_model_refresh": {"interval_seconds": max(60, int(self.config.memory.self_model_refresh_interval_seconds)), "enabled_modes": {"companion", "dream_only", "full_brain"}},
+            "homeostasis_tick": {"interval_seconds": max(30, int(self.config.memory.homeostasis_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "operator_planning": {"interval_seconds": max(120, int(self.config.memory.operator_planning_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "operator_shadow_cycle": {"interval_seconds": max(90, int(self.config.memory.operator_shadow_cycle_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "visual_ingest_cycle": {"interval_seconds": max(15, int(self.config.memory.visual_ingest_cycle_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+        }
+        if mode == "full_brain":
+            definitions["association_stream"]["interval_seconds"] = max(60, int(definitions["association_stream"]["interval_seconds"] * 0.5))
+            definitions["social_stream"]["interval_seconds"] = max(90, int(definitions["social_stream"]["interval_seconds"] * 0.5))
+            definitions["self_revision"]["interval_seconds"] = max(600, int(definitions["self_revision"]["interval_seconds"] * 0.5))
+            definitions["operator_planning"]["interval_seconds"] = max(90, int(definitions["operator_planning"]["interval_seconds"] * 0.75))
+            definitions["operator_shadow_cycle"]["interval_seconds"] = max(60, int(definitions["operator_shadow_cycle"]["interval_seconds"] * 0.75))
+        return definitions
+
+    def _brain_status_payload(self) -> dict[str, Any]:
+        payload = dict(self.memory.brain_status())
+        mode = str(payload.get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default)
+        latest_activity_at = self.store.latest_activity_at(channel="wechat")
+        payload["latest_activity_at"] = latest_activity_at
+        payload["idle_seconds"] = max(0.0, time.time() - _parse_utc_timestamp(latest_activity_at))
+        existing = {
+            str(item.get("loop_name", "")): dict(item)
+            for item in payload.get("loops", [])
+            if str(item.get("loop_name", "")).strip()
+        }
+        merged: list[dict[str, Any]] = []
+        for loop_name, meta in self._brain_loop_definitions(mode).items():
+            current = existing.pop(loop_name, {})
+            if not current:
+                current = {
+                    "loop_name": loop_name,
+                    "status": "never",
+                    "mode": mode,
+                    "started_at": "",
+                    "finished_at": "",
+                    "duration_ms": 0.0,
+                    "influence_summary": "",
+                    "blocked_reason": "",
+                    "stats_json": "",
+                    "next_due_at": "",
+                }
+            finished_at = str(current.get("finished_at", "") or current.get("started_at", "") or "")
+            next_due_at = str(current.get("next_due_at", "") or "")
+            if not next_due_at and finished_at:
+                next_due_at = (
+                    datetime.fromtimestamp(
+                        _parse_utc_timestamp(finished_at) + int(meta["interval_seconds"]),
+                        tz=timezone.utc,
+                    )
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+            current["next_due_at"] = next_due_at
+            current.setdefault("blocked_reason", "")
+            current.setdefault("influence_summary", "")
+            current.setdefault("duration_ms", 0.0)
+            current.setdefault("stats_json", "")
+            current.setdefault("mode", mode)
+            merged.append(current)
+        merged.extend(existing.values())
+        payload["loops"] = sorted(merged, key=lambda item: str(item.get("loop_name", "")))
+        return payload
 
     def _load_wechat_helper_runtime(self) -> dict[str, Any]:
         repo_root = self.config.runtime.repo_root
@@ -455,7 +569,7 @@ class HoloReplyService:
         }
 
     def health(self) -> dict[str, Any]:
-        brain_status = self.memory.brain_status()
+        brain_status = self.brain_status()
         return {
             "status": "ok",
             "repo_root": str(self.config.runtime.repo_root),
@@ -476,6 +590,8 @@ class HoloReplyService:
             "processor_mesh_tasks": getattr(self.runner, "supported_tasks", lambda: [])(),
             "brain_mode": str(brain_status.get("mode", self.config.memory.brain_mode_default)),
             "brain_status": brain_status,
+            "self_model": self.memory.self_model_state(),
+            "operator_status": self.memory.operator_status(),
         }
 
     def snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -514,6 +630,42 @@ class HoloReplyService:
                 source=str(payload.get("source", "holo_host.reply_api.artifact")).strip() or "holo_host.reply_api.artifact",
                 tags=[str(tag) for tag in tags if str(tag).strip()],
                 dry_run=bool(payload.get("dry_run", False)),
+            )
+
+    def ingest_image(self, payload: dict[str, Any]) -> dict[str, Any]:
+        path = _coerce_helper_artifact_path(payload.get("path", ""))
+        if not path:
+            raise ValueError("`path` is required")
+        channel = str(payload.get("channel", "wechat")).strip() or "wechat"
+        thread_key = str(payload.get("thread_key", "")).strip()
+        chat_name = str(payload.get("chat_name", "")).strip() or thread_key
+        tags = payload.get("tags", [])
+        if tags is None:
+            tags = []
+        if not isinstance(tags, list):
+            raise ValueError("`tags` must be a JSON array when provided")
+        sync = bool(payload.get("sync", True))
+        if not sync:
+            with self._memory_lock:
+                return self.memory.queue_visual_ingest(
+                    path,
+                    note=str(payload.get("note", "")).strip() or None,
+                    source=str(payload.get("source", "holo_host.reply_api.visual")).strip() or "holo_host.reply_api.visual",
+                    tags=[str(tag) for tag in tags if str(tag).strip()],
+                    channel=channel,
+                    thread_key=thread_key,
+                    chat_name=chat_name,
+                )
+        with self._memory_lock:
+            return self.memory.ingest_image(
+                path,
+                note=str(payload.get("note", "")).strip() or None,
+                source=str(payload.get("source", "holo_host.reply_api.visual")).strip() or "holo_host.reply_api.visual",
+                tags=[str(tag) for tag in tags if str(tag).strip()],
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                sync=True,
             )
 
     def revive_packet(self, *, query: str | None = None, path: str | None = None) -> dict[str, Any]:
@@ -573,6 +725,10 @@ class HoloReplyService:
         payload["build_ms"] = round((time.perf_counter() - started_at) * 1000.0, 2)
         return payload
 
+    def trace_visual_recall(self, *, query: str, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 4) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_visual_recall(query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
     def activation_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.activation_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
@@ -587,11 +743,32 @@ class HoloReplyService:
 
     def brain_status(self) -> dict[str, Any]:
         with self._memory_lock:
-            return self.memory.brain_status()
+            return self._brain_status_payload()
+
+    def self_model(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.self_model_state()
+
+    def operator_status(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.operator_status()
+
+    def visual_memory(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.visual_memory_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
 
     def set_brain_mode(self, *, mode: str, note: str = "") -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.set_brain_mode(mode, note=note)
+
+    def trace_self_model(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return {
+                "self_model": self.memory.self_model_state(),
+                "brain_status": self._brain_status_payload(),
+                "operator_status": self.memory.operator_status(),
+                "stream_status": self.memory.stream_status(),
+            }
 
     def initiative_probe(
         self,
@@ -612,6 +789,179 @@ class HoloReplyService:
             query=query or "initiative_probe",
             mode=str(self.memory.brain_status().get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default),
         )
+
+    def operator_probe(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return run_operator_probe(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+        )
+
+    def run_operator_cycle(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        reason: str = "reply_api",
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            refresh_self_model(
+                config=self.config,
+                runner=self.runner,
+                memory=self.memory,
+                store=self.store,
+                reason=f"{reason}:self_model_refresh",
+                source="reply_api",
+            )
+            return run_operator_cycle(
+                config=self.config,
+                runner=self.runner,
+                memory=self.memory,
+                store=self.store,
+                reason=reason,
+                thread_key=str(thread_key or chat_name or "").strip() or "Nemoqi",
+                chat_name=str(chat_name or thread_key or "").strip() or "Nemoqi",
+                channel=channel,
+            )
+
+    def accept_stage3(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage3_acceptance
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        original_mode = str(self.brain_status().get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default)
+        mode_transition = self.set_brain_mode(mode="full_brain", note="accept-stage3")
+        before_self_model = self.self_model()
+        with self._memory_lock:
+            refresh_self_model(
+                config=self.config,
+                runner=self.runner,
+                memory=self.memory,
+                store=self.store,
+                reason="accept-stage3:self_model_refresh",
+                source="reply_api",
+            )
+        after_self_model = self.self_model()
+        operator_probe = self.operator_probe(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        operator_cycle = self.run_operator_cycle(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            reason="accept-stage3",
+        )
+
+        sample_visual: dict[str, Any] = {"status": "skipped", "reason": "no_sample"}
+        visual_trace: dict[str, Any] = {}
+        visual_state: dict[str, Any] = {}
+        sample_png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn0rC8AAAAASUVORK5CYII="
+        )
+        with tempfile.TemporaryDirectory(prefix="holo-stage3-") as tmpdir:
+            image_path = Path(tmpdir) / "stage3-visual-anchor.png"
+            image_path.write_bytes(sample_png)
+            sample_visual = self.ingest_image(
+                {
+                    "path": str(image_path),
+                    "note": "苹果和酒摆在木桌上，像一段能被想起的旅途锚点",
+                    "source": "holo_host.accept_stage3",
+                    "tags": ["stage3", "visual", channel],
+                    "channel": channel,
+                    "thread_key": normalized_thread_key,
+                    "chat_name": normalized_chat_name,
+                    "sync": True,
+                }
+            )
+            visual_trace = self.trace_visual_recall(
+                query="苹果 酒 木桌 旅途 图",
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                limit=4,
+            )
+            visual_state = self.visual_memory(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+            )
+
+        fast_benchmark = self._benchmark_packet_build(
+            query="在吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="fast",
+        )
+        recall_benchmark = self._benchmark_packet_build(
+            query="顺着刚才那条线继续",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="recall",
+        )
+        deep_benchmark = self._benchmark_packet_build(
+            query="你还记得重新上线前吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="deep_recall",
+        )
+        report = _evaluate_stage3_acceptance(
+            health=self.health(),
+            mode_transition=mode_transition,
+            brain_status=self.brain_status(),
+            before_self_model=before_self_model,
+            after_self_model=after_self_model,
+            operator_probe=operator_probe,
+            operator_cycle=operator_cycle,
+            visual_ingest=sample_visual,
+            visual_state=visual_state,
+            visual_trace=visual_trace,
+            stream_status=self.stream_status(),
+            initiative_probe=self.initiative_probe(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                query="若此刻想主动开口，会不会被放行",
+            ),
+            fast_benchmark=fast_benchmark,
+            recall_benchmark=recall_benchmark,
+            deep_benchmark=deep_benchmark,
+        )
+        report["transport"] = "live_http"
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        report["original_mode"] = original_mode
+        return report
 
     def initiative_status(
         self,
@@ -843,6 +1193,7 @@ class HoloReplyService:
             "sender": turn.sender,
             "contact_display_name": str(contact.get("display_name") or ""),
             "recent_history": history,
+            "attachments": list((turn.metadata or {}).get("attachments", [])) if isinstance((turn.metadata or {}).get("attachments"), list) else [],
             "recall_trigger_mode": self.config.memory.recall_trigger_mode,
             "mind_budget": {
                 "fast_history_messages": self.config.memory.fast_history_messages,
@@ -1183,6 +1534,41 @@ class HoloReplyService:
             contact=contact,
             history=history,
         )
+        visual_report: dict[str, Any] | None = None
+        image_attachments = _image_attachments(turn.metadata)
+        if image_attachments:
+            sync_candidates = [
+                item
+                for item in image_attachments[: max(1, int(self.config.memory.visual_sync_max_count or 1))]
+                if _attachment_size_mb(item) <= float(self.config.memory.visual_sync_max_size_mb or 8)
+            ]
+            queued_candidates = image_attachments[len(sync_candidates):]
+            for attachment in queued_candidates:
+                self.ingest_image(
+                    {
+                        "path": attachment.get("path", ""),
+                        "note": f"queued visual ingest for {turn.chat_name}",
+                        "source": "holo_host.reply_api.queued_visual",
+                        "tags": [turn.channel, "visual_queue"],
+                        "channel": turn.channel,
+                        "thread_key": incoming.thread_key,
+                        "chat_name": turn.chat_name,
+                        "sync": False,
+                    }
+                )
+            if sync_candidates:
+                visual_report = self.ingest_image(
+                    {
+                        "path": sync_candidates[0].get("path", ""),
+                        "note": f"sync visual ingest for {turn.chat_name}",
+                        "source": "holo_host.reply_api.sync_visual",
+                        "tags": [turn.channel, "visual_sync"],
+                        "channel": turn.channel,
+                        "thread_key": incoming.thread_key,
+                        "chat_name": turn.chat_name,
+                        "sync": True,
+                    }
+                )
         sidecar_started_at = time.perf_counter()
         with self._memory_lock:
             sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
@@ -1297,6 +1683,7 @@ class HoloReplyService:
                     "repair_ms": repair_ms,
                 },
                 "active_memory_refresh": active_history_report or {},
+                "visual_ingest": visual_report or {},
             },
         )
         self.store.record_outbound(
@@ -1347,6 +1734,7 @@ class HoloReplyService:
                 "total_ms": int((time.perf_counter() - started_at) * 1000),
             },
             "active_memory_refresh": active_history_report or {},
+            "visual_ingest": visual_report or {},
             **(turn.metadata or {}),
         }
         memory_write_report: dict[str, Any] = {}
@@ -1426,6 +1814,7 @@ class HoloReplyService:
             "mind_graph_sync": mind_graph_sync,
             "timing_ms": timing_ms,
             "active_memory_refresh": active_history_report or {},
+            "visual_ingest": visual_report or {},
         }
 
     def _parse_turn(self, payload: dict[str, Any]) -> ChatTurn:
@@ -1489,6 +1878,50 @@ class HoloReplyService:
             fallback = shape_wechat_reply(text) if channel == "wechat" else text.strip()
             finalized.append(ReplyBubble(text=fallback or "咱在。", delay_ms=0, purpose="fallback"))
         return finalized
+
+
+    def _benchmark_packet_build(
+        self,
+        *,
+        query: str,
+        thread_key: str,
+        chat_name: str,
+        channel: str,
+        sender: str,
+        iterations: int,
+        warmup: int,
+        target_tier: str,
+    ) -> dict[str, Any]:
+        timings: list[float] = []
+        last_payload: dict[str, Any] = {}
+        total_runs = max(1, int(warmup)) + max(1, int(iterations))
+        for index in range(total_runs):
+            started_at = time.perf_counter()
+            payload = self.inspect_mind(
+                query=query,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                include_graph_trace=True,
+            )
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            if index >= max(1, int(warmup)):
+                timings.append(round(elapsed_ms, 2))
+            last_payload = payload
+        if not timings:
+            timings = [0.0]
+        return {
+            "query": query,
+            "target_tier": target_tier,
+            "last_tier": str(last_payload.get("tier", "") or ""),
+            "timings_ms": {
+                "min": round(min(timings), 2),
+                "max": round(max(timings), 2),
+                "avg": round(sum(timings) / len(timings), 2),
+            },
+            "packet_cache": dict(self.memory.packet_cache_stats()),
+        }
 
 
 class _ReplyHTTPServer(ThreadingHTTPServer):
@@ -1589,6 +2022,36 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/brain-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.brain_status())
                     return
+                if parsed.path == "/self-model":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.self_model())
+                    return
+                if parsed.path == "/operator-status":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.operator_status())
+                    return
+                if parsed.path == "/visual-memory":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.visual_memory(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/trace-visual-recall":
+                    params = parse_qs(parsed.query)
+                    query = params.get("query", [""])[0]
+                    if not str(query).strip():
+                        self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": "`query` is required"})
+                        return
+                    payload = self.server.reply_service.trace_visual_recall(
+                        query=query,
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["4"])[0]),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/initiative-status":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.initiative_status(
@@ -1657,6 +2120,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/ingest-artifact":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.ingest_artifact(payload))
                     return
+                if parsed.path == "/ingest-image":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.ingest_image(payload))
+                    return
                 if parsed.path == "/refresh-wechat-history":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.refresh_wechat_history(payload))
                     return
@@ -1717,6 +2183,40 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",
                             query=str(payload.get("query", "")).strip(),
+                        ),
+                    )
+                    return
+                if parsed.path == "/operator-probe":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.operator_probe(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                        ),
+                    )
+                    return
+                if parsed.path == "/operator-cycle":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.run_operator_cycle(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            reason=str(payload.get("reason", "reply_api")).strip() or "reply_api",
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage3":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage3(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
                         ),
                     )
                     return

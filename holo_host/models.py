@@ -63,6 +63,9 @@ class ProcessorTaskRequest:
     output_schema: str = "plain_text"
     allowed_data_layers: tuple[str, ...] = ()
     allow_memory_writeback: bool = False
+    image_paths: tuple[str, ...] = ()
+    workspace_mode: str = "live_readonly"
+    operator_scope: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,6 +79,9 @@ class ProcessorTaskRequest:
             "output_schema": self.output_schema,
             "allowed_data_layers": list(self.allowed_data_layers),
             "allow_memory_writeback": self.allow_memory_writeback,
+            "image_paths": list(self.image_paths),
+            "workspace_mode": self.workspace_mode,
+            "operator_scope": self.operator_scope,
             "metadata": dict(self.metadata),
         }
 
@@ -209,6 +215,10 @@ class TurnContext:
     game_state: dict[str, Any] = field(default_factory=dict)
     stream_influence: dict[str, Any] = field(default_factory=dict)
     self_revision_state: dict[str, Any] = field(default_factory=dict)
+    self_model: dict[str, Any] = field(default_factory=dict)
+    homeostasis_state: dict[str, Any] = field(default_factory=dict)
+    operator_state: dict[str, Any] = field(default_factory=dict)
+    visual_memory: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.mind_packet:
@@ -226,6 +236,14 @@ class TurnContext:
             self.stream_influence = dict(packet.get("stream_influence", {}))
         if not self.self_revision_state:
             self.self_revision_state = dict(packet.get("self_revision_state", {}))
+        if not self.self_model:
+            self.self_model = dict(packet.get("self_model", {}))
+        if not self.homeostasis_state:
+            self.homeostasis_state = dict(packet.get("homeostasis_state", {}))
+        if not self.operator_state:
+            self.operator_state = dict(packet.get("operator_state", {}))
+        if not self.visual_memory:
+            self.visual_memory = dict(packet.get("visual_memory", {}))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -248,6 +266,10 @@ class TurnContext:
             "game_state": dict(self.game_state),
             "stream_influence": dict(self.stream_influence),
             "self_revision_state": dict(self.self_revision_state),
+            "self_model": dict(self.self_model),
+            "homeostasis_state": dict(self.homeostasis_state),
+            "operator_state": dict(self.operator_state),
+            "visual_memory": dict(self.visual_memory),
         }
 
 

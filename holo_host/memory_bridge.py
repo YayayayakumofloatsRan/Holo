@@ -13,6 +13,8 @@ from typing import Any
 from .activation_state import ActivationStateStore
 from .common import utc_now
 from .mind_graph import MindGraph
+from .models import ProcessorTaskRequest
+from .operator_bus import build_homeostasis_state
 from .vector_memory import VectorMemory
 
 GRAPH_MEMORY_LANES = (
@@ -101,6 +103,7 @@ class MemoryBridge:
         activation_cache_enabled: bool = True,
         private_memory_sync_enabled: bool = False,
         private_memory_repo_path: str = "",
+        runner: Any | None = None,
         rag: ModuleType | None = None,
         vector: VectorMemory | None = None,
         activation: ActivationStateStore | None = None,
@@ -113,6 +116,7 @@ class MemoryBridge:
         self.activation_cache_enabled = bool(activation_cache_enabled)
         self.private_memory_sync_enabled = bool(private_memory_sync_enabled)
         self.private_memory_repo_path = Path(private_memory_repo_path).expanduser() if str(private_memory_repo_path).strip() else None
+        self.runner = runner
         self.rag = rag or self._load_rag_memory()
         self.graph = MindGraph(
             self.repo_root,
@@ -130,6 +134,7 @@ class MemoryBridge:
         self._packet_cache: dict[str, dict[str, Any]] = {}
         self._packet_cache_hits = 0
         self._packet_cache_misses = 0
+        self._visual_queue_path = (self.repo_root / ".holo_runtime" / "visual_ingest_queue.jsonl").resolve()
 
     def _load_rag_memory(self) -> ModuleType:
         path = self.repo_root / "holo_memory_library" / "rag_memory.py"
@@ -189,6 +194,7 @@ class MemoryBridge:
                 "sender": str(context.get("sender", "") or ""),
                 "include_graph_trace": bool(context.get("include_graph_trace", False)),
                 "graph_trace_limit": int(context.get("graph_trace_limit", 0) or 0),
+                "attachments": list(context.get("attachments", [])) if isinstance(context.get("attachments"), list) else [],
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -267,6 +273,18 @@ class MemoryBridge:
     def _self_revision_state(self) -> dict[str, Any]:
         return self.graph.latest_self_revision_state()
 
+    def _self_model_state(self) -> dict[str, Any]:
+        return self.graph.self_model_state()
+
+    def _homeostasis_state(self) -> dict[str, Any]:
+        class _ConfigShim:
+            memory = type("MemoryCfg", (), {"brain_mode_default": "full_brain"})()
+
+        return build_homeostasis_state(memory=self, config=_ConfigShim())
+
+    def _operator_state(self) -> dict[str, Any]:
+        return self.graph.operator_status()
+
     def _game_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
         return self.graph.game_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
 
@@ -300,6 +318,29 @@ class MemoryBridge:
         payload.setdefault("recent_events", [])
         return payload
 
+    def _visual_memory(self, *, channel: str, thread_key: str, chat_name: str, limit: int = 3) -> dict[str, Any]:
+        items = self.graph.visual_memory(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+        if not items:
+            return {
+                "items": [],
+                "scene_summary": "",
+                "objects": [],
+                "text_ocr": "",
+                "mood_imagery": "",
+                "thread_relevance": 0.0,
+                "visual_anchors": [],
+            }
+        latest = dict(items[0])
+        return {
+            "items": items,
+            "scene_summary": str(latest.get("scene_summary", "") or ""),
+            "objects": list(latest.get("objects", [])),
+            "text_ocr": str(latest.get("text_ocr", "") or ""),
+            "mood_imagery": str(latest.get("mood_imagery", "") or ""),
+            "thread_relevance": float(latest.get("thread_relevance", 0.0) or 0.0),
+            "visual_anchors": list(latest.get("visual_anchors", [])),
+        }
+
     def _mind_limits(self, context: dict[str, Any], *, fast: bool) -> dict[str, int]:
         budget = dict(context.get("mind_budget", {}))
         fast_history = max(1, int(budget.get("fast_history_messages", 4) or 4))
@@ -323,6 +364,10 @@ class MemoryBridge:
         relationship_state = dict(packet.get("relationship_state", {}))
         game_state = self._game_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
         self_revision_state = self._self_revision_state()
+        self_model_state = self._self_model_state()
+        homeostasis_state = self._homeostasis_state()
+        operator_state = self._operator_state()
+        visual_memory = self._visual_memory(channel=channel, thread_key=thread_key, chat_name=chat_name)
         persona_blend = self._persona_blend(
             query=query,
             relationship_state=relationship_state,
@@ -331,12 +376,24 @@ class MemoryBridge:
         )
         stream_influence = self._stream_influence(channel=channel, thread_key=thread_key, chat_name=chat_name)
         brain_state = self._brain_state()
-        packet["mind_packet_version"] = "v5"
+        visual_anchors = [str(item).strip() for item in visual_memory.get("visual_anchors", []) if str(item).strip()]
+        if visual_anchors:
+            packet["episodic_recall"] = {
+                **dict(packet.get("episodic_recall", {})),
+                "lines": self._unique_strings(
+                    list(dict(packet.get("episodic_recall", {})).get("lines", [])) + visual_anchors
+                )[: max(1, int(packet.get("limits", {}).get("episodic_k", 2) or 2))],
+            }
+        packet["mind_packet_version"] = "v6"
         packet["persona_blend"] = persona_blend
         packet["brain_state"] = brain_state
         packet["game_state"] = game_state
         packet["stream_influence"] = stream_influence
         packet["self_revision_state"] = self_revision_state
+        packet["self_model"] = self_model_state
+        packet["homeostasis_state"] = homeostasis_state
+        packet["operator_state"] = operator_state
+        packet["visual_memory"] = visual_memory
         packet.setdefault("state", {})
         packet["state"]["persona_blend"] = dict(persona_blend)
         packet["state"]["game_state"] = dict(game_state)
@@ -345,6 +402,10 @@ class MemoryBridge:
             "idle_since": str(brain_state.get("idle_since", "")),
         }
         packet["state"]["stream_influence"] = dict(stream_influence)
+        packet["state"]["self_model"] = dict(self_model_state)
+        packet["state"]["homeostasis_state"] = dict(homeostasis_state)
+        packet["state"]["operator_state"] = dict(operator_state)
+        packet["state"]["visual_memory"] = dict(visual_memory)
         packet["initiative_state"] = {
             **dict(packet.get("initiative_state", DEFAULT_INITIATIVE_STATE)),
             "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
@@ -1116,6 +1177,10 @@ class MemoryBridge:
             "vector_hits": list(packet.get("vector_hits", [])),
             "activation_state": dict(packet.get("activation_state", {})),
             "retrieval_trace": dict(packet.get("retrieval_trace", {})),
+            "self_model": dict(packet.get("self_model", {})),
+            "homeostasis_state": dict(packet.get("homeostasis_state", {})),
+            "operator_state": dict(packet.get("operator_state", {})),
+            "visual_memory": dict(packet.get("visual_memory", {})),
             "mind_packet": packet,
         }
 
@@ -1279,6 +1344,17 @@ class MemoryBridge:
         chat_name: str | None = None,
     ) -> dict[str, Any]:
         docs = self.graph.export_vector_documents(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        visuals = self.graph.visual_memory(thread_key=thread_key, chat_name=chat_name, channel=str(channel or "wechat"), limit=256)
+        for item in visuals:
+            docs.extend(
+                self._visual_vector_documents(
+                    record_id=str(item.get("id", "")),
+                    channel=str(item.get("channel", channel or "wechat") or (channel or "wechat")),
+                    thread_key=str(item.get("thread_key", thread_key or chat_name or "") or (thread_key or chat_name or "")),
+                    chat_name=str(item.get("chat_name", chat_name or thread_key or "") or (chat_name or thread_key or "")),
+                    visual_memory=dict(item),
+                )
+            )
         result = self.vector.upsert_documents(docs)
         result["document_ids"] = [str(doc.get("id", "")) for doc in docs[:8]]
         return result
@@ -1396,6 +1472,15 @@ class MemoryBridge:
     def brain_status(self) -> dict[str, Any]:
         return self._brain_state()
 
+    def self_model_state(self) -> dict[str, Any]:
+        return self._self_model_state()
+
+    def operator_status(self) -> dict[str, Any]:
+        return self._operator_state()
+
+    def visual_memory_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        return self._visual_memory(channel=channel, thread_key=str(thread_key or ""), chat_name=str(chat_name or ""))
+
     def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
         return self.graph.set_brain_mode(mode, note=note)
 
@@ -1414,6 +1499,8 @@ class MemoryBridge:
         payload["activation_events"] = self.activation.global_recent_events(limit=12)
         payload["vector"] = self.vector.health()
         payload["brain"] = self._brain_state()
+        payload["operator"] = self._operator_state()
+        payload["self_model"] = self._self_model_state()
         return payload
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1468,6 +1555,76 @@ class MemoryBridge:
     def list_initiative_candidates(self, *, limit: int = 12) -> list[dict[str, Any]]:
         return self.rag.load_initiative_candidates(limit=limit)
 
+    def _visual_vector_documents(self, *, record_id: str, channel: str, thread_key: str, chat_name: str, visual_memory: dict[str, Any]) -> list[dict[str, Any]]:
+        lines = [
+            str(visual_memory.get("scene_summary", "") or "").strip(),
+            str(visual_memory.get("text_ocr", "") or "").strip(),
+            str(visual_memory.get("mood_imagery", "") or "").strip(),
+            *[str(item).strip() for item in visual_memory.get("visual_anchors", []) if str(item).strip()],
+            *[str(item).strip() for item in visual_memory.get("objects", []) if str(item).strip()],
+        ]
+        text = "\n".join(line for line in lines if line).strip()
+        if not text:
+            return []
+        return [
+            {
+                "id": f"visual_memory:{record_id}",
+                "channel": channel,
+                "thread_key": thread_key,
+                "chat_name": chat_name,
+                "memory_class": "sensory_trace",
+                "source_store": "visual_memory",
+                "source_id": record_id,
+                "text": text,
+                "importance": max(0.66, float(visual_memory.get("thread_relevance", 0.6) or 0.6)),
+                "confidence": 0.76,
+            }
+        ]
+
+    def _visual_understand_prompt(self, *, artifact_report: dict[str, Any], thread_key: str, chat_name: str, channel: str, note: str | None = None) -> str:
+        return (
+            "Return JSON only with keys scene_summary, objects, text_ocr, mood_imagery, thread_relevance, visual_anchors. "
+            "Use concise Chinese. visual_anchors should be 1 to 4 short recallable anchors.\n\n"
+            f"Thread:\nchannel={channel}\nthread_key={thread_key}\nchat_name={chat_name}\n\n"
+            f"Artifact report:\n{json.dumps(artifact_report, ensure_ascii=False, indent=2)}\n\n"
+            f"Note:\n{str(note or '').strip()}"
+        )
+
+    def _run_image_understand(self, *, image_path: str, prompt: str) -> dict[str, Any]:
+        if self.runner is None or not hasattr(self.runner, "run_task"):
+            return {}
+        result = self.runner.run_task(
+            ProcessorTaskRequest(
+                task_type="image_understand",
+                prompt=prompt,
+                output_schema="json",
+                image_paths=(image_path,),
+                workspace_mode="live_readonly",
+                operator_scope="visual_memory",
+                allowed_data_layers=("visual_memory", "relationship_state", "activation_state"),
+            )
+        )
+        try:
+            payload = json.loads(result.text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _coerce_visual_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            current = str(value).strip()
+            return [current] if current else []
+        return []
+
     def ingest_artifact(
         self,
         path: str,
@@ -1478,6 +1635,191 @@ class MemoryBridge:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         return self.rag.ingest_artifact_result(path, note=note, source=source, tags=tags, dry_run=dry_run)
+
+    def queue_visual_ingest(
+        self,
+        path: str,
+        *,
+        note: str | None = None,
+        source: str,
+        tags: list[str],
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+    ) -> dict[str, Any]:
+        entry = {
+            "path": str(path),
+            "note": str(note or ""),
+            "source": str(source or "visual_ingest"),
+            "tags": [str(item).strip() for item in tags if str(item).strip()],
+            "channel": str(channel or "wechat"),
+            "thread_key": str(thread_key or chat_name),
+            "chat_name": str(chat_name or thread_key),
+            "queued_at": utc_now(),
+        }
+        self._visual_queue_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._visual_queue_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return {"status": "queued", "entry": entry, "queue_path": str(self._visual_queue_path)}
+
+    def drain_visual_ingest_queue(self, *, limit: int = 3) -> dict[str, Any]:
+        if not self._visual_queue_path.exists():
+            return {"status": "ok", "processed": [], "remaining": 0}
+        lines = [line.strip() for line in self._visual_queue_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        processed: list[dict[str, Any]] = []
+        remaining: list[str] = []
+        for index, line in enumerate(lines):
+            if index < max(1, int(limit)):
+                try:
+                    payload = json.loads(line)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                processed.append(
+                    self.ingest_image(
+                        str(payload.get("path", "")),
+                        note=str(payload.get("note", "")).strip() or None,
+                        source=str(payload.get("source", "visual_queue")).strip() or "visual_queue",
+                        tags=[str(item).strip() for item in payload.get("tags", []) if str(item).strip()],
+                        channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                        thread_key=str(payload.get("thread_key", "")).strip(),
+                        chat_name=str(payload.get("chat_name", "")).strip(),
+                        sync=False,
+                    )
+                )
+            else:
+                remaining.append(line)
+        if remaining:
+            self._visual_queue_path.write_text("\n".join(remaining) + "\n", encoding="utf-8")
+        else:
+            self._visual_queue_path.unlink(missing_ok=True)
+        return {"status": "ok", "processed": processed, "remaining": len(remaining)}
+
+    def ingest_image(
+        self,
+        path: str,
+        *,
+        note: str | None = None,
+        source: str,
+        tags: list[str],
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        sync: bool = True,
+    ) -> dict[str, Any]:
+        artifact = self.ingest_artifact(path, note=note, source=source, tags=tags, dry_run=False)
+        media_type = str(artifact.get("media_type", "") or "")
+        if not media_type.startswith("image/") and str(artifact.get("artifact_type", "") or "") != "image":
+            return {"status": "skipped", "reason": "not_image", "artifact": artifact}
+        understanding = self._run_image_understand(
+            image_path=str(path),
+            prompt=self._visual_understand_prompt(
+                artifact_report=artifact,
+                thread_key=thread_key or chat_name,
+                chat_name=chat_name or thread_key,
+                channel=channel,
+                note=note,
+            ),
+        )
+        if not understanding:
+            summary = str(artifact.get("summary_text", "") or "")
+            extracted = str(artifact.get("extracted_excerpt", "") or "")
+            note_text = str(note or "").strip()
+            anchor_seed = note_text or summary or extracted
+            understanding = {
+                "scene_summary": note_text or summary,
+                "objects": [],
+                "text_ocr": extracted,
+                "mood_imagery": "still_visual_memory",
+                "thread_relevance": 0.62,
+                "visual_anchors": [anchor_seed] if anchor_seed else [],
+            }
+        visual_payload = {
+            "scene_summary": str(understanding.get("scene_summary", artifact.get("summary_text", "")) or ""),
+            "objects": self._coerce_visual_list(understanding.get("objects")),
+            "text_ocr": str(understanding.get("text_ocr", artifact.get("extracted_excerpt", "")) or ""),
+            "mood_imagery": str(understanding.get("mood_imagery", "") or ""),
+            "thread_relevance": self._coerce_float(understanding.get("thread_relevance", 0.62) or 0.62) or 0.62,
+            "visual_anchors": self._coerce_visual_list(understanding.get("visual_anchors")),
+        }
+        upsert = self.graph.upsert_visual_memory(
+            channel=channel,
+            thread_key=thread_key or chat_name,
+            chat_name=chat_name or thread_key,
+            artifact_path=str(path),
+            media_type=media_type,
+            scene_summary=visual_payload["scene_summary"],
+            objects=visual_payload["objects"],
+            text_ocr=visual_payload["text_ocr"],
+            mood_imagery=visual_payload["mood_imagery"],
+            thread_relevance=visual_payload["thread_relevance"],
+            visual_anchors=visual_payload["visual_anchors"],
+            metadata={"artifact": artifact, "note": note or "", "sync": bool(sync)},
+            source=source,
+        )
+        vector_sync = self.vector.upsert_documents(
+            self._visual_vector_documents(
+                record_id=str(upsert.get("id", "")),
+                channel=channel,
+                thread_key=thread_key or chat_name,
+                chat_name=chat_name or thread_key,
+                visual_memory=visual_payload,
+            )
+        )
+        activation_sync = self.activation.record(
+            channel=channel,
+            thread_key=thread_key or chat_name,
+            chat_name=chat_name or thread_key,
+            contributor="visual_memory",
+            note="image_understand" if sync else "image_understand_async",
+            motifs=[visual_payload["scene_summary"], visual_payload["mood_imagery"]] + list(visual_payload["visual_anchors"]),
+            payload={"path": str(path), "source": source, "sync": bool(sync)},
+            heat_delta=0.18,
+        )
+        return {
+            "status": "ok",
+            "artifact": artifact,
+            "visual_memory": visual_payload,
+            "graph_sync": upsert,
+            "vector_sync": vector_sync,
+            "activation_sync": activation_sync,
+        }
+
+    def trace_visual_recall(
+        self,
+        query: str,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 4,
+    ) -> dict[str, Any]:
+        visuals = self.graph.visual_memory(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=max(limit * 2, 6))
+        lowered = str(query or "").lower()
+        scored: list[dict[str, Any]] = []
+        for item in visuals:
+            combined = " ".join(
+                [
+                    str(item.get("scene_summary", "")),
+                    str(item.get("text_ocr", "")),
+                    str(item.get("mood_imagery", "")),
+                    *[str(anchor) for anchor in item.get("visual_anchors", [])],
+                    *[str(obj) for obj in item.get("objects", [])],
+                ]
+            ).lower()
+            score = float(item.get("thread_relevance", 0.0) or 0.0)
+            if lowered and lowered in combined:
+                score += 0.4
+            if any(token and token in combined for token in lowered.split()):
+                score += 0.18
+            scored.append({**item, "score": round(score, 4)})
+        scored.sort(key=lambda row: (float(row.get("score", 0.0)), str(row.get("updated_at", ""))), reverse=True)
+        return {
+            "query": query,
+            "channel": channel,
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "hits": scored[: max(1, limit)],
+        }
 
     def sync_private_memory(self, *, label: str | None = None) -> dict[str, Any]:
         if not self.private_memory_sync_enabled:

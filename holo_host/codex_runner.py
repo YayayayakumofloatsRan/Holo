@@ -116,6 +116,54 @@ PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
         "output_schema": "json",
         "default_reasoning_effort": "medium",
     },
+    "self_model_observe": {
+        "description": "Observe current self drift, operator needs, and homeostasis pressure as bounded self-model evidence.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("mind_graph", "activation_state", "relationship_state", "self_model_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
+    "self_model_plan": {
+        "description": "Plan bounded self-model updates and homeostasis goals without editing canonical identity.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("self_model_state", "mind_graph", "activation_state", "relationship_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
+    "operator_plan": {
+        "description": "Produce a bounded operator task plan, scope, and validation path.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("self_model_state", "mind_graph", "activation_state", "relationship_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
+    "operator_execute_shadow": {
+        "description": "Execute a bounded operator task in a shadow workspace without touching the live repo.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("self_model_state", "mind_graph", "activation_state", "relationship_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json_or_text",
+        "default_reasoning_effort": "medium",
+    },
+    "operator_review": {
+        "description": "Review a bounded operator result and decide whether a state-layer delta may be applied.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("self_model_state", "mind_graph", "activation_state", "relationship_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
+    "image_understand": {
+        "description": "Understand an image and return a structured memory-oriented description for Holo.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("visual_memory", "relationship_state", "activation_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
 }
 
 
@@ -237,6 +285,12 @@ class CodexRunner:
                     f"allowed_data_layers={','.join(request.allowed_data_layers)}\n\n"
                     f"{request.prompt}"
                 )
+                task_prompt = (
+                    task_prompt.rstrip()
+                    + "\n"
+                    + f"workspace_mode={request.workspace_mode or 'live_readonly'}\n"
+                    + f"operator_scope={request.operator_scope or ''}\n"
+                )
             if resumed:
                 command = prefix + [
                     "exec",
@@ -255,6 +309,10 @@ class CodexRunner:
                     str(output_path),
                     task_prompt,
                 ]
+            for image_path in request.image_paths:
+                current = str(image_path or "").strip()
+                if current:
+                    command.extend(["-i", current])
             command = self._apply_runtime_options(
                 command,
                 resumed=resumed,
@@ -263,9 +321,15 @@ class CodexRunner:
             )
             if output_path.exists():
                 output_path.write_text("", encoding="utf-8")
+            workspace_path = str(request.metadata.get("workspace_path", "") or "").strip()
+            cwd = self.config.runtime.repo_root
+            if request.workspace_mode == "shadow_write" and workspace_path:
+                shadow_path = Path(workspace_path)
+                if shadow_path.exists():
+                    cwd = shadow_path
             proc = subprocess.run(
                 command,
-                cwd=self.config.runtime.repo_root,
+                cwd=cwd,
                 capture_output=True,
                 text=True,
                 timeout=request.timeout_seconds or self.config.runtime.codex_timeout_seconds,

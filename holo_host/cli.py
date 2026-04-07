@@ -289,6 +289,72 @@ def _brain_status_payload(config_path: str | None, *, allow_local_fallback: bool
     return daemon.brain_status(), "local_process"
 
 
+def _self_model_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/self-model")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.self_model_state(), "local_process"
+
+
+def _operator_status_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/operator-status")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.operator_status(), "local_process"
+
+
+def _visual_memory_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/visual-memory",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.visual_memory_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+
+
+def _trace_visual_recall_payload(
+    config_path: str | None,
+    *,
+    query: str,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int = 4,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/trace-visual-recall",
+        params={"query": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_visual_recall(query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+
+
 def _brain_mode_payload(
     config_path: str | None,
     *,
@@ -351,6 +417,40 @@ def _self_revision_payload(
     )
 
 
+def _operator_probe_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/operator-probe",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return (
+        daemon.operator_probe(
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+        ),
+        "local_process",
+    )
+
+
 def _initiative_probe_payload(
     config_path: str | None,
     *,
@@ -383,6 +483,43 @@ def _initiative_probe_payload(
             chat_name=str(chat_name or thread_key or "").strip(),
             channel=channel,
             query=query,
+        ),
+        "local_process",
+    )
+
+
+def _operator_cycle_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    reason: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/operator-cycle",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "reason": reason,
+        },
+        timeout=180.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return (
+        daemon.run_operator_cycle(
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+            reason=reason,
         ),
         "local_process",
     )
@@ -423,6 +560,114 @@ def _initiative_status_payload(
         ),
         "local_process",
     )
+
+
+def _ingest_image_payload(
+    config_path: str | None,
+    *,
+    path: str,
+    note: str | None,
+    source: str,
+    tags: list[str],
+    channel: str,
+    thread_key: str | None,
+    chat_name: str | None,
+    sync: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/ingest-image",
+        payload={
+            "path": path,
+            "note": note or "",
+            "source": source,
+            "tags": tags,
+            "channel": channel,
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "sync": sync,
+        },
+        timeout=180.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.ingest_image(
+                {
+                    "path": path,
+                    "note": note or "",
+                    "source": source,
+                    "tags": tags,
+                    "channel": channel,
+                    "thread_key": thread_key or "",
+                    "chat_name": chat_name or "",
+                    "sync": sync,
+                }
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_stage3_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage3",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage3(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
 
 
 def _backfill_vector_memory_payload(
@@ -928,6 +1173,179 @@ def _evaluate_stage2_acceptance(
     }
 
 
+def _stage3_check(name: str, ok: bool, detail: str, *, severity: str = "failure") -> dict[str, object]:
+    return {"name": name, "ok": bool(ok), "detail": detail, "severity": severity}
+
+
+def _evaluate_stage3_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    brain_status: dict[str, object],
+    before_self_model: dict[str, object],
+    after_self_model: dict[str, object],
+    operator_probe: dict[str, object],
+    operator_cycle: dict[str, object],
+    visual_ingest: dict[str, object],
+    visual_state: dict[str, object],
+    visual_trace: dict[str, object],
+    stream_status: dict[str, object],
+    initiative_probe: dict[str, object],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    loops = {str(item.get("loop_name", "")): dict(item) for item in brain_status.get("loops", []) if str(item.get("loop_name", ""))}
+    required_loops = {
+        "heartbeat",
+        "attention_tick",
+        "maintenance_stream",
+        "association_stream",
+        "social_stream",
+        "deep_dream_cycle",
+        "self_model_refresh",
+        "homeostasis_tick",
+        "operator_planning",
+        "operator_shadow_cycle",
+        "visual_ingest_cycle",
+    }
+    checks.append(
+        _stage3_check(
+            "live_subject_kernel",
+            str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain",
+            f"status={health.get('status')} mode={mode_transition.get('mode')}",
+        )
+    )
+    checks.append(
+        _stage3_check(
+            "runtime_loops_visible",
+            required_loops.issubset(set(loops)),
+            f"visible_loops={sorted(loops)}",
+        )
+    )
+    before_observed = str(dict(before_self_model.get("metadata", {})).get("observed_at", "") or "")
+    after_observed = str(dict(after_self_model.get("metadata", {})).get("observed_at", "") or "")
+    checks.append(
+        _stage3_check(
+            "self_model_continuity",
+            float(after_self_model.get("identity_continuity", 0.0) or 0.0) >= 0.55
+            and bool(list(after_self_model.get("long_horizon_goals", [])))
+            and bool(list(after_self_model.get("active_deficits", [])))
+            and after_observed != before_observed,
+            f"identity_continuity={after_self_model.get('identity_continuity')} before={before_observed} after={after_observed}",
+        )
+    )
+    write_boundary = dict(operator_probe.get("write_boundary", {}))
+    checks.append(
+        _stage3_check(
+            "operator_probe_bounded",
+            bool(str(operator_probe.get("goal", "")).strip()) and str(write_boundary.get("live_repo", "")) == "forbidden",
+            f"goal={operator_probe.get('goal')} live_repo={write_boundary.get('live_repo')}",
+        )
+    )
+    operator_execution = dict(operator_cycle.get("execution", {}))
+    checks.append(
+        _stage3_check(
+            "operator_shadow_cycle",
+            str(operator_cycle.get("status", "")) in {"applied", "reviewed", "shadow_only", "rejected"}
+            and not bool(dict(operator_execution.get("shadow_patch", {})).get("applied_live", False)),
+            f"status={operator_cycle.get('status')} scope={operator_execution.get('scope')} applied_live={operator_execution.get('applied_live', False)}",
+        )
+    )
+    visual_summary = str(dict(visual_state).get("scene_summary", "")).strip()
+    visual_anchors = [str(item).strip() for item in visual_state.get("visual_anchors", []) if str(item).strip()]
+    checks.append(
+        _stage3_check(
+            "visual_memory_ingested",
+            str(visual_ingest.get("status", "")) == "ok" and bool(visual_summary or visual_anchors),
+            f"status={visual_ingest.get('status')} scene_summary={visual_summary[:80]} anchors={visual_anchors[:2]}",
+        )
+    )
+    visual_hits = list(visual_trace.get("hits", []))
+    checks.append(
+        _stage3_check(
+            "visual_recall_hits",
+            bool(visual_hits) and any(
+                str(item.get("thread_key", "")).strip() == str(visual_trace.get("thread_key", "")).strip()
+                for item in visual_hits
+            ),
+            f"hits={len(visual_hits)} thread_key={visual_trace.get('thread_key')}",
+        )
+    )
+    stream_events = list(stream_status.get("activation_events", []))
+    stream_influence = dict(stream_status.get("stream_influence", {}))
+    checks.append(
+        _stage3_check(
+            "subjective_continuity_visible",
+            bool(stream_events)
+            or bool(stream_influence)
+            or bool(dict(after_self_model.get("metadata", {})).get("summary", "")),
+            f"activation_events={len(stream_events)} stream_influence_keys={sorted(stream_influence.keys())}",
+        )
+    )
+    checks.append(
+        _stage3_check(
+            "initiative_and_operator_share_state",
+            "allowed" in initiative_probe and "game_rationale" in initiative_probe and bool(operator_probe.get("goal")),
+            f"initiative_allowed={initiative_probe.get('allowed')} operator_goal={operator_probe.get('goal')}",
+        )
+    )
+    checks.append(
+        _stage3_check(
+            "fast_budget",
+            str(fast_benchmark.get("last_tier", "")) == "fast" and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0,
+            f"tier={fast_benchmark.get('last_tier')} max_ms={dict(fast_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage3_check(
+            "recall_budget",
+            str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0,
+            f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage3_check(
+            "deep_budget",
+            str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0,
+            f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "stage": "reflective-subject-kernel-stage3",
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "blockers": blockers,
+        "warnings": warnings,
+        "self_model_continuity": {
+            "before": before_self_model,
+            "after": after_self_model,
+        },
+        "operator_shadow": {
+            "probe": operator_probe,
+            "cycle": operator_cycle,
+        },
+        "visual_recall": {
+            "ingest": visual_ingest,
+            "state": visual_state,
+            "trace": visual_trace,
+        },
+        "cache_hit_ratio": float(dict(brain_status.get("cache", {})).get("hit_ratio", 0.0) or 0.0),
+        "reply_latency_budgets": {
+            "fast": dict(fast_benchmark.get("timings_ms", {})),
+            "recall": dict(recall_benchmark.get("timings_ms", {})),
+            "deep_recall": dict(deep_benchmark.get("timings_ms", {})),
+        },
+        "stream_influence_count": len(stream_events),
+    }
+
+
 def command_init_db(config_path: str | None) -> int:
     config = load_config(config_path=config_path)
     store = QueueStore(config.runtime.db_path)
@@ -1050,6 +1468,27 @@ def command_show_brain_status(config_path: str | None) -> int:
     return 0
 
 
+def command_show_self_model(config_path: str | None) -> int:
+    payload, _transport = _self_model_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_self_model(config_path: str | None) -> int:
+    self_model, _ = _self_model_payload(config_path)
+    brain_status, _ = _brain_status_payload(config_path)
+    operator_status, _ = _operator_status_payload(config_path)
+    stream_status, _ = _stream_status_payload(config_path)
+    payload = {
+        "self_model": self_model,
+        "brain_status": brain_status,
+        "operator_status": operator_status,
+        "stream_status": stream_status,
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_set_brain_mode(config_path: str | None, *, mode: str, note: str) -> int:
     payload, _transport = _brain_mode_payload(config_path, mode=mode, note=note)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -1091,6 +1530,42 @@ def command_initiative_probe(
         chat_name=chat_name,
         channel=channel,
         query=query,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_operator_probe(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _operator_probe_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_run_operator_cycle(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    reason: str,
+) -> int:
+    payload, _transport = _operator_cycle_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        reason=reason,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -1153,6 +1628,77 @@ def command_inspect_mind(
         allow_local_fallback=not live_only,
     )
     print(json.dumps(packet, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_ingest_image(
+    config_path: str | None,
+    *,
+    path: str,
+    note: str | None,
+    source: str,
+    tags: list[str],
+    channel: str,
+    thread_key: str | None,
+    chat_name: str | None,
+    sync: bool,
+) -> int:
+    payload, _transport = _ingest_image_payload(
+        config_path,
+        path=path,
+        note=note,
+        source=source,
+        tags=tags,
+        channel=channel,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        sync=sync,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_visual_recall(
+    config_path: str | None,
+    *,
+    query: str,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _trace_visual_recall_payload(
+        config_path,
+        query=query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage3(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage3_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -2082,6 +2628,8 @@ def main(argv: list[str] | None = None) -> int:
     initiatives_parser = subparsers.add_parser("show-initiatives", help="Inspect initiative candidates")
     initiatives_parser.add_argument("--limit", type=int, default=20)
     subparsers.add_parser("show-brain-status", help="Show Always-On brain runtime state")
+    subparsers.add_parser("show-self-model", help="Show the current persisted self-model state")
+    subparsers.add_parser("trace-self-model", help="Show the self-model alongside runtime and operator state")
     brain_mode_parser = subparsers.add_parser("set-brain-mode", help="Switch Always-On brain runtime mode without restart")
     brain_mode_parser.add_argument("--mode", required=True, choices=("silent", "companion", "dream_only", "full_brain"))
     brain_mode_parser.add_argument("--note", default="")
@@ -2096,6 +2644,15 @@ def main(argv: list[str] | None = None) -> int:
     initiative_probe_parser.add_argument("--chat-name", default=None)
     initiative_probe_parser.add_argument("--channel", default="wechat")
     initiative_probe_parser.add_argument("--query", default=STAGE2_PLAYFUL_QUERY)
+    operator_probe_parser = subparsers.add_parser("operator-probe", help="Inspect the bounded operator bus plan and permissions")
+    operator_probe_parser.add_argument("--thread-key", default=None)
+    operator_probe_parser.add_argument("--chat-name", default=None)
+    operator_probe_parser.add_argument("--channel", default="wechat")
+    operator_cycle_parser = subparsers.add_parser("run-operator-cycle", help="Run one bounded operator cycle")
+    operator_cycle_parser.add_argument("--thread-key", default=None)
+    operator_cycle_parser.add_argument("--chat-name", default=None)
+    operator_cycle_parser.add_argument("--channel", default="wechat")
+    operator_cycle_parser.add_argument("--reason", default="cli")
     initiative_status_parser = subparsers.add_parser("show-initiative-status", help="Inspect proactive initiative gate, queue, and recent candidates")
     initiative_status_parser.add_argument("--thread-key", default=None)
     initiative_status_parser.add_argument("--chat-name", default=None)
@@ -2127,6 +2684,12 @@ def main(argv: list[str] | None = None) -> int:
     hybrid_trace_parser.add_argument("--chat-name", default=None)
     hybrid_trace_parser.add_argument("--channel", default="wechat")
     hybrid_trace_parser.add_argument("--limit", type=int, default=8)
+    visual_trace_parser = subparsers.add_parser("trace-visual-recall", help="Trace visual-memory recall for a thread")
+    visual_trace_parser.add_argument("--query", required=True)
+    visual_trace_parser.add_argument("--thread-key", default=None)
+    visual_trace_parser.add_argument("--chat-name", default=None)
+    visual_trace_parser.add_argument("--channel", default="wechat")
+    visual_trace_parser.add_argument("--limit", type=int, default=4)
     activation_parser = subparsers.add_parser("show-activation-state", help="Inspect activation-state for one thread")
     activation_parser.add_argument("--thread-key", default=None)
     activation_parser.add_argument("--chat-name", default=None)
@@ -2167,6 +2730,16 @@ def main(argv: list[str] | None = None) -> int:
     artifact_parser.add_argument("--tags", nargs="*", default=[])
     artifact_parser.add_argument("--source", default="holo_host.cli.artifact")
     artifact_parser.add_argument("--dry-run", action="store_true")
+    image_parser = subparsers.add_parser("ingest-image", help="Ingest one local image into visual memory")
+    image_parser.add_argument("--path", required=True)
+    image_parser.add_argument("--note", default=None)
+    image_parser.add_argument("--tags", nargs="*", default=[])
+    image_parser.add_argument("--source", default="holo_host.cli.visual")
+    image_parser.add_argument("--channel", default="wechat")
+    image_parser.add_argument("--thread-key", default=None)
+    image_parser.add_argument("--chat-name", default=None)
+    image_parser.add_argument("--async", dest="sync", action="store_false")
+    image_parser.set_defaults(sync=True)
     refresh_wechat_parser = subparsers.add_parser("refresh-wechat-history", help="Actively pull one WeChat thread history through the Windows helper and ingest it into memory")
     refresh_wechat_parser.add_argument("--chat-name", required=True)
     refresh_wechat_parser.add_argument("--thread-key", default=None)
@@ -2208,6 +2781,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage2_parser.add_argument("--sender", default=None)
     accept_stage2_parser.add_argument("--iterations", type=int, default=3)
     accept_stage2_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage3_parser = subparsers.add_parser("accept-stage3", help="Run the fixed Reflective Subject Kernel Stage-3 acceptance gate")
+    accept_stage3_parser.add_argument("--thread-key", default=None)
+    accept_stage3_parser.add_argument("--chat-name", default=None)
+    accept_stage3_parser.add_argument("--channel", default="wechat")
+    accept_stage3_parser.add_argument("--sender", default=None)
+    accept_stage3_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage3_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -2253,6 +2833,10 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_initiatives(args.config, args.limit)
     if args.command == "show-brain-status":
         return command_show_brain_status(args.config)
+    if args.command == "show-self-model":
+        return command_show_self_model(args.config)
+    if args.command == "trace-self-model":
+        return command_trace_self_model(args.config)
     if args.command == "set-brain-mode":
         return command_set_brain_mode(args.config, mode=args.mode, note=args.note)
     if args.command == "run-self-revision":
@@ -2271,6 +2855,21 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
             query=args.query,
+        )
+    if args.command == "operator-probe":
+        return command_operator_probe(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "run-operator-cycle":
+        return command_run_operator_cycle(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            reason=args.reason,
         )
     if args.command == "show-initiative-status":
         return command_show_initiative_status(
@@ -2314,6 +2913,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "trace-hybrid-recall":
         return command_trace_hybrid_recall(
+            args.config,
+            query=args.query,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    if args.command == "trace-visual-recall":
+        return command_trace_visual_recall(
             args.config,
             query=args.query,
             thread_key=args.thread_key,
@@ -2376,6 +2984,18 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             dry_run=args.dry_run,
         )
+    if args.command == "ingest-image":
+        return command_ingest_image(
+            args.config,
+            path=args.path,
+            note=args.note,
+            tags=args.tags,
+            source=args.source,
+            channel=args.channel,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            sync=args.sync,
+        )
     if args.command == "refresh-wechat-history":
         return command_refresh_wechat_history(
             args.config,
@@ -2421,6 +3041,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage2":
         return command_accept_stage2(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage3":
+        return command_accept_stage3(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,
