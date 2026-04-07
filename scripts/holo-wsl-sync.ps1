@@ -40,9 +40,11 @@ function Get-HoloWslSettings {
   } else {
     ''
   }
+  $distro = [string]$distro
+  $repo = [string]$repo
   return [pscustomobject]@{
-    Distro = $distro
-    Repo = $repo
+    Distro = $distro.Trim()
+    Repo = $repo.Trim()
   }
 }
 
@@ -73,10 +75,10 @@ $excludeFlags = @(
   "--exclude='injector.log'"
 ) -join ' '
 
-$command = @"
-mkdir -p "$($settings.Repo)"
-rsync -a $deleteFlag $dryRunFlag $excludeFlags "$sourceRepo/" "$($settings.Repo)/"
-"@
+$command = @(
+  "mkdir -p `"$($settings.Repo)`"",
+  "rsync -a $deleteFlag $dryRunFlag $excludeFlags `"$sourceRepo/`" `"$($settings.Repo)/`""
+) -join '; '
 
 Write-Output "syncing core code to WSL distro '$($settings.Distro)'"
 Write-Output "source: $root"
@@ -87,10 +89,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output 'core sync complete'
 
-$memoryMergeCommand = @"
-cd "$($settings.Repo)"
-python3 ./scripts/merge_memory_jsonl.py --source-dir "$sourceRepo/holo_memory_library/memories" $(if ($DryRun) { '--dry-run' } else { '' })
-"@
+$memoryMergeCommand = @(
+  "cd `"$($settings.Repo)`"",
+  "python3 ./scripts/merge_memory_jsonl.py --source-dir `"$sourceRepo/holo_memory_library/memories`" $(if ($DryRun) { '--dry-run' } else { '' })"
+) -join ' && '
 
 Write-Output "merging memory streams into WSL distro '$($settings.Distro)'"
 & wsl.exe -d $settings.Distro -- bash -lc $memoryMergeCommand
@@ -99,19 +101,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output 'memory merge complete'
 
-$memoryMirrorCommand = @"
-mkdir -p "$sourceRepo/holo_memory_library/memories"
-rsync -a \
-  "$($settings.Repo)/holo_memory_library/memories/working_store.jsonl" \
-  "$($settings.Repo)/holo_memory_library/memories/memory_store.jsonl" \
-  "$($settings.Repo)/holo_memory_library/memories/candidate_store.jsonl" \
-  "$($settings.Repo)/holo_memory_library/memories/conversation_archive.jsonl" \
-  "$($settings.Repo)/holo_memory_library/memories/emotion_trace.jsonl" \
-  "$($settings.Repo)/holo_memory_library/memories/callback_candidates.jsonl" \
-  "$($settings.Repo)/holo_memory_library/memories/thought_stream.jsonl" \
-  "$($settings.Repo)/holo_memory_library/memories/initiative_candidates.jsonl" \
-  "$sourceRepo/holo_memory_library/memories/"
-"@
+$memoryMirrorCommand = @(
+  "mkdir -p `"$sourceRepo/holo_memory_library/memories`"",
+  "rsync -a `"$($settings.Repo)/holo_memory_library/memories/working_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/memory_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/candidate_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/conversation_archive.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/emotion_trace.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/callback_candidates.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/thought_stream.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/initiative_candidates.jsonl`" `"$sourceRepo/holo_memory_library/memories/`""
+) -join '; '
 
 Write-Output "mirroring merged memory back to Windows repo at $root"
 & wsl.exe -d $settings.Distro -- bash -lc $memoryMirrorCommand

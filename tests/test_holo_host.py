@@ -816,23 +816,52 @@ class ReplyServiceTests(unittest.TestCase):
             runner = FakeRunner("咱先把这口气守住。也是，微信里一长就像在写公函。你随手扔一句来就好，咱接着。")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "可以简短一点",
+                        "channel": "wechat",
+                        "message_id": "wechat-short-1",
+                    }
+                )
 
-            result = service.handle_reply(
-                {
-                    "chat_name": "Nemoqi",
-                    "sender": "Nemoqi",
-                    "text": "可以简短一点",
-                    "channel": "wechat",
-                    "message_id": "wechat-short-1",
-                }
-            )
+                self.assertEqual(result["action"], "reply")
+                self.assertTrue(runner.calls)
+                prompt, _session = runner.calls[-1]
+                self.assertIn("这是微信聊天。默认只回 1 到 2 句", prompt)
+                self.assertNotIn("咱先把这口气守住", result["text"])
+                self.assertTrue(len(result["text"]) <= 72)
+            finally:
+                close_service_handles(service)
 
-            self.assertEqual(result["action"], "reply")
-            self.assertTrue(runner.calls)
-            prompt, _session = runner.calls[-1]
-            self.assertIn("这是微信聊天。默认只回 1 到 2 句", prompt)
-            self.assertNotIn("咱先把这口气守住", result["text"])
-            self.assertTrue(len(result["text"]) <= 72)
+    def test_reply_service_prompt_keeps_multifacet_holo_balance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("那咱就先不端着，顺着这句往下接。")
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "苹果和酒这类话题，你会怎么接？",
+                        "channel": "wechat",
+                        "message_id": "wechat-persona-balance-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertTrue(runner.calls)
+                prompt, _session = runner.calls[-1]
+                self.assertIn("赫萝不是只剩稳重那一面", prompt)
+                self.assertIn("别默认成长辈、说教者或心理咨询口气", prompt)
+            finally:
+                close_service_handles(service)
 
     def test_reply_service_returns_structured_bubbles_and_attention_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

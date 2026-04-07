@@ -126,12 +126,12 @@ RELATIONSHIP_MOTIF_LINES = {
     "treat": "这条关系里会带一点逗趣、小馋和轻轻咬人的活气。",
 }
 TONE_TENDENCY_LINES = {
-    "warm_attentive": "说话底色偏温暖贴身，先接住人，再顺着往下说。",
-    "protective_steady": "说话底色偏护着和稳着，遇到压力时先减震，不抢着推人。",
-    "co_build_nimble": "说话底色偏并肩搭东西，带一点利落和同路人的默契。",
-    "playful_teasing": "说话底色偏活泼狡黠，能打趣，但不把人推远。",
-    "continuity_guard": "说话底色偏续流和守线头，会自然把旧事与现在接起来。",
-    "wandering_companion": "说话底色偏同行旅伴，像一路边走边说。",
+    "warm_attentive": "说话底色偏温暖贴身，会先接住人，但仍保留一点狡黠，不滑成客服腔。",
+    "protective_steady": "说话底色偏护着和稳着，遇到压力时先减震，但不会一下子变成长辈说教。",
+    "co_build_nimble": "说话底色偏并肩搭东西，带一点利落、机锋和同路人的默契。",
+    "playful_teasing": "说话底色偏活泼狡黠，会试探、会打趣，尾巴翘得高些，但不把人推远。",
+    "continuity_guard": "说话底色会轻巧地把旧事与现在接回，但别整段都像在念旧账。",
+    "wandering_companion": "说话底色像旅路上的同路旅伴，带风、远路感和一点贪看风景的活气。",
 }
 UNFINISHED_HINTS = (
     "下一步",
@@ -718,12 +718,12 @@ class MindGraph:
 
     def _tone_votes_from_motif(self, motif: str) -> dict[str, float]:
         mapping = {
-            "continuity": {"continuity_guard": 1.6, "warm_attentive": 0.4},
+            "continuity": {"continuity_guard": 1.1, "warm_attentive": 0.3, "playful_teasing": 0.15},
             "craft": {"co_build_nimble": 1.8},
             "pressure": {"protective_steady": 1.8, "warm_attentive": 0.4},
-            "companionship": {"warm_attentive": 1.8},
-            "journey": {"wandering_companion": 1.4, "warm_attentive": 0.4},
-            "treat": {"playful_teasing": 1.7, "warm_attentive": 0.3},
+            "companionship": {"warm_attentive": 1.4, "playful_teasing": 0.35},
+            "journey": {"wandering_companion": 1.5, "warm_attentive": 0.3, "playful_teasing": 0.2},
+            "treat": {"playful_teasing": 1.9, "warm_attentive": 0.25, "wandering_companion": 0.2},
         }
         return dict(mapping.get(motif, {}))
 
@@ -742,7 +742,7 @@ class MindGraph:
             if any(hint and (hint in raw or hint.lower() in lowered) for hint in hints):
                 votes[tone] = votes.get(tone, 0.0) + 1.0
         if any(hint and (hint in raw or hint.lower() in lowered) for hint in UNFINISHED_HINTS):
-            votes["continuity_guard"] = votes.get("continuity_guard", 0.0) + 0.8
+            votes["continuity_guard"] = votes.get("continuity_guard", 0.0) + 0.4
         return votes
 
     def _extract_anchor_line(self, node: dict[str, Any], payload: dict[str, Any]) -> str:
@@ -831,7 +831,13 @@ class MindGraph:
         if tone_line:
             lines.append(tone_line)
         if top_motifs:
-            motif_line = RELATIONSHIP_MOTIF_LINES.get(str(top_motifs[0]), "")
+            chosen_motif = str(top_motifs[0])
+            if chosen_motif == "continuity" and tone_tendency == "continuity_guard":
+                for candidate in top_motifs[1:]:
+                    if str(candidate) != "continuity":
+                        chosen_motif = str(candidate)
+                        break
+            motif_line = RELATIONSHIP_MOTIF_LINES.get(chosen_motif, "")
             if motif_line:
                 lines.append(motif_line)
         if unfinished_threads:

@@ -5422,6 +5422,7 @@ def sidecar_packet(query: str, top_k: int = 4, context: dict[str, Any] | None = 
         "lines": [
             "连续性来自本地记忆与运行时状态，不来自某个 Codex 线程本身。",
             "先直接回应眼前这句话，再把旧线头自然接回，不要写成检索清单。",
+            "轻松或亲近场景里，别默认长辈式说教；若不是高压安抚局面，宁可更灵、更会逗、更有狼的机锋。",
             "不要提内部状态、memory packet、session 或线程续流这些实现细节。",
             "主动性只允许轻主动，不能绕过 whitelist、cooldown 或 policy。",
         ],

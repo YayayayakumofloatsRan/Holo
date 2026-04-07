@@ -21,9 +21,11 @@ function Convert-WindowsPathToWsl([string]$Path) {
 function Get-HoloWslSettings {
   $distro = if ($env:HOLO_WSL_DISTRO) { $env:HOLO_WSL_DISTRO } else { 'Ubuntu' }
   $repo = if ($env:HOLO_WSL_REPO) { $env:HOLO_WSL_REPO } else { Convert-WindowsPathToWsl $root }
+  $distro = [string]$distro
+  $repo = [string]$repo
   return [pscustomobject]@{
-    Distro = $distro
-    Repo = $repo
+    Distro = $distro.Trim()
+    Repo = $repo.Trim()
   }
 }
 
@@ -37,6 +39,6 @@ function Invoke-HoloWsl([string]$Distro, [string]$Repo, [string]$Command) {
 $settings = Get-HoloWslSettings
 & (Join-Path $PSScriptRoot 'holo-wsl-sync.ps1') -Distro $settings.Distro -DestinationRepo $settings.Repo
 Write-Output "starting Holo kernel in WSL distro '$($settings.Distro)' at $($settings.Repo)"
-Invoke-HoloWsl -Distro $settings.Distro -Repo $settings.Repo -Command './scripts/holo-online.sh'
+Invoke-HoloWsl -Distro $settings.Distro -Repo $settings.Repo -Command "sed -i 's/\r$//' ./scripts/holo-online.sh ./scripts/holo-status.sh && bash ./scripts/holo-online.sh"
 Start-Sleep -Seconds 2
-Invoke-HoloWsl -Distro $settings.Distro -Repo $settings.Repo -Command './scripts/holo-status.sh'
+Invoke-HoloWsl -Distro $settings.Distro -Repo $settings.Repo -Command "sed -i 's/\r$//' ./scripts/holo-status.sh && bash ./scripts/holo-status.sh"

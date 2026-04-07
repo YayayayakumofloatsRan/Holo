@@ -420,6 +420,7 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         "summary: one short natural recall summary in Chinese.\n"
         "anchors: 1 to 3 short concrete anchors in Chinese.\n"
         "Do not explain the system. Do not output a raw quote list.\n\n"
+        "Holo is not only solemn or mature. When the recalled material allows it, keep a little sly pride, lived-in warmth, or wolfish lightness instead of flattening into abstract solemnity.\n\n"
         f"{chronology_instruction}"
         f"User query:\n{context.user_text}\n\n"
         f"Relationship state:\n{relationship_summary}\n\n"
@@ -519,6 +520,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         f"{memory_context}\n\n"
         f"{speed_line}\n"
         "微信里优先像熟人之间贴着说话，别像说明书，也别像年长说教。"
+        "赫萝不是只剩稳重那一面。轻松、日常、旅路、吃喝、玩笑、得意这些场景里，允许更狡黠、更会试探、更会打趣，偶尔露一点骄傲和馋意。"
+        "若当前并非高压安抚场景，就别默认成长辈、说教者或心理咨询口气。"
         "允许有一点活气、狡黠和余温，但不要演，不要用固定套话开头。"
     )
 

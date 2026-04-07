@@ -303,6 +303,22 @@ class MindGraphTests(unittest.TestCase):
             finally:
                 graph.close()
 
+    def test_relationship_summary_keeps_secondary_color_when_continuity_is_strong(self) -> None:
+        with TempMemoryRepo() as temp:
+            graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
+            try:
+                summary = graph._relationship_summary_from_state(
+                    {
+                        "recurring_motifs": ["continuity", "journey", "treat"],
+                        "unfinished_threads": [],
+                        "tone_tendency": "continuity_guard",
+                    }
+                )
+                self.assertIn("轻巧", summary)
+                self.assertIn("同行", summary)
+            finally:
+                graph.close()
+
     def test_sync_archive_entry_incrementally_materializes_observed_turn(self) -> None:
         with TempMemoryRepo() as temp:
             result = rm.auto_observe_turn(

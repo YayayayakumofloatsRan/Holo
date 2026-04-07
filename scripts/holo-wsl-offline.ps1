@@ -21,9 +21,11 @@ function Convert-WindowsPathToWsl([string]$Path) {
 function Get-HoloWslSettings {
   $distro = if ($env:HOLO_WSL_DISTRO) { $env:HOLO_WSL_DISTRO } else { 'Ubuntu' }
   $repo = if ($env:HOLO_WSL_REPO) { $env:HOLO_WSL_REPO } else { Convert-WindowsPathToWsl $root }
+  $distro = [string]$distro
+  $repo = [string]$repo
   return [pscustomobject]@{
-    Distro = $distro
-    Repo = $repo
+    Distro = $distro.Trim()
+    Repo = $repo.Trim()
   }
 }
 
@@ -36,4 +38,4 @@ function Invoke-HoloWsl([string]$Distro, [string]$Repo, [string]$Command) {
 
 $settings = Get-HoloWslSettings
 Write-Output "stopping Holo kernel in WSL distro '$($settings.Distro)' at $($settings.Repo)"
-Invoke-HoloWsl -Distro $settings.Distro -Repo $settings.Repo -Command './scripts/holo-offline.sh'
+Invoke-HoloWsl -Distro $settings.Distro -Repo $settings.Repo -Command "sed -i 's/\r$//' ./scripts/holo-offline.sh && bash ./scripts/holo-offline.sh"

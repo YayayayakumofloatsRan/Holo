@@ -904,6 +904,8 @@ def command_reply_probe(
     sender: str | None,
     mode: str,
 ) -> int:
+    _health, transport = _health_payload(config_path)
+    live_only = transport == "live_http"
     payload, _transport = _reply_probe_payload(
         config_path,
         query=query,
