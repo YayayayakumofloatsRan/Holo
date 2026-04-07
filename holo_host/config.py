@@ -89,6 +89,13 @@ class MemoryConfig:
     activation_cache_enabled: bool = True
     private_memory_sync_enabled: bool = False
     private_memory_repo_path: str = ""
+    brain_mode_default: str = "companion"
+    heartbeat_interval_seconds: int = 1
+    attention_tick_interval_seconds: int = 3
+    dream_idle_threshold_seconds: int = 900
+    self_revision_interval_seconds: int = 1800
+    self_revision_enabled: bool = True
+    self_revision_min_evidence: int = 3
     auto_observe: bool = True
     promote_batch_size: int = 8
     promote_interval_seconds: int = 300
@@ -128,6 +135,8 @@ class AutonomyConfig:
     auto_send_mode: str = "full_auto"
     allow_proactive_existing_threads: bool = True
     allow_initiative_whitelist_contacts: bool = True
+    initiative_probe_enabled: bool = True
+    game_state_enabled: bool = True
     proactive_after_hours: int = 72
     initiative_cooldown_hours: int = 48
     max_auto_replies_per_contact_per_hour: int = 4
@@ -233,6 +242,13 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         activation_cache_enabled=bool(memory_data.get("activation_cache_enabled", True)),
         private_memory_sync_enabled=bool(memory_data.get("private_memory_sync_enabled", False)),
         private_memory_repo_path=str(memory_data.get("private_memory_repo_path", "")).strip(),
+        brain_mode_default=str(memory_data.get("brain_mode_default", "companion")).strip() or "companion",
+        heartbeat_interval_seconds=int(memory_data.get("heartbeat_interval_seconds", 1)),
+        attention_tick_interval_seconds=int(memory_data.get("attention_tick_interval_seconds", 3)),
+        dream_idle_threshold_seconds=int(memory_data.get("dream_idle_threshold_seconds", 900)),
+        self_revision_interval_seconds=int(memory_data.get("self_revision_interval_seconds", 1800)),
+        self_revision_enabled=bool(memory_data.get("self_revision_enabled", True)),
+        self_revision_min_evidence=int(memory_data.get("self_revision_min_evidence", 3)),
         auto_observe=bool(memory_data.get("auto_observe", True)),
         promote_batch_size=int(memory_data.get("promote_batch_size", 8)),
         promote_interval_seconds=int(memory_data.get("promote_interval_seconds", 300)),
@@ -275,6 +291,8 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         auto_send_mode=str(autonomy_data.get("auto_send_mode", "full_auto")),
         allow_proactive_existing_threads=bool(autonomy_data.get("allow_proactive_existing_threads", True)),
         allow_initiative_whitelist_contacts=bool(autonomy_data.get("allow_initiative_whitelist_contacts", True)),
+        initiative_probe_enabled=bool(autonomy_data.get("initiative_probe_enabled", True)),
+        game_state_enabled=bool(autonomy_data.get("game_state_enabled", True)),
         proactive_after_hours=int(autonomy_data.get("proactive_after_hours", 72)),
         initiative_cooldown_hours=int(autonomy_data.get("initiative_cooldown_hours", 48)),
         max_auto_replies_per_contact_per_hour=int(

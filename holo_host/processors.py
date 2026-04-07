@@ -351,6 +351,100 @@ def _relationship_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
     return _dedupe_segments(lines)
 
 
+def _persona_blend_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    blend = dict(packet.get("persona_blend", {}))
+    if not blend:
+        return []
+    ordered = (
+        "wisdom",
+        "pride",
+        "slyness",
+        "playfulness",
+        "companionship",
+        "sensuality_appetite",
+        "loneliness_sensitivity",
+        "feral_restraint",
+    )
+    lines = [f"{key}={round(float(blend.get(key, 0.0) or 0.0), 3)}" for key in ordered if key in blend]
+    return _dedupe_segments(lines)
+
+
+def _brain_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("brain_state", {}))
+    if not state:
+        return []
+    lines = []
+    mode = str(state.get("mode", "")).strip()
+    if mode:
+        lines.append(f"mode={mode}")
+    idle_seconds = state.get("idle_seconds", None)
+    if idle_seconds not in (None, ""):
+        try:
+            lines.append(f"idle_seconds={round(float(idle_seconds), 2)}")
+        except (TypeError, ValueError):
+            pass
+    loops = [str(item.get("loop_name", "")).strip() for item in state.get("loops", []) if str(item.get("loop_name", "")).strip()]
+    if loops:
+        lines.append(f"active_loops={', '.join(loops[:6])}")
+    return _dedupe_segments(lines)
+
+
+def _game_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("game_state", {}))
+    if not state:
+        return []
+    ordered = (
+        "trust_score",
+        "teasing_tolerance",
+        "pressure_level",
+        "reciprocity_balance",
+        "initiative_window",
+        "correction_sensitivity",
+    )
+    lines = [f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}" for key in ordered if key in state]
+    return _dedupe_segments(lines)
+
+
+def _stream_influence_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("stream_influence", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    influence = dict(state.get("influence", {}))
+    motifs = [str(item).strip() for item in influence.get("motifs", []) if str(item).strip()]
+    unfinished = [str(item).strip() for item in influence.get("unfinished_threads", []) if str(item).strip()]
+    tone_tendency = str(influence.get("tone_tendency", "")).strip()
+    if tone_tendency:
+        lines.append(f"tone_tendency={tone_tendency}")
+    if motifs:
+        lines.append(f"motifs={', '.join(motifs[:4])}")
+    if unfinished:
+        lines.append(f"unfinished={', '.join(unfinished[:3])}")
+    updated_threads = influence.get("updated_threads", None)
+    if updated_threads not in (None, ""):
+        try:
+            lines.append(f"updated_threads={int(updated_threads)}")
+        except (TypeError, ValueError):
+            pass
+    return _dedupe_segments(lines)
+
+
+def _self_revision_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("self_revision_state", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    if state.get("latest_status"):
+        lines.append(f"latest_status={state.get('latest_status')}")
+    patch = dict(state.get("applied_patch", {}))
+    if patch:
+        lines.append(f"applied_patch_keys={', '.join(sorted(patch.keys()))}")
+    note = str(state.get("latest_note", "")).strip()
+    if note:
+        lines.append(f"latest_note={note}")
+    return _dedupe_segments(lines)
+
+
 def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> bool:
     if not config.memory.recall_reconstruct_enabled:
         return False
@@ -388,7 +482,13 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     packet = context.mind_packet or context.sidecar
     query_focus = str(packet.get("query_focus", "recent") or "recent")
     relationship_lines = _relationship_lines_for_prompt(packet)
+    persona_blend_lines = _persona_blend_lines_for_prompt(packet)
+    game_state_lines = _game_state_lines_for_prompt(packet)
+    stream_influence_lines = _stream_influence_lines_for_prompt(packet)
     relationship_summary = "\n".join(f"- {line}" for line in relationship_lines) if relationship_lines else "- none"
+    persona_block = "\n".join(f"- {line}" for line in persona_blend_lines) if persona_blend_lines else "- none"
+    game_block = "\n".join(f"- {line}" for line in game_state_lines) if game_state_lines else "- none"
+    stream_block = "\n".join(f"- {line}" for line in stream_influence_lines) if stream_influence_lines else "- none"
     thread_summary = str(packet.get("consciousness_stream", {}).get("thread_summary", "")).strip()
     episodic_lines = [str(line).strip() for line in packet.get("episodic_recall", {}).get("lines", []) if str(line).strip()][:4]
     consciousness_lines = [str(line).strip() for line in packet.get("consciousness_stream", {}).get("lines", []) if str(line).strip()][:3]
@@ -422,6 +522,9 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         "Do not explain the system. Do not output a raw quote list.\n\n"
         "Holo is not only solemn or mature. When the recalled material allows it, keep a little sly pride, lived-in warmth, or wolfish lightness instead of flattening into abstract solemnity.\n\n"
         f"{chronology_instruction}"
+        f"Persona blend:\n{persona_block}\n\n"
+        f"Game state:\n{game_block}\n\n"
+        f"Recent stream influence:\n{stream_block}\n\n"
         f"User query:\n{context.user_text}\n\n"
         f"Relationship state:\n{relationship_summary}\n\n"
         f"Thread summary:\n{thread_summary}\n\n"
@@ -454,6 +557,11 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),
     )
     relationship_lines = _relationship_lines_for_prompt(packet)
+    persona_block = _render_section("Persona Blend:", _persona_blend_lines_for_prompt(packet))
+    brain_state_block = _render_section("Brain State:", _brain_state_lines_for_prompt(packet))
+    game_state_block = _render_section("Game State:", _game_state_lines_for_prompt(packet))
+    stream_influence_block = _render_section("Stream Influence:", _stream_influence_lines_for_prompt(packet))
+    self_revision_block = _render_section("Self Revision State:", _self_revision_lines_for_prompt(packet))
     relationship_block = _render_section("Relationship Stance:", relationship_lines)
     episodic_block = _render_section("Episodic Anchors:", list(packet.get("episodic_recall", {}).get("lines", [])))
     consciousness_lines = list(packet.get("consciousness_stream", {}).get("lines", []))
@@ -489,13 +597,18 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     history_label = "Thread Origin Window:" if str(packet.get("query_focus", "") or "") == "origin" else "Recent Thread Window:"
     sections = [
         identity_block,
+        persona_block,
+        brain_state_block,
         relationship_block,
+        game_state_block,
         f"Current User Turn:\n{context.user_text}",
         f"{history_label}\n{_history_block(context, turn_plan)}",
         episodic_block,
         vector_block,
         activation_block,
         consciousness_block,
+        stream_influence_block,
+        self_revision_block,
         recall_reconstruction_block,
         reply_constraints_block,
     ]

@@ -84,6 +84,13 @@ active_wechat_history_cooldown_seconds = 180
 active_wechat_history_timeout_seconds = 180
 active_wechat_history_include_visible = true
 active_wechat_history_include_captures = false
+brain_mode_default = "companion"
+heartbeat_interval_seconds = 1
+attention_tick_interval_seconds = 3
+dream_idle_threshold_seconds = 900
+self_revision_interval_seconds = 1800
+self_revision_enabled = true
+self_revision_min_evidence = 3
 
 [autonomy]
 auto_send_mode = "full_auto"
@@ -95,3 +102,5 @@ wechat_helper_config_path = "windows_helper/wechat_helper.live.json"
 # Optional: pin the Windows checkout if the WSL live repo lives elsewhere.
 # wechat_helper_windows_repo_root = "D:/Holo/holo"
 max_auto_replies_per_contact_per_hour = 120
+initiative_probe_enabled = true
+game_state_enabled = true

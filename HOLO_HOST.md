@@ -218,6 +218,19 @@ The intended deployment shape stays the same:
 - Windows does message ingress/egress
 - WSL does Codex, memory, and reply repair
 
+## Stage-2 Runtime Controls
+- `python3 -m holo_host show-brain-status`
+- `python3 -m holo_host set-brain-mode --mode companion`
+- `python3 -m holo_host run-self-revision --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host initiative-probe --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host accept-stage2 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+
+Additional Stage-2 API endpoints:
+- `GET /brain-status`
+- `POST /brain-mode`
+- `POST /self-revision`
+- `POST /initiative-probe`
+
 The old `wcf` path is no longer the intended online path on this machine. `wcf-info` now makes the mismatch explicit: the installed `wcferry 39.x` line is publicly documented around the `3.9.x` client line, while the local desktop client is `Weixin 4.1.x`.
 For `Weixin 4.1+`, the helper now grows a dialog-based `pyweixin_dialog` transport: one dedicated minimized dialog window per whitelisted chat, listened to through upstream `pyweixin`'s own monitor methods. That is the new intended online direction.
 `watch-pyweixin` still exists, but it is now the maintenance lane for main-window probing, history capture, and rich-media extraction. When it sees a rich-media message that yields a capture, it forwards that capture to the WSL memory bridge so Holo can keep the artifact, not just the one-line placeholder text.

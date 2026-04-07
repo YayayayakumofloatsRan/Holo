@@ -204,12 +204,28 @@ class TurnContext:
     metadata: dict[str, Any] = field(default_factory=dict)
     capability_context: dict[str, Any] = field(default_factory=dict)
     route_hint: str = ""
+    persona_blend: dict[str, Any] = field(default_factory=dict)
+    brain_state: dict[str, Any] = field(default_factory=dict)
+    game_state: dict[str, Any] = field(default_factory=dict)
+    stream_influence: dict[str, Any] = field(default_factory=dict)
+    self_revision_state: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.mind_packet:
             self.mind_packet = self.sidecar
         elif not self.sidecar:
             self.sidecar = self.mind_packet
+        packet = dict(self.mind_packet or self.sidecar or {})
+        if not self.persona_blend:
+            self.persona_blend = dict(packet.get("persona_blend", {}))
+        if not self.brain_state:
+            self.brain_state = dict(packet.get("brain_state", {}))
+        if not self.game_state:
+            self.game_state = dict(packet.get("game_state", {}))
+        if not self.stream_influence:
+            self.stream_influence = dict(packet.get("stream_influence", {}))
+        if not self.self_revision_state:
+            self.self_revision_state = dict(packet.get("self_revision_state", {}))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -227,6 +243,11 @@ class TurnContext:
             "metadata": dict(self.metadata),
             "capability_context": dict(self.capability_context),
             "route_hint": self.route_hint,
+            "persona_blend": dict(self.persona_blend),
+            "brain_state": dict(self.brain_state),
+            "game_state": dict(self.game_state),
+            "stream_influence": dict(self.stream_influence),
+            "self_revision_state": dict(self.self_revision_state),
         }
 
 

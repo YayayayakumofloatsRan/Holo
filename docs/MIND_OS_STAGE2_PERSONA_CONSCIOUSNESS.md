@@ -97,3 +97,36 @@ Stage-2 is complete when all of these are true:
 
 When those pass, Stage-2 stops.
 Any stronger autonomy, larger self-model mutation, or deeper brain-simulation work belongs to a new stage.
+
+## Implemented Stage-2 Control Plane
+- Brain runtime stays inside the existing `daemon`; it is now the Always-On brain runtime instead of a one-shot maintenance worker.
+- Runtime modes:
+  - `silent`
+  - `companion`
+  - `dream_only`
+  - `full_brain`
+- Live controls:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-brain-status`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml set-brain-mode --mode companion`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml run-self-revision --thread-key Nemoqi --chat-name Nemoqi`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml initiative-probe --thread-key Nemoqi --chat-name Nemoqi`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml accept-stage2 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+
+## Acceptance Gate
+`accept-stage2` is the Stage-2 closure command.
+
+It verifies:
+- runtime mode switching without restart
+- visible loop state for heartbeat / attention / maintenance / association / social / dream
+- persona probes for playfulness, pressure handling, appetite imagery, and direct correction
+- stream influence writeback
+- initiative probe rationale
+- bounded self-revision with evidence and patch review
+- packet-latency budgets for fast / recall / deep_recall
+
+The command outputs:
+- packet latency
+- cache hit ratio
+- stream influence count
+- self-revision result
+- final stage verdict

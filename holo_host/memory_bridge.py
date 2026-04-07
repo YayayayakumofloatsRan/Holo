@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -58,6 +60,16 @@ DEFAULT_EMOTION_LINES = [
     "先接住人，再判断这句该轻轻试探、打趣、还是认真接住；别一上来就板成说教。",
     "轻松话题里允许更活、更狡黠、更像旅路上的狼，不要只剩稳重。",
 ]
+DEFAULT_PERSONA_BLEND = {
+    "wisdom": 0.78,
+    "pride": 0.58,
+    "slyness": 0.63,
+    "playfulness": 0.61,
+    "companionship": 0.72,
+    "sensuality_appetite": 0.48,
+    "loneliness_sensitivity": 0.44,
+    "feral_restraint": 0.67,
+}
 
 
 def stream_cadences_from_config(config: Any) -> dict[str, int]:
@@ -115,6 +127,9 @@ class MemoryBridge:
             collection_prefix=milvus_collection_prefix,
         )
         self.activation = activation or ActivationStateStore(self.graph.db_path)
+        self._packet_cache: dict[str, dict[str, Any]] = {}
+        self._packet_cache_hits = 0
+        self._packet_cache_misses = 0
 
     def _load_rag_memory(self) -> ModuleType:
         path = self.repo_root / "holo_memory_library" / "rag_memory.py"
@@ -155,6 +170,105 @@ class MemoryBridge:
             return float(value or 0.0)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _clamp(value: Any, *, lower: float = 0.0, upper: float = 1.0, default: float = 0.0) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = float(default)
+        return round(max(lower, min(upper, numeric)), 4)
+
+    def _packet_cache_key(self, query: str, *, context: dict[str, Any]) -> str:
+        return json.dumps(
+            {
+                "query": str(query or ""),
+                "channel": str(context.get("channel", "") or ""),
+                "thread_key": str(context.get("thread_key", "") or ""),
+                "chat_name": str(context.get("chat_name", "") or ""),
+                "sender": str(context.get("sender", "") or ""),
+                "include_graph_trace": bool(context.get("include_graph_trace", False)),
+                "graph_trace_limit": int(context.get("graph_trace_limit", 0) or 0),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    def _load_packet_cache(self, query: str, *, context: dict[str, Any]) -> dict[str, Any] | None:
+        key = self._packet_cache_key(query, context=context)
+        cached = self._packet_cache.get(key)
+        if not cached:
+            self._packet_cache_misses += 1
+            return None
+        if float(cached.get("expires_at", 0.0) or 0.0) < time.time():
+            self._packet_cache.pop(key, None)
+            self._packet_cache_misses += 1
+            return None
+        self._packet_cache_hits += 1
+        return copy.deepcopy(dict(cached.get("packet", {})))
+
+    def _store_packet_cache(self, query: str, *, context: dict[str, Any], packet: dict[str, Any], ttl_seconds: float = 12.0) -> None:
+        key = self._packet_cache_key(query, context=context)
+        if len(self._packet_cache) >= 24:
+            oldest = min(self._packet_cache.items(), key=lambda item: float(item[1].get("expires_at", 0.0) or 0.0))[0]
+            self._packet_cache.pop(oldest, None)
+        self._packet_cache[key] = {
+            "expires_at": time.time() + max(1.0, float(ttl_seconds)),
+            "packet": copy.deepcopy(packet),
+        }
+
+    def packet_cache_stats(self) -> dict[str, Any]:
+        total = self._packet_cache_hits + self._packet_cache_misses
+        ratio = round(self._packet_cache_hits / total, 4) if total else 0.0
+        return {
+            "entries": len(self._packet_cache),
+            "hits": self._packet_cache_hits,
+            "misses": self._packet_cache_misses,
+            "hit_ratio": ratio,
+        }
+
+    def _persona_blend(self, *, query: str, relationship_state: dict[str, Any], game_state: dict[str, Any], self_revision_state: dict[str, Any]) -> dict[str, float]:
+        blend = dict(DEFAULT_PERSONA_BLEND)
+        applied_patch = dict(self_revision_state.get("applied_patch", {}))
+        for key, value in dict(applied_patch.get("persona_blend", {})).items():
+            if key in blend:
+                blend[key] = self._clamp(value, default=blend[key])
+        tone_tendency = str(relationship_state.get("tone_tendency", "") or "").strip()
+        recurring_motifs = {str(item).strip() for item in relationship_state.get("recurring_motifs", []) if str(item).strip()}
+        lowered = str(query or "").lower()
+        if tone_tendency == "playful_teasing":
+            blend["playfulness"] = self._clamp(blend["playfulness"] + 0.14, default=blend["playfulness"])
+            blend["slyness"] = self._clamp(blend["slyness"] + 0.08, default=blend["slyness"])
+        if tone_tendency == "continuity_guard":
+            blend["wisdom"] = self._clamp(blend["wisdom"] + 0.04, default=blend["wisdom"])
+            blend["companionship"] = self._clamp(blend["companionship"] + 0.06, default=blend["companionship"])
+        if "treat" in recurring_motifs or any(marker in lowered for marker in ("apple", "wine", "酒", "苹果", "吃", "喝", "麦子")):
+            blend["sensuality_appetite"] = self._clamp(blend["sensuality_appetite"] + 0.14, default=blend["sensuality_appetite"])
+            blend["playfulness"] = self._clamp(blend["playfulness"] + 0.06, default=blend["playfulness"])
+        pressure_level = self._coerce_float(game_state.get("pressure_level", 0.0))
+        if pressure_level >= 0.55:
+            blend["wisdom"] = self._clamp(blend["wisdom"] + 0.08, default=blend["wisdom"])
+            blend["feral_restraint"] = self._clamp(blend["feral_restraint"] + 0.08, default=blend["feral_restraint"])
+            blend["playfulness"] = self._clamp(blend["playfulness"] - 0.08, default=blend["playfulness"])
+        correction_sensitivity = self._coerce_float(game_state.get("correction_sensitivity", 0.0))
+        if correction_sensitivity >= 0.45:
+            blend["pride"] = self._clamp(blend["pride"] + 0.05, default=blend["pride"])
+            blend["companionship"] = self._clamp(blend["companionship"] - 0.03, default=blend["companionship"])
+        return {key: self._clamp(value, default=DEFAULT_PERSONA_BLEND[key]) for key, value in blend.items()}
+
+    def _brain_state(self) -> dict[str, Any]:
+        payload = self.graph.brain_state()
+        payload["cache"] = self.packet_cache_stats()
+        return payload
+
+    def _stream_influence(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return self.graph.latest_stream_influence(channel=channel, thread_key=thread_key, chat_name=chat_name)
+
+    def _self_revision_state(self) -> dict[str, Any]:
+        return self.graph.latest_self_revision_state()
+
+    def _game_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return self.graph.game_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
 
     @staticmethod
     def _is_fast_ping_query(query: str | None) -> bool:
@@ -201,6 +315,47 @@ class MemoryBridge:
             "episodic_k": fast_episodic if fast else recall_episodic,
             "consciousness_k": fast_consciousness if fast else recall_consciousness,
         }
+
+    def _finalize_stage2_packet(self, packet: dict[str, Any], *, query: str, context: dict[str, Any]) -> dict[str, Any]:
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or "")
+        relationship_state = dict(packet.get("relationship_state", {}))
+        game_state = self._game_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        self_revision_state = self._self_revision_state()
+        persona_blend = self._persona_blend(
+            query=query,
+            relationship_state=relationship_state,
+            game_state=game_state,
+            self_revision_state=self_revision_state,
+        )
+        stream_influence = self._stream_influence(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        brain_state = self._brain_state()
+        packet["mind_packet_version"] = "v5"
+        packet["persona_blend"] = persona_blend
+        packet["brain_state"] = brain_state
+        packet["game_state"] = game_state
+        packet["stream_influence"] = stream_influence
+        packet["self_revision_state"] = self_revision_state
+        packet.setdefault("state", {})
+        packet["state"]["persona_blend"] = dict(persona_blend)
+        packet["state"]["game_state"] = dict(game_state)
+        packet["state"]["brain_state"] = {
+            "mode": str(brain_state.get("mode", "")),
+            "idle_since": str(brain_state.get("idle_since", "")),
+        }
+        packet["state"]["stream_influence"] = dict(stream_influence)
+        packet["initiative_state"] = {
+            **dict(packet.get("initiative_state", DEFAULT_INITIATIVE_STATE)),
+            "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
+            "teasing_tolerance": float(game_state.get("teasing_tolerance", 0.0) or 0.0),
+        }
+        packet["reply_constraints"] = {
+            **dict(packet.get("reply_constraints", {})),
+            "persona_guard": f"persona={persona_blend}",
+        }
+        self._store_packet_cache(query, context=context, packet=packet)
+        return packet
 
     def _packet_scaffold(
         self,
@@ -316,7 +471,7 @@ class MemoryBridge:
         activation_state = self._activation_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
         relationship_lines = self._unique_strings(list(relationship.get("lines", [])))[: max(1, limits["relationship_k"])]
         consciousness_lines = self._unique_strings(list(consciousness.get("lines", [])))[: max(1, limits["consciousness_k"])]
-        return self._packet_scaffold(
+        packet = self._packet_scaffold(
             query=query,
             tier="fast",
             query_focus="recent",
@@ -364,6 +519,7 @@ class MemoryBridge:
             memory_route="graph",
             recall_confidence=0.0,
         )
+        return self._finalize_stage2_packet(packet, query=query, context=context)
 
     def _boost_from_activation(self, candidate: dict[str, Any], activation_state: dict[str, Any]) -> tuple[float, list[str]]:
         reasons: list[str] = []
@@ -570,7 +726,7 @@ class MemoryBridge:
                 limit=int(context.get("graph_trace_limit", 8) or 8),
                 record=False,
             )
-        return packet
+        return self._finalize_stage2_packet(packet, query=query, context=dict(context or {}))
 
     def _graph_sidecar_packet(self, query: str, *, context: dict[str, Any], legacy_packet: dict[str, Any]) -> dict[str, Any]:
         channel = str(context.get("channel", "wechat") or "wechat")
@@ -829,10 +985,13 @@ class MemoryBridge:
                 packet["recall_reason"] = "graph_deep_recall"
         if not packet.get("thread_recall_lines"):
             packet["thread_recall_lines"] = list(graph_packet.get("episodic_recall", {}).get("lines", []))[:3]
-        return packet
+        return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def sidecar_packet(self, query: str, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
         normalized_context = dict(context or {})
+        cached = self._load_packet_cache(query, context=normalized_context)
+        if cached is not None:
+            return cached
         if not self.graph_led_reply:
             return self.legacy_sidecar_packet(query, context=normalized_context)
 
@@ -845,7 +1004,7 @@ class MemoryBridge:
         legacy_packet = self.legacy_sidecar_packet(query, context=normalized_context)
         graph_packet = self.graph_sidecar_packet(query, context=normalized_context)
         packet = dict(graph_packet)
-        packet["mind_packet_version"] = "v4"
+        packet["mind_packet_version"] = "v5"
         hybrid = self._hybrid_trace(
             query,
             channel=channel,
@@ -926,7 +1085,7 @@ class MemoryBridge:
         packet["selected_memory_ids"] = self._unique_strings(list(packet.get("selected_memory_ids", [])) + list(legacy_packet.get("selected_memory_ids", [])))
         if not packet.get("thread_recall_lines"):
             packet["thread_recall_lines"] = list(packet.get("episodic_recall", {}).get("lines", []))[:3]
-        return packet
+        return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def inspect_mind(
         self,
@@ -980,6 +1139,30 @@ class MemoryBridge:
     def repair_reply(self, query: str, draft: str, *, max_passes: int = 2) -> dict[str, Any]:
         return self.rag.reply_loop_result(query, draft, max_passes=max_passes)
 
+    def _game_state_delta_from_turn(self, *, user_text: str, reply: str, metadata: dict[str, Any] | None = None) -> dict[str, float]:
+        lowered = f"{user_text}\n{reply}".lower()
+        delta = {
+            "trust_score": 0.02,
+            "teasing_tolerance": 0.0,
+            "pressure_level": 0.0,
+            "reciprocity_balance": 0.01,
+            "initiative_window": 0.0,
+            "correction_sensitivity": 0.0,
+        }
+        if any(marker in lowered for marker in ("压力", "焦虑", "累", "难受", "burnout", "tired", "anxious")):
+            delta["pressure_level"] += 0.22
+            delta["initiative_window"] -= 0.12
+        if any(marker in lowered for marker in ("别太老成", "不要一直顺着", "独立性", "反身性", "别总")):
+            delta["correction_sensitivity"] += 0.2
+            delta["trust_score"] += 0.01
+        if any(marker in lowered for marker in ("逗", "坏", "狼", "苹果", "酒", "麦子", "调戏", " teasing ", "joke")):
+            delta["teasing_tolerance"] += 0.1
+            delta["initiative_window"] += 0.04
+        if any(marker in lowered for marker in ("想你", "陪", "在吗", "还在", "一起", "陪着")):
+            delta["trust_score"] += 0.03
+            delta["reciprocity_balance"] += 0.03
+        return delta
+
     def observe_turn(
         self,
         user_text: str,
@@ -1016,6 +1199,14 @@ class MemoryBridge:
                     motifs=[user_text[:48], reply[:48]],
                     payload={"source": source, "tags": tags},
                     heat_delta=0.12,
+                )
+                result["game_state_sync"] = self.graph.update_game_state(
+                    channel=channel,
+                    thread_key=thread_key or chat_name,
+                    chat_name=chat_name or thread_key,
+                    delta=self._game_state_delta_from_turn(user_text=user_text, reply=reply, metadata=metadata),
+                    note="observe_turn",
+                    source=source,
                 )
         return result
 
@@ -1057,6 +1248,14 @@ class MemoryBridge:
                 motifs=[user_text[:48], reply[:48]],
                 payload={"source": source, "tags": tags},
                 heat_delta=0.1,
+            )
+            result["game_state_sync"] = self.graph.update_game_state(
+                channel=channel,
+                thread_key=thread_key or chat_name,
+                chat_name=chat_name or thread_key,
+                delta=self._game_state_delta_from_turn(user_text=user_text, reply=reply, metadata=metadata),
+                note="archive_turn",
+                source=source,
             )
         return result
 
@@ -1194,10 +1393,27 @@ class MemoryBridge:
     def vector_health(self) -> dict[str, Any]:
         return self.vector.health()
 
+    def brain_status(self) -> dict[str, Any]:
+        return self._brain_state()
+
+    def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
+        return self.graph.set_brain_mode(mode, note=note)
+
+    def mark_active_history_refresh(self, *, channel: str, thread_key: str, chat_name: str, query: str = "") -> dict[str, Any]:
+        return self.graph.update_game_state(
+            channel=channel,
+            thread_key=thread_key or chat_name,
+            chat_name=chat_name or thread_key,
+            delta={"trust_score": 0.02, "initiative_window": 0.03, "pressure_level": -0.04},
+            note=f"active_history_refresh:{query[:80]}",
+            source="active_history_refresh",
+        )
+
     def stream_status(self) -> dict[str, Any]:
         payload = self.graph.stream_status()
         payload["activation_events"] = self.activation.global_recent_events(limit=12)
         payload["vector"] = self.vector.health()
+        payload["brain"] = self._brain_state()
         return payload
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:

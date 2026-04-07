@@ -84,6 +84,38 @@ PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
         "output_schema": "json",
         "default_reasoning_effort": "medium",
     },
+    "self_observe": {
+        "description": "Observe drift, user corrections, and runtime pain points as bounded self-evidence.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("mind_graph", "relationship_state", "activation_state", "recent_dialogue_window"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
+    "self_revision_plan": {
+        "description": "Produce a bounded JSON patch over allowed mutable mind parameters.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("identity_core", "relationship_state", "mind_graph", "activation_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
+    "self_revision_review": {
+        "description": "Review a proposed bounded self-revision patch against fixed probes before applying it.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("identity_core", "reply_constraints", "mind_graph", "activation_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
+    "initiative_probe": {
+        "description": "Evaluate whether a light proactive move is currently allowed and explain the gating rationale.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("relationship_state", "mind_graph", "activation_state", "initiative_candidates"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "medium",
+    },
 }
 
 

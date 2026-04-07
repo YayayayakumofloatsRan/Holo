@@ -15,6 +15,8 @@ from pathlib import PureWindowsPath
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .brain_ops import initiative_probe as build_initiative_probe
+from .brain_ops import run_self_revision as run_self_revision_cycle
 from .capabilities import CapabilityBroker
 from .common import atomic_write_text, compact_text, stable_digest
 from .config import HostConfig, load_config
@@ -400,6 +402,7 @@ class HoloReplyService:
         self._wechat_history_state_path = self.config.runtime.state_dir / "active_wechat_history_state.json"
 
     def health(self) -> dict[str, Any]:
+        brain_status = self.memory.brain_status()
         return {
             "status": "ok",
             "repo_root": str(self.config.runtime.repo_root),
@@ -418,6 +421,8 @@ class HoloReplyService:
             "vector_health": self.memory.vector_health(),
             "activation_cache_enabled": self.config.memory.activation_cache_enabled,
             "processor_mesh_tasks": getattr(self.runner, "supported_tasks", lambda: [])(),
+            "brain_mode": str(brain_status.get("mode", self.config.memory.brain_mode_default)),
+            "brain_status": brain_status,
         }
 
     def snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -527,6 +532,54 @@ class HoloReplyService:
         with self._memory_lock:
             return self.memory.stream_status()
 
+    def brain_status(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.brain_status()
+
+    def set_brain_mode(self, *, mode: str, note: str = "") -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.set_brain_mode(mode, note=note)
+
+    def initiative_probe(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+    ) -> dict[str, Any]:
+        return build_initiative_probe(
+            config=self.config,
+            policy=self.policy,
+            memory=self.memory,
+            store=self.store,
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+            query=query or "initiative_probe",
+        )
+
+    def run_self_revision(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        corrections: list[str] | None = None,
+        apply_patch: bool = True,
+    ) -> dict[str, Any]:
+        return run_self_revision_cycle(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+            extra_corrections=corrections,
+            apply_patch=apply_patch,
+        )
+
     def stream_tick(self, *, stream_name: str, dry_run: bool = False) -> dict[str, Any]:
         with self._memory_lock:
             stream_name = str(stream_name or "").strip()
@@ -559,6 +612,7 @@ class HoloReplyService:
 
     def reply_probe(self, payload: dict[str, Any]) -> dict[str, Any]:
         turn = self._parse_turn(payload)
+        requested_mode = str(payload.get("mode", "") or "").strip().lower()
         incoming = turn.to_incoming_message()
         thread = self.store.find_thread(channel=turn.channel, thread_key=incoming.thread_key)
         history = list(reversed(self.store.recent_thread_messages(int(thread["id"]), self.config.memory.history_messages))) if thread else []
@@ -617,12 +671,17 @@ class HoloReplyService:
                 "consciousness_lines": list(packet.get("consciousness_stream", {}).get("lines", [])),
                 "vector_hits": list(packet.get("vector_hits", [])),
                 "activation_state": dict(packet.get("activation_state", {})),
+                "persona_blend": dict(packet.get("persona_blend", {})),
+                "brain_state": dict(packet.get("brain_state", {})),
+                "game_state": dict(packet.get("game_state", {})),
+                "stream_influence": dict(packet.get("stream_influence", {})),
+                "self_revision_state": dict(packet.get("self_revision_state", {})),
                 "retrieval_trace": dict(packet.get("retrieval_trace", {})),
                 "recall_reconstruction": dict((context.mind_packet or {}).get("recall_reconstruction", {})),
                 "reply_plan": reply_plan.to_dict(),
             }
 
-        return {
+        probes = {
             "chat_name": turn.chat_name,
             "thread_key": incoming.thread_key,
             "channel": turn.channel,
@@ -632,6 +691,10 @@ class HoloReplyService:
             "graph": _render_probe(graph_packet),
             "legacy": _render_probe(legacy_packet),
         }
+        if requested_mode in {"hybrid", "graph", "graph_led", "legacy"}:
+            probes["selected_mode"] = requested_mode
+            probes["selected"] = dict(probes[requested_mode])
+        return probes
 
     def _mind_context(
         self,
@@ -910,6 +973,12 @@ class HoloReplyService:
         if str(report.get("status", "")).strip() == "ingested":
             with self._memory_lock:
                 report["mind_graph_rebuild"] = self.memory.backfill_mind_graph(dry_run=False)
+                report["game_state_sync"] = self.memory.mark_active_history_refresh(
+                    channel=channel,
+                    thread_key=thread_key or chat_name,
+                    chat_name=chat_name,
+                    query=query,
+                )
         with self._wechat_history_lock:
             state = self._load_wechat_history_state()
             now_ts = time.time()
@@ -1387,6 +1456,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/vector-health":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.vector_health())
                     return
+                if parsed.path == "/brain-status":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.brain_status())
+                    return
                 if parsed.path == "/stream-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.stream_status())
                     return
@@ -1473,6 +1545,38 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         self.server.reply_service.stream_tick(
                             stream_name=str(payload.get("stream_name", "")).strip(),
                             dry_run=bool(payload.get("dry_run", False)),
+                        ),
+                    )
+                    return
+                if parsed.path == "/brain-mode":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.set_brain_mode(
+                            mode=str(payload.get("mode", "")).strip() or self.server.reply_service.config.memory.brain_mode_default,
+                            note=str(payload.get("note", "")).strip(),
+                        ),
+                    )
+                    return
+                if parsed.path == "/self-revision":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.run_self_revision(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            corrections=[str(item).strip() for item in payload.get("corrections", []) if str(item).strip()],
+                            apply_patch=bool(payload.get("apply_patch", True)),
+                        ),
+                    )
+                    return
+                if parsed.path == "/initiative-probe":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.initiative_probe(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            query=str(payload.get("query", "")).strip(),
                         ),
                     )
                     return

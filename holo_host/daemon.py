@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import signal
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .brain_ops import initiative_probe as build_initiative_probe
+from .brain_ops import run_self_revision as run_self_revision_cycle
 from .common import atomic_write_text, compact_text, stable_digest, utc_now
 from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
@@ -83,6 +87,8 @@ def reply_prompt(bundle: dict[str, Any], sidecar: dict[str, Any], *, proactive: 
 
 
 def _helper_to_path(raw: str) -> Path:
+    if os.name == "nt":
+        return Path(raw)
     if re.match(r"^[A-Za-z]:[\\/]", raw):
         drive = raw[0].lower()
         tail = raw[2:].lstrip("\\/")
@@ -127,6 +133,17 @@ def load_wechat_helper_settings(repo_root: Path, explicit_path: str = "") -> dic
         "process_path": "",
         "whitelist": [],
     }
+
+
+def _parse_utc_timestamp(value: str | None) -> float:
+    current = str(value or "").strip()
+    if not current:
+        return 0.0
+    try:
+        normalized = current.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return 0.0
 
 
 def initiative_prompt(bundle: dict[str, Any], sidecar: dict[str, Any]) -> str:
@@ -184,11 +201,6 @@ class HoloDaemon:
         self.policy = policy or AutonomyPolicy(config)
         self.logger = logger or _build_logger(config.runtime.log_dir)
         self._stop = False
-        self._last_promote_at = 0.0
-        self._last_think_at = 0.0
-        self._last_reflect_at = 0.0
-        self._last_dream_at = 0.0
-        self._last_initiative_at = 0.0
         self._wechat_helper_settings: dict[str, Any] | None = None
         signal.signal(signal.SIGTERM, self._signal_stop)
         signal.signal(signal.SIGINT, self._signal_stop)
@@ -229,14 +241,150 @@ class HoloDaemon:
         atomic_write_text(target, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         return {"path": str(target), "task": payload}
 
+    def brain_mode(self) -> str:
+        return str(self.memory.brain_status().get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default)
+
+    def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
+        return self.memory.set_brain_mode(mode, note=note)
+
+    def brain_status(self) -> dict[str, Any]:
+        payload = dict(self.memory.brain_status())
+        mode = str(payload.get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default)
+        latest_activity_at = self.store.latest_activity_at(channel="wechat")
+        payload["latest_activity_at"] = latest_activity_at
+        payload["idle_seconds"] = max(0.0, time.time() - _parse_utc_timestamp(latest_activity_at))
+        loops: list[dict[str, Any]] = []
+        seen = {str(item.get("loop_name", "")) for item in payload.get("loops", []) if str(item.get("loop_name", ""))}
+        for loop_name, meta in self._loop_definitions(mode).items():
+            current = next((dict(item) for item in payload.get("loops", []) if str(item.get("loop_name", "")) == loop_name), {})
+            if not current:
+                current = {"loop_name": loop_name, "status": "never", "mode": mode, "started_at": "", "finished_at": "", "duration_ms": 0.0, "influence_summary": "", "blocked_reason": "", "next_due_at": ""}
+            finished_at = str(current.get("finished_at", "") or current.get("started_at", "") or "")
+            next_due_at = current.get("next_due_at")
+            if not str(next_due_at or "").strip() and finished_at:
+                next_due_at = datetime.fromtimestamp(_parse_utc_timestamp(finished_at) + int(meta["interval_seconds"]), tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            current["next_due_at"] = str(next_due_at or "")
+            loops.append(current)
+        for item in payload.get("loops", []):
+            if str(item.get("loop_name", "")) not in seen:
+                loops.append(dict(item))
+        payload["loops"] = sorted(loops, key=lambda item: str(item.get("loop_name", "")))
+        return payload
+
+    def _loop_definitions(self, mode: str) -> dict[str, dict[str, Any]]:
+        definitions = {
+            "heartbeat": {"interval_seconds": max(1, int(self.config.memory.heartbeat_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "attention_tick": {"interval_seconds": max(1, int(self.config.memory.attention_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "full_brain"}},
+            "maintenance_stream": {"interval_seconds": 60, "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "association_stream": {"interval_seconds": 180, "enabled_modes": {"companion", "full_brain"}},
+            "social_stream": {"interval_seconds": 300, "enabled_modes": {"companion", "full_brain"}},
+            "deep_dream_cycle": {"interval_seconds": 3600, "enabled_modes": {"dream_only", "full_brain"}},
+            "self_revision": {"interval_seconds": max(300, int(self.config.memory.self_revision_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+        }
+        if mode == "full_brain":
+            definitions["association_stream"]["interval_seconds"] = max(60, int(definitions["association_stream"]["interval_seconds"] * 0.5))
+            definitions["social_stream"]["interval_seconds"] = max(90, int(definitions["social_stream"]["interval_seconds"] * 0.5))
+            definitions["self_revision"]["interval_seconds"] = max(600, int(definitions["self_revision"]["interval_seconds"] * 0.5))
+        return definitions
+
+    def _loop_due(self, loop_name: str, *, mode: str) -> tuple[bool, str]:
+        status = self.memory.brain_status()
+        latest = next((dict(item) for item in status.get("loops", []) if str(item.get("loop_name", "")) == loop_name), {})
+        interval_seconds = int(self._loop_definitions(mode)[loop_name]["interval_seconds"])
+        finished_at = str(latest.get("finished_at", "") or latest.get("started_at", "") or "")
+        if not finished_at:
+            return True, ""
+        due = time.time() - _parse_utc_timestamp(finished_at) >= interval_seconds
+        return due, "" if due else "not_due"
+
+    def _record_loop(self, loop_name: str, *, mode: str, started_at: str, started_ts: float, status: str, influence_summary: str = "", blocked_reason: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        interval_seconds = int(self._loop_definitions(mode)[loop_name]["interval_seconds"])
+        next_due = datetime.fromtimestamp(time.time() + interval_seconds, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        return self.memory.graph.record_brain_loop_run(
+            loop_name,
+            mode=mode,
+            status=status,
+            started_at=started_at,
+            finished_at=utc_now(),
+            duration_ms=round((time.perf_counter() - started_ts) * 1000.0, 2),
+            influence_summary=influence_summary,
+            blocked_reason=blocked_reason,
+            payload=payload,
+            next_due_at=next_due,
+        )
+
+    def _run_loop(self, loop_name: str, *, mode: str, runner) -> dict[str, Any]:
+        definitions = self._loop_definitions(mode)
+        if mode not in definitions[loop_name]["enabled_modes"]:
+            return {"loop_name": loop_name, "status": "blocked", "blocked_reason": f"mode:{mode}"}
+        due, blocked_reason = self._loop_due(loop_name, mode=mode)
+        if not due:
+            return {"loop_name": loop_name, "status": "idle", "blocked_reason": blocked_reason}
+        started_at = utc_now()
+        started_ts = time.perf_counter()
+        payload = runner()
+        payload_dict = payload if isinstance(payload, dict) else {"value": str(payload)}
+        status = "ok"
+        blocked_reason = ""
+        if str(payload_dict.get("status", "")).strip().lower() in {"blocked", "skipped"}:
+            status = str(payload_dict.get("status", "")).strip().lower()
+            blocked_reason = str(payload_dict.get("blocked_reason", payload_dict.get("reason", "")) or "")
+        if isinstance(payload, dict):
+            influence_summary = compact_text(
+                json.dumps(
+                    {
+                        "motifs": payload.get("motifs", payload.get("seed", "")),
+                        "initiative_added": payload.get("initiative_added", 0),
+                        "candidate_added": payload.get("candidate_added", 0),
+                        "thought_added": payload.get("thought_added", 0),
+                    },
+                    ensure_ascii=False,
+                ),
+                200,
+            )
+        else:
+            influence_summary = compact_text(str(payload), 200)
+        record = self._record_loop(
+            loop_name,
+            mode=mode,
+            started_at=started_at,
+            started_ts=started_ts,
+            status=status,
+            influence_summary=influence_summary,
+            blocked_reason=blocked_reason,
+            payload=payload_dict,
+        )
+        merged = {"loop_name": loop_name, "result": payload, "record": record}
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                merged.setdefault(str(key), value)
+        return merged
+
     def run_forever(self) -> None:
         self.logger.info("holo_host daemon started")
         while not self._stop:
             self.run_cycle()
-            time.sleep(self.config.runtime.poll_interval_seconds)
+            time.sleep(max(1, min(int(self.config.runtime.poll_interval_seconds), int(self.config.memory.heartbeat_interval_seconds))))
         self.logger.info("holo_host daemon stopped")
 
     def run_cycle(self) -> dict[str, Any]:
+        mode = self.brain_mode()
+        latest_activity_at = self.store.latest_activity_at(channel="wechat")
+        idle_seconds = max(0.0, time.time() - _parse_utc_timestamp(latest_activity_at))
+        self.memory.graph.touch_brain_runtime(
+            idle_since=latest_activity_at or utc_now(),
+            metadata={"current_mode": mode, "idle_seconds": round(idle_seconds, 2)},
+        )
+        heartbeat = self._run_loop("heartbeat", mode=mode, runner=lambda: {"status": "alive", "idle_seconds": round(idle_seconds, 2)})
+        attention = self._run_loop(
+            "attention_tick",
+            mode=mode,
+            runner=lambda: {
+                "latest_activity_at": latest_activity_at,
+                "idle_seconds": round(idle_seconds, 2),
+                "brain_mode": mode,
+            },
+        )
         ingested = self._ingest_messages()
         proactive = []
         if self.config.autonomy.allow_proactive_existing_threads:
@@ -244,21 +392,24 @@ class HoloDaemon:
                 self.config.autonomy.proactive_after_hours,
                 limit=max(self.config.runtime.max_jobs_per_cycle, 4),
             )
-        think = self._maybe_run_think_cycle()
-        reflect = self._maybe_run_reflect_cycle()
-        dream = self._maybe_run_dream_cycle()
-        initiative = self._maybe_run_initiative_cycle()
+        maintenance = self._run_loop("maintenance_stream", mode=mode, runner=self._run_maintenance_cycle)
+        think = self._run_loop("association_stream", mode=mode, runner=self._run_association_cycle)
+        initiative = self._run_loop("social_stream", mode=mode, runner=self._run_social_cycle)
+        dream = self._run_loop("deep_dream_cycle", mode=mode, runner=lambda: self._run_deep_dream_cycle(idle_seconds=idle_seconds))
+        self_revision = self._run_loop("self_revision", mode=mode, runner=self._run_self_revision_cycle)
         processed = self._process_jobs(self.config.runtime.max_jobs_per_cycle)
-        promoted = self._maybe_promote_candidates()
         return {
+            "mode": mode,
+            "heartbeat": heartbeat,
+            "attention_tick": attention,
             "ingested": ingested,
             "scheduled_followups": proactive,
+            "maintenance": maintenance,
             "think": think,
-            "reflect": reflect,
             "dream": dream,
             "initiative": initiative,
+            "self_revision": self_revision,
             "processed_jobs": processed,
-            "promotion": promoted,
         }
 
     def _ingest_messages(self) -> list[str]:
@@ -625,11 +776,26 @@ class HoloDaemon:
         self.store.complete_job(int(job["id"]), status="queued_transport", sent_message_id=remote_message_id)
         return f"queued:{job['id']}:{remote_message_id}"
 
-    def _maybe_run_think_cycle(self) -> dict[str, Any]:
-        now = time.time()
-        if now - self._last_think_at < self.config.memory.thought_interval_seconds:
-            return {"thought_added": 0, "seed": "", "sampled_archive_ids": []}
-        self._last_think_at = now
+    def _run_maintenance_cycle(self) -> dict[str, Any]:
+        reflect = self.memory.run_reflect_cycle(window_hours=self.config.memory.reflection_window_hours)
+        promote = self.memory.promote_ready_candidates(limit=self.config.memory.promote_batch_size)
+        payload = {
+            "candidate_added": int(reflect.get("candidate_added", 0) or 0),
+            "thought_added": int(reflect.get("thought_added", 0) or 0),
+            "promoted": list(promote.get("promoted", [])),
+            "remaining_candidates": promote.get("remaining_candidates"),
+        }
+        self.memory.record_stream_run("maintenance_stream", status="ok", note="maintenance_cycle", payload=payload)
+        if payload["candidate_added"] or payload["thought_added"] or payload["promoted"]:
+            self.logger.info(
+                "maintenance cycle: candidate_added=%s thought_added=%s promoted=%s",
+                payload["candidate_added"],
+                payload["thought_added"],
+                ",".join(payload["promoted"]),
+            )
+        return payload
+
+    def _run_association_cycle(self) -> dict[str, Any]:
         result = self.memory.run_think_cycle(sample_size=self.config.memory.thought_sample_size)
         self.memory.record_stream_run("association_stream", status="ok", note="think_cycle", payload=result)
         if result.get("thought_added"):
@@ -641,37 +807,9 @@ class HoloDaemon:
             )
         return result
 
-    def _maybe_run_reflect_cycle(self) -> dict[str, Any]:
-        now = time.time()
-        if now - self._last_reflect_at < self.config.memory.reflection_interval_seconds:
-            return {"candidate_added": 0, "thought_added": 0, "window_hours": self.config.memory.reflection_window_hours}
-        self._last_reflect_at = now
-        result = self.memory.run_reflect_cycle(window_hours=self.config.memory.reflection_window_hours)
-        self.memory.record_stream_run("maintenance_stream", status="ok", note="reflect_cycle", payload=result)
-        if result.get("candidate_added") or result.get("thought_added"):
-            self.logger.info(
-                "reflect cycle: candidate_added=%s thought_added=%s",
-                result.get("candidate_added", 0),
-                result.get("thought_added", 0),
-            )
-        return result
-
-    def _maybe_promote_candidates(self) -> dict[str, Any]:
-        now = time.time()
-        if now - self._last_promote_at < self.config.memory.promote_interval_seconds:
-            return {"promoted": [], "skipped": [], "remaining_candidates": None}
-        self._last_promote_at = now
-        result = self.memory.promote_ready_candidates(limit=self.config.memory.promote_batch_size)
-        self.memory.record_stream_run("maintenance_stream", status="ok", note="promote_candidates", payload=result)
-        if result["promoted"]:
-            self.logger.info("memory promotion: %s", ", ".join(result["promoted"]))
-        return result
-
-    def _maybe_run_dream_cycle(self) -> dict[str, Any]:
-        now = time.time()
-        if now - self._last_dream_at < self.config.memory.dream_interval_seconds:
-            return {"sampled_archive_ids": [], "callback_added": 0, "seed": ""}
-        self._last_dream_at = now
+    def _run_deep_dream_cycle(self, *, idle_seconds: float) -> dict[str, Any]:
+        if idle_seconds < float(self.config.memory.dream_idle_threshold_seconds):
+            return {"status": "blocked", "blocked_reason": "insufficient_idle_window", "idle_seconds": round(idle_seconds, 2)}
         result = self.memory.run_dream_cycle(sample_size=self.config.memory.dream_sample_size)
         self.memory.record_stream_run("deep_dream_cycle", status="ok", note="dream_cycle", payload=result)
         if result.get("sampled_archive_ids"):
@@ -683,11 +821,7 @@ class HoloDaemon:
             )
         return result
 
-    def _maybe_run_initiative_cycle(self) -> dict[str, Any]:
-        now = time.time()
-        if now - self._last_initiative_at < self.config.memory.initiative_interval_seconds:
-            return {"initiative_added": 0, "scheduled_job_ids": []}
-        self._last_initiative_at = now
+    def _run_social_cycle(self) -> dict[str, Any]:
         cycle_report = self.memory.run_initiative_cycle()
         self.memory.record_stream_run("social_stream", status="ok", note="initiative_cycle", payload=cycle_report)
         settings = self._wechat_settings()
@@ -739,6 +873,57 @@ class HoloDaemon:
         if scheduled:
             self.logger.info("initiative cycle: staged=%s scheduled=%s", cycle_report.get("initiative_added", 0), ",".join(str(item) for item in scheduled))
         return cycle_report
+
+    def _run_self_revision_cycle(self) -> dict[str, Any]:
+        if not self.config.memory.self_revision_enabled:
+            return {"status": "skipped", "reason": "self_revision_disabled"}
+        report = run_self_revision_cycle(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            thread_key="Nemoqi",
+            chat_name="Nemoqi",
+            channel="wechat",
+            extra_corrections=["别总这么老成", "不要一直顺着我说", "要有独立性/反身性"],
+            apply_patch=True,
+        )
+        if str(report.get("status", "")) == "applied":
+            self.logger.info("self revision applied run_id=%s", report.get("run_id", 0))
+        return report
+
+    def initiative_probe(self, *, thread_key: str, chat_name: str, channel: str = "wechat", query: str = "") -> dict[str, Any]:
+        return build_initiative_probe(
+            config=self.config,
+            policy=self.policy,
+            memory=self.memory,
+            store=self.store,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            query=query or "initiative_probe",
+        )
+
+    def run_self_revision(
+        self,
+        *,
+        thread_key: str,
+        chat_name: str,
+        channel: str = "wechat",
+        corrections: list[str] | None = None,
+        apply_patch: bool = True,
+    ) -> dict[str, Any]:
+        return run_self_revision_cycle(
+            config=self.config,
+            runner=self.runner,
+            memory=self.memory,
+            store=self.store,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            extra_corrections=corrections,
+            apply_patch=apply_patch,
+        )
 
 
 def build_daemon(config_path: str | None = None) -> HoloDaemon:

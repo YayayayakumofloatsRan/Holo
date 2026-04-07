@@ -689,6 +689,17 @@ class QueueStore:
         )
 
     @_synchronized
+    def latest_activity_at(self, *, channel: str | None = None) -> str:
+        if channel:
+            row = self.conn.execute(
+                "SELECT MAX(last_message_at) AS ts FROM threads WHERE channel = ?",
+                (str(channel).strip(),),
+            ).fetchone()
+        else:
+            row = self.conn.execute("SELECT MAX(last_message_at) AS ts FROM threads").fetchone()
+        return str((row["ts"] if row else "") or "")
+
+    @_synchronized
     def get_thread_bundle(self, job_id: int, history_limit: int = 6) -> dict[str, Any] | None:
         job = self._fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
         if not job:

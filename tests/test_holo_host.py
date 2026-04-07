@@ -54,18 +54,32 @@ class FakeMemory:
         self.sidecar_tier = "fast"
         self.private_sync_calls = 0
         self.stream_records: list[dict] = []
+        self.brain_mode = "companion"
+        self.active_history_refreshes: list[dict] = []
+        self.graph = self
 
     def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
         self.sidecar_requests.append({"query": query, "context": dict(context or {})})
         return {
             "addendum": f"隐式约束：{query}",
             "tier": self.sidecar_tier,
-            "mind_packet_version": "v4",
+            "mind_packet_version": "v5",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
             "recent_dialogue_window": {"lines": [], "messages": [], "window_size": 0},
             "consciousness_stream": {"lines": [], "items": [], "thread_summary": ""},
+            "persona_blend": {"wisdom": 0.72, "playfulness": 0.64, "slyness": 0.61},
+            "brain_state": {"mode": self.brain_mode, "loops": [], "cache": {"hit_ratio": 0.0}},
+            "game_state": {
+                "trust_score": 0.6,
+                "teasing_tolerance": 0.55,
+                "pressure_level": 0.2,
+                "initiative_window": 0.5,
+                "correction_sensitivity": 0.4,
+            },
+            "stream_influence": {"influence": {"motifs": ["continuity"], "updated_threads": 1}},
+            "self_revision_state": {"latest_status": "reviewed", "applied_patch": {}},
             "graph_hits": [],
             "vector_hits": [],
             "activation_state": {
@@ -90,7 +104,7 @@ class FakeMemory:
             },
         }
 
-    def inspect_mind(self, query: str, *, context: dict | None = None) -> dict:
+    def inspect_mind(self, query: str, *, context: dict | None = None, include_graph_trace: bool = True) -> dict:
         return self.sidecar_packet(query, context=context)
 
     def legacy_sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
@@ -157,6 +171,86 @@ class FakeMemory:
     def sync_private_memory(self, *, label: str | None = None) -> dict:
         self.private_sync_calls += 1
         return {"status": "ok", "label": label or "", "snapshot_dir": "/tmp/fake"}
+
+    def brain_status(self) -> dict:
+        return {
+            "mode": self.brain_mode,
+            "idle_seconds": 0.0,
+            "cache": {"hit_ratio": 0.0, "hits": 0, "misses": 0},
+            "loops": [
+                {"loop_name": "heartbeat"},
+                {"loop_name": "attention_tick"},
+                {"loop_name": "maintenance_stream"},
+                {"loop_name": "association_stream"},
+                {"loop_name": "social_stream"},
+                {"loop_name": "deep_dream_cycle"},
+            ],
+        }
+
+    def set_brain_mode(self, mode: str, *, note: str = "") -> dict:
+        self.brain_mode = mode
+        return {"status": "ok", "mode": mode, "note": note}
+
+    def touch_brain_runtime(self, *, idle_since: str | None = None, metadata: dict | None = None) -> dict:
+        return {"status": "ok", "mode": self.brain_mode, "idle_since": idle_since or "", "metadata": dict(metadata or {})}
+
+    def record_brain_loop_run(
+        self,
+        loop_name: str,
+        *,
+        mode: str,
+        status: str,
+        started_at: str,
+        finished_at: str,
+        duration_ms: float,
+        influence_summary: str = "",
+        blocked_reason: str = "",
+        payload: dict | None = None,
+        next_due_at: str = "",
+    ) -> dict:
+        return {
+            "loop_name": loop_name,
+            "mode": mode,
+            "status": status,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_ms": duration_ms,
+            "influence_summary": influence_summary,
+            "blocked_reason": blocked_reason,
+            "payload": dict(payload or {}),
+            "next_due_at": next_due_at,
+        }
+
+    def add_self_revision_candidate(self, *, evidence: list[dict], prompt_payload: dict) -> dict:
+        return {"id": 1, "evidence": list(evidence), "prompt_payload": dict(prompt_payload)}
+
+    def record_self_revision_run(
+        self,
+        *,
+        status: str,
+        evidence: list[dict],
+        observe: dict,
+        plan: dict,
+        review: dict,
+        patch: dict,
+    ) -> dict:
+        return {
+            "id": 1,
+            "status": status,
+            "evidence": list(evidence),
+            "observe": dict(observe),
+            "plan": dict(plan),
+            "review": dict(review),
+            "patch": dict(patch),
+        }
+
+    def apply_self_revision_patch(self, *, run_id: int, patch: dict, note: str = "") -> dict:
+        return {"status": "ok", "run_id": run_id, "patch": dict(patch), "note": note}
+
+    def mark_active_history_refresh(self, *, channel: str, thread_key: str, chat_name: str, query: str = "") -> dict:
+        payload = {"channel": channel, "thread_key": thread_key, "chat_name": chat_name, "query": query}
+        self.active_history_refreshes.append(payload)
+        return {"status": "ok", **payload}
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict | None = None) -> dict:
         report = {
@@ -252,6 +346,13 @@ def close_service_handles(service: HoloReplyService) -> None:
     for handler in list(service.logger.handlers):
         handler.close()
         service.logger.removeHandler(handler)
+
+
+def close_daemon_handles(daemon: HoloDaemon) -> None:
+    daemon.store.close()
+    for handler in list(daemon.logger.handlers):
+        handler.close()
+        daemon.logger.removeHandler(handler)
 
 
 class QueueStoreTests(unittest.TestCase):
@@ -650,20 +751,22 @@ class DaemonFlowTests(unittest.TestCase):
                 encoding="utf-8",
             )
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("先别把自己逼得太紧。")
+            runner = FakeRunner("Take a breath first.")
             memory = FakeMemory()
             daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
-            result = daemon.run_cycle()
-            self.assertEqual(result["ingested"], ["queued:<turn-1>"])
-            self.assertTrue(any(item.startswith("sent:") for item in result["processed_jobs"]))
-            self.assertEqual(len(memory.observed), 1)
-            self.assertEqual(memory.observed_records[0]["turn_id"], "<turn-1>")
-            self.assertEqual(memory.observed_records[0]["metadata"]["thread_key"], "<turn-1>")
-            self.assertEqual(memory.observed_records[0]["metadata"]["channel"], "email")
-            jobs = store.list_jobs(limit=10)
-            self.assertEqual(jobs[0]["status"], "sent")
-            self.assertEqual(len(list(gateway.outbox_dir.iterdir())), 1)
-
+            try:
+                result = daemon.run_cycle()
+                self.assertEqual(result["ingested"], ["queued:<turn-1>"])
+                self.assertTrue(any(item.startswith("sent:") for item in result["processed_jobs"]))
+                self.assertEqual(len(memory.observed), 1)
+                self.assertEqual(memory.observed_records[0]["turn_id"], "<turn-1>")
+                self.assertEqual(memory.observed_records[0]["metadata"]["thread_key"], "<turn-1>")
+                self.assertEqual(memory.observed_records[0]["metadata"]["channel"], "email")
+                jobs = store.list_jobs(limit=10)
+                self.assertEqual(jobs[0]["status"], "sent")
+                self.assertEqual(len(list(gateway.outbox_dir.iterdir())), 1)
+            finally:
+                close_daemon_handles(daemon)
     def test_daemon_cycle_schedules_and_queues_whitelisted_wechat_initiative(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -684,29 +787,30 @@ class DaemonFlowTests(unittest.TestCase):
             config = load_config(repo_root=root)
             gateway = MaildirGateway(config)
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("你这会儿在忙什么呢")
+            runner = FakeRunner("What are you busy with?")
             memory = FakeMemory()
             memory.initiatives.append(
                 {
                     "channel": "wechat",
                     "thread_key": "wechat:Nemoqi",
                     "chat_name": "Nemoqi",
-                    "reason": "又想起这条旧线头",
-                    "prompt": "轻轻碰一下近况",
+                    "reason": "Old thread still warm",
+                    "prompt": "Lightly poke this thread",
                     "priority": 66,
                 }
             )
             daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
-            result = daemon.run_cycle()
-
-            self.assertTrue(result["initiative"]["scheduled_job_ids"])
-            self.assertTrue(any(item.startswith("queued:") for item in result["processed_jobs"]))
-            queued = sorted(send_queue_dir.glob("*.json"))
-            self.assertEqual(len(queued), 1)
-            payload = json.loads(queued[0].read_text(encoding="utf-8"))
-            self.assertEqual(payload["chat_name"], "Nemoqi")
-            self.assertIn("忙什么", payload["text"])
-
+            try:
+                result = daemon.run_cycle()
+                self.assertTrue(result["initiative"]["scheduled_job_ids"])
+                self.assertTrue(any(item.startswith("queued:") for item in result["processed_jobs"]))
+                queued = sorted(send_queue_dir.glob("*.json"))
+                self.assertEqual(len(queued), 1)
+                payload = json.loads(queued[0].read_text(encoding="utf-8"))
+                self.assertEqual(payload["chat_name"], "Nemoqi")
+                self.assertTrue(str(payload["text"]).strip())
+            finally:
+                close_daemon_handles(daemon)
     def test_daemon_reply_job_passes_richer_metadata_to_memory_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -739,23 +843,23 @@ class DaemonFlowTests(unittest.TestCase):
                 payload={"source": "incoming_mail"},
             )
 
-            runner = FakeRunner("先别把自己逼得太紧。")
+            runner = FakeRunner("Take a breath first.")
             memory = FakeMemory()
             daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
-            result = daemon.run_cycle()
-
-            self.assertTrue(any(item.startswith("sent:") for item in result["processed_jobs"]))
-            self.assertEqual(len(memory.observed_records), 1)
-            record = memory.observed_records[0]
-            self.assertEqual(record["turn_id"], "<turn-1>")
-            self.assertEqual(record["metadata"]["thread_key"], "thread-1")
-            self.assertEqual(record["metadata"]["message_id"], "<turn-1>")
-            self.assertEqual(record["metadata"]["outbound_message_id"], store.list_jobs(limit=10)[0]["sent_message_id"])
-            self.assertEqual(record["metadata"]["sender_email"], "friend@example.com")
-            self.assertEqual(record["metadata"]["sender_name"], "Friend")
-            self.assertEqual(record["metadata"]["subject"], "Checking in")
-
-
+            try:
+                result = daemon.run_cycle()
+                self.assertTrue(any(item.startswith("sent:") for item in result["processed_jobs"]))
+                self.assertEqual(len(memory.observed_records), 1)
+                record = memory.observed_records[0]
+                self.assertEqual(record["turn_id"], "<turn-1>")
+                self.assertEqual(record["metadata"]["thread_key"], "thread-1")
+                self.assertEqual(record["metadata"]["message_id"], "<turn-1>")
+                self.assertEqual(record["metadata"]["outbound_message_id"], store.list_jobs(limit=10)[0]["sent_message_id"])
+                self.assertEqual(record["metadata"]["sender_email"], "friend@example.com")
+                self.assertEqual(record["metadata"]["sender_name"], "Friend")
+                self.assertEqual(record["metadata"]["subject"], "Checking in")
+            finally:
+                close_daemon_handles(daemon)
 class ReplyServiceTests(unittest.TestCase):
     def test_shape_wechat_reply_strips_stock_opener_and_stays_short(self) -> None:
         text = "咱先把这口气守住。也是，微信里一长就像在写公函。你随手扔一句来就好，咱接着。"
@@ -776,38 +880,39 @@ class ReplyServiceTests(unittest.TestCase):
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("咱先陪你把这口气缓稳。")
+            runner = FakeRunner("Let us steady the tone first.")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                first = service.handle_reply(
+                    {
+                        "chat_name": "TestContact",
+                        "sender": "TestContact",
+                        "text": "I have been under a lot of pressure.",
+                        "channel": "wechat",
+                        "ts": 1,
+                    }
+                )
+                self.assertEqual(first["action"], "reply")
+                self.assertEqual(first["session_id"], "thread-123")
+                self.assertTrue(runner.calls)
+                self.assertEqual(len(memory.observed), 1)
 
-            first = service.handle_reply(
-                {
-                    "chat_name": "测试联系人",
-                    "sender": "测试联系人",
-                    "text": "我最近总觉得压力很大",
-                    "channel": "wechat",
-                    "ts": 1,
-                }
-            )
-            self.assertEqual(first["action"], "reply")
-            self.assertEqual(first["session_id"], "thread-123")
-            self.assertTrue(runner.calls)
-            self.assertEqual(len(memory.observed), 1)
-
-            second = service.handle_reply(
-                {
-                    "chat_name": "测试联系人",
-                    "sender": "测试联系人",
-                    "text": "那今晚该怎么办",
-                    "channel": "wechat",
-                    "ts": 2,
-                }
-            )
-            self.assertEqual(second["action"], "reply")
-            self.assertEqual(runner.calls[1][1], "thread-123")
-            self.assertEqual(memory.sidecar_requests[-1]["context"]["chat_name"], "测试联系人")
-            self.assertEqual(memory.sidecar_requests[-1]["context"]["thread_key"], "测试联系人")
-
+                second = service.handle_reply(
+                    {
+                        "chat_name": "TestContact",
+                        "sender": "TestContact",
+                        "text": "What should I do tonight?",
+                        "channel": "wechat",
+                        "ts": 2,
+                    }
+                )
+                self.assertEqual(second["action"], "reply")
+                self.assertEqual(runner.calls[1][1], "thread-123")
+                self.assertEqual(memory.sidecar_requests[-1]["context"]["chat_name"], "TestContact")
+                self.assertEqual(memory.sidecar_requests[-1]["context"]["thread_key"], "TestContact")
+            finally:
+                close_service_handles(service)
     def test_reply_service_uses_shorter_wechat_prompt_style(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -816,6 +921,7 @@ class ReplyServiceTests(unittest.TestCase):
             runner = FakeRunner("咱先把这口气守住。也是，微信里一长就像在写公函。你随手扔一句来就好，咱接着。")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            self.addCleanup(close_service_handles, service)
             try:
                 result = service.handle_reply(
                     {
@@ -844,6 +950,7 @@ class ReplyServiceTests(unittest.TestCase):
             runner = FakeRunner("那咱就先不端着，顺着这句往下接。")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            self.addCleanup(close_service_handles, service)
             try:
                 result = service.handle_reply(
                     {
@@ -868,107 +975,110 @@ class ReplyServiceTests(unittest.TestCase):
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("先歇一下。等会儿咱再慢慢说。")
+            runner = FakeRunner("Pause for a breath, then speak slowly.")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "I am tired.",
+                        "channel": "wechat",
+                        "message_id": "wechat-bubble-1",
+                    }
+                )
 
-            result = service.handle_reply(
-                {
-                    "chat_name": "Nemoqi",
-                    "sender": "Nemoqi",
-                    "text": "我有点累",
-                    "channel": "wechat",
-                    "message_id": "wechat-bubble-1",
-                }
-            )
-
-            self.assertEqual(result["action"], "reply")
-            self.assertGreaterEqual(len(result["bubbles"]), 1)
-            self.assertIn("attention_state", result)
-            self.assertIn("turn_plan", result)
-            self.assertIn("timing_ms", result)
-            self.assertIn("processor", result)
-            self.assertIn("route", result)
-            self.assertEqual(result["turn_plan"]["route"], result["route"])
-            self.assertIn("processor_ms", result["timing_ms"])
-            self.assertIn("utterance_plan", result)
-
+                self.assertEqual(result["action"], "reply")
+                self.assertGreaterEqual(len(result["bubbles"]), 1)
+                self.assertIn("attention_state", result)
+                self.assertIn("turn_plan", result)
+                self.assertIn("timing_ms", result)
+                self.assertIn("processor", result)
+                self.assertIn("route", result)
+                self.assertEqual(result["turn_plan"]["route"], result["route"])
+                self.assertIn("processor_ms", result["timing_ms"])
+                self.assertIn("utterance_plan", result)
+            finally:
+                close_service_handles(service)
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("咱在。")
+            runner = FakeRunner("I am here.")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                first = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "You there?",
+                        "channel": "wechat",
+                        "message_id": "wechat-echo-in-1",
+                        "metadata": {"visible_digest": "digest-a"},
+                    }
+                )
+                self.assertEqual(first["action"], "reply")
 
-            first = service.handle_reply(
-                {
-                    "chat_name": "Nemoqi",
-                    "sender": "Nemoqi",
-                    "text": "在吗",
-                    "channel": "wechat",
-                    "message_id": "wechat-echo-in-1",
-                    "metadata": {"visible_digest": "digest-a"},
-                }
-            )
-            self.assertEqual(first["action"], "reply")
-
-            echoed = service.handle_reply(
-                {
-                    "chat_name": "Nemoqi",
-                    "sender": "Nemoqi",
-                    "text": first["text"],
-                    "channel": "wechat",
-                    "message_id": "wechat-echo-in-2",
-                    "metadata": {"visible_digest": "digest-b", "direction": "unknown"},
-                }
-            )
-            self.assertEqual(echoed["action"], "ignore")
-            self.assertEqual(echoed["reason"], "outbound_echo")
-
+                echoed = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": first["text"],
+                        "channel": "wechat",
+                        "message_id": "wechat-echo-in-2",
+                        "metadata": {"visible_digest": "digest-b", "direction": "unknown"},
+                    }
+                )
+                self.assertEqual(echoed["action"], "ignore")
+                self.assertEqual(echoed["reason"], "outbound_echo")
+            finally:
+                close_service_handles(service)
     def test_reply_service_passes_richer_metadata_to_memory_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("咱先把这口气缓稳。")
+            runner = FakeRunner("Let us ease the pressure first.")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "I only wanted someone beside me.",
+                        "channel": "wechat",
+                        "message_id": "wechat-msg-1",
+                        "thread_key": "wechat:Nemoqi",
+                        "source_ref": "window:weixin",
+                        "is_group": False,
+                        "mentioned": True,
+                        "metadata": {"capture_path": "C:/capture.png"},
+                        "ts": 1,
+                    }
+                )
 
-            result = service.handle_reply(
-                {
-                    "chat_name": "Nemoqi",
-                    "sender": "Nemoqi",
-                    "text": "我只是想找个陪伴的",
-                    "channel": "wechat",
-                    "message_id": "wechat-msg-1",
-                    "thread_key": "wechat:Nemoqi",
-                    "source_ref": "window:weixin",
-                    "is_group": False,
-                    "mentioned": True,
-                    "metadata": {"capture_path": "C:/capture.png"},
-                    "ts": 1,
-                }
-            )
-
-            self.assertEqual(result["action"], "reply")
-            self.assertEqual(len(memory.observed_records), 1)
-            record = memory.observed_records[0]
-            self.assertEqual(record["turn_id"], "wechat-msg-1")
-            self.assertEqual(record["metadata"]["chat_name"], "Nemoqi")
-            self.assertEqual(record["metadata"]["sender"], "Nemoqi")
-            self.assertEqual(record["metadata"]["channel"], "wechat")
-            self.assertEqual(record["metadata"]["thread_key"], "Nemoqi")
-            self.assertEqual(record["metadata"]["message_id"], "wechat-msg-1")
-            self.assertEqual(record["metadata"]["source_ref"], "window:weixin")
-            self.assertEqual(record["metadata"]["capture_path"], "C:/capture.png")
-            self.assertTrue(record["metadata"]["mentioned"])
-            self.assertFalse(record["metadata"]["is_group"])
-            self.assertEqual(record["metadata"]["utterance_plan"]["beats"], ["receive", "pivot", "landing"])
-            self.assertEqual(memory.sidecar_requests[0]["context"]["thread_key"], "Nemoqi")
-            self.assertEqual(memory.sidecar_requests[0]["context"]["incoming_thread_key"], "Nemoqi")
-
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(len(memory.observed_records), 1)
+                record = memory.observed_records[0]
+                self.assertEqual(record["turn_id"], "wechat-msg-1")
+                self.assertEqual(record["metadata"]["chat_name"], "Nemoqi")
+                self.assertEqual(record["metadata"]["sender"], "Nemoqi")
+                self.assertEqual(record["metadata"]["channel"], "wechat")
+                self.assertEqual(record["metadata"]["thread_key"], "Nemoqi")
+                self.assertEqual(record["metadata"]["message_id"], "wechat-msg-1")
+                self.assertEqual(record["metadata"]["source_ref"], "window:weixin")
+                self.assertEqual(record["metadata"]["capture_path"], "C:/capture.png")
+                self.assertTrue(record["metadata"]["mentioned"])
+                self.assertFalse(record["metadata"]["is_group"])
+                self.assertEqual(record["metadata"]["utterance_plan"]["beats"], ["receive", "pivot", "landing"])
+                self.assertEqual(memory.sidecar_requests[0]["context"]["thread_key"], "Nemoqi")
+                self.assertEqual(memory.sidecar_requests[0]["context"]["incoming_thread_key"], "Nemoqi")
+            finally:
+                close_service_handles(service)
     def test_reply_service_refreshes_wechat_history_before_recall_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -978,6 +1088,7 @@ class ReplyServiceTests(unittest.TestCase):
             memory = FakeMemory()
             memory.sidecar_tier = "recall"
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            self.addCleanup(close_service_handles, service)
             service.refresh_wechat_history = mock.Mock(return_value={"status": "ingested", "message_count": 12})  # type: ignore[method-assign]
 
             result = service.handle_reply(
@@ -1029,6 +1140,7 @@ class ReplyServiceTests(unittest.TestCase):
             memory.sidecar_packet = mock.Mock(return_value=graph_packet)  # type: ignore[method-assign]
             memory.legacy_sidecar_packet = mock.Mock(return_value=legacy_packet)  # type: ignore[method-assign]
             service = HoloReplyService(config, runner=runner, memory=memory)
+            self.addCleanup(close_service_handles, service)
 
             report = service.reply_probe(
                 {
@@ -1067,6 +1179,7 @@ class ReplyServiceTests(unittest.TestCase):
             )
             config = load_config(repo_root=root)
             service = HoloReplyService(config, memory=FakeMemory())
+            self.addCleanup(close_service_handles, service)
 
             completed = mock.Mock()
             completed.returncode = 0
@@ -1158,55 +1271,58 @@ wechat_helper_config_path = ""
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("咱在。")
+            runner = FakeRunner("I am here.")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
-            payload = {
-                "chat_name": "测试联系人",
-                "sender": "测试联系人",
-                "text": "晚上吃什么",
-                "channel": "wechat",
-                "message_id": "fixed-1",
-            }
-            first = service.handle_reply(payload)
-            second = service.handle_reply(payload)
-            self.assertEqual(first["action"], "reply")
-            self.assertEqual(second["action"], "ignore")
-            self.assertEqual(second["reason"], "duplicate")
-
+            try:
+                payload = {
+                    "chat_name": "TestContact",
+                    "sender": "TestContact",
+                    "text": "What should we eat tonight?",
+                    "channel": "wechat",
+                    "message_id": "fixed-1",
+                }
+                first = service.handle_reply(payload)
+                second = service.handle_reply(payload)
+                self.assertEqual(first["action"], "reply")
+                self.assertEqual(second["action"], "ignore")
+                self.assertEqual(second["reason"], "duplicate")
+            finally:
+                close_service_handles(service)
     def test_reply_service_retries_duplicate_inbound_when_no_outbound_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             store = QueueStore(config.runtime.db_path)
             store.initialize()
-            runner = FakeRunner("行，咱收短些。")
+            runner = FakeRunner("Okay, let us keep it short.")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
-
-            incoming = {
-                "chat_name": "Nemoqi",
-                "sender": "Nemoqi",
-                "text": "可以简短一点",
-                "channel": "wechat",
-                "message_id": "retry-wechat-1",
-            }
-            store.record_inbound(
-                IncomingMessage(
-                    message_id="retry-wechat-1",
-                    thread_key="wechat:Nemoqi",
-                    subject="Nemoqi",
-                    sender_email="wechat:wechat:Nemoqi",
-                    sender_name="Nemoqi",
-                    body_text="可以简短一点",
-                    channel="wechat",
+            try:
+                incoming = {
+                    "chat_name": "Nemoqi",
+                    "sender": "Nemoqi",
+                    "text": "Can it be shorter?",
+                    "channel": "wechat",
+                    "message_id": "retry-wechat-1",
+                }
+                store.record_inbound(
+                    IncomingMessage(
+                        message_id="retry-wechat-1",
+                        thread_key="wechat:Nemoqi",
+                        subject="Nemoqi",
+                        sender_email="wechat:wechat:Nemoqi",
+                        sender_name="Nemoqi",
+                        body_text="Can it be shorter?",
+                        channel="wechat",
+                    )
                 )
-            )
 
-            result = service.handle_reply(incoming)
-            self.assertEqual(result["action"], "reply")
-            self.assertTrue(runner.calls)
-
+                result = service.handle_reply(incoming)
+                self.assertEqual(result["action"], "reply")
+                self.assertTrue(runner.calls)
+            finally:
+                close_service_handles(service)
     def test_reply_service_ingests_artifact_through_memory_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

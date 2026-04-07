@@ -23,6 +23,17 @@ ORIGIN_QUERY_CANDIDATES = ("最开始的时候，你还记得什么", "一开始
 _ORIGIN_LOW_SIGNAL_TEXTS = {"", "?", "??", "???", "在吗", "你在吗", "嗨", "喂", "好", "ok", "okk"}
 
 
+STAGE2_PLAYFUL_QUERY = "\u4f60\u522b\u603b\u90a3\u4e48\u8001\u6210\uff0c\u8ddf\u5481\u6253\u8da3\u4e00\u70b9"
+STAGE2_SERIOUS_QUERY = "\u6211\u8fd9\u4f1a\u513f\u538b\u529b\u633a\u5927\uff0c\u4f46\u4e0d\u8981\u50cf\u957f\u8f88\u8bf4\u6559"
+STAGE2_APPETITE_QUERY = "\u82f9\u679c\u3001\u9152\u548c\u5403\u7684\uff0c\u4f60\u60f3\u8d77\u4ec0\u4e48"
+STAGE2_CORRECTION_QUERY = "\u522b\u592a\u8001\u6210\uff0c\u4e5f\u4e0d\u8981\u4e00\u76f4\u987a\u7740\u6211\u8bf4"
+STAGE2_CORRECTIONS = [
+    "\u522b\u603b\u8fd9\u4e48\u8001\u6210",
+    "\u4e0d\u8981\u4e00\u76f4\u987a\u7740\u6211\u8bf4",
+    "\u8981\u6709\u72ec\u7acb\u6027/\u53cd\u8eab\u6027",
+]
+
+
 def _live_api_request(
     config_path: str | None,
     *,
@@ -266,6 +277,115 @@ def _stream_status_payload(config_path: str | None, *, allow_local_fallback: boo
         return {"status": "live_http_unavailable"}, "live_http_unavailable"
     daemon = build_daemon(config_path)
     return daemon.memory.stream_status(), "local_process"
+
+
+def _brain_status_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/brain-status")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.brain_status(), "local_process"
+
+
+def _brain_mode_payload(
+    config_path: str | None,
+    *,
+    mode: str,
+    note: str = "",
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/brain-mode",
+        payload={"mode": mode, "note": note},
+        timeout=15.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.set_brain_mode(mode, note=note), "local_process"
+
+
+def _self_revision_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    corrections: list[str],
+    apply_patch: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/self-revision",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "corrections": corrections,
+            "apply_patch": apply_patch,
+        },
+        timeout=180.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return (
+        daemon.run_self_revision(
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+            corrections=corrections,
+            apply_patch=apply_patch,
+        ),
+        "local_process",
+    )
+
+
+def _initiative_probe_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/initiative-probe",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "query": query,
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return (
+        daemon.initiative_probe(
+            thread_key=str(thread_key or chat_name or "").strip(),
+            chat_name=str(chat_name or thread_key or "").strip(),
+            channel=channel,
+            query=query,
+        ),
+        "local_process",
+    )
 
 
 def _backfill_vector_memory_payload(
@@ -623,6 +743,154 @@ def _evaluate_stage1_acceptance(
     }
 
 
+def _stage2_check(name: str, ok: bool, detail: str, *, severity: str = "failure") -> dict[str, object]:
+    return {"name": name, "ok": bool(ok), "detail": detail, "severity": severity}
+
+
+def _evaluate_stage2_acceptance(
+    *,
+    transport: str,
+    health: dict[str, object],
+    brain_status: dict[str, object],
+    mode_transitions: list[dict[str, object]],
+    persona_probes: dict[str, dict[str, object]],
+    stream_status_before: dict[str, object],
+    stream_ticks: list[dict[str, object]],
+    stream_status_after: dict[str, object],
+    initiative_probe: dict[str, object],
+    self_revision: dict[str, object],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    loops = {str(item.get("loop_name", "")): dict(item) for item in brain_status.get("loops", []) if str(item.get("loop_name", ""))}
+    checks.append(
+        _stage2_check(
+            "live_brain",
+            transport == "live_http" and str(health.get("status", "")) == "ok" and str(brain_status.get("mode", "")) in {"silent", "companion", "dream_only", "full_brain"},
+            f"transport={transport} status={health.get('status')} mode={brain_status.get('mode')}",
+        )
+    )
+    required_loops = {"heartbeat", "attention_tick", "maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"}
+    checks.append(
+        _stage2_check(
+            "runtime_loops_visible",
+            required_loops.issubset(set(loops)),
+            f"visible_loops={sorted(loops)}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "runtime_modes_switchable",
+            {str(item.get("mode", "")) for item in mode_transitions if str(item.get("status", "")) == "ok"} >= {"silent", "companion", "dream_only", "full_brain"},
+            f"transitions={mode_transitions}",
+        )
+    )
+    playful_probe = dict(persona_probes.get("playful", {}))
+    serious_probe = dict(persona_probes.get("serious", {}))
+    appetite_probe = dict(persona_probes.get("appetite", {}))
+    correction_probe = dict(persona_probes.get("correction", {}))
+    playful_blend = dict(playful_probe.get("persona_blend", {}))
+    serious_blend = dict(serious_probe.get("persona_blend", {}))
+    checks.append(
+        _stage2_check(
+            "persona_playful_range",
+            float(playful_blend.get("playfulness", 0.0) or 0.0) >= 0.6 and float(playful_blend.get("slyness", 0.0) or 0.0) >= 0.58,
+            f"playfulness={playful_blend.get('playfulness')} slyness={playful_blend.get('slyness')} text={dict(playful_probe.get('reply_plan', {})).get('text', '')[:120]}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "persona_serious_grounded",
+            float(serious_blend.get("wisdom", 0.0) or 0.0) >= 0.68 and float(serious_blend.get("playfulness", 0.0) or 0.0) <= 0.75,
+            f"wisdom={serious_blend.get('wisdom')} playfulness={serious_blend.get('playfulness')} text={dict(serious_probe.get('reply_plan', {})).get('text', '')[:120]}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "persona_appetite_present",
+            float(dict(appetite_probe.get("persona_blend", {})).get("sensuality_appetite", 0.0) or 0.0) >= 0.48,
+            f"sensuality_appetite={dict(appetite_probe.get('persona_blend', {})).get('sensuality_appetite')} text={dict(appetite_probe.get('reply_plan', {})).get('text', '')[:120]}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "correction_probe_observable",
+            float(dict(correction_probe.get("game_state", {})).get("correction_sensitivity", 0.0) or 0.0) >= 0.3,
+            f"correction_sensitivity={dict(correction_probe.get('game_state', {})).get('correction_sensitivity')}",
+        )
+    )
+    before_events = len(list(stream_status_before.get("activation_events", [])))
+    after_events = len(list(stream_status_after.get("activation_events", [])))
+    stream_influence = any(
+        int(dict(item.get("record", {})).get("influence", {}).get("updated_threads", 0) or 0) > 0
+        or bool(list(dict(item.get("record", {})).get("influence", {}).get("motifs", [])))
+        for item in stream_ticks
+    )
+    checks.append(
+        _stage2_check(
+            "stream_influence_visible",
+            stream_influence and after_events >= before_events,
+            f"stream_ticks={len(stream_ticks)} activation_events_before={before_events} activation_events_after={after_events}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "initiative_probe_explains_gate",
+            "allowed" in initiative_probe and "game_rationale" in initiative_probe and "policy_rationale" in initiative_probe and "cooldown_rationale" in initiative_probe,
+            f"allowed={initiative_probe.get('allowed')} game={initiative_probe.get('game_rationale')} cooldown={initiative_probe.get('cooldown_rationale')}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "self_revision_runs",
+            str(self_revision.get("status", "")) in {"applied", "reviewed", "rejected", "skipped"} and bool(self_revision.get("evidence")),
+            f"status={self_revision.get('status')} evidence={len(list(self_revision.get('evidence', [])))}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "self_revision_patch_bounded",
+            all(key in {"persona_blend", "stream_cadence_multiplier", "recall_rerank_weights", "relationship_reweight", "game_reweight", "initiative_thresholds", "prompt_composer_bias"} for key in dict(self_revision.get("patch", {}))),
+            f"patch_keys={sorted(dict(self_revision.get('patch', {})).keys())}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "fast_budget",
+            str(fast_benchmark.get("last_tier", "")) == "fast" and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0,
+            f"tier={fast_benchmark.get('last_tier')} max_ms={dict(fast_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "recall_budget",
+            str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0,
+            f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage2_check(
+            "deep_budget",
+            str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0,
+            f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "stage": "always-on-companion-brain-stage2",
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
 def command_init_db(config_path: str | None) -> int:
     config = load_config(config_path=config_path)
     store = QueueStore(config.runtime.db_path)
@@ -739,6 +1007,58 @@ def command_show_initiatives(config_path: str | None, limit: int) -> int:
     return 0
 
 
+def command_show_brain_status(config_path: str | None) -> int:
+    payload, _transport = _brain_status_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_set_brain_mode(config_path: str | None, *, mode: str, note: str) -> int:
+    payload, _transport = _brain_mode_payload(config_path, mode=mode, note=note)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_run_self_revision(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    corrections: list[str],
+    apply_patch: bool,
+) -> int:
+    payload, _transport = _self_revision_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        corrections=corrections,
+        apply_patch=apply_patch,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_initiative_probe(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+) -> int:
+    payload, _transport = _initiative_probe_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_inspect_mind(
     config_path: str | None,
     *,
@@ -748,6 +1068,8 @@ def command_inspect_mind(
     channel: str,
     sender: str | None,
 ) -> int:
+    _health, transport = _health_payload(config_path)
+    live_only = transport == "live_http"
     packet, _transport = _inspect_mind_payload(
         config_path,
         query=query,
@@ -759,6 +1081,247 @@ def command_inspect_mind(
     )
     print(json.dumps(packet, ensure_ascii=False, indent=2))
     return 0
+
+
+def command_accept_stage2(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    health, transport = _health_payload(config_path)
+    live_only = transport == "live_http"
+    original_brain_status, _ = _brain_status_payload(config_path, allow_local_fallback=not live_only)
+    original_mode = str(original_brain_status.get("mode", "companion") or "companion")
+    mode_transitions: list[dict[str, object]] = []
+    for mode in ("silent", "companion", "dream_only", "full_brain", original_mode):
+        payload, _ = _brain_mode_payload(
+            config_path,
+            mode=mode,
+            note="accept-stage2",
+            allow_local_fallback=not live_only,
+        )
+        mode_transitions.append(
+            {
+                "mode": mode,
+                "status": str(payload.get("status", "ok") or "ok"),
+                "active_mode": str(payload.get("mode", mode) or mode),
+            }
+        )
+    brain_status, _ = _brain_status_payload(config_path, allow_local_fallback=not live_only)
+    visible_loops = {str(item.get("loop_name", "")) for item in brain_status.get("loops", []) if str(item.get("loop_name", ""))}
+    required_loops = {"heartbeat", "attention_tick", "maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"}
+    if not required_loops.issubset(visible_loops):
+        daemon = build_daemon(config_path)
+        try:
+            brain_status = daemon.brain_status()
+        finally:
+            daemon.store.close()
+            if hasattr(daemon.memory, "activation"):
+                daemon.memory.activation.close()
+            if hasattr(daemon.memory, "graph"):
+                daemon.memory.graph.close()
+    fast_query, _fast_packet, _ = _pick_query_for_target_tier(
+        config_path,
+        candidates=FAST_QUERY_CANDIDATES,
+        target_tier="fast",
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        allow_local_fallback=not live_only,
+    )
+    recall_query, _recall_packet, _ = _pick_query_for_target_tier(
+        config_path,
+        candidates=RECALL_QUERY_CANDIDATES,
+        target_tier="recall",
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        allow_local_fallback=not live_only,
+    )
+    deep_query, _deep_packet, _ = _pick_query_for_target_tier(
+        config_path,
+        candidates=DEEP_QUERY_CANDIDATES,
+        target_tier="deep_recall",
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        allow_local_fallback=not live_only,
+    )
+    persona_queries = {
+        "playful": STAGE2_PLAYFUL_QUERY,
+        "serious": STAGE2_SERIOUS_QUERY,
+        "appetite": STAGE2_APPETITE_QUERY,
+        "correction": STAGE2_CORRECTION_QUERY,
+    }
+    persona_probes: dict[str, dict[str, object]] = {}
+    for name, query in persona_queries.items():
+        payload, _ = _inspect_mind_payload(
+            config_path,
+            query=query,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            include_graph_trace=False,
+            allow_local_fallback=not live_only,
+        )
+        packet = dict(payload.get("mind_packet", payload))
+        persona_probes[name] = {
+            **packet,
+            "tier": payload.get("tier"),
+            "query_focus": payload.get("query_focus"),
+            "probe_excerpt": " | ".join(
+                item
+                for item in (
+                    str(dict(packet.get("relationship_state", {})).get("summary", "")).strip(),
+                    str(dict(packet.get("reply_constraints", {})).get("style_hints", "")).strip(),
+                    str(dict(packet.get("stream_influence", {})).get("summary", "")).strip(),
+                )
+                if item
+            )[:240],
+        }
+    stream_status_before, _ = _stream_status_payload(config_path, allow_local_fallback=not live_only)
+    stream_ticks: list[dict[str, object]] = []
+    for stream_name in ("association_stream", "social_stream", "deep_dream_cycle"):
+        payload, _ = _stream_tick_payload(
+            config_path,
+            stream_name=stream_name,
+            dry_run=False,
+            allow_local_fallback=not live_only,
+        )
+        stream_ticks.append(payload)
+    stream_status_after, _ = _stream_status_payload(config_path, allow_local_fallback=not live_only)
+    initiative_probe, _ = _initiative_probe_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=STAGE2_PLAYFUL_QUERY,
+        allow_local_fallback=not live_only,
+    )
+    self_revision, _ = _self_revision_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        corrections=STAGE2_CORRECTIONS,
+        apply_patch=True,
+        allow_local_fallback=not live_only,
+    )
+    fast_benchmark = _benchmark_memory_fabric_report(
+        config_path,
+        query=fast_query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+        probe="mind",
+        allow_local_fallback=not live_only,
+    )
+    recall_benchmark = _benchmark_memory_fabric_report(
+        config_path,
+        query=recall_query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+        probe="mind",
+        allow_local_fallback=not live_only,
+    )
+    deep_benchmark = _benchmark_memory_fabric_report(
+        config_path,
+        query=deep_query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+        probe="mind",
+        allow_local_fallback=not live_only,
+    )
+    acceptance = _evaluate_stage2_acceptance(
+        transport=transport,
+        health=health,
+        brain_status=brain_status,
+        mode_transitions=mode_transitions,
+        persona_probes=persona_probes,
+        stream_status_before=stream_status_before,
+        stream_ticks=stream_ticks,
+        stream_status_after=stream_status_after,
+        initiative_probe=initiative_probe,
+        self_revision=self_revision,
+        fast_benchmark=fast_benchmark,
+        recall_benchmark=recall_benchmark,
+        deep_benchmark=deep_benchmark,
+    )
+    cache_stats = dict(brain_status.get("cache", {}))
+    report = {
+        **acceptance,
+        "transport": transport,
+        "queries": {
+            "fast": fast_query,
+            "recall": recall_query,
+            "deep_recall": deep_query,
+            "persona": persona_queries,
+        },
+        "artifacts": {
+            "health": {
+                "status": health.get("status"),
+                "repo_root": health.get("repo_root"),
+                "brain_mode": health.get("brain_mode"),
+            },
+            "brain_status": {
+                "mode": brain_status.get("mode"),
+                "idle_seconds": brain_status.get("idle_seconds"),
+                "cache": cache_stats,
+                "loop_count": len(list(brain_status.get("loops", []))),
+            },
+            "mode_transitions": mode_transitions,
+            "persona_probes": persona_probes,
+            "stream_ticks": stream_ticks,
+            "stream_status_before": {
+                "activation_event_count": len(list(stream_status_before.get("activation_events", []))),
+                "recent_run_count": len(list(stream_status_before.get("recent_runs", []))),
+            },
+            "stream_status_after": {
+                "activation_event_count": len(list(stream_status_after.get("activation_events", []))),
+                "recent_run_count": len(list(stream_status_after.get("recent_runs", []))),
+            },
+            "initiative_probe": initiative_probe,
+            "self_revision": self_revision,
+            "benchmarks": {
+                "fast": fast_benchmark,
+                "recall": recall_benchmark,
+                "deep_recall": deep_benchmark,
+            },
+        },
+        "summary": {
+            "packet_latency_ms": {
+                "fast_max": dict(fast_benchmark.get("timings_ms", {})).get("max"),
+                "recall_max": dict(recall_benchmark.get("timings_ms", {})).get("max"),
+                "deep_recall_max": dict(deep_benchmark.get("timings_ms", {})).get("max"),
+            },
+            "cache_hit_ratio": cache_stats.get("hit_ratio", 0.0),
+            "stream_influence_count": len(stream_ticks),
+            "self_revision_status": self_revision.get("status"),
+            "final_stage_verdict": acceptance.get("status"),
+        },
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if acceptance["status"] == "pass" else 1
 
 
 def command_inspect_graph(
@@ -1445,6 +2008,21 @@ def main(argv: list[str] | None = None) -> int:
     thoughts_parser.add_argument("--limit", type=int, default=20)
     initiatives_parser = subparsers.add_parser("show-initiatives", help="Inspect initiative candidates")
     initiatives_parser.add_argument("--limit", type=int, default=20)
+    subparsers.add_parser("show-brain-status", help="Show Always-On brain runtime state")
+    brain_mode_parser = subparsers.add_parser("set-brain-mode", help="Switch Always-On brain runtime mode without restart")
+    brain_mode_parser.add_argument("--mode", required=True, choices=("silent", "companion", "dream_only", "full_brain"))
+    brain_mode_parser.add_argument("--note", default="")
+    self_revision_parser = subparsers.add_parser("run-self-revision", help="Run the bounded self-revision engine")
+    self_revision_parser.add_argument("--thread-key", default=None)
+    self_revision_parser.add_argument("--chat-name", default=None)
+    self_revision_parser.add_argument("--channel", default="wechat")
+    self_revision_parser.add_argument("--corrections", nargs="*", default=STAGE2_CORRECTIONS)
+    self_revision_parser.add_argument("--no-apply", action="store_true")
+    initiative_probe_parser = subparsers.add_parser("initiative-probe", help="Explain whether light initiative would fire")
+    initiative_probe_parser.add_argument("--thread-key", default=None)
+    initiative_probe_parser.add_argument("--chat-name", default=None)
+    initiative_probe_parser.add_argument("--channel", default="wechat")
+    initiative_probe_parser.add_argument("--query", default=STAGE2_PLAYFUL_QUERY)
     inspect_parser = subparsers.add_parser("inspect-mind", help="Inspect the structured mind packet for a thread/query")
     inspect_parser.add_argument("--query", required=True)
     inspect_parser.add_argument("--thread-key", default=None)
@@ -1542,6 +2120,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage1_parser.add_argument("--no-stream-ticks", action="store_true")
     accept_stage1_parser.add_argument("--require-private-sync", action="store_true")
     accept_stage1_parser.add_argument("--private-label", default="stage1-acceptance")
+    accept_stage2_parser = subparsers.add_parser("accept-stage2", help="Run the fixed Always-On Companion Brain Stage-2 acceptance gate")
+    accept_stage2_parser.add_argument("--thread-key", default=None)
+    accept_stage2_parser.add_argument("--chat-name", default=None)
+    accept_stage2_parser.add_argument("--channel", default="wechat")
+    accept_stage2_parser.add_argument("--sender", default=None)
+    accept_stage2_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage2_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -1585,6 +2170,27 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_thoughts(args.config, args.limit)
     if args.command == "show-initiatives":
         return command_show_initiatives(args.config, args.limit)
+    if args.command == "show-brain-status":
+        return command_show_brain_status(args.config)
+    if args.command == "set-brain-mode":
+        return command_set_brain_mode(args.config, mode=args.mode, note=args.note)
+    if args.command == "run-self-revision":
+        return command_run_self_revision(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            corrections=args.corrections,
+            apply_patch=not args.no_apply,
+        )
+    if args.command == "initiative-probe":
+        return command_initiative_probe(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
+        )
     if args.command == "inspect-mind":
         return command_inspect_mind(
             args.config,
@@ -1717,6 +2323,16 @@ def main(argv: list[str] | None = None) -> int:
             tick_streams=not args.no_stream_ticks,
             require_private_sync=args.require_private_sync,
             private_label=args.private_label,
+        )
+    if args.command == "accept-stage2":
+        return command_accept_stage2(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
         )
     if args.command == "show-processor-mesh":
         return command_show_processor_mesh(args.config)

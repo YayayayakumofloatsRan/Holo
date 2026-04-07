@@ -37,6 +37,32 @@ STREAM_DEFAULTS = {
     "social_stream": {"cadence_seconds": 1800, "description": "relationship upkeep"},
     "deep_dream_cycle": {"cadence_seconds": 21600, "description": "slow dream replay"},
 }
+GAME_STATE_DEFAULTS = {
+    "trust_score": 0.5,
+    "teasing_tolerance": 0.45,
+    "pressure_level": 0.1,
+    "reciprocity_balance": 0.5,
+    "initiative_window": 0.35,
+    "correction_sensitivity": 0.3,
+}
+BRAIN_LOOP_DEFAULTS = {
+    "heartbeat": {"interval_seconds": 1, "description": "runtime heartbeat"},
+    "attention_tick": {"interval_seconds": 3, "description": "attention routing"},
+    "maintenance_stream": {"interval_seconds": 60, "description": "maintenance consolidation"},
+    "association_stream": {"interval_seconds": 180, "description": "associative drift"},
+    "social_stream": {"interval_seconds": 300, "description": "social upkeep"},
+    "deep_dream_cycle": {"interval_seconds": 3600, "description": "idle dream replay"},
+    "self_revision": {"interval_seconds": 1800, "description": "bounded self revision"},
+}
+ALLOWED_SELF_REVISION_FIELDS = {
+    "persona_blend",
+    "stream_cadence_multiplier",
+    "recall_rerank_weights",
+    "relationship_reweight",
+    "game_reweight",
+    "initiative_thresholds",
+    "prompt_composer_bias",
+}
 ORIGIN_SUBSTANTIVE_HINTS = (
     "判断",
     "记得",
@@ -409,6 +435,60 @@ class MindGraph:
                 trace_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS brain_runtime_state (
+                runtime_id INTEGER PRIMARY KEY CHECK(runtime_id = 1),
+                mode TEXT NOT NULL DEFAULT 'companion',
+                started_at TEXT NOT NULL DEFAULT '',
+                last_updated_at TEXT NOT NULL DEFAULT '',
+                idle_since TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE IF NOT EXISTS brain_mode_events (
+                id INTEGER PRIMARY KEY,
+                previous_mode TEXT NOT NULL DEFAULT '',
+                next_mode TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS brain_loop_runs (
+                id INTEGER PRIMARY KEY,
+                loop_name TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'never',
+                started_at TEXT NOT NULL DEFAULT '',
+                finished_at TEXT NOT NULL DEFAULT '',
+                duration_ms REAL NOT NULL DEFAULT 0.0,
+                influence_summary TEXT NOT NULL DEFAULT '',
+                blocked_reason TEXT NOT NULL DEFAULT '',
+                stats_json TEXT NOT NULL DEFAULT '{}',
+                next_due_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS self_revision_candidates (
+                id INTEGER PRIMARY KEY,
+                evidence_json TEXT NOT NULL DEFAULT '[]',
+                prompt_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS self_revision_runs (
+                id INTEGER PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT '',
+                evidence_json TEXT NOT NULL DEFAULT '[]',
+                observe_json TEXT NOT NULL DEFAULT '{}',
+                plan_json TEXT NOT NULL DEFAULT '{}',
+                review_json TEXT NOT NULL DEFAULT '{}',
+                patch_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS self_revision_applied (
+                id INTEGER PRIMARY KEY,
+                run_id INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'applied',
+                patch_json TEXT NOT NULL DEFAULT '{}',
+                previous_patch_json TEXT NOT NULL DEFAULT '{}',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
                 """
             )
             for stream_name, payload in self.stream_cadences.items():
@@ -422,6 +502,15 @@ class MindGraph:
                     """,
                     (stream_name, int(payload.get("cadence_seconds", 0)), str(payload.get("description", ""))),
                 )
+            now = utc_now()
+            self.conn.execute(
+                """
+                INSERT INTO brain_runtime_state(runtime_id, mode, started_at, last_updated_at, idle_since, metadata_json)
+                VALUES (1, 'companion', ?, ?, ?, '{}')
+                ON CONFLICT(runtime_id) DO NOTHING
+                """,
+                (now, now, now),
+            )
             self.conn.commit()
 
     def count_nodes(self) -> int:
@@ -432,6 +521,174 @@ class MindGraph:
     def close(self) -> None:
         with self._lock:
             self.conn.close()
+
+    @staticmethod
+    def _clamp(value: Any, *, lower: float = 0.0, upper: float = 1.0, default: float = 0.0) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = float(default)
+        return round(max(lower, min(upper, numeric)), 4)
+
+    def brain_state(self, *, default_mode: str = "companion") -> dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM brain_runtime_state WHERE runtime_id = 1").fetchone()
+            if row is None:
+                now = utc_now()
+                self.conn.execute(
+                    """
+                    INSERT INTO brain_runtime_state(runtime_id, mode, started_at, last_updated_at, idle_since, metadata_json)
+                    VALUES (1, ?, ?, ?, ?, '{}')
+                    """,
+                    (default_mode, now, now, now),
+                )
+                self.conn.commit()
+                row = self.conn.execute("SELECT * FROM brain_runtime_state WHERE runtime_id = 1").fetchone()
+            payload = dict(row) if row else {}
+            metadata = _safe_json_dict(payload.get("metadata_json", "{}"))
+            latest_runs = [
+                dict(run)
+                for run in self.conn.execute(
+                    """
+                    SELECT loop_name, mode, status, started_at, finished_at, duration_ms, influence_summary, blocked_reason, stats_json, next_due_at
+                    FROM brain_loop_runs
+                    WHERE id IN (
+                        SELECT MAX(id) FROM brain_loop_runs GROUP BY loop_name
+                    )
+                    ORDER BY loop_name ASC
+                    """
+                ).fetchall()
+            ]
+            mode_events = [
+                dict(event)
+                for event in self.conn.execute(
+                    "SELECT previous_mode, next_mode, note, created_at FROM brain_mode_events ORDER BY id DESC LIMIT 8"
+                ).fetchall()
+            ]
+        return {
+            "mode": str(payload.get("mode", default_mode) or default_mode),
+            "started_at": str(payload.get("started_at", "") or ""),
+            "last_updated_at": str(payload.get("last_updated_at", "") or ""),
+            "idle_since": str(payload.get("idle_since", "") or ""),
+            "metadata": metadata,
+            "loops": latest_runs,
+            "recent_mode_events": mode_events,
+        }
+
+    def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
+        normalized_mode = str(mode or "").strip() or "companion"
+        now = utc_now()
+        with self._lock:
+            current = self.conn.execute("SELECT * FROM brain_runtime_state WHERE runtime_id = 1").fetchone()
+            previous_mode = str(current["mode"]) if current else ""
+            metadata_json = str(current["metadata_json"]) if current else "{}"
+            started_at = str(current["started_at"]) if current else now
+            idle_since = str(current["idle_since"]) if current else now
+            self.conn.execute(
+                """
+                INSERT INTO brain_runtime_state(runtime_id, mode, started_at, last_updated_at, idle_since, metadata_json)
+                VALUES (1, ?, ?, ?, ?, ?)
+                ON CONFLICT(runtime_id) DO UPDATE SET
+                    mode = excluded.mode,
+                    started_at = excluded.started_at,
+                    last_updated_at = excluded.last_updated_at,
+                    idle_since = excluded.idle_since,
+                    metadata_json = excluded.metadata_json
+                """,
+                (normalized_mode, started_at, now, idle_since, metadata_json),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO brain_mode_events(previous_mode, next_mode, note, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (previous_mode, normalized_mode, note, now),
+            )
+            self.conn.commit()
+        state = self.brain_state(default_mode=normalized_mode)
+        state["previous_mode"] = previous_mode
+        state["note"] = note
+        return state
+
+    def touch_brain_runtime(self, *, idle_since: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        current = self.brain_state()
+        current_metadata = dict(current.get("metadata", {}))
+        if metadata:
+            current_metadata.update(dict(metadata))
+        now = utc_now()
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE brain_runtime_state
+                SET last_updated_at = ?,
+                    idle_since = ?,
+                    metadata_json = ?
+                WHERE runtime_id = 1
+                """,
+                (
+                    now,
+                    str(idle_since or current.get("idle_since", "") or now),
+                    json.dumps(current_metadata, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            self.conn.commit()
+        return self.brain_state()
+
+    def record_brain_loop_run(
+        self,
+        loop_name: str,
+        *,
+        mode: str,
+        status: str,
+        started_at: str,
+        finished_at: str,
+        duration_ms: float,
+        influence_summary: str = "",
+        blocked_reason: str = "",
+        payload: dict[str, Any] | None = None,
+        next_due_at: str = "",
+    ) -> dict[str, Any]:
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO brain_loop_runs(
+                    loop_name, mode, status, started_at, finished_at, duration_ms, influence_summary, blocked_reason, stats_json, next_due_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(loop_name or "").strip(),
+                    str(mode or "").strip(),
+                    str(status or "").strip() or "ok",
+                    str(started_at or ""),
+                    str(finished_at or ""),
+                    float(duration_ms or 0.0),
+                    str(influence_summary or ""),
+                    str(blocked_reason or ""),
+                    json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                    str(next_due_at or ""),
+                ),
+            )
+            self.conn.execute(
+                """
+                UPDATE brain_runtime_state
+                SET last_updated_at = ?
+                WHERE runtime_id = 1
+                """,
+                (str(finished_at or started_at or utc_now()),),
+            )
+            self.conn.commit()
+        return {
+            "loop_name": str(loop_name or "").strip(),
+            "mode": str(mode or "").strip(),
+            "status": str(status or "").strip() or "ok",
+            "started_at": str(started_at or ""),
+            "finished_at": str(finished_at or ""),
+            "duration_ms": round(float(duration_ms or 0.0), 2),
+            "influence_summary": str(influence_summary or ""),
+            "blocked_reason": str(blocked_reason or ""),
+            "next_due_at": str(next_due_at or ""),
+            "stats": dict(payload or {}),
+        }
 
     def _jsonl_rows(self, path: Path) -> list[dict[str, Any]]:
         if not path.exists():
@@ -664,7 +921,7 @@ class MindGraph:
         return normalized_thread_key, aliases
 
     def _thread_state_bucket(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
-        return {
+        state = {
             "thread_key": thread_key,
             "channel": channel,
             "chat_name": chat_name,
@@ -683,6 +940,8 @@ class MindGraph:
             "explicit_user_signals": 0,
             "successful_recall_total": 0,
         }
+        state.update(GAME_STATE_DEFAULTS)
+        return state
 
     def _module_hints(self, *names: str) -> tuple[str, ...]:
         hints: list[str] = []
@@ -1518,6 +1777,97 @@ class MindGraph:
             "continuity_score": round(continuity_score, 3),
         }
 
+    def game_state(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        snapshot = self.relationship_snapshot(
+            thread_key=normalized_thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=3,
+            _allow_refresh=False,
+        )
+        with self._lock:
+            row = None
+            if normalized_thread_key:
+                row = self.conn.execute(
+                    "SELECT * FROM mind_thread_state WHERE thread_key = ? AND channel = ?",
+                    (normalized_thread_key, channel),
+                ).fetchone()
+        metadata = _safe_json_dict(row["metadata_json"]) if row else {}
+        payload = dict(GAME_STATE_DEFAULTS)
+        payload["trust_score"] = self._clamp(metadata.get("trust_score", snapshot.get("trust_score", 0.5)), default=0.5)
+        payload["pressure_level"] = self._clamp(metadata.get("pressure_level", 0.1), default=0.1)
+        payload["teasing_tolerance"] = self._clamp(metadata.get("teasing_tolerance", 0.45), default=0.45)
+        payload["reciprocity_balance"] = self._clamp(metadata.get("reciprocity_balance", 0.5), default=0.5)
+        payload["initiative_window"] = self._clamp(
+            metadata.get("initiative_window", (payload["trust_score"] + float(snapshot.get("closeness_score", 0.0) or 0.0)) / 2.0),
+            default=0.35,
+        )
+        payload["correction_sensitivity"] = self._clamp(metadata.get("correction_sensitivity", 0.3), default=0.3)
+        payload["thread_key"] = normalized_thread_key
+        payload["chat_name"] = str(chat_name or snapshot.get("summary", "") or "").strip()
+        payload["channel"] = channel
+        payload["last_updated_at"] = str(metadata.get("game_state_updated_at", row["last_message_at"] if row else "")) if row else ""
+        return payload
+
+    def update_game_state(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        delta: dict[str, float] | None = None,
+        absolute: dict[str, float] | None = None,
+        note: str = "",
+        source: str = "runtime",
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        if not normalized_thread_key:
+            return {"status": "skipped", "reason": "missing_thread_key"}
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM mind_thread_state WHERE thread_key = ? AND channel = ?",
+                (normalized_thread_key, channel),
+            ).fetchone()
+            if row is None:
+                return {"status": "skipped", "reason": "missing_thread_state", "thread_key": normalized_thread_key}
+            metadata = _safe_json_dict(row["metadata_json"])
+            current = dict(GAME_STATE_DEFAULTS)
+            for key, value in dict(metadata).items():
+                if key in GAME_STATE_DEFAULTS:
+                    current[key] = self._clamp(value, default=GAME_STATE_DEFAULTS[key])
+            for key, value in dict(delta or {}).items():
+                if key in GAME_STATE_DEFAULTS:
+                    current[key] = self._clamp(current.get(key, GAME_STATE_DEFAULTS[key]) + float(value or 0.0), default=GAME_STATE_DEFAULTS[key])
+            for key, value in dict(absolute or {}).items():
+                if key in GAME_STATE_DEFAULTS:
+                    current[key] = self._clamp(value, default=GAME_STATE_DEFAULTS[key])
+            now = utc_now()
+            metadata.update(current)
+            metadata["game_state_updated_at"] = now
+            metadata["last_game_state_note"] = compact_text(note, 160)
+            metadata["last_game_state_source"] = str(source or "runtime")
+            self.conn.execute(
+                """
+                UPDATE mind_thread_state
+                SET metadata_json = ?
+                WHERE channel = ? AND thread_key = ?
+                """,
+                (json.dumps(metadata, ensure_ascii=False, sort_keys=True), channel, normalized_thread_key),
+            )
+            self.conn.commit()
+        state = self.game_state(thread_key=normalized_thread_key, chat_name=chat_name, channel=channel)
+        state["status"] = "ok"
+        state["note"] = note
+        state["source"] = source
+        return state
+
     def recent_dialogue_window(
         self,
         *,
@@ -2128,10 +2478,35 @@ class MindGraph:
             unfinished_threads = _dedupe_strings(list(metadata.get("unfinished_threads", [])) + list(info.get("unfinished", [])))[:4]
             metadata["recurring_motifs"] = recurring_motifs
             metadata["unfinished_threads"] = unfinished_threads
+            tone_tendency = str(metadata.get("tone_tendency", "")).strip()
+            if stream_name == "association_stream" and not tone_tendency:
+                tone_tendency = "playful_teasing"
+            elif stream_name == "social_stream" and tone_tendency not in {"playful_teasing", "wandering_companion"}:
+                tone_tendency = "wandering_companion"
+            elif stream_name == "maintenance_stream" and not tone_tendency:
+                tone_tendency = "continuity_guard"
+            if tone_tendency:
+                metadata["tone_tendency"] = tone_tendency
+            current_game = {
+                key: self._clamp(metadata.get(key, GAME_STATE_DEFAULTS[key]), default=GAME_STATE_DEFAULTS[key])
+                for key in GAME_STATE_DEFAULTS
+            }
+            if stream_name == "association_stream":
+                current_game["teasing_tolerance"] = self._clamp(current_game["teasing_tolerance"] + 0.06, default=GAME_STATE_DEFAULTS["teasing_tolerance"])
+            elif stream_name == "social_stream":
+                current_game["initiative_window"] = self._clamp(current_game["initiative_window"] + 0.08, default=GAME_STATE_DEFAULTS["initiative_window"])
+                current_game["trust_score"] = self._clamp(current_game["trust_score"] + 0.04, default=GAME_STATE_DEFAULTS["trust_score"])
+            elif stream_name == "deep_dream_cycle":
+                current_game["reciprocity_balance"] = self._clamp(current_game["reciprocity_balance"] + 0.03, default=GAME_STATE_DEFAULTS["reciprocity_balance"])
+            for key, value in current_game.items():
+                metadata[key] = value
+            metadata["game_state_updated_at"] = now
             metadata["last_stream_influence"] = {
                 "stream_name": stream_name,
                 "note": note,
                 "updated_at": now,
+                "motifs": recurring_motifs[:3],
+                "unfinished_threads": unfinished_threads[:3],
             }
             self.conn.execute(
                 """
@@ -2176,3 +2551,146 @@ class MindGraph:
                     ).fetchall()
                 ],
             }
+
+    def latest_stream_influence(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        with self._lock:
+            row = None
+            if normalized_thread_key:
+                row = self.conn.execute(
+                    "SELECT metadata_json FROM mind_thread_state WHERE channel = ? AND thread_key = ?",
+                    (channel, normalized_thread_key),
+                ).fetchone()
+        metadata = _safe_json_dict(row["metadata_json"]) if row else {}
+        influence = dict(metadata.get("last_stream_influence", {}))
+        if "motifs" not in influence:
+            influence["motifs"] = list(metadata.get("recurring_motifs", []))[:3]
+        if "unfinished_threads" not in influence:
+            influence["unfinished_threads"] = list(metadata.get("unfinished_threads", []))[:3]
+        return influence
+
+    def list_self_revision_candidates(self, *, limit: int = 16) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    "SELECT * FROM self_revision_candidates ORDER BY id DESC LIMIT ?",
+                    (max(1, int(limit)),),
+                ).fetchall()
+            ]
+        return rows
+
+    def latest_self_revision_state(self) -> dict[str, Any]:
+        with self._lock:
+            applied = self.conn.execute("SELECT * FROM self_revision_applied ORDER BY id DESC LIMIT 1").fetchone()
+            run = self.conn.execute("SELECT * FROM self_revision_runs ORDER BY id DESC LIMIT 1").fetchone()
+        patch = _safe_json_dict(applied["patch_json"]) if applied else {}
+        return {
+            "latest_run_id": int(run["id"]) if run else 0,
+            "latest_status": str(run["status"]) if run else "",
+            "applied": bool(applied),
+            "applied_patch": patch,
+            "applied_at": str(applied["created_at"]) if applied else "",
+            "allowed_fields": sorted(ALLOWED_SELF_REVISION_FIELDS),
+        }
+
+    def add_self_revision_candidate(self, *, evidence: list[dict[str, Any]], prompt_payload: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock:
+            row_id = self.conn.execute(
+                """
+                INSERT INTO self_revision_candidates(evidence_json, prompt_json, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+                    json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            ).lastrowid
+            self.conn.commit()
+        return {"id": int(row_id), "created_at": now}
+
+    def record_self_revision_run(
+        self,
+        *,
+        status: str,
+        evidence: list[dict[str, Any]],
+        observe: dict[str, Any],
+        plan: dict[str, Any],
+        review: dict[str, Any],
+        patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock:
+            row_id = self.conn.execute(
+                """
+                INSERT INTO self_revision_runs(status, evidence_json, observe_json, plan_json, review_json, patch_json, created_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(status or "").strip(),
+                    json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+                    json.dumps(observe, ensure_ascii=False, sort_keys=True),
+                    json.dumps(plan, ensure_ascii=False, sort_keys=True),
+                    json.dumps(review, ensure_ascii=False, sort_keys=True),
+                    json.dumps(patch, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            ).lastrowid
+            self.conn.commit()
+        return {"id": int(row_id), "created_at": now, "status": str(status or "").strip()}
+
+    def apply_self_revision_patch(self, *, run_id: int, patch: dict[str, Any], note: str = "") -> dict[str, Any]:
+        filtered_patch = {key: value for key, value in dict(patch or {}).items() if key in ALLOWED_SELF_REVISION_FIELDS}
+        previous = self.latest_self_revision_state().get("applied_patch", {})
+        now = utc_now()
+        with self._lock:
+            row_id = self.conn.execute(
+                """
+                INSERT INTO self_revision_applied(run_id, status, patch_json, previous_patch_json, note, created_at)
+                VALUES (?, 'applied', ?, ?, ?, ?)
+                """,
+                (
+                    int(run_id or 0),
+                    json.dumps(filtered_patch, ensure_ascii=False, sort_keys=True),
+                    json.dumps(previous, ensure_ascii=False, sort_keys=True),
+                    str(note or ""),
+                    now,
+                ),
+            ).lastrowid
+            self.conn.commit()
+        state = self.latest_self_revision_state()
+        state["row_id"] = int(row_id)
+        state["note"] = note
+        return state
+
+    def rollback_self_revision(self) -> dict[str, Any]:
+        with self._lock:
+            latest = self.conn.execute("SELECT * FROM self_revision_applied ORDER BY id DESC LIMIT 1").fetchone()
+            if latest is None:
+                return {"status": "skipped", "reason": "no_revision_applied"}
+            previous = _safe_json_dict(latest["previous_patch_json"])
+            row_id = self.conn.execute(
+                """
+                INSERT INTO self_revision_applied(run_id, status, patch_json, previous_patch_json, note, created_at)
+                VALUES (?, 'rollback', ?, '{}', 'rollback', ?)
+                """,
+                (
+                    int(latest["run_id"] or 0),
+                    json.dumps(previous, ensure_ascii=False, sort_keys=True),
+                    utc_now(),
+                ),
+            ).lastrowid
+            self.conn.commit()
+        state = self.latest_self_revision_state()
+        state["status"] = "ok"
+        state["row_id"] = int(row_id)
+        return state
