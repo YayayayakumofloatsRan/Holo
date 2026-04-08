@@ -4,12 +4,13 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
 
 ## Read This First
 1. `HOLO_HANDOFF.md`
-2. `HOLO_SYSTEM.md`
-3. `HOLO_DEVELOPMENT.md`
-4. `HOLO_HOST.md`
-5. `OPERATIONS.md`
-6. `holo_memory_library/MEMORY_LIBRARY.md`
-7. `windows_helper/README.md`
+2. `docs/ENGINEERING_HANDOFF_STAGE8.md`
+3. `HOLO_SYSTEM.md`
+4. `HOLO_DEVELOPMENT.md`
+5. `HOLO_HOST.md`
+6. `OPERATIONS.md`
+7. `holo_memory_library/MEMORY_LIBRARY.md`
+8. `windows_helper/README.md`
 
 ## What Holo Is
 - Holo is not one long Codex conversation.
@@ -17,7 +18,7 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `holo-prototype`.
+- The current milestone tag is `stage8-autobiographical-self`.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -40,6 +41,14 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
 - `wcferry` is diagnostic-only here because local `Weixin 4.1.x` is incompatible with installed `wcferry 39.x`
 - WSL is the authoritative kernel
 - Windows helper is only the transport shell
+- Default brain mode is `full_brain`
+- Stage-8 is live:
+  - `autobiographical_state`
+  - `goal_state`
+  - `world_state`
+  - `counterfactual`
+  - `consciousness_ledger`
+- Holo can generate proactive initiative candidates, but current gates are conservative and often block auto-send.
 
 ## Memory Pyramid
 - `canonical`: persona core and non-negotiable boundaries
@@ -109,6 +118,9 @@ These files change while Holo is alive. Do not treat them like static docs.
 - live WeChat trigger behavior still needs real-world hardening
 - image understanding is still artifact-first, not a fully native visual stack
 - latency and fast-path tuning still need work
+- cache reuse is still cold in practice
+- proactive initiative exists but is often blocked by `initiative_probe_blocked`
+- retrieval and expression control still feel more engineered than natural
 
 ## Invariants
 - Do not silently change online transport modes
@@ -116,6 +128,8 @@ These files change while Holo is alive. Do not treat them like static docs.
 - Do not let archive be the only place history lives, but also do not let runtime threads become the only continuity
 - Do not depend on one Codex thread to keep Holo alive
 - Do not forget to keep CLI archive hooks working when editing repo-local hook config
+- Do not treat `autobiographical_state`, `goal_state`, or `world_state` as display-only metadata; they are now part of subject deliberation
+- Do not publish live memory or runtime state to the public repo
 
 ## Minimum Done For Any Holo Change
 - local behavior works
