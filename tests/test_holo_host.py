@@ -92,12 +92,124 @@ class FakeMemory:
     @staticmethod
     def roadmap_registry() -> dict:
         return {
-            "Primary Track": ["intent-led subject runtime"],
-            "Secondary Tracks": ["world model", "autobiographical continuity"],
-            "Parked Hypotheses": ["counterfactual inner simulation"],
-            "Deferred Experiments": ["deeper world modeling"],
+            "Primary Track": ["social world model", "fast and deep counterfactual simulation", "simulation-led action rerank"],
+            "Secondary Tracks": ["autobiographical continuity", "long-horizon goals"],
+            "Parked Hypotheses": ["richer desire shaping", "stronger negotiated will"],
+            "Deferred Experiments": ["open-ended world modeling", "broader multi-agent social world", "deeper imagination beyond current recall"],
             "Constitutional Constraints": ["owner override", "policy boundary"],
         }
+
+    def clear_packet_cache(self) -> None:
+        return None
+
+    def _world_state_for(self, *, thread_key: str, chat_name: str, channel: str) -> dict:
+        normalized_thread = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat = str(chat_name or thread_key or normalized_thread).strip() or normalized_thread
+        return {
+            "contact_models": {
+                normalized_chat: {
+                    "reply_likelihood": 0.74,
+                    "delay_tolerance": 0.63,
+                    "teasing_receptivity": 0.61,
+                    "correction_receptivity": 0.72,
+                    "continuity_sensitivity": 0.83,
+                    "initiative_receptivity": 0.67,
+                    "conflict_fragility": 0.29,
+                    "attention_value": 0.88,
+                }
+            },
+            "thread_models": {
+                normalized_thread: {
+                    "reply_fit": 0.72,
+                    "defer_fit": 0.41,
+                    "silence_fit": 0.18,
+                    "ping_fit": 0.58,
+                    "push_back_fit": 0.43,
+                    "risk_level": 0.24,
+                    "opportunity_level": 0.78,
+                    "unfinished_pull": 0.66,
+                }
+            },
+            "active_commitments": [
+                {
+                    "thread_key": normalized_thread,
+                    "chat_name": normalized_chat,
+                    "channel": channel,
+                    "commitment": "keep continuity alive without going stiff",
+                }
+            ],
+            "opportunity_windows": [{"thread_key": normalized_thread, "opportunity_level": 0.78}],
+            "risk_windows": [{"thread_key": normalized_thread, "risk_level": 0.24}],
+            "response_expectations": {
+                "best_case": "a short warm reply lands well",
+                "worst_case": "overexplaining turns the tone heavy",
+                "most_likely": "brief contact keeps the line alive",
+            },
+            "last_counterfactual_summary": {"preferred_action": "reply_once", "confidence": 0.74},
+            "last_post_outcome_calibration": {"future_bias": 0.09, "updated_from": "fake"},
+        }
+
+    def _counterfactual_set(self, *, action_market: list[dict], thread_key: str, chat_name: str, channel: str) -> list[dict]:
+        world_state = self._world_state_for(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        contact_model = next(iter(world_state["contact_models"].values()))
+        thread_model = next(iter(world_state["thread_models"].values()))
+        simulations: list[dict] = []
+        for item in list(action_market)[:3]:
+            action_type = str(item.get("action_type", "")).strip()
+            predicted_response_quality = 0.62
+            predicted_risk = 0.28
+            predicted_regret = 0.21
+            recommended_bias = 0.0
+            if action_type == "silence":
+                predicted_response_quality = 0.18
+                predicted_risk = 0.12
+                predicted_regret = 0.56
+                recommended_bias = -0.08
+            elif action_type == "defer_reply":
+                predicted_response_quality = 0.44
+                predicted_risk = 0.16
+                predicted_regret = 0.22
+                recommended_bias = 0.04
+            elif action_type == "reply_once":
+                predicted_response_quality = 0.79
+                predicted_risk = 0.18
+                predicted_regret = 0.11
+                recommended_bias = 0.18
+            elif action_type == "reply_multi":
+                predicted_response_quality = 0.61
+                predicted_risk = 0.37
+                predicted_regret = 0.41
+                recommended_bias = -0.12
+            elif action_type == "external_lookup":
+                predicted_response_quality = 0.73
+                predicted_risk = 0.14
+                predicted_regret = 0.09
+                recommended_bias = 0.15
+            elif action_type == "history_refresh":
+                predicted_response_quality = 0.68
+                predicted_risk = 0.12
+                predicted_regret = 0.13
+                recommended_bias = 0.12
+            elif action_type == "push_back":
+                predicted_response_quality = 0.58
+                predicted_risk = 0.33
+                predicted_regret = 0.26
+                recommended_bias = -0.03
+            simulations.append(
+                {
+                    "action_type": action_type,
+                    "predicted_relational_delta": round(predicted_response_quality - predicted_risk, 3),
+                    "predicted_identity_delta": round(0.52 - predicted_regret * 0.5, 3),
+                    "predicted_response_quality": predicted_response_quality,
+                    "predicted_risk": predicted_risk,
+                    "predicted_regret": predicted_regret,
+                    "confidence": round((contact_model["reply_likelihood"] + thread_model["reply_fit"]) / 2.0, 3),
+                    "recommended_bias": recommended_bias,
+                    "world_rationale": "social world model favors lighter, continuity-safe moves",
+                    "simulation_rationale": f"{action_type} was compared against thread risk/opportunity before speaking",
+                }
+            )
+        return simulations
 
     def _derive_stage5_selection(self, query: str, *, channel: str, thread_key: str, chat_name: str) -> dict:
         normalized_query = str(query or "").strip()
@@ -119,7 +231,7 @@ class FakeMemory:
             query_focus = "memory"
             reply_pull = 0.78
             expansion_pressure = 0.72
-        elif "顺着" in str(query or "") or "继续" in str(query or "") or "carry on" in lowered or "continue" in lowered:
+        elif "顺着" in str(query or "") or "继续" in str(query or "") or "接着" in str(query or "") or "carry on" in lowered or "continue" in lowered:
             tier = "recall"
             query_focus = "continuity"
             reply_pull = 0.74
@@ -312,10 +424,27 @@ class FakeMemory:
         chat_name = str(context.get("chat_name", "") or thread_key or "Nemoqi")
         channel = str(context.get("channel", "wechat") or "wechat")
         stage5 = self._derive_stage6_selection(query, channel=channel, thread_key=thread_key, chat_name=chat_name)
+        world_state = self._world_state_for(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        counterfactual_set = self._counterfactual_set(
+            action_market=stage5["action_market"],
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+        )
+        counterfactual_by_action = {str(item.get("action_type", "")): dict(item) for item in counterfactual_set}
+        selected_prediction = dict(counterfactual_by_action.get(str(stage5["selected_action"].get("action_type", "")), counterfactual_set[0] if counterfactual_set else {}))
+        predicted_best_outcome = dict(max(counterfactual_set, key=lambda item: float(item.get("predicted_response_quality", 0.0) or 0.0), default={}))
+        predicted_worst_outcome = dict(max(counterfactual_set, key=lambda item: float(item.get("predicted_regret", 0.0) or 0.0), default={}))
+        counterfactual_summary = {
+            "candidate_count": len(counterfactual_set),
+            "best_action": str(predicted_best_outcome.get("action_type", "")),
+            "selected_action": str(stage5["selected_action"].get("action_type", "")),
+            "selected_confidence": float(selected_prediction.get("confidence", 0.0) or 0.0),
+        }
         return {
             "addendum": f"隐式约束：{query}",
             "tier": stage5["intent_state"]["tier"],
-            "mind_packet_version": "v9",
+            "mind_packet_version": "v10",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
@@ -407,6 +536,12 @@ class FakeMemory:
             "retrieval_trace": {},
             "memory_route": "hybrid",
             "recall_confidence": 0.0,
+            "world_state": world_state,
+            "counterfactual_summary": counterfactual_summary,
+            "predicted_best_outcome": predicted_best_outcome,
+            "predicted_worst_outcome": predicted_worst_outcome,
+            "uncertainty_level": 0.28,
+            "selected_prediction": selected_prediction,
             "intent_state": dict(stage5["intent_state"]),
             "action_market": list(stage5["action_market"]),
             "selected_action": dict(stage5["selected_action"]),
@@ -418,6 +553,31 @@ class FakeMemory:
             "intent_state_v2": dict(stage5["intent_state"]),
             "action_market_v2": list(stage5["action_market"]),
             "expression_budget_v2": int(stage5["expression_budget"]),
+            "intent_state_v3": {
+                **dict(stage5["intent_state"]),
+                "world_state": world_state,
+                "counterfactual_summary": counterfactual_summary,
+                "predicted_best_outcome": predicted_best_outcome,
+                "predicted_worst_outcome": predicted_worst_outcome,
+                "uncertainty_level": 0.28,
+            },
+            "action_market_v3": [
+                {
+                    **dict(item),
+                    "world_rationale": dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})).get(
+                        "world_rationale",
+                        "social world model has no extra preference",
+                    ),
+                    "simulation_rationale": dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})).get(
+                        "simulation_rationale",
+                        "no simulation rerank applied",
+                    ),
+                    "predicted_outcome": dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})),
+                    "rerank_delta": float(dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})).get("recommended_bias", 0.0) or 0.0),
+                }
+                for item in stage5["action_market"]
+            ],
+            "expression_budget_v3": int(stage5["expression_budget"]),
             "deliberation_trace_id": f"fake-deliberation-{len(self.sidecar_requests)}",
             "reply_constraints": {
                 "lines": ["先直接回应，再自然延伸。"],
@@ -430,6 +590,8 @@ class FakeMemory:
                 "intent_state": dict(stage5["intent_state"]),
                 "selected_action": dict(stage5["selected_action"]),
                 "expression_budget": int(stage5["expression_budget"]),
+                "world_state": world_state,
+                "counterfactual_summary": counterfactual_summary,
             },
         }
 
@@ -609,6 +771,43 @@ class FakeMemory:
         payload["initiative_market"] = self.list_initiative_market(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=8)
         return payload
 
+    def world_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
+        return self._world_state_for(thread_key=str(thread_key or chat_name or "Nemoqi"), chat_name=str(chat_name or thread_key or "Nemoqi"), channel=channel)
+
+    def trace_counterfactual(self, *, query: str, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 3) -> dict:
+        packet = self.sidecar_packet(query, context={"thread_key": thread_key, "chat_name": chat_name, "channel": channel})
+        counterfactual_set = list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[: max(1, int(limit))]
+        selected_action = dict(packet.get("selected_action", {}))
+        return {
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "query": query,
+            "world_state": dict(packet.get("world_state", {})),
+            "counterfactual_set": counterfactual_set,
+            "selected_action": selected_action,
+            "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
+            "predicted_best_outcome": dict(packet.get("predicted_best_outcome", {})),
+            "predicted_worst_outcome": dict(packet.get("predicted_worst_outcome", {})),
+            "selected_prediction": dict(packet.get("selected_prediction", {})),
+            "uncertainty_level": float(packet.get("uncertainty_level", 0.0) or 0.0),
+            "lookup_reason": str(packet.get("lookup_reason", "")),
+            "defer_reason": str(packet.get("defer_reason", "")),
+            "silence_reason": str(packet.get("silence_reason", "")),
+            "action_rationale": str(packet.get("action_rationale", "")),
+        }
+
+    def trace_world_calibration(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
+        world_state = self.world_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        return {
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "world_snapshot": dict(world_state),
+            "last_counterfactual_summary": dict(world_state.get("last_counterfactual_summary", {})),
+            "last_post_outcome_calibration": dict(world_state.get("last_post_outcome_calibration", {})),
+        }
+
     def operator_status(self) -> dict:
         return dict(self.sidecar_packet("", context={}).get("operator_state", {}))
 
@@ -662,6 +861,7 @@ class FakeMemory:
                 {"loop_name": "drive_arbitration"},
                 {"loop_name": "initiative_marketplace"},
                 {"loop_name": "outcome_appraisal"},
+                {"loop_name": "deep_simulation"},
             ],
         }
 
@@ -904,6 +1104,7 @@ class FakeMemory:
             "conflict_state": dict(packet.get("conflict_state", {})),
             "resistance_posture": dict(packet.get("resistance_posture", {})),
             "outcome_memory": dict(packet.get("outcome_memory", {})),
+            "world_state": dict(packet.get("world_state", {})),
         }
 
     def intent_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict:
@@ -915,9 +1116,16 @@ class FakeMemory:
             "query": query,
             "intent_state": dict(packet.get("intent_state", {})),
             "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
+            "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
+            "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0))) or 0),
+            "world_state": dict(packet.get("world_state", {})),
+            "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
+            "predicted_best_outcome": dict(packet.get("predicted_best_outcome", {})),
+            "predicted_worst_outcome": dict(packet.get("predicted_worst_outcome", {})),
+            "uncertainty_level": float(packet.get("uncertainty_level", 0.0) or 0.0),
         }
 
     def action_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "", limit: int = 8) -> dict:
@@ -929,9 +1137,13 @@ class FakeMemory:
             "query": query,
             "action_market": list(packet.get("action_market", []))[:limit],
             "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[:limit],
+            "action_market_v3": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[:limit],
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
+            "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0))) or 0),
+            "world_state": dict(packet.get("world_state", {})),
+            "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
             "roadmap_registry": self.roadmap_registry(),
         }
 
@@ -944,11 +1156,14 @@ class FakeMemory:
             "query": query,
             "intent_state": dict(packet.get("intent_state", {})),
             "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
+            "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
             "action_market": list(packet.get("action_market", []))[:limit],
             "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[:limit],
+            "action_market_v3": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[:limit],
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
+            "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0))) or 0),
             "silence_reason": str(packet.get("silence_reason", "")),
             "defer_reason": str(packet.get("defer_reason", "")),
             "lookup_reason": str(packet.get("lookup_reason", "")),
@@ -960,6 +1175,13 @@ class FakeMemory:
             "conflict_state": dict(packet.get("conflict_state", {})),
             "game_state": dict(packet.get("game_state", {})),
             "self_model": dict(packet.get("self_model", {})),
+            "world_state": dict(packet.get("world_state", {})),
+            "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
+            "predicted_best_outcome": dict(packet.get("predicted_best_outcome", {})),
+            "predicted_worst_outcome": dict(packet.get("predicted_worst_outcome", {})),
+            "selected_prediction": dict(packet.get("selected_prediction", {})),
+            "uncertainty_level": float(packet.get("uncertainty_level", 0.0) or 0.0),
+            "counterfactual_set": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[: min(limit, 3)],
             "roadmap_registry": self.roadmap_registry(),
         }
 
@@ -981,6 +1203,7 @@ class FakeMemory:
         silence_reason: str = "",
         defer_reason: str = "",
         action_rationale: str = "",
+        world_state: dict | None = None,
     ) -> dict:
         payload = {
             "channel": channel,
@@ -995,6 +1218,7 @@ class FakeMemory:
             "silence_reason": str(silence_reason),
             "defer_reason": str(defer_reason),
             "action_rationale": str(action_rationale),
+            "world_state": dict(world_state or self._world_state_for(thread_key=thread_key, chat_name=chat_name, channel=channel)),
         }
         self.action_selections.append(payload)
         return {"status": "ok", **payload}
@@ -2344,6 +2568,44 @@ wechat_helper_config_path = ""
                 )
                 self.assertEqual(report["status"], "pass")
                 self.assertEqual(report["stage"], "deliberative-subject-core-stage6")
+            finally:
+                close_service_handles(service)
+
+    def test_trace_counterfactual_exposes_stage7_world_and_prediction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                payload = service.trace_counterfactual(
+                    query="search transcendence movie johnny depp",
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    channel="wechat",
+                    limit=3,
+                )
+                self.assertEqual(payload["selected_action"]["action_type"], "external_lookup")
+                self.assertTrue(payload["world_state"]["contact_models"])
+                self.assertTrue(payload["counterfactual_set"])
+                self.assertTrue(payload["predicted_best_outcome"])
+            finally:
+                close_service_handles(service)
+
+    def test_accept_stage7_passes_with_fake_world_model_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                report = service.accept_stage7(
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    channel="wechat",
+                    iterations=1,
+                    warmup=1,
+                )
+                self.assertEqual(report["status"], "pass")
+                self.assertEqual(report["stage"], "social-world-model-stage7")
             finally:
                 close_service_handles(service)
 

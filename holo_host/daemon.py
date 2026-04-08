@@ -291,6 +291,7 @@ class HoloDaemon:
             "drive_arbitration": {"interval_seconds": max(45, int(self.config.memory.drive_arbitration_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "initiative_marketplace": {"interval_seconds": max(60, int(self.config.memory.initiative_marketplace_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "outcome_appraisal": {"interval_seconds": max(90, int(self.config.memory.outcome_appraisal_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "deep_simulation": {"interval_seconds": 420, "enabled_modes": {"companion", "full_brain"}},
             "operator_planning": {"interval_seconds": max(120, int(self.config.memory.operator_planning_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "operator_shadow_cycle": {"interval_seconds": max(90, int(self.config.memory.operator_shadow_cycle_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "visual_ingest_cycle": {"interval_seconds": max(15, int(self.config.memory.visual_ingest_cycle_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
@@ -303,6 +304,7 @@ class HoloDaemon:
             definitions["drive_arbitration"]["interval_seconds"] = max(30, int(definitions["drive_arbitration"]["interval_seconds"] * 0.75))
             definitions["initiative_marketplace"]["interval_seconds"] = max(45, int(definitions["initiative_marketplace"]["interval_seconds"] * 0.75))
             definitions["outcome_appraisal"]["interval_seconds"] = max(60, int(definitions["outcome_appraisal"]["interval_seconds"] * 0.75))
+            definitions["deep_simulation"]["interval_seconds"] = max(180, int(definitions["deep_simulation"]["interval_seconds"] * 0.75))
             definitions["operator_planning"]["interval_seconds"] = max(90, int(definitions["operator_planning"]["interval_seconds"] * 0.75))
             definitions["operator_shadow_cycle"]["interval_seconds"] = max(60, int(definitions["operator_shadow_cycle"]["interval_seconds"] * 0.75))
         return definitions
@@ -423,6 +425,7 @@ class HoloDaemon:
         drive_arbitration = self._run_loop("drive_arbitration", mode=mode, runner=self._run_drive_arbitration)
         initiative_marketplace = self._run_loop("initiative_marketplace", mode=mode, runner=self._run_initiative_marketplace)
         outcome_appraisal = self._run_loop("outcome_appraisal", mode=mode, runner=self._run_outcome_appraisal)
+        deep_simulation = self._run_loop("deep_simulation", mode=mode, runner=self._run_deep_simulation)
         operator_plan = self._run_loop("operator_planning", mode=mode, runner=self._run_operator_planning_cycle)
         operator_shadow = self._run_loop("operator_shadow_cycle", mode=mode, runner=self._run_operator_shadow_cycle)
         visual_ingest = self._run_loop("visual_ingest_cycle", mode=mode, runner=self._run_visual_ingest_cycle)
@@ -444,6 +447,7 @@ class HoloDaemon:
             "drive_arbitration": drive_arbitration,
             "initiative_marketplace": initiative_marketplace,
             "outcome_appraisal": outcome_appraisal,
+            "deep_simulation": deep_simulation,
             "operator_planning": operator_plan,
             "operator_shadow_cycle": operator_shadow,
             "visual_ingest_cycle": visual_ingest,
@@ -1225,6 +1229,55 @@ class HoloDaemon:
         if not appraised:
             return {"status": "blocked", "blocked_reason": "no_pending_outcome"}
         return {"status": "ok", "appraised": len(appraised), "items": appraised[:3]}
+
+    def _run_deep_simulation(self) -> dict[str, Any]:
+        simulated: list[dict[str, Any]] = []
+        for item in self.memory.graph.top_thread_commitments(limit=4):
+            channel = str(item.get("channel", "") or "").strip() or "wechat"
+            thread_key = str(item.get("thread_key", "") or "").strip()
+            chat_name = str(item.get("chat_name", "") or thread_key).strip() or thread_key
+            if not thread_key:
+                continue
+            prompt = "how about now"
+            unfinished = [str(line).strip() for line in item.get("unfinished_threads", []) if str(line).strip()]
+            if unfinished:
+                prompt = unfinished[0]
+            trace = self.memory.trace_counterfactual(
+                query=prompt,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=3,
+            )
+            summary = {
+                "query": prompt,
+                "selected_action": dict(trace.get("selected_action", {})),
+                "selected_prediction": dict(trace.get("selected_prediction", {})),
+                "counterfactual_summary": dict(trace.get("counterfactual_summary", {})),
+                "at": utc_now(),
+            }
+            current_world = dict(self.memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel).get("world_state", {}))
+            current_world["last_counterfactual_summary"] = summary
+            self.memory.graph.update_subject_state(
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                world_state=current_world,
+                metadata={"deep_simulation_at": summary["at"]},
+                note="deep_simulation",
+                source="daemon",
+            )
+            simulated.append(
+                {
+                    "thread_key": thread_key,
+                    "chat_name": chat_name,
+                    "query": prompt,
+                    "selected_action": dict(trace.get("selected_action", {})).get("action_type", ""),
+                }
+            )
+        if not simulated:
+            return {"status": "blocked", "blocked_reason": "no_threads_for_simulation"}
+        return {"status": "ok", "simulated_threads": len(simulated), "items": simulated[:3]}
 
     def _run_operator_planning_cycle(self) -> dict[str, Any]:
         pending = self.memory.graph.pending_operator_run()

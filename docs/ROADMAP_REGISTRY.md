@@ -3,24 +3,22 @@
 This registry exists so Holo planning does not collapse into a single forced choice every stage.
 
 ## Primary Track
-- intent-led subject runtime
-- subject-first action selection
-- silence and defer as first-class acts
+- social world model
+- fast and deep counterfactual simulation
+- simulation-led action rerank
 
 ## Secondary Tracks
-- world model thickening
 - autobiographical continuity
-- counterfactual inner simulation
+- long-horizon goals
 
 ## Parked Hypotheses
-- deeper subjective reporting layers
-- richer non-linguistic affect modeling
-- broader multi-contact social dynamics
+- richer desire shaping
+- stronger negotiated will
 
 ## Deferred Experiments
 - open-ended world modeling
-- stronger shadow simulation before operator action
-- deeper synthetic dream compression
+- broader multi-agent social world
+- deeper imagination beyond current recall
 
 ## Constitutional Constraints
 - owner stop/offline always wins

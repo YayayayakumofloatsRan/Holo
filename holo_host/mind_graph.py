@@ -115,6 +115,26 @@ RESISTANCE_POSTURE_DEFAULTS = {
     "continuity_defense": 0.22,
     "interactional_resistance": 0.16,
 }
+WORLD_CONTACT_MODEL_DEFAULTS = {
+    "reply_likelihood": 0.56,
+    "delay_tolerance": 0.44,
+    "teasing_receptivity": 0.5,
+    "correction_receptivity": 0.42,
+    "continuity_sensitivity": 0.58,
+    "initiative_receptivity": 0.46,
+    "conflict_fragility": 0.34,
+    "attention_value": 0.6,
+}
+WORLD_THREAD_MODEL_DEFAULTS = {
+    "reply_fit": 0.58,
+    "defer_fit": 0.22,
+    "silence_fit": 0.18,
+    "ping_fit": 0.32,
+    "push_back_fit": 0.24,
+    "risk_level": 0.22,
+    "opportunity_level": 0.42,
+    "unfinished_pull": 0.34,
+}
 BRAIN_LOOP_DEFAULTS = {
     "heartbeat": {"interval_seconds": 1, "description": "runtime heartbeat"},
     "attention_tick": {"interval_seconds": 3, "description": "attention routing"},
@@ -132,6 +152,7 @@ BRAIN_LOOP_DEFAULTS = {
     "operator_planning": {"interval_seconds": 420, "description": "bounded operator planning"},
     "operator_shadow_cycle": {"interval_seconds": 300, "description": "shadow execution review"},
     "visual_ingest_cycle": {"interval_seconds": 45, "description": "async visual ingest"},
+    "deep_simulation": {"interval_seconds": 420, "description": "async social counterfactual replay"},
 }
 ALLOWED_SELF_REVISION_FIELDS = {
     "persona_blend",
@@ -658,6 +679,7 @@ class MindGraph:
                 drive_json TEXT NOT NULL DEFAULT '{}',
                 value_json TEXT NOT NULL DEFAULT '{}',
                 conflict_json TEXT NOT NULL DEFAULT '{}',
+                world_json TEXT NOT NULL DEFAULT '{}',
                 resistance_json TEXT NOT NULL DEFAULT '{}',
                 initiative_json TEXT NOT NULL DEFAULT '{}',
                 outcome_json TEXT NOT NULL DEFAULT '{}',
@@ -717,6 +739,12 @@ class MindGraph:
             CREATE INDEX IF NOT EXISTS idx_consciousness_ledger_thread ON consciousness_ledger(channel, thread_key, created_at DESC);
                 """
             )
+            subject_columns = {
+                str(row["name"] or "")
+                for row in self.conn.execute("PRAGMA table_info(subject_state)").fetchall()
+            }
+            if "world_json" not in subject_columns:
+                self.conn.execute("ALTER TABLE subject_state ADD COLUMN world_json TEXT NOT NULL DEFAULT '{}'")
             for stream_name, payload in self.stream_cadences.items():
                 self.conn.execute(
                     """
@@ -2551,11 +2579,56 @@ class MindGraph:
             "derived_from": "relationship+self_model+game",
             "unfinished_threads": unfinished[:3],
         }
+        contact_model = {
+            "reply_likelihood": self._clamp(0.22 + trust * 0.34 + closeness * 0.16, default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]),
+            "delay_tolerance": self._clamp(0.16 + pressure * 0.28 + max(0.0, 1.0 - continuity) * 0.12, default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]),
+            "teasing_receptivity": self._clamp(0.18 + teasing * 0.42, default=WORLD_CONTACT_MODEL_DEFAULTS["teasing_receptivity"]),
+            "correction_receptivity": self._clamp(0.14 + float(game.get("correction_sensitivity", 0.0) or 0.0) * 0.46, default=WORLD_CONTACT_MODEL_DEFAULTS["correction_receptivity"]),
+            "continuity_sensitivity": self._clamp(0.22 + continuity * 0.44 + float(bool(unfinished)) * 0.08, default=WORLD_CONTACT_MODEL_DEFAULTS["continuity_sensitivity"]),
+            "initiative_receptivity": self._clamp(0.18 + initiative_window * 0.42 + trust * 0.08, default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
+            "conflict_fragility": self._clamp(0.12 + pressure * 0.34 + max(0.0, 0.6 - trust) * 0.18, default=WORLD_CONTACT_MODEL_DEFAULTS["conflict_fragility"]),
+            "attention_value": self._clamp(0.24 + closeness * 0.34 + continuity * 0.18, default=WORLD_CONTACT_MODEL_DEFAULTS["attention_value"]),
+        }
+        thread_model = {
+            "reply_fit": self._clamp(contact_model["reply_likelihood"] * 0.72 + initiative["pressure"] * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["reply_fit"]),
+            "defer_fit": self._clamp(0.12 + pressure * 0.22 + drive["avoid_risk"] * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["defer_fit"]),
+            "silence_fit": self._clamp(0.08 + drive["avoid_risk"] * 0.14, default=WORLD_THREAD_MODEL_DEFAULTS["silence_fit"]),
+            "ping_fit": self._clamp(0.1 + initiative["pressure"] * 0.28 + contact_model["initiative_receptivity"] * 0.16, default=WORLD_THREAD_MODEL_DEFAULTS["ping_fit"]),
+            "push_back_fit": self._clamp(0.1 + resistance["interactional_resistance"] * 0.32, default=WORLD_THREAD_MODEL_DEFAULTS["push_back_fit"]),
+            "risk_level": self._clamp(0.1 + pressure * 0.3 + contact_model["conflict_fragility"] * 0.18, default=WORLD_THREAD_MODEL_DEFAULTS["risk_level"]),
+            "opportunity_level": self._clamp(0.14 + contact_model["reply_likelihood"] * 0.26 + contact_model["attention_value"] * 0.18, default=WORLD_THREAD_MODEL_DEFAULTS["opportunity_level"]),
+            "unfinished_pull": self._clamp(0.1 + float(bool(unfinished)) * 0.42 + continuity * 0.16, default=WORLD_THREAD_MODEL_DEFAULTS["unfinished_pull"]),
+        }
+        world = {
+            "contact_models": {str(chat_name or thread_key or ""): contact_model},
+            "thread_models": {str(thread_key or ""): thread_model},
+            "active_commitments": unfinished[:3],
+            "opportunity_windows": [
+                {
+                    "label": "initiative_window",
+                    "score": round(float(contact_model["initiative_receptivity"]), 4),
+                }
+            ],
+            "risk_windows": [
+                {
+                    "label": "conflict_fragility",
+                    "score": round(float(contact_model["conflict_fragility"]), 4),
+                }
+            ],
+            "response_expectations": {
+                "reply_likelihood": round(float(contact_model["reply_likelihood"]), 4),
+                "delay_tolerance": round(float(contact_model["delay_tolerance"]), 4),
+                "attention_value": round(float(contact_model["attention_value"]), 4),
+            },
+            "last_counterfactual_summary": {},
+            "last_post_outcome_calibration": {},
+        }
         return {
             "affect_state": affect,
             "drive_state": drive,
             "value_state": value,
             "conflict_state": conflict,
+            "world_state": world,
             "resistance_posture": resistance,
             "initiative_state": initiative,
             "outcome_memory": outcome,
@@ -2585,9 +2658,9 @@ class MindGraph:
                 self.conn.execute(
                     """
                     INSERT INTO subject_state(
-                        channel, thread_key, chat_name, affect_json, drive_json, value_json, conflict_json,
+                        channel, thread_key, chat_name, affect_json, drive_json, value_json, conflict_json, world_json,
                         resistance_json, initiative_json, outcome_json, metadata_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         channel,
@@ -2597,6 +2670,7 @@ class MindGraph:
                         json.dumps(defaults["drive_state"], ensure_ascii=False, sort_keys=True),
                         json.dumps(defaults["value_state"], ensure_ascii=False, sort_keys=True),
                         json.dumps(defaults["conflict_state"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["world_state"], ensure_ascii=False, sort_keys=True),
                         json.dumps(defaults["resistance_posture"], ensure_ascii=False, sort_keys=True),
                         json.dumps(defaults["initiative_state"], ensure_ascii=False, sort_keys=True),
                         json.dumps(defaults["outcome_memory"], ensure_ascii=False, sort_keys=True),
@@ -2611,7 +2685,7 @@ class MindGraph:
                     (channel, normalized_thread_key),
                 ).fetchone()
         payload = dict(row) if row else {}
-        return {
+        state = {
             "channel": channel,
             "thread_key": normalized_thread_key,
             "chat_name": str(payload.get("chat_name", chat_name or normalized_thread_key) or chat_name or normalized_thread_key),
@@ -2619,6 +2693,7 @@ class MindGraph:
             "drive_state": dict(_safe_json_dict(payload.get("drive_json", "{}"))),
             "value_state": dict(_safe_json_dict(payload.get("value_json", "{}"))),
             "conflict_state": dict(_safe_json_dict(payload.get("conflict_json", "{}"))),
+            "world_state": dict(_safe_json_dict(payload.get("world_json", "{}"))),
             "resistance_posture": dict(_safe_json_dict(payload.get("resistance_json", "{}"))),
             "initiative_state": dict(_safe_json_dict(payload.get("initiative_json", "{}"))),
             "outcome_memory": dict(_safe_json_dict(payload.get("outcome_json", "{}"))),
@@ -2626,6 +2701,52 @@ class MindGraph:
             "created_at": str(payload.get("created_at", "") or ""),
             "updated_at": str(payload.get("updated_at", "") or ""),
         }
+        current_world = dict(state.get("world_state", {}))
+        world_is_sparse = not current_world or not all(
+            key in current_world
+            for key in ("contact_models", "thread_models", "response_expectations")
+        )
+        if world_is_sparse:
+            defaults = self._subject_defaults(
+                channel=channel,
+                thread_key=normalized_thread_key,
+                chat_name=str(state.get("chat_name", chat_name or normalized_thread_key) or normalized_thread_key),
+            )
+            default_world = dict(defaults.get("world_state", {}))
+            hydrated_world = {**default_world, **current_world}
+            if not hydrated_world.get("contact_models"):
+                hydrated_world["contact_models"] = dict(default_world.get("contact_models", {}))
+            if not hydrated_world.get("thread_models"):
+                hydrated_world["thread_models"] = dict(default_world.get("thread_models", {}))
+            if not hydrated_world.get("response_expectations"):
+                hydrated_world["response_expectations"] = dict(default_world.get("response_expectations", {}))
+            if not hydrated_world.get("active_commitments"):
+                hydrated_world["active_commitments"] = list(default_world.get("active_commitments", []))
+            if not hydrated_world.get("opportunity_windows"):
+                hydrated_world["opportunity_windows"] = list(default_world.get("opportunity_windows", []))
+            if not hydrated_world.get("risk_windows"):
+                hydrated_world["risk_windows"] = list(default_world.get("risk_windows", []))
+            if not hydrated_world.get("last_counterfactual_summary"):
+                hydrated_world["last_counterfactual_summary"] = dict(default_world.get("last_counterfactual_summary", {}))
+            if not hydrated_world.get("last_post_outcome_calibration"):
+                hydrated_world["last_post_outcome_calibration"] = dict(default_world.get("last_post_outcome_calibration", {}))
+            with self._lock:
+                self.conn.execute(
+                    """
+                    UPDATE subject_state
+                    SET world_json = ?, updated_at = ?
+                    WHERE channel = ? AND thread_key = ?
+                    """,
+                    (
+                        json.dumps(hydrated_world, ensure_ascii=False, sort_keys=True),
+                        utc_now(),
+                        channel,
+                        normalized_thread_key,
+                    ),
+                )
+                self.conn.commit()
+            state["world_state"] = hydrated_world
+        return state
 
     def update_subject_state(
         self,
@@ -2637,6 +2758,7 @@ class MindGraph:
         drive_state: dict[str, Any] | None = None,
         value_state: dict[str, Any] | None = None,
         conflict_state: dict[str, Any] | None = None,
+        world_state: dict[str, Any] | None = None,
         resistance_posture: dict[str, Any] | None = None,
         initiative_state: dict[str, Any] | None = None,
         outcome_memory: dict[str, Any] | None = None,
@@ -2665,6 +2787,8 @@ class MindGraph:
         next_drive = _merge_numeric(dict(current.get("drive_state", {})), drive_state, DRIVE_STATE_DEFAULTS)
         next_value = _merge_numeric(dict(current.get("value_state", {})), value_state, VALUE_STATE_DEFAULTS)
         next_conflict = _merge_numeric(dict(current.get("conflict_state", {})), conflict_state, CONFLICT_STATE_DEFAULTS)
+        next_world = dict(current.get("world_state", {}))
+        next_world.update(dict(world_state or {}))
         next_resistance = dict(current.get("resistance_posture", {}))
         next_resistance.update(dict(resistance_posture or {}))
         next_resistance["strength"] = self._clamp(next_resistance.get("strength", RESISTANCE_POSTURE_DEFAULTS["strength"]), default=RESISTANCE_POSTURE_DEFAULTS["strength"])
@@ -2692,15 +2816,16 @@ class MindGraph:
             self.conn.execute(
                 """
                 INSERT INTO subject_state(
-                    channel, thread_key, chat_name, affect_json, drive_json, value_json, conflict_json,
+                    channel, thread_key, chat_name, affect_json, drive_json, value_json, conflict_json, world_json,
                     resistance_json, initiative_json, outcome_json, metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(channel, thread_key) DO UPDATE SET
                     chat_name = excluded.chat_name,
                     affect_json = excluded.affect_json,
                     drive_json = excluded.drive_json,
                     value_json = excluded.value_json,
                     conflict_json = excluded.conflict_json,
+                    world_json = excluded.world_json,
                     resistance_json = excluded.resistance_json,
                     initiative_json = excluded.initiative_json,
                     outcome_json = excluded.outcome_json,
@@ -2715,6 +2840,7 @@ class MindGraph:
                     json.dumps(next_drive, ensure_ascii=False, sort_keys=True),
                     json.dumps(next_value, ensure_ascii=False, sort_keys=True),
                     json.dumps(next_conflict, ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_world, ensure_ascii=False, sort_keys=True),
                     json.dumps(next_resistance, ensure_ascii=False, sort_keys=True),
                     json.dumps(next_initiative, ensure_ascii=False, sort_keys=True),
                     json.dumps(next_outcome, ensure_ascii=False, sort_keys=True),
@@ -2926,6 +3052,12 @@ class MindGraph:
         current = self.subject_state(thread_key=normalized_thread_key, chat_name=chat_name, channel=channel)
         affect = dict(current.get("affect_state", {}))
         drive = dict(current.get("drive_state", {}))
+        world = dict(current.get("world_state", {}))
+        contact_models = dict(world.get("contact_models", {}))
+        thread_models = dict(world.get("thread_models", {}))
+        contact_key = str(chat_name or normalized_thread_key)
+        contact_model = dict(contact_models.get(contact_key, WORLD_CONTACT_MODEL_DEFAULTS))
+        thread_model = dict(thread_models.get(normalized_thread_key, WORLD_THREAD_MODEL_DEFAULTS))
         outcome = {
             "was_rewarding": self._clamp(was_rewarding, default=0.0),
             "was_ignored": self._clamp(was_ignored, default=0.0),
@@ -2941,6 +3073,29 @@ class MindGraph:
         drive["protect_identity"] = self._clamp(drive.get("protect_identity", 0.0) + max(0.0, float(future_resistance_bias or 0.0)) * 0.12, default=DRIVE_STATE_DEFAULTS["protect_identity"])
         affect["frustration"] = self._clamp(affect.get("frustration", 0.0) + float(was_ignored or 0.0) * 0.22 - float(was_rewarding or 0.0) * 0.14, default=AFFECT_STATE_DEFAULTS["frustration"])
         affect["attachment_pull"] = self._clamp(affect.get("attachment_pull", 0.0) + max(0.0, float(relational_delta or 0.0)) * 0.18, default=AFFECT_STATE_DEFAULTS["attachment_pull"])
+        contact_model["reply_likelihood"] = self._clamp(contact_model.get("reply_likelihood", 0.0) + float(relational_delta or 0.0) * 0.12 - float(was_ignored or 0.0) * 0.08, default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"])
+        contact_model["delay_tolerance"] = self._clamp(contact_model.get("delay_tolerance", 0.0) + float(was_ignored or 0.0) * 0.06, default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"])
+        contact_model["initiative_receptivity"] = self._clamp(contact_model.get("initiative_receptivity", 0.0) + float(future_initiative_bias or 0.0) * 0.18 - float(was_ignored or 0.0) * 0.06, default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"])
+        contact_model["conflict_fragility"] = self._clamp(contact_model.get("conflict_fragility", 0.0) - max(0.0, float(relational_delta or 0.0)) * 0.08 + max(0.0, float(future_resistance_bias or 0.0)) * 0.05, default=WORLD_CONTACT_MODEL_DEFAULTS["conflict_fragility"])
+        thread_model["reply_fit"] = self._clamp(thread_model.get("reply_fit", 0.0) + float(relational_delta or 0.0) * 0.1 - float(was_ignored or 0.0) * 0.05, default=WORLD_THREAD_MODEL_DEFAULTS["reply_fit"])
+        thread_model["defer_fit"] = self._clamp(thread_model.get("defer_fit", 0.0) + float(was_ignored or 0.0) * 0.08, default=WORLD_THREAD_MODEL_DEFAULTS["defer_fit"])
+        thread_model["risk_level"] = self._clamp(thread_model.get("risk_level", 0.0) + max(0.0, float(future_resistance_bias or 0.0)) * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["risk_level"])
+        world["contact_models"] = {**contact_models, contact_key: contact_model}
+        world["thread_models"] = {**thread_models, normalized_thread_key: thread_model}
+        world["response_expectations"] = {
+            "reply_likelihood": round(float(contact_model.get("reply_likelihood", 0.0) or 0.0), 4),
+            "delay_tolerance": round(float(contact_model.get("delay_tolerance", 0.0) or 0.0), 4),
+            "attention_value": round(float(contact_model.get("attention_value", 0.0) or 0.0), 4),
+        }
+        world["last_post_outcome_calibration"] = {
+            "action_type": str(action_type or "").strip(),
+            "action_ref": str(action_ref or "").strip(),
+            "was_rewarding": outcome["was_rewarding"],
+            "was_ignored": outcome["was_ignored"],
+            "relational_delta": outcome["relational_delta"],
+            "identity_delta": outcome["identity_delta"],
+            "at": now,
+        }
         return {
             "id": int(row_id),
             "status": "ok",
@@ -2950,6 +3105,7 @@ class MindGraph:
                 chat_name=chat_name or normalized_thread_key,
                 affect_state=affect,
                 drive_state=drive,
+                world_state=world,
                 outcome_memory=outcome,
                 metadata={"last_outcome_action": str(action_type or "").strip()},
                 note=f"outcome_appraisal:{action_type}",

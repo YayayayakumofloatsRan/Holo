@@ -223,16 +223,24 @@ class TurnContext:
     drive_state: dict[str, Any] = field(default_factory=dict)
     value_state: dict[str, Any] = field(default_factory=dict)
     conflict_state: dict[str, Any] = field(default_factory=dict)
+    world_state: dict[str, Any] = field(default_factory=dict)
+    counterfactual_summary: dict[str, Any] = field(default_factory=dict)
+    predicted_best_outcome: dict[str, Any] = field(default_factory=dict)
+    predicted_worst_outcome: dict[str, Any] = field(default_factory=dict)
+    uncertainty_level: float = 0.0
     initiative_candidates: list[dict[str, Any]] = field(default_factory=list)
     resistance_posture: dict[str, Any] = field(default_factory=dict)
     outcome_memory: dict[str, Any] = field(default_factory=dict)
     intent_state: dict[str, Any] = field(default_factory=dict)
     action_market: list[dict[str, Any]] = field(default_factory=list)
     selected_action: dict[str, Any] = field(default_factory=dict)
+    selected_prediction: dict[str, Any] = field(default_factory=dict)
     expression_budget: int = 0
     silence_reason: str = ""
     defer_reason: str = ""
     action_rationale: str = ""
+    lookup_reason: str = ""
+    deliberation_trace_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.mind_packet:
@@ -266,6 +274,19 @@ class TurnContext:
             self.value_state = dict(packet.get("value_state", {}))
         if not self.conflict_state:
             self.conflict_state = dict(packet.get("conflict_state", {}))
+        if not self.world_state:
+            self.world_state = dict(packet.get("world_state", {}))
+        if not self.counterfactual_summary:
+            self.counterfactual_summary = dict(packet.get("counterfactual_summary", {}))
+        if not self.predicted_best_outcome:
+            self.predicted_best_outcome = dict(packet.get("predicted_best_outcome", {}))
+        if not self.predicted_worst_outcome:
+            self.predicted_worst_outcome = dict(packet.get("predicted_worst_outcome", {}))
+        if not self.uncertainty_level:
+            try:
+                self.uncertainty_level = float(packet.get("uncertainty_level", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                self.uncertainty_level = 0.0
         if not self.initiative_candidates:
             self.initiative_candidates = list(packet.get("initiative_candidates", []))
         if not self.resistance_posture:
@@ -278,6 +299,8 @@ class TurnContext:
             self.action_market = list(packet.get("action_market", []))
         if not self.selected_action:
             self.selected_action = dict(packet.get("selected_action", {}))
+        if not self.selected_prediction:
+            self.selected_prediction = dict(packet.get("selected_prediction", {}))
         if not self.expression_budget:
             try:
                 self.expression_budget = int(packet.get("expression_budget", 0) or 0)
@@ -289,6 +312,10 @@ class TurnContext:
             self.defer_reason = str(packet.get("defer_reason", "") or "")
         if not self.action_rationale:
             self.action_rationale = str(packet.get("action_rationale", "") or "")
+        if not self.lookup_reason:
+            self.lookup_reason = str(packet.get("lookup_reason", "") or "")
+        if not self.deliberation_trace_id:
+            self.deliberation_trace_id = str(packet.get("deliberation_trace_id", "") or "")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -319,16 +346,24 @@ class TurnContext:
             "drive_state": dict(self.drive_state),
             "value_state": dict(self.value_state),
             "conflict_state": dict(self.conflict_state),
+            "world_state": dict(self.world_state),
+            "counterfactual_summary": dict(self.counterfactual_summary),
+            "predicted_best_outcome": dict(self.predicted_best_outcome),
+            "predicted_worst_outcome": dict(self.predicted_worst_outcome),
+            "uncertainty_level": float(self.uncertainty_level),
             "initiative_candidates": list(self.initiative_candidates),
             "resistance_posture": dict(self.resistance_posture),
             "outcome_memory": dict(self.outcome_memory),
             "intent_state": dict(self.intent_state),
             "action_market": list(self.action_market),
             "selected_action": dict(self.selected_action),
+            "selected_prediction": dict(self.selected_prediction),
             "expression_budget": int(self.expression_budget),
             "silence_reason": self.silence_reason,
             "defer_reason": self.defer_reason,
             "action_rationale": self.action_rationale,
+            "lookup_reason": self.lookup_reason,
+            "deliberation_trace_id": self.deliberation_trace_id,
         }
 
 

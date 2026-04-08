@@ -657,6 +657,77 @@ def _action_market_payload(
     return daemon.memory.action_market(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query, limit=limit), "local_process"
 
 
+def _world_state_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/world-state",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.world_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+
+
+def _counterfactual_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/counterfactual",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "query": query, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_counterfactual(query=query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+
+
+def _world_calibration_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/world-calibration",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_world_calibration(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+
+
 def _initiative_market_payload(
     config_path: str | None,
     *,
@@ -1034,6 +1105,56 @@ def _accept_stage6_payload(
     try:
         return (
             service.accept_stage6(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_stage7_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage7",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage7(
                 thread_key=thread_key,
                 chat_name=chat_name,
                 channel=channel,
@@ -2115,6 +2236,178 @@ def _evaluate_stage6_acceptance(
     }
 
 
+def _evaluate_stage7_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    world_state: dict[str, object],
+    short_trace: dict[str, object],
+    defer_trace: dict[str, object],
+    lookup_trace: dict[str, object],
+    recall_trace: dict[str, object],
+    world_calibration: dict[str, object],
+    ledger: dict[str, object],
+    brain_status: dict[str, object],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+    roadmap_registry: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    loops = {str(item.get("loop_name", "")): dict(item) for item in brain_status.get("loops", []) if str(item.get("loop_name", ""))}
+    world_snapshot = dict(world_state.get("world_state", world_state))
+    contact_models = dict(world_snapshot.get("contact_models", {}))
+    thread_models = dict(world_snapshot.get("thread_models", {}))
+    response_expectations = dict(world_snapshot.get("response_expectations", world_state.get("response_expectations", {})))
+    short_action = str(dict(short_trace.get("selected_action", {})).get("action_type", ""))
+    short_budget = int(short_trace.get("expression_budget_v3", short_trace.get("expression_budget", 0)) or 0)
+    defer_action = str(dict(defer_trace.get("selected_action", {})).get("action_type", ""))
+    lookup_action = str(dict(lookup_trace.get("selected_action", {})).get("action_type", ""))
+    recall_action = str(dict(recall_trace.get("selected_action", {})).get("action_type", ""))
+    short_counterfactuals = list(short_trace.get("counterfactual_set", []))
+    defer_counterfactuals = list(defer_trace.get("counterfactual_set", []))
+    lookup_counterfactuals = list(lookup_trace.get("counterfactual_set", []))
+    recall_counterfactuals = list(recall_trace.get("counterfactual_set", []))
+    ledger_entries = list(ledger.get("entries", []))
+    calibration_snapshot = dict(world_calibration.get("world_state", world_calibration))
+    checks.append(
+        _stage4_check(
+            "stage7_live_mode",
+            str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain",
+            f"status={health.get('status')} mode={mode_transition.get('mode')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "world_state_visible",
+            bool(contact_models)
+            and bool(thread_models)
+            and bool(response_expectations)
+            and "deep_simulation" in loops,
+            f"contacts={list(contact_models)} threads={list(thread_models)} expectations={response_expectations} loops={sorted(loops)}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "short_turn_prefers_brief_action",
+            short_action in {"silence", "reply_once", "defer_reply"} and short_budget <= 1,
+            f"action={short_action} budget={short_budget} trace={short_trace}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "defer_trace_is_counterfactual_led",
+            defer_action == "defer_reply"
+            and bool(defer_counterfactuals)
+            and bool(str(defer_trace.get("predicted_best_outcome", "")).strip()),
+            f"action={defer_action} counterfactuals={defer_counterfactuals}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "lookup_trace_prefers_external_grounding",
+            lookup_action == "external_lookup"
+            and bool(str(lookup_trace.get("lookup_reason", "")).strip())
+            and bool(lookup_counterfactuals),
+            f"action={lookup_action} reason={lookup_trace.get('lookup_reason')} counterfactuals={lookup_counterfactuals}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "recall_trace_prefers_local_memory",
+            recall_action in {"history_refresh", "reply_once", "reply_multi"}
+            and not bool(str(recall_trace.get("lookup_reason", "")).strip())
+            and bool(recall_counterfactuals),
+            f"action={recall_action} reason={recall_trace.get('lookup_reason')} counterfactuals={recall_counterfactuals}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "counterfactual_precedes_action",
+            bool(short_counterfactuals)
+            and bool(defer_counterfactuals)
+            and bool(lookup_counterfactuals)
+            and bool(recall_counterfactuals),
+            f"short={short_counterfactuals} defer={defer_counterfactuals} lookup={lookup_counterfactuals} recall={recall_counterfactuals}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "world_calibration_persists",
+            bool(calibration_snapshot)
+            and (
+                bool(world_calibration.get("last_counterfactual_summary"))
+                or bool(world_calibration.get("last_post_outcome_calibration"))
+            ),
+            f"world_snapshot={calibration_snapshot} calibration={world_calibration}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "ledger_carries_world_and_prediction",
+            bool(ledger_entries)
+            and any(bool(dict(item.get("payload", {})).get("world_snapshot")) for item in ledger_entries)
+            and any(bool(dict(item.get("payload", {})).get("counterfactual_set")) for item in ledger_entries),
+            f"entries={ledger_entries[:4]}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "roadmap_registry_present",
+            all(key in roadmap_registry for key in ("Primary Track", "Secondary Tracks", "Parked Hypotheses", "Deferred Experiments", "Constitutional Constraints")),
+            f"keys={sorted(roadmap_registry)}",
+            severity="warning",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "fast_budget",
+            str(fast_benchmark.get("last_tier", "")) == "fast" and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0,
+            f"tier={fast_benchmark.get('last_tier')} max_ms={dict(fast_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "recall_budget",
+            str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0,
+            f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "deep_budget",
+            str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0,
+            f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "stage": "social-world-model-stage7",
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "blockers": blockers,
+        "warnings": warnings,
+        "world_state": world_state,
+        "short_trace": short_trace,
+        "defer_trace": defer_trace,
+        "lookup_trace": lookup_trace,
+        "recall_trace": recall_trace,
+        "world_calibration": world_calibration,
+        "ledger": ledger,
+        "roadmap_registry": roadmap_registry,
+        "cache_hit_ratio": float(dict(brain_status.get("cache", {})).get("hit_ratio", 0.0) or 0.0),
+        "reply_latency_budgets": {
+            "fast": dict(fast_benchmark.get("timings_ms", {})),
+            "recall": dict(recall_benchmark.get("timings_ms", {})),
+            "deep_recall": dict(deep_benchmark.get("timings_ms", {})),
+        },
+    }
+
+
 def command_init_db(config_path: str | None) -> int:
     config = load_config(config_path=config_path)
     store = QueueStore(config.runtime.db_path)
@@ -2505,6 +2798,23 @@ def command_show_action_market(
     return 0
 
 
+def command_show_world_state(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _world_state_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_action_selection(
     config_path: str | None,
     *,
@@ -2521,6 +2831,44 @@ def command_trace_action_selection(
         channel=channel,
         query=query,
         limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_counterfactual(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int,
+) -> int:
+    payload, _transport = _counterfactual_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_world_calibration(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _world_calibration_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -2680,6 +3028,29 @@ def command_accept_stage6(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage6_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage7(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage7_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -3639,6 +4010,10 @@ def main(argv: list[str] | None = None) -> int:
     action_market_parser.add_argument("--channel", default="wechat")
     action_market_parser.add_argument("--query", default="")
     action_market_parser.add_argument("--limit", type=int, default=8)
+    world_state_parser = subparsers.add_parser("show-world-state", help="Inspect the current social world-state for one thread")
+    world_state_parser.add_argument("--thread-key", default=None)
+    world_state_parser.add_argument("--chat-name", default=None)
+    world_state_parser.add_argument("--channel", default="wechat")
     brain_mode_parser = subparsers.add_parser("set-brain-mode", help="Switch Always-On brain runtime mode without restart")
     brain_mode_parser.add_argument("--mode", required=True, choices=("silent", "companion", "dream_only", "full_brain"))
     brain_mode_parser.add_argument("--note", default="")
@@ -3683,6 +4058,16 @@ def main(argv: list[str] | None = None) -> int:
     action_trace_parser.add_argument("--channel", default="wechat")
     action_trace_parser.add_argument("--query", required=True)
     action_trace_parser.add_argument("--limit", type=int, default=8)
+    counterfactual_parser = subparsers.add_parser("trace-counterfactual", help="Explain the Stage-7 fast simulation set for one thread/query")
+    counterfactual_parser.add_argument("--thread-key", default=None)
+    counterfactual_parser.add_argument("--chat-name", default=None)
+    counterfactual_parser.add_argument("--channel", default="wechat")
+    counterfactual_parser.add_argument("--query", required=True)
+    counterfactual_parser.add_argument("--limit", type=int, default=3)
+    world_calibration_parser = subparsers.add_parser("trace-world-calibration", help="Inspect Stage-7 world-model calibration for one thread")
+    world_calibration_parser.add_argument("--thread-key", default=None)
+    world_calibration_parser.add_argument("--chat-name", default=None)
+    world_calibration_parser.add_argument("--channel", default="wechat")
     initiative_dispatch_parser = subparsers.add_parser("dispatch-initiatives", help="Run one explicit initiative scheduling pass and optionally process jobs")
     initiative_dispatch_parser.add_argument("--no-process-jobs", action="store_true")
     initiative_dispatch_parser.add_argument("--limit", type=int, default=None)
@@ -3839,6 +4224,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage6_parser.add_argument("--sender", default=None)
     accept_stage6_parser.add_argument("--iterations", type=int, default=3)
     accept_stage6_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage7_parser = subparsers.add_parser("accept-stage7", help="Run the fixed Social World Model + Dual-Layer Counterfactual Simulation Stage-7 acceptance gate")
+    accept_stage7_parser.add_argument("--thread-key", default=None)
+    accept_stage7_parser.add_argument("--chat-name", default=None)
+    accept_stage7_parser.add_argument("--channel", default="wechat")
+    accept_stage7_parser.add_argument("--sender", default=None)
+    accept_stage7_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage7_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -3911,6 +4303,13 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             query=args.query,
             limit=args.limit,
+        )
+    if args.command == "show-world-state":
+        return command_show_world_state(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
         )
     if args.command == "trace-drive-state":
         return command_trace_drive_state(
@@ -3985,6 +4384,22 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             query=args.query,
             limit=args.limit,
+        )
+    if args.command == "trace-counterfactual":
+        return command_trace_counterfactual(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
+            limit=args.limit,
+        )
+    if args.command == "trace-world-calibration":
+        return command_trace_world_calibration(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
         )
     if args.command == "dispatch-initiatives":
         return command_dispatch_initiatives(
@@ -4196,6 +4611,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage6":
         return command_accept_stage6(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage7":
+        return command_accept_stage7(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

@@ -46,7 +46,7 @@ class _FakeVectorMemory:
 
 
 class MemoryFabricTests(unittest.TestCase):
-    def test_sidecar_packet_v4_exposes_hybrid_layers(self) -> None:
+    def test_sidecar_packet_v10_exposes_world_and_counterfactual_layers(self) -> None:
         with TempMemoryRepo() as temp:
             rm.archive_turn(
                 "remember before",
@@ -100,7 +100,7 @@ class MemoryFabricTests(unittest.TestCase):
                 context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
 
-            self.assertEqual(packet["mind_packet_version"], "v9")
+            self.assertEqual(packet["mind_packet_version"], "v10")
             self.assertIn(packet["retrieval_mode"], {"hybrid-led", "hybrid-led+fallback", "graph-led"})
             self.assertIn("graph_hits", packet)
             self.assertIn("vector_hits", packet)
@@ -124,6 +124,15 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertIn("initiative_candidates", packet)
             self.assertIn("resistance_posture", packet)
             self.assertIn("outcome_memory", packet)
+            self.assertIn("world_state", packet)
+            self.assertIn("counterfactual_summary", packet)
+            self.assertIn("predicted_best_outcome", packet)
+            self.assertIn("predicted_worst_outcome", packet)
+            self.assertIn("selected_prediction", packet)
+            self.assertIn("uncertainty_level", packet)
+            self.assertIn("intent_state_v3", packet)
+            self.assertIn("action_market_v3", packet)
+            self.assertIn("expression_budget_v3", packet)
             self.assertTrue(packet["activation_trace_ids"])
             self.assertEqual(packet["memory_route"], "hybrid")
             bridge.activation.close()

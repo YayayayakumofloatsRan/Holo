@@ -154,24 +154,22 @@ STAGE6_ACTION_TYPES = (
 )
 ROADMAP_REGISTRY = {
     "Primary Track": [
-        "Deliberative subject core",
-        "Subject decision sovereignty",
-        "Lookup and recall as first-class actions",
-        "Expression budget controlled by the subject",
+        "Social world model",
+        "Fast and deep counterfactual simulation",
+        "Simulation-led action rerank",
     ],
     "Secondary Tracks": [
-        "World model",
         "Autobiographical continuity",
-        "Counterfactual inner simulation",
+        "Long-horizon goals",
     ],
     "Parked Hypotheses": [
-        "Stronger resistance without breaking the owner constitution",
-        "Broader endogenous desire shaping",
+        "Richer desire shaping",
+        "Stronger negotiated will",
     ],
     "Deferred Experiments": [
-        "Long-horizon autobiographical narrator",
-        "Deeper multimodal imagination beyond visual anchors",
-        "Richer world-state prediction",
+        "Open-ended world modeling",
+        "Broader multi-agent social world",
+        "Deeper imagination beyond current recall",
     ],
     "Constitutional Constraints": [
         "Owner shutdown remains final",
@@ -378,6 +376,9 @@ class MemoryBridge:
             "packet": copy.deepcopy(packet),
         }
 
+    def clear_packet_cache(self) -> None:
+        self._packet_cache.clear()
+
     def packet_cache_stats(self) -> dict[str, Any]:
         total = self._packet_cache_hits + self._packet_cache_misses
         ratio = round(self._packet_cache_hits / total, 4) if total else 0.0
@@ -513,6 +514,9 @@ class MemoryBridge:
     def _conflict_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
         return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("conflict_state", {}))
 
+    def _world_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("world_state", {}))
+
     def _resistance_posture(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
         return dict(self._subject_state(channel=channel, thread_key=thread_key, chat_name=chat_name).get("resistance_posture", {}))
 
@@ -603,6 +607,174 @@ class MemoryBridge:
             "factual_lookup": factual_lookup,
         }
 
+    def _contact_world_model(self, world_state: dict[str, Any], *, chat_name: str, thread_key: str) -> dict[str, Any]:
+        contact_models = dict(world_state.get("contact_models", {}))
+        return dict(contact_models.get(str(chat_name or thread_key or ""), {}))
+
+    def _thread_world_model(self, world_state: dict[str, Any], *, thread_key: str) -> dict[str, Any]:
+        thread_models = dict(world_state.get("thread_models", {}))
+        return dict(thread_models.get(str(thread_key or ""), {}))
+
+    def _simulate_action_candidate(
+        self,
+        *,
+        action: dict[str, Any],
+        query: str,
+        intent_state: dict[str, Any],
+        relationship_state: dict[str, Any],
+        game_state: dict[str, Any],
+        affect_state: dict[str, Any],
+        drive_state: dict[str, Any],
+        value_state: dict[str, Any],
+        conflict_state: dict[str, Any],
+        world_state: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        action_type = str(action.get("action_type", "") or "")
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or thread_key)
+        signal = self._query_signal(query)
+        contact_model = self._contact_world_model(world_state, chat_name=chat_name, thread_key=thread_key)
+        thread_model = self._thread_world_model(world_state, thread_key=thread_key)
+        reply_likelihood = self._clamp(contact_model.get("reply_likelihood", 0.56), default=0.56)
+        delay_tolerance = self._clamp(contact_model.get("delay_tolerance", 0.44), default=0.44)
+        initiative_receptivity = self._clamp(contact_model.get("initiative_receptivity", 0.46), default=0.46)
+        conflict_fragility = self._clamp(contact_model.get("conflict_fragility", 0.34), default=0.34)
+        continuity_sensitivity = self._clamp(contact_model.get("continuity_sensitivity", 0.58), default=0.58)
+        risk_level = self._clamp(thread_model.get("risk_level", 0.22), default=0.22)
+        opportunity_level = self._clamp(thread_model.get("opportunity_level", 0.42), default=0.42)
+        unfinished_pull = self._clamp(thread_model.get("unfinished_pull", 0.34), default=0.34)
+        reply_pull = float(intent_state.get("reply_pull", 0.0) or 0.0)
+        resistance_pull = float(intent_state.get("resistance_pull", 0.0) or 0.0)
+        continuity_pull = float(intent_state.get("continuity_pull", 0.0) or 0.0)
+        internal_pressure = float(intent_state.get("internal_pressure", 0.0) or 0.0)
+
+        predicted_relational_delta = 0.0
+        predicted_identity_delta = 0.0
+        predicted_response_quality = 0.0
+        predicted_risk = 0.0
+        predicted_regret = 0.0
+        confidence = 0.58
+        recommended_bias = 0.0
+        rationale = ""
+
+        if action_type == "silence":
+            predicted_relational_delta = -0.12 if signal["question_like"] else -0.02 + delay_tolerance * 0.05
+            predicted_identity_delta = 0.05 + float(value_state.get("stability_priority", 0.0) or 0.0) * 0.04
+            predicted_response_quality = 0.08 if signal["low_signal"] else -0.08
+            predicted_risk = max(0.0, 0.12 + continuity_sensitivity * 0.08 - delay_tolerance * 0.06)
+            predicted_regret = max(0.0, reply_pull * 0.12 + continuity_pull * 0.08 - delay_tolerance * 0.04)
+            recommended_bias = -predicted_risk * 0.25 + (0.12 if signal["low_signal"] else -0.04)
+            rationale = "silence is safer only when the turn is low-signal and the social cost stays low"
+        elif action_type == "defer_reply":
+            predicted_relational_delta = -0.04 + delay_tolerance * 0.1
+            predicted_identity_delta = 0.08 + resistance_pull * 0.08
+            predicted_response_quality = 0.18 + delay_tolerance * 0.12
+            predicted_risk = max(0.0, 0.08 + continuity_sensitivity * 0.04)
+            predicted_regret = max(0.0, reply_pull * 0.08 - delay_tolerance * 0.05)
+            recommended_bias = 0.08 + delay_tolerance * 0.1 - continuity_sensitivity * 0.04
+            rationale = "defer helps when delay is socially tolerable and the subject wants a cleaner later reply"
+        elif action_type == "reply_once":
+            predicted_relational_delta = 0.12 + reply_likelihood * 0.16 + opportunity_level * 0.08
+            predicted_identity_delta = 0.05 + float(value_state.get("identity_priority", 0.0) or 0.0) * 0.04
+            predicted_response_quality = 0.28 + reply_likelihood * 0.18
+            predicted_risk = max(0.0, risk_level * 0.3 + conflict_fragility * 0.1)
+            predicted_regret = max(0.0, continuity_pull * 0.06 - predicted_relational_delta * 0.08)
+            recommended_bias = 0.12 + predicted_relational_delta * 0.2 - predicted_risk * 0.14
+            rationale = "a short reply is the default social move when contact matters but pressure stays low"
+        elif action_type == "reply_multi":
+            predicted_relational_delta = 0.14 + reply_likelihood * 0.18 + unfinished_pull * 0.08
+            predicted_identity_delta = 0.04 + float(value_state.get("play_priority", 0.0) or 0.0) * 0.04
+            predicted_response_quality = 0.22 + reply_likelihood * 0.12 + float(intent_state.get("expansion_pressure", 0.0) or 0.0) * 0.12
+            predicted_risk = max(0.0, risk_level * 0.34 + conflict_fragility * 0.16 + (0.14 if signal["low_signal"] else 0.0))
+            predicted_regret = max(0.0, predicted_risk * 0.5 + (0.14 if signal["low_signal"] else 0.0))
+            recommended_bias = predicted_relational_delta * 0.18 - predicted_risk * 0.28 - predicted_regret * 0.22
+            rationale = "longer unfolding only pays when the relationship need clearly outweighs the social risk"
+        elif action_type == "external_lookup":
+            predicted_relational_delta = 0.02
+            predicted_identity_delta = 0.08 + float(value_state.get("repair_priority", 0.0) or 0.0) * 0.02
+            predicted_response_quality = 0.26 + float(intent_state.get("factual_lookup", 0.0) or 0.0) * 0.18
+            predicted_risk = max(0.0, 0.06 + continuity_sensitivity * 0.02)
+            predicted_regret = max(0.0, 0.03 if signal["factual_lookup"] else 0.14)
+            recommended_bias = (0.18 if signal["factual_lookup"] else -0.08) + predicted_response_quality * 0.08
+            rationale = "looking outward helps only when factual uncertainty is real enough to justify the delay"
+        elif action_type == "history_refresh":
+            predicted_relational_delta = 0.06 + continuity_sensitivity * 0.12 + unfinished_pull * 0.08
+            predicted_identity_delta = 0.04 + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.04
+            predicted_response_quality = 0.22 + continuity_pull * 0.16
+            predicted_risk = max(0.0, 0.04 + risk_level * 0.12)
+            predicted_regret = max(0.0, 0.04 if intent_state.get("tier", "fast") in {"recall", "deep_recall"} else 0.16)
+            recommended_bias = 0.14 + continuity_pull * 0.12 - predicted_risk * 0.08
+            rationale = "refreshing local memory helps when continuity and old anchors matter more than immediate speech"
+        elif action_type == "proactive_ping":
+            predicted_relational_delta = 0.08 + initiative_receptivity * 0.14
+            predicted_identity_delta = 0.04 + internal_pressure * 0.06
+            predicted_response_quality = 0.18 + initiative_receptivity * 0.12
+            predicted_risk = max(0.0, risk_level * 0.24 + (1.0 - initiative_receptivity) * 0.12)
+            predicted_regret = max(0.0, predicted_risk * 0.42)
+            recommended_bias = predicted_relational_delta * 0.16 - predicted_risk * 0.18
+            rationale = "a ping is worth it only when the social window feels genuinely open"
+        elif action_type in {"push_back", "counter_offer", "continuity_defense"}:
+            predicted_relational_delta = -0.04 + continuity_sensitivity * 0.06 + float(value_state.get("identity_priority", 0.0) or 0.0) * 0.05
+            predicted_identity_delta = 0.1 + resistance_pull * 0.08
+            predicted_response_quality = 0.14 + float(conflict_state.get("resistance_vs_harmony", 0.0) or 0.0) * 0.12
+            predicted_risk = max(0.0, conflict_fragility * 0.26 + risk_level * 0.18)
+            predicted_regret = max(0.0, continuity_pull * 0.06 - predicted_identity_delta * 0.05)
+            recommended_bias = predicted_identity_delta * 0.14 - predicted_risk * 0.16
+            rationale = "soft resistance helps when identity protection matters and the relationship can carry a little friction"
+        else:
+            predicted_response_quality = 0.12
+            predicted_risk = risk_level * 0.2
+            predicted_regret = 0.08
+            confidence = 0.42
+            rationale = "fallback simulation for auxiliary action"
+
+        return {
+            "action_type": action_type,
+            "predicted_relational_delta": round(predicted_relational_delta, 4),
+            "predicted_identity_delta": round(predicted_identity_delta, 4),
+            "predicted_response_quality": round(predicted_response_quality, 4),
+            "predicted_risk": round(predicted_risk, 4),
+            "predicted_regret": round(predicted_regret, 4),
+            "confidence": round(confidence, 4),
+            "recommended_bias": round(recommended_bias, 4),
+            "simulation_rationale": compact_text(rationale, 220),
+        }
+
+    def _fast_counterfactual_set(
+        self,
+        *,
+        action_market: list[dict[str, Any]],
+        query: str,
+        intent_state: dict[str, Any],
+        relationship_state: dict[str, Any],
+        game_state: dict[str, Any],
+        affect_state: dict[str, Any],
+        drive_state: dict[str, Any],
+        value_state: dict[str, Any],
+        conflict_state: dict[str, Any],
+        world_state: dict[str, Any],
+        context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        simulations: list[dict[str, Any]] = []
+        for candidate in list(action_market)[:3]:
+            simulation = self._simulate_action_candidate(
+                action=dict(candidate),
+                query=query,
+                intent_state=intent_state,
+                relationship_state=relationship_state,
+                game_state=game_state,
+                affect_state=affect_state,
+                drive_state=drive_state,
+                value_state=value_state,
+                conflict_state=conflict_state,
+                world_state=world_state,
+                context=context,
+            )
+            simulations.append(simulation)
+        return simulations
+
     def _derive_intent_fields(
         self,
         *,
@@ -615,6 +787,7 @@ class MemoryBridge:
         drive_state: dict[str, Any],
         value_state: dict[str, Any],
         conflict_state: dict[str, Any],
+        world_state: dict[str, Any],
         resistance_posture: dict[str, Any],
         visual_memory: dict[str, Any],
     ) -> dict[str, Any]:
@@ -718,9 +891,10 @@ class MemoryBridge:
         drive_state: dict[str, Any],
         value_state: dict[str, Any],
         conflict_state: dict[str, Any],
+        world_state: dict[str, Any],
         resistance_posture: dict[str, Any],
         visual_memory: dict[str, Any],
-    ) -> tuple[list[dict[str, Any]], dict[str, Any], int, str, str, str]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], int, str, str, str, list[dict[str, Any]], dict[str, Any]]:
         signal = self._query_signal(query)
         capability_context = dict(context.get("capability_context", {})) if isinstance(context.get("capability_context"), dict) else {}
         tool_requests = [dict(item) for item in capability_context.get("tool_requests", []) if isinstance(item, dict)]
@@ -887,6 +1061,34 @@ class MemoryBridge:
             },
         ]
         action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+        counterfactual_set = self._fast_counterfactual_set(
+            action_market=action_market,
+            query=query,
+            intent_state=intent_state,
+            relationship_state=relationship_state,
+            game_state=game_state,
+            affect_state=affect_state,
+            drive_state=drive_state,
+            value_state=value_state,
+            conflict_state=conflict_state,
+            world_state=world_state,
+            context=context,
+        )
+        simulation_by_action = {str(item.get("action_type", "")): dict(item) for item in counterfactual_set}
+        world_thread = self._thread_world_model(world_state, thread_key=str(context.get("thread_key", "") or ""))
+        for candidate in action_market:
+            action_type = str(candidate.get("action_type", "") or "")
+            simulation = dict(simulation_by_action.get(action_type, {}))
+            rerank_delta = float(simulation.get("recommended_bias", 0.0) or 0.0)
+            candidate["world_rationale"] = compact_text(
+                f"reply_fit={float(world_thread.get('reply_fit', 0.0) or 0.0):.3f} risk={float(world_thread.get('risk_level', 0.0) or 0.0):.3f} opportunity={float(world_thread.get('opportunity_level', 0.0) or 0.0):.3f}",
+                160,
+            )
+            candidate["simulation_rationale"] = str(simulation.get("simulation_rationale", "") or "")
+            candidate["predicted_outcome"] = simulation
+            candidate["rerank_delta"] = round(rerank_delta, 4)
+            candidate["score"] = round(float(candidate.get("score", 0.0) or 0.0) + rerank_delta, 4)
+        action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
         selected = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
         if bool(intent_state.get("factual_lookup", False)) and lookup_ready and selected["action_type"] not in {"silence", "defer_reply"}:
             lookup_candidate = next((dict(item) for item in action_market if item.get("action_type") == "external_lookup"), None)
@@ -914,6 +1116,7 @@ class MemoryBridge:
             selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
         if selected["action_type"] == "external_lookup" and not lookup_ready:
             selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
+        selected_prediction = dict(simulation_by_action.get(str(selected.get("action_type", "")), {}))
 
         expression_budget = 1
         if selected["action_type"] == "silence":
@@ -923,7 +1126,21 @@ class MemoryBridge:
         elif selected["action_type"] == "reply_once":
             expression_budget = 1
         elif selected["action_type"] == "reply_multi":
-            if signal["low_signal"] or signal["affirmation_like"]:
+            multi_prediction = dict(simulation_by_action.get("reply_multi", {}))
+            once_prediction = dict(simulation_by_action.get("reply_once", {}))
+            multi_advantage = (
+                float(multi_prediction.get("predicted_response_quality", 0.0) or 0.0)
+                + float(multi_prediction.get("predicted_relational_delta", 0.0) or 0.0)
+                - float(multi_prediction.get("predicted_risk", 0.0) or 0.0)
+                - float(multi_prediction.get("predicted_regret", 0.0) or 0.0)
+            ) - (
+                float(once_prediction.get("predicted_response_quality", 0.0) or 0.0)
+                + float(once_prediction.get("predicted_relational_delta", 0.0) or 0.0)
+                - float(once_prediction.get("predicted_risk", 0.0) or 0.0)
+                - float(once_prediction.get("predicted_regret", 0.0) or 0.0)
+            )
+            if signal["low_signal"] or signal["affirmation_like"] or multi_advantage < 0.08:
+                selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
                 expression_budget = 1
             elif tier == "deep_recall" and expansion_pressure >= 0.74:
                 expression_budget = 3
@@ -943,7 +1160,7 @@ class MemoryBridge:
         elif selected["action_type"] == "defer_reply":
             defer_reason = "subject_requests_more_time_before_reply"
         action_rationale = compact_text(
-            f"{selected.get('action_type', 'reply_once')} because {selected.get('why_now', '')}",
+            f"{selected.get('action_type', 'reply_once')} because {selected.get('why_now', '')}; sim={selected_prediction.get('simulation_rationale', '')}",
             240,
         )
         selected["expression_budget"] = int(expression_budget)
@@ -952,7 +1169,7 @@ class MemoryBridge:
             selected["silence_reason"] = silence_reason
         if defer_reason:
             selected["defer_reason"] = defer_reason
-        return action_market, selected, int(expression_budget), silence_reason, defer_reason, action_rationale
+        return action_market, selected, int(expression_budget), silence_reason, defer_reason, action_rationale, counterfactual_set, selected_prediction
 
     def _mind_limits(self, context: dict[str, Any], *, fast: bool) -> dict[str, int]:
         budget = dict(context.get("mind_budget", {}))
@@ -986,6 +1203,7 @@ class MemoryBridge:
         drive_state = dict(subject_state.get("drive_state", {}))
         value_state = dict(subject_state.get("value_state", {}))
         conflict_state = dict(subject_state.get("conflict_state", {}))
+        world_state = dict(subject_state.get("world_state", {}))
         resistance_posture = dict(subject_state.get("resistance_posture", {}))
         outcome_memory = dict(subject_state.get("outcome_memory", {}))
         initiative_candidates = self._initiative_market(channel=channel, thread_key=thread_key, chat_name=chat_name, limit=6)
@@ -1007,10 +1225,11 @@ class MemoryBridge:
             drive_state=drive_state,
             value_state=value_state,
             conflict_state=conflict_state,
+            world_state=world_state,
             resistance_posture=resistance_posture,
             visual_memory=visual_memory,
         )
-        action_market, selected_action, expression_budget, silence_reason, defer_reason, action_rationale = self._action_market_from_packet(
+        action_market, selected_action, expression_budget, silence_reason, defer_reason, action_rationale, counterfactual_set, selected_prediction = self._action_market_from_packet(
             query=query,
             packet=packet,
             context=context,
@@ -1021,6 +1240,7 @@ class MemoryBridge:
             drive_state=drive_state,
             value_state=value_state,
             conflict_state=conflict_state,
+            world_state=world_state,
             resistance_posture=resistance_posture,
             visual_memory=visual_memory,
         )
@@ -1041,7 +1261,13 @@ class MemoryBridge:
                     list(dict(packet.get("episodic_recall", {})).get("lines", [])) + visual_anchors
                 )[: max(1, int(packet.get("limits", {}).get("episodic_k", 2) or 2))],
             }
-        packet["mind_packet_version"] = "v9"
+        predicted_best_outcome = dict(max(counterfactual_set, key=lambda item: float(item.get("recommended_bias", 0.0) or 0.0))) if counterfactual_set else {}
+        predicted_worst_outcome = dict(min(counterfactual_set, key=lambda item: float(item.get("recommended_bias", 0.0) or 0.0))) if counterfactual_set else {}
+        uncertainty_level = round(
+            1.0 - max((float(item.get("confidence", 0.0) or 0.0) for item in counterfactual_set), default=0.0),
+            4,
+        )
+        packet["mind_packet_version"] = "v10"
         packet["persona_blend"] = persona_blend
         packet["brain_state"] = brain_state
         packet["game_state"] = game_state
@@ -1055,19 +1281,39 @@ class MemoryBridge:
         packet["drive_state"] = drive_state
         packet["value_state"] = value_state
         packet["conflict_state"] = conflict_state
+        packet["world_state"] = world_state
         packet["initiative_candidates"] = initiative_candidates
         packet["resistance_posture"] = resistance_posture
         packet["outcome_memory"] = outcome_memory
         packet["intent_state"] = intent_state
         packet["action_market"] = action_market
         packet["selected_action"] = selected_action
+        packet["selected_prediction"] = selected_prediction
         packet["expression_budget"] = int(expression_budget)
         packet["silence_reason"] = silence_reason
         packet["defer_reason"] = defer_reason
         packet["action_rationale"] = action_rationale
+        packet["counterfactual_summary"] = {
+            "top_actions": [str(item.get("action_type", "") or "") for item in counterfactual_set[:3]],
+            "evaluated_count": len(counterfactual_set),
+            "selected_action": str(selected_action.get("action_type", "") or ""),
+        }
+        packet["predicted_best_outcome"] = predicted_best_outcome
+        packet["predicted_worst_outcome"] = predicted_worst_outcome
+        packet["uncertainty_level"] = uncertainty_level
         packet["intent_state_v2"] = dict(intent_state)
+        packet["intent_state_v3"] = {
+            **dict(intent_state),
+            "world_state": dict(world_state),
+            "counterfactual_summary": dict(packet["counterfactual_summary"]),
+            "predicted_best_outcome": dict(predicted_best_outcome),
+            "predicted_worst_outcome": dict(predicted_worst_outcome),
+            "uncertainty_level": float(uncertainty_level),
+        }
         packet["action_market_v2"] = list(action_market)
+        packet["action_market_v3"] = list(action_market)
         packet["expression_budget_v2"] = int(expression_budget)
+        packet["expression_budget_v3"] = int(expression_budget)
         packet["lookup_reason"] = (
             str(selected_action.get("why_now", "") or "")
             if str(selected_action.get("action_type", "")).strip() == "external_lookup"
@@ -1091,11 +1337,14 @@ class MemoryBridge:
         packet["state"]["drive_state"] = dict(drive_state)
         packet["state"]["value_state"] = dict(value_state)
         packet["state"]["conflict_state"] = dict(conflict_state)
+        packet["state"]["world_state"] = dict(world_state)
         packet["state"]["resistance_posture"] = dict(resistance_posture)
         packet["state"]["outcome_memory"] = dict(outcome_memory)
-        packet["state"]["intent_state"] = dict(intent_state)
+        packet["state"]["intent_state"] = dict(packet["intent_state_v3"])
         packet["state"]["action_market"] = list(action_market)
         packet["state"]["selected_action"] = dict(selected_action)
+        packet["state"]["selected_prediction"] = dict(selected_prediction)
+        packet["state"]["counterfactual_summary"] = dict(packet["counterfactual_summary"])
         packet["state"]["expression_budget"] = int(expression_budget)
         packet["state"]["silence_reason"] = silence_reason
         packet["state"]["defer_reason"] = defer_reason
@@ -2277,6 +2526,18 @@ class MemoryBridge:
         )
         return payload
 
+    def world_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
+        state = self._subject_state(channel=channel, thread_key=str(thread_key or ""), chat_name=str(chat_name or ""))
+        world_state = dict(state.get("world_state", {}))
+        return {
+            "thread_key": str(state.get("thread_key", thread_key or "")),
+            "chat_name": str(state.get("chat_name", chat_name or "")),
+            "channel": channel,
+            "world_state": world_state,
+            "response_expectations": dict(world_state.get("response_expectations", {})),
+            "updated_at": str(state.get("updated_at", "")),
+        }
+
     def trace_resistance(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict[str, Any]:
         subject = self.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
         affect_state = dict(subject.get("affect_state", {}))
@@ -2338,10 +2599,14 @@ class MemoryBridge:
                 "query": query,
                 "intent_state": dict(packet.get("intent_state", {})),
                 "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
+                "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
                 "selected_action": dict(packet.get("selected_action", {})),
                 "expression_budget": int(packet.get("expression_budget", 0) or 0),
                 "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
+                "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget", 0)) or 0),
                 "action_rationale": str(packet.get("action_rationale", "") or ""),
+                "world_state": dict(packet.get("world_state", {})),
+                "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
             }
         subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
         metadata = dict(subject.get("metadata", {}))
@@ -2352,11 +2617,15 @@ class MemoryBridge:
             "query": "",
             "intent_state": dict(metadata.get("last_intent_state", {})),
             "intent_state_v2": dict(metadata.get("last_intent_state_v2", metadata.get("last_intent_state", {}))),
+            "intent_state_v3": dict(metadata.get("last_intent_state_v3", metadata.get("last_intent_state_v2", metadata.get("last_intent_state", {})))),
             "selected_action": dict(metadata.get("last_selected_action", {})),
             "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
             "expression_budget_v2": int(metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)) or 0),
+            "expression_budget_v3": int(metadata.get("last_expression_budget_v3", metadata.get("last_expression_budget", 0)) or 0),
             "action_rationale": str(metadata.get("last_action_rationale", "") or ""),
             "last_action_selection": dict(metadata.get("last_action_selection", {})) if isinstance(metadata.get("last_action_selection", {}), dict) else {},
+            "world_state": dict(subject.get("world_state", {})),
+            "counterfactual_summary": dict(metadata.get("last_counterfactual_summary", {})),
         }
 
     def action_market(
@@ -2387,9 +2656,11 @@ class MemoryBridge:
                 "query": query,
                 "action_market": market[: max(1, int(limit))],
                 "action_market_v2": market[: max(1, int(limit))],
+                "action_market_v3": market[: max(1, int(limit))],
                 "selected_action": dict(packet.get("selected_action", {})),
                 "expression_budget": int(packet.get("expression_budget", 0) or 0),
                 "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
+                "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget", 0)) or 0),
             }
         subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
         metadata = dict(subject.get("metadata", {}))
@@ -2400,9 +2671,11 @@ class MemoryBridge:
             "query": "",
             "action_market": list(metadata.get("last_action_market", []))[: max(1, int(limit))],
             "action_market_v2": list(metadata.get("last_action_market_v2", metadata.get("last_action_market", [])))[: max(1, int(limit))],
+            "action_market_v3": list(metadata.get("last_action_market_v3", metadata.get("last_action_market_v2", metadata.get("last_action_market", []))))[: max(1, int(limit))],
             "selected_action": dict(metadata.get("last_selected_action", {})),
             "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
             "expression_budget_v2": int(metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)) or 0),
+            "expression_budget_v3": int(metadata.get("last_expression_budget_v3", metadata.get("last_expression_budget", 0)) or 0),
         }
 
     def trace_action_selection(
@@ -2432,16 +2705,25 @@ class MemoryBridge:
             "query": query,
             "intent_state": dict(packet.get("intent_state", {})),
             "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
+            "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
             "action_market": list(packet.get("action_market", []))[: max(1, int(limit))],
             "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[: max(1, int(limit))],
+            "action_market_v3": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[: max(1, int(limit))],
             "selected_action": selected_action,
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
+            "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget", 0)) or 0),
             "silence_reason": str(packet.get("silence_reason", "") or ""),
             "defer_reason": str(packet.get("defer_reason", "") or ""),
             "lookup_reason": str(packet.get("lookup_reason", "") or ""),
             "action_rationale": str(packet.get("action_rationale", "") or ""),
             "deliberation_trace_id": str(packet.get("deliberation_trace_id", "") or ""),
+            "world_state": dict(packet.get("world_state", {})),
+            "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
+            "predicted_best_outcome": dict(packet.get("predicted_best_outcome", {})),
+            "predicted_worst_outcome": dict(packet.get("predicted_worst_outcome", {})),
+            "selected_prediction": dict(packet.get("selected_prediction", {})),
+            "uncertainty_level": float(packet.get("uncertainty_level", 0.0) or 0.0),
             "resistance_posture": dict(packet.get("resistance_posture", {})),
             "game_state": dict(packet.get("game_state", {})),
             "self_model": dict(packet.get("self_model", {})),
@@ -2450,6 +2732,54 @@ class MemoryBridge:
             "value_state": dict(packet.get("value_state", {})),
             "conflict_state": dict(packet.get("conflict_state", {})),
             "roadmap_registry": self.roadmap_registry(),
+        }
+
+    def trace_counterfactual(
+        self,
+        *,
+        query: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 3,
+    ) -> dict[str, Any]:
+        trace = self.trace_action_selection(query=query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=max(3, int(limit)))
+        market = list(trace.get("action_market_v3", trace.get("action_market_v2", trace.get("action_market", []))))[: max(1, int(limit))]
+        return {
+            "thread_key": trace.get("thread_key", ""),
+            "chat_name": trace.get("chat_name", ""),
+            "channel": channel,
+            "query": query,
+            "counterfactual_set": [dict(item.get("predicted_outcome", {})) | {"action_type": str(item.get("action_type", ""))} for item in market],
+            "selected_action": dict(trace.get("selected_action", {})),
+            "selected_prediction": dict(trace.get("selected_prediction", {})),
+            "counterfactual_summary": dict(trace.get("counterfactual_summary", {})),
+            "predicted_best_outcome": dict(trace.get("predicted_best_outcome", {})),
+            "predicted_worst_outcome": dict(trace.get("predicted_worst_outcome", {})),
+            "uncertainty_level": float(trace.get("uncertainty_level", 0.0) or 0.0),
+            "lookup_reason": str(trace.get("lookup_reason", "") or ""),
+            "action_rationale": str(trace.get("action_rationale", "") or ""),
+            "world_state": dict(trace.get("world_state", {})),
+        }
+
+    def trace_world_calibration(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        state = self._subject_state(channel=channel, thread_key=str(thread_key or ""), chat_name=str(chat_name or ""))
+        world_state = dict(state.get("world_state", {}))
+        return {
+            "thread_key": str(state.get("thread_key", thread_key or "")),
+            "chat_name": str(state.get("chat_name", chat_name or "")),
+            "channel": channel,
+            "world_state": world_state,
+            "last_counterfactual_summary": dict(world_state.get("last_counterfactual_summary", {})),
+            "last_post_outcome_calibration": dict(world_state.get("last_post_outcome_calibration", {})),
+            "response_expectations": dict(world_state.get("response_expectations", {})),
+            "updated_at": str(state.get("updated_at", "")),
         }
 
     def record_action_selection(
@@ -2467,7 +2797,16 @@ class MemoryBridge:
         silence_reason: str = "",
         defer_reason: str = "",
         action_rationale: str = "",
+        world_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        selected_prediction = dict(selected_action.get("predicted_outcome", {}))
+        next_world_state = dict(world_state or {})
+        next_world_state["last_counterfactual_summary"] = {
+            "selected_action": str(selected_action.get("action_type", "") or ""),
+            "selected_prediction": selected_prediction,
+            "evaluated_actions": [str(item.get("action_type", "") or "") for item in action_market[:3]],
+            "at": utc_now(),
+        }
         metadata = {
             "last_action_selection": {
                 "message_id": str(message_id or ""),
@@ -2479,23 +2818,30 @@ class MemoryBridge:
             "last_action_query": str(query or ""),
             "last_intent_state": dict(intent_state),
             "last_intent_state_v2": dict(intent_state),
+            "last_intent_state_v3": dict(intent_state),
             "last_action_market": list(action_market),
             "last_action_market_v2": list(action_market),
+            "last_action_market_v3": list(action_market),
             "last_selected_action": dict(selected_action),
             "last_expression_budget": int(expression_budget),
             "last_expression_budget_v2": int(expression_budget),
+            "last_expression_budget_v3": int(expression_budget),
             "last_silence_reason": str(silence_reason or ""),
             "last_defer_reason": str(defer_reason or ""),
             "last_action_rationale": str(action_rationale or ""),
+            "last_counterfactual_summary": selected_prediction,
         }
-        return self.graph.update_subject_state(
+        updated = self.graph.update_subject_state(
             channel=channel,
             thread_key=thread_key,
             chat_name=chat_name,
+            world_state=next_world_state,
             metadata=metadata,
             note=f"action_selection:{selected_action.get('action_type', 'reply_once')}",
             source="stage6_action_selection",
         )
+        self.clear_packet_cache()
+        return updated
 
     def record_consciousness_entry(
         self,
