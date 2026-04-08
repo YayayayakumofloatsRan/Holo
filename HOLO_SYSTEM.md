@@ -46,15 +46,15 @@ The real continuity lives in:
 
 ## Main Data Flow
 1. Transport receives a turn
-2. Host normalizes input and builds `TurnContext`
-3. Memory bridge builds a structured `mind_packet` with adaptive `fast` / `recall` tiers
-4. Processor builds `TurnPlan`
-4. Processor returns structured `ReplyPlan`
-5. Bubble planner shapes WeChat output into 1-4 bubbles
-6. Host writes outbound turn to runtime store
-7. Memory bridge writes archive + working/candidate observations
-8. Mind Graph incrementally re-syncs the active thread after each real turn
-9. Background promotion/dream cycles adjust longer-term memory
+2. Host normalizes input and records it as an event, not an automatic reply
+3. Memory bridge builds a structured `mind_packet` plus `intent_state` and `action_market`
+4. The subject kernel selects one action
+5. Only the selected speech action enters processor generation
+6. Expression budget, silence, or defer are treated as first-class action outcomes
+7. Host writes the chosen action and any outbound turn to runtime store
+8. Memory bridge writes archive + working/candidate observations
+9. Mind Graph incrementally re-syncs the active thread after each real turn
+10. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
 
 ## Current Runtime Truth
 - Main processor: `codex_cli`
@@ -87,6 +87,8 @@ Current relationship-memory rule:
 - `OPERATIONS.md`: how to start, stop, inspect, and recover the system
 - `holo_memory_library/MEMORY_LIBRARY.md`: memory architecture and CLI
 - `windows_helper/README.md`: Windows transport details
+- `docs/MIND_OS_STAGE5_INTENT_LED_SUBJECT.md`: Stage-5 subject-first runtime design
+- `docs/ROADMAP_REGISTRY.md`: preserved primary/secondary/deferred tracks
 - `tests/`: regression coverage for host, memory, and Windows helper
 
 ## Invariants

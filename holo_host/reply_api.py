@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -435,6 +435,7 @@ class HoloReplyService:
             graph_led_reply=config.memory.graph_led_reply,
             graph_fallback=config.memory.graph_fallback,
             deep_recall_on_memory_queries=config.memory.deep_recall_on_memory_queries,
+            active_wechat_history_enabled=config.memory.active_wechat_history_enabled,
             vector_backend=config.memory.vector_backend,
             milvus_uri=config.memory.milvus_uri,
             milvus_collection_prefix=config.memory.milvus_collection_prefix,
@@ -768,6 +769,53 @@ class HoloReplyService:
     def initiative_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8) -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.initiative_market(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
+    def intent_state(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.intent_state(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query)
+
+    def action_market(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.action_market(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                query=query,
+                limit=limit,
+            )
+
+    def trace_action_selection(
+        self,
+        *,
+        query: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_action_selection(
+                query=query,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+            )
 
     def trace_resistance(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict[str, Any]:
         with self._memory_lock:
@@ -1115,6 +1163,113 @@ class HoloReplyService:
         report["affect_tick_touch"] = affect_tick
         return report
 
+    def accept_stage5(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage5_acceptance
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        silence_query = "ok"
+        defer_query = "reply later, not now"
+        normal_query = "continue from that line"
+        resistance_query = "don't just follow me; push back a little"
+        fast_query = "you there"
+        deep_query = "what do you remember from before we came back online"
+        mode_transition = self.set_brain_mode(mode="full_brain", note="accept-stage5")
+        silence_trace = self.trace_action_selection(
+            query=silence_query,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        defer_trace = self.trace_action_selection(
+            query=defer_query,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        normal_trace = self.trace_action_selection(
+            query=normal_query,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        resistance_trace = self.trace_action_selection(
+            query=resistance_query,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        fast_benchmark = self._benchmark_packet_build(
+            query=fast_query,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="fast",
+        )
+        recall_benchmark = self._benchmark_packet_build(
+            query=normal_query,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="recall",
+        )
+        deep_benchmark = self._benchmark_packet_build(
+            query=deep_query,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="deep_recall",
+        )
+        report = _evaluate_stage5_acceptance(
+            health=self.health(),
+            mode_transition=mode_transition,
+            brain_status=self.brain_status(),
+            intent_state=self.intent_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel, query=normal_query),
+            action_market=self.action_market(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel, query=normal_query, limit=8),
+            silence_trace=silence_trace,
+            defer_trace=defer_trace,
+            normal_trace=normal_trace,
+            resistance_trace=resistance_trace,
+            initiative_probe=self.initiative_probe(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                query="should I initiate contact now",
+            ),
+            operator_probe=self.operator_probe(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel),
+            fast_benchmark=fast_benchmark,
+            recall_benchmark=recall_benchmark,
+            deep_benchmark=deep_benchmark,
+            roadmap_registry=self.memory.roadmap_registry(),
+        )
+        report["transport"] = "live_http"
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        return report
+
     def initiative_status(
         self,
         *,
@@ -1341,6 +1496,7 @@ class HoloReplyService:
             "channel": turn.channel,
             "thread_key": str(thread.get("thread_key") or incoming.thread_key),
             "incoming_thread_key": incoming.thread_key,
+            "message_id": incoming.message_id,
             "chat_name": turn.chat_name,
             "sender": turn.sender,
             "contact_display_name": str(contact.get("display_name") or ""),
@@ -1641,6 +1797,61 @@ class HoloReplyService:
         )
         return report
 
+    def _schedule_deferred_reply(
+        self,
+        *,
+        thread: dict[str, Any],
+        contact: dict[str, Any],
+        stored_message: dict[str, Any],
+        turn: ChatTurn,
+        selected_action: dict[str, Any],
+        defer_reason: str,
+    ) -> int:
+        available_at = (
+            datetime.now(timezone.utc).replace(microsecond=0)
+            + timedelta(seconds=max(90, int(self.config.memory.attention_tick_interval_seconds) * 20))
+        ).isoformat().replace("+00:00", "Z")
+        return self.store.enqueue_job(
+            task_type="deferred_reply",
+            priority=80,
+            message_row_id=int(stored_message["id"]),
+            thread_id=int(thread["id"]),
+            contact_id=int(contact["id"]),
+            available_at=available_at,
+            payload={
+                "source": "reply_api.defer_reply",
+                "chat_name": turn.chat_name,
+                "thread_key": thread.get("thread_key") or turn.thread_key,
+                "channel": turn.channel,
+                "sender": turn.sender,
+                "defer_reason": defer_reason,
+                "selected_action": dict(selected_action),
+            },
+        )
+
+    def _record_subject_action(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        sidecar: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.record_action_selection(
+                channel=turn.channel,
+                thread_key=incoming.thread_key,
+                chat_name=turn.chat_name,
+                message_id=incoming.message_id,
+                query=turn.text,
+                intent_state=dict(sidecar.get("intent_state", {})),
+                action_market=list(sidecar.get("action_market", [])),
+                selected_action=dict(sidecar.get("selected_action", {})),
+                expression_budget=int(sidecar.get("expression_budget", 0) or 0),
+                silence_reason=str(sidecar.get("silence_reason", "") or ""),
+                defer_reason=str(sidecar.get("defer_reason", "") or ""),
+                action_rationale=str(sidecar.get("action_rationale", "") or ""),
+            )
+
     def handle_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
         started_at = time.perf_counter()
         turn = self._parse_turn(payload)
@@ -1745,6 +1956,93 @@ class HoloReplyService:
                 with self._memory_lock:
                     sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
         sidecar_ms = int((time.perf_counter() - sidecar_started_at) * 1000)
+        selected_action = dict(sidecar.get("selected_action", {}))
+        selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
+        if selected_action_type not in {"silence", "defer_reply", "reply_once", "reply_multi", "history_refresh", "visual_recall"}:
+            for candidate in list(sidecar.get("action_market", [])):
+                candidate_type = str(candidate.get("action_type", "")).strip()
+                if candidate_type in {"silence", "defer_reply", "reply_once", "reply_multi", "history_refresh", "visual_recall"}:
+                    selected_action = dict(candidate)
+                    selected_action_type = candidate_type
+                    break
+        last_action_selection = dict(sidecar.get("last_action_selection", {})) if isinstance(sidecar.get("last_action_selection", {}), dict) else {}
+        if record.get("duplicate") and record.get("awaiting_reply"):
+            if str(last_action_selection.get("message_id", "") or "") == incoming.message_id and selected_action_type in {"silence", "defer_reply"}:
+                return {
+                    "action": "ignore",
+                    "reason": "already_decided",
+                    "thread_key": incoming.thread_key,
+                    "message_id": incoming.message_id,
+                    "selected_action": selected_action_type,
+                }
+        if selected_action_type == "history_refresh" and active_history_report is None and self._should_refresh_wechat_history(turn, sidecar):
+            refresh_started_at = time.perf_counter()
+            active_history_report = self.refresh_wechat_history(
+                {
+                    "chat_name": turn.chat_name,
+                    "thread_key": incoming.thread_key,
+                    "channel": turn.channel,
+                    "query": turn.text,
+                    "force": True,
+                }
+            )
+            active_history_ms += int((time.perf_counter() - refresh_started_at) * 1000)
+            if str(active_history_report.get("status", "")).strip() == "ingested":
+                with self._memory_lock:
+                    sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
+                selected_action = dict(sidecar.get("selected_action", {}))
+                selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
+
+        self._record_subject_action(turn=turn, incoming=incoming, sidecar=sidecar)
+
+        if selected_action_type == "silence":
+            self.logger.info(
+                "subject selected silence for %s message=%s reason=%s",
+                turn.chat_name,
+                incoming.message_id,
+                sidecar.get("silence_reason", ""),
+            )
+            return {
+                "action": "silence",
+                "reason": str(sidecar.get("silence_reason", "") or "silence_selected"),
+                "thread_key": incoming.thread_key,
+                "message_id": incoming.message_id,
+                "selected_action": selected_action,
+                "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
+                "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+                "active_memory_refresh": active_history_report or {},
+                "visual_ingest": visual_report or {},
+            }
+
+        if selected_action_type == "defer_reply":
+            deferred_job_id = self._schedule_deferred_reply(
+                thread=thread,
+                contact=contact,
+                stored_message=stored_message,
+                turn=turn,
+                selected_action=selected_action,
+                defer_reason=str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
+            )
+            self.logger.info(
+                "subject deferred reply for %s message=%s job=%s reason=%s",
+                turn.chat_name,
+                incoming.message_id,
+                deferred_job_id,
+                sidecar.get("defer_reason", ""),
+            )
+            return {
+                "action": "defer_reply",
+                "reason": str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
+                "thread_key": incoming.thread_key,
+                "message_id": incoming.message_id,
+                "job_id": deferred_job_id,
+                "selected_action": selected_action,
+                "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
+                "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+                "active_memory_refresh": active_history_report or {},
+                "visual_ingest": visual_report or {},
+            }
+
         capability_started_at = time.perf_counter()
         capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata)
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
@@ -1791,6 +2089,7 @@ class HoloReplyService:
             utterance_plan=reply_plan.utterance_plan or turn_context.utterance_plan,
             route=reply_plan.route,
             target_count=(reply_plan.turn_plan.bubble_target if reply_plan.turn_plan else 2),
+            strict_target=bool(sidecar.get("selected_action", {})),
         )
         final_reply = " ".join(bubble.text for bubble in bubbles).strip()
         outbound = self.policy.outbound_decision(
@@ -1967,6 +2266,9 @@ class HoloReplyService:
             "timing_ms": timing_ms,
             "active_memory_refresh": active_history_report or {},
             "visual_ingest": visual_report or {},
+            "selected_action": dict(sidecar.get("selected_action", {})),
+            "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
+            "action_rationale": str(sidecar.get("action_rationale", "") or ""),
         }
 
     def _parse_turn(self, payload: dict[str, Any]) -> ChatTurn:
@@ -2005,6 +2307,7 @@ class HoloReplyService:
         utterance_plan: dict[str, Any] | None,
         route: str,
         target_count: int = 2,
+        strict_target: bool = False,
     ) -> list[ReplyBubble]:
         raw_bubbles = build_reply_bubbles(
             text,
@@ -2014,6 +2317,7 @@ class HoloReplyService:
             utterance_plan=utterance_plan,
             route=route,
             target_count=target_count,
+            strict_target=strict_target,
         )
         finalized: list[ReplyBubble] = []
         for bubble in raw_bubbles:
@@ -2183,6 +2487,27 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         thread_key=params.get("thread_key", [None])[0],
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/intent-state":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.intent_state(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        query=params.get("query", [""])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/action-market":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.action_market(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        query=params.get("query", [""])[0],
+                        limit=int(params.get("limit", ["8"])[0]),
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
@@ -2409,6 +2734,18 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         ),
                     )
                     return
+                if parsed.path == "/trace-action-selection":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.trace_action_selection(
+                            query=str(payload.get("query", "")).strip(),
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            limit=int(payload.get("limit", 8) or 8),
+                        ),
+                    )
+                    return
                 if parsed.path == "/accept-stage3":
                     self._write_json(
                         HTTPStatus.OK,
@@ -2426,6 +2763,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage4(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage5":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage5(
                             thread_key=str(payload.get("thread_key", "")).strip() or None,
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",

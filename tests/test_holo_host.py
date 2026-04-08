@@ -78,6 +78,7 @@ class FakeMemory:
         self.brain_mode = "companion"
         self.active_history_refreshes: list[dict] = []
         self.visual_rows: list[dict] = []
+        self.action_selections: list[dict] = []
         self.game_state_data = {
             "trust_score": 0.6,
             "teasing_tolerance": 0.55,
@@ -87,12 +88,169 @@ class FakeMemory:
         }
         self.graph = self
 
+    @staticmethod
+    def roadmap_registry() -> dict:
+        return {
+            "Primary Track": ["intent-led subject runtime"],
+            "Secondary Tracks": ["world model", "autobiographical continuity"],
+            "Parked Hypotheses": ["counterfactual inner simulation"],
+            "Deferred Experiments": ["deeper world modeling"],
+            "Constitutional Constraints": ["owner override", "policy boundary"],
+        }
+
+    def _derive_stage5_selection(self, query: str, *, channel: str, thread_key: str, chat_name: str) -> dict:
+        normalized_query = str(query or "").strip()
+        lowered = normalized_query.lower()
+        low_signal = normalized_query in {"嗯", "哦", "好", "ok", "okay", "收到", "嗷"} or (
+            len(normalized_query) <= 4
+            and "?" not in lowered
+            and not any(token in lowered for token in ("later", "after", "remember", "before", "earlier"))
+        )
+        question_like = ("?" in lowered) or ("吗" in str(query or "")) or any(token in lowered for token in ("how", "why", "what", "remember", "before", "earlier"))
+        defer_requested = any(token in lowered for token in ("later", "after")) or any(token in str(query or "") for token in ("晚点", "之后"))
+        visual_requested = any(token in lowered for token in ("image", "photo", "picture")) or any(token in str(query or "") for token in ("图", "图片", "照片"))
+        tier = self.sidecar_tier
+        query_focus = "recent"
+        reply_pull = 0.68
+        expansion_pressure = 0.34
+        if any(token in lowered for token in ("remember", "before", "earlier")) or any(token in str(query or "") for token in ("记得", "之前", "上线前")):
+            tier = "deep_recall"
+            query_focus = "memory"
+            reply_pull = 0.78
+            expansion_pressure = 0.72
+        elif "顺着" in str(query or "") or "继续" in str(query or "") or "carry on" in lowered or "continue" in lowered:
+            tier = "recall"
+            query_focus = "continuity"
+            reply_pull = 0.74
+            expansion_pressure = 0.58
+        elif low_signal:
+            reply_pull = 0.18
+            expansion_pressure = 0.08
+        resistance_pull = 0.28
+        if "顶" in str(query or "") or "反驳" in str(query or "") or "别总按我的话" in str(query or ""):
+            resistance_pull = 0.62
+        intent_state = {
+            "need": "delayed_touch" if defer_requested else "direct_reply",
+            "query_focus": query_focus,
+            "tier": tier,
+            "low_signal": low_signal,
+            "question_like": question_like,
+            "defer_requested": defer_requested,
+            "visual_requested": visual_requested,
+            "reply_pull": reply_pull,
+            "resistance_pull": resistance_pull,
+            "continuity_pull": 0.62,
+            "expansion_pressure": expansion_pressure,
+            "internal_pressure": 0.55,
+            "why_now": "subject state still leans toward contact and continuity",
+        }
+        action_market = [
+            {
+                "action_type": "silence",
+                "score": 0.61 if low_signal and not question_like and not defer_requested else 0.04,
+                "why_now": "low-signal input does not demand immediate language",
+                "drive_source": "avoid_risk + low_signal",
+                "value_rationale": "stability can outrank contact",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "defer_reply",
+                "score": 0.86 if defer_requested else 0.08,
+                "why_now": "the subject wants to answer later",
+                "drive_source": "resistance_pull + avoid_risk",
+                "value_rationale": "identity asks for more time",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "reply_once",
+                "score": max(0.12, reply_pull + 0.06),
+                "why_now": "the subject wants a light reply",
+                "drive_source": "seek_contact + seek_continuity",
+                "value_rationale": "the turn deserves contact but not sprawl",
+                "send_allowed": True,
+            },
+            {
+                "action_type": "reply_multi",
+                "score": reply_pull + expansion_pressure * 0.45,
+                "why_now": "memory or pressure makes the turn worth unfolding",
+                "drive_source": "continuity_pull + expansion_pressure",
+                "value_rationale": "the subject judges the turn worth more room",
+                "send_allowed": True,
+            },
+            {
+                "action_type": "proactive_ping",
+                "score": 0.44,
+                "why_now": "contact pressure exists in the background",
+                "drive_source": "initiative_pressure",
+                "value_rationale": "human threads stay first-class",
+                "send_allowed": True,
+            },
+            {
+                "action_type": "history_refresh",
+                "score": 0.66 if tier in {"recall", "deep_recall"} else 0.03,
+                "why_now": "memory depth could benefit from refresh",
+                "drive_source": "seek_continuity",
+                "value_rationale": "continuity can ask for more evidence",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "visual_recall",
+                "score": 0.62 if visual_requested else 0.02,
+                "why_now": "a visual anchor is relevant",
+                "drive_source": "visual_memory",
+                "value_rationale": "visual memory belongs inside the same subject state",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "operator_self_fix",
+                "score": 0.31,
+                "why_now": "bounded self-fix remains available",
+                "drive_source": "seek_self_repair",
+                "value_rationale": "repair stays inside the same kernel",
+                "send_allowed": False,
+            },
+        ]
+        action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0)), reverse=True)
+        selected_action = dict(action_market[0])
+        if selected_action["action_type"] == "reply_multi" and expansion_pressure < 0.48:
+            selected_action = next(dict(item) for item in action_market if item["action_type"] == "reply_once")
+        if selected_action["action_type"] == "silence" and question_like:
+            selected_action = next(dict(item) for item in action_market if item["action_type"] == "reply_once")
+        expression_budget = 1
+        silence_reason = ""
+        defer_reason = ""
+        if selected_action["action_type"] == "silence":
+            expression_budget = 0
+            silence_reason = "low_signal_turn_with_low_expression_pressure"
+        elif selected_action["action_type"] == "defer_reply":
+            expression_budget = 0
+            defer_reason = "subject_requests_more_time_before_reply"
+        elif selected_action["action_type"] == "reply_multi":
+            expression_budget = 3 if tier == "deep_recall" else 2
+        action_rationale = f"{selected_action['action_type']} because {selected_action['why_now']}"
+        selected_action["expression_budget"] = expression_budget
+        selected_action["action_rationale"] = action_rationale
+        return {
+            "intent_state": intent_state,
+            "action_market": action_market,
+            "selected_action": selected_action,
+            "expression_budget": expression_budget,
+            "silence_reason": silence_reason,
+            "defer_reason": defer_reason,
+            "action_rationale": action_rationale,
+        }
+
     def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
         self.sidecar_requests.append({"query": query, "context": dict(context or {})})
+        context = dict(context or {})
+        thread_key = str(context.get("thread_key", "") or context.get("incoming_thread_key", "") or context.get("chat_name", "") or "Nemoqi")
+        chat_name = str(context.get("chat_name", "") or thread_key or "Nemoqi")
+        channel = str(context.get("channel", "wechat") or "wechat")
+        stage5 = self._derive_stage5_selection(query, channel=channel, thread_key=thread_key, chat_name=chat_name)
         return {
             "addendum": f"隐式约束：{query}",
-            "tier": self.sidecar_tier,
-            "mind_packet_version": "v7",
+            "tier": stage5["intent_state"]["tier"],
+            "mind_packet_version": "v8",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
@@ -100,13 +258,7 @@ class FakeMemory:
             "consciousness_stream": {"lines": [], "items": [], "thread_summary": ""},
             "persona_blend": {"wisdom": 0.72, "playfulness": 0.64, "slyness": 0.61},
             "brain_state": {"mode": self.brain_mode, "loops": [], "cache": {"hit_ratio": 0.0}},
-            "game_state": {
-                "trust_score": 0.6,
-                "teasing_tolerance": 0.55,
-                "pressure_level": 0.2,
-                "initiative_window": 0.5,
-                "correction_sensitivity": 0.4,
-            },
+            "game_state": dict(self.game_state_data),
             "stream_influence": {"influence": {"motifs": ["continuity"], "updated_threads": 1}},
             "self_revision_state": {"latest_status": "reviewed", "applied_patch": {}},
             "affect_state": {
@@ -190,6 +342,13 @@ class FakeMemory:
             "retrieval_trace": {},
             "memory_route": "hybrid",
             "recall_confidence": 0.0,
+            "intent_state": dict(stage5["intent_state"]),
+            "action_market": list(stage5["action_market"]),
+            "selected_action": dict(stage5["selected_action"]),
+            "expression_budget": int(stage5["expression_budget"]),
+            "silence_reason": str(stage5["silence_reason"]),
+            "defer_reason": str(stage5["defer_reason"]),
+            "action_rationale": str(stage5["action_rationale"]),
             "reply_constraints": {
                 "lines": ["先直接回应，再自然延伸。"],
                 "human_recall_style": "回忆时先概括，再给锚点。",
@@ -198,6 +357,9 @@ class FakeMemory:
                 "query_mode": "casual",
                 "emotion_state": {"name": "steady_wolf"},
                 "rewrite_state": {"utterance_plan": {"beats": ["receive", "pivot", "landing"]}},
+                "intent_state": dict(stage5["intent_state"]),
+                "selected_action": dict(stage5["selected_action"]),
+                "expression_budget": int(stage5["expression_budget"]),
             },
         }
 
@@ -674,8 +836,89 @@ class FakeMemory:
             "outcome_memory": dict(packet.get("outcome_memory", {})),
         }
 
+    def intent_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict:
+        packet = self.sidecar_packet(query, context={"thread_key": thread_key, "chat_name": chat_name, "channel": channel})
+        return {
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "query": query,
+            "intent_state": dict(packet.get("intent_state", {})),
+            "selected_action": dict(packet.get("selected_action", {})),
+            "expression_budget": int(packet.get("expression_budget", 0) or 0),
+        }
+
+    def action_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "", limit: int = 8) -> dict:
+        packet = self.sidecar_packet(query, context={"thread_key": thread_key, "chat_name": chat_name, "channel": channel})
+        return {
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "query": query,
+            "action_market": list(packet.get("action_market", []))[:limit],
+            "selected_action": dict(packet.get("selected_action", {})),
+            "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            "roadmap_registry": self.roadmap_registry(),
+        }
+
+    def trace_action_selection(self, *, query: str, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 8) -> dict:
+        packet = self.sidecar_packet(query, context={"thread_key": thread_key, "chat_name": chat_name, "channel": channel})
+        return {
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "query": query,
+            "intent_state": dict(packet.get("intent_state", {})),
+            "action_market": list(packet.get("action_market", []))[:limit],
+            "selected_action": dict(packet.get("selected_action", {})),
+            "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            "silence_reason": str(packet.get("silence_reason", "")),
+            "defer_reason": str(packet.get("defer_reason", "")),
+            "action_rationale": str(packet.get("action_rationale", "")),
+            "affect_state": dict(packet.get("affect_state", {})),
+            "drive_state": dict(packet.get("drive_state", {})),
+            "value_state": dict(packet.get("value_state", {})),
+            "conflict_state": dict(packet.get("conflict_state", {})),
+            "game_state": dict(packet.get("game_state", {})),
+            "self_model": dict(packet.get("self_model", {})),
+            "roadmap_registry": self.roadmap_registry(),
+        }
+
     def update_subject_state(self, *, thread_key: str, chat_name: str, channel: str = "wechat", **changes) -> dict:
         return {"status": "ok", "thread_key": thread_key, "chat_name": chat_name, "channel": channel, "changes": changes}
+
+    def record_action_selection(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        message_id: str,
+        query: str,
+        intent_state: dict,
+        action_market: list[dict],
+        selected_action: dict,
+        expression_budget: int,
+        silence_reason: str = "",
+        defer_reason: str = "",
+        action_rationale: str = "",
+    ) -> dict:
+        payload = {
+            "channel": channel,
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "message_id": message_id,
+            "query": query,
+            "intent_state": dict(intent_state),
+            "action_market": list(action_market),
+            "selected_action": dict(selected_action),
+            "expression_budget": int(expression_budget),
+            "silence_reason": str(silence_reason),
+            "defer_reason": str(defer_reason),
+            "action_rationale": str(action_rationale),
+        }
+        self.action_selections.append(payload)
+        return {"status": "ok", **payload}
 
     def add_initiative_candidate(self, **payload) -> dict:
         return {"status": "ok", "id": payload.get("id", 1), **payload}
@@ -1817,6 +2060,97 @@ wechat_helper_config_path = ""
                 result = service.handle_reply(incoming)
                 self.assertEqual(result["action"], "reply")
                 self.assertTrue(runner.calls)
+            finally:
+                close_service_handles(service)
+
+    def test_reply_service_can_choose_silence_as_a_first_class_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("This should never be used.")
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "嗯",
+                        "channel": "wechat",
+                        "message_id": "stage5-silence-1",
+                    }
+                )
+                self.assertEqual(result["action"], "silence")
+                self.assertEqual(result["expression_budget"], 0)
+                self.assertEqual(result["reason"], "low_signal_turn_with_low_expression_pressure")
+                self.assertFalse(runner.calls)
+                self.assertTrue(memory.action_selections)
+                self.assertEqual(memory.action_selections[-1]["selected_action"]["action_type"], "silence")
+            finally:
+                close_service_handles(service)
+
+    def test_reply_service_can_defer_reply_and_schedule_job(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("This should also never be used.")
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "这个不用现在回，晚点再说",
+                        "channel": "wechat",
+                        "message_id": "stage5-defer-1",
+                    }
+                )
+                self.assertEqual(result["action"], "defer_reply")
+                self.assertEqual(result["expression_budget"], 0)
+                self.assertTrue(result["job_id"])
+                jobs = store.list_jobs(limit=10)
+                self.assertTrue(any(str(item.get("task_type", "")) == "deferred_reply" for item in jobs))
+                self.assertFalse(runner.calls)
+            finally:
+                close_service_handles(service)
+
+    def test_trace_action_selection_exposes_subject_led_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                trace = service.trace_action_selection(
+                    query="在吗，顺着刚才那句往下接一点",
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    channel="wechat",
+                )
+                self.assertIn(trace["selected_action"]["action_type"], {"reply_once", "reply_multi"})
+                self.assertTrue(trace["intent_state"])
+                self.assertTrue(trace["action_market"])
+                self.assertTrue(trace["action_rationale"])
+            finally:
+                close_service_handles(service)
+
+    def test_accept_stage5_passes_with_fake_subject_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                report = service.accept_stage5(
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    channel="wechat",
+                    iterations=1,
+                    warmup=1,
+                )
+                self.assertEqual(report["status"], "pass")
+                self.assertEqual(report["stage"], "intent-led-subject-runtime-stage5")
             finally:
                 close_service_handles(service)
     def test_reply_service_ingests_artifact_through_memory_bridge(self) -> None:

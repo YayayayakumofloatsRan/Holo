@@ -82,7 +82,12 @@ def build_turn_plan(context: TurnContext, config: HostConfig) -> TurnPlan:
         tool_mode = "web_preview"
     else:
         tool_mode = "none" if fast_path else "bounded"
-    bubble_target = _dynamic_wechat_bubble_target(context, fast_path=fast_path, mind_tier=mind_tier)
+    explicit_budget = 0
+    try:
+        explicit_budget = int(context.expression_budget or context.mind_packet.get("expression_budget", 0) or 0)
+    except (TypeError, ValueError):
+        explicit_budget = 0
+    bubble_target = explicit_budget if explicit_budget > 0 else _dynamic_wechat_bubble_target(context, fast_path=fast_path, mind_tier=mind_tier)
     if mind_tier == "deep_recall":
         history_window = config.memory.recall_history_messages
         latency_tier = "deep_recall"
@@ -280,6 +285,7 @@ def build_reply_bubbles(
     utterance_plan: dict[str, Any] | None = None,
     route: str,
     target_count: int = 2,
+    strict_target: bool = False,
 ) -> list[ReplyBubble]:
     normalized = " ".join(str(text).strip().split())
     if not normalized:
@@ -304,20 +310,21 @@ def build_reply_bubbles(
         segments = segments[:2]
 
     allowed_count = max(1, min(target_count, 5))
-    if len(plan.get("beats", [])) >= 4:
-        allowed_count = max(allowed_count, 4)
-    elif len(plan.get("beats", [])) >= 3:
-        allowed_count = max(allowed_count, 3)
-    if channel == "wechat" and (split_long_segment or (len(segments) >= 2 and len(normalized) > 34)):
-        allowed_count = max(allowed_count, 2)
-    if len(normalized) > 72:
-        allowed_count = max(allowed_count, 3)
-    if len(normalized) > 120:
-        allowed_count = max(allowed_count, 4)
-    if len(normalized) > 180:
-        allowed_count = max(allowed_count, 5)
-    if str(emotion_state.get("playfulness", "")).lower() == "high" and len(normalized) > 48:
-        allowed_count = max(allowed_count, 3)
+    if not strict_target:
+        if len(plan.get("beats", [])) >= 4:
+            allowed_count = max(allowed_count, 4)
+        elif len(plan.get("beats", [])) >= 3:
+            allowed_count = max(allowed_count, 3)
+        if channel == "wechat" and (split_long_segment or (len(segments) >= 2 and len(normalized) > 34)):
+            allowed_count = max(allowed_count, 2)
+        if len(normalized) > 72:
+            allowed_count = max(allowed_count, 3)
+        if len(normalized) > 120:
+            allowed_count = max(allowed_count, 4)
+        if len(normalized) > 180:
+            allowed_count = max(allowed_count, 5)
+        if str(emotion_state.get("playfulness", "")).lower() == "high" and len(normalized) > 48:
+            allowed_count = max(allowed_count, 3)
 
     if len(segments) > allowed_count:
         segments = segments[: allowed_count - 1] + ["，".join(item for item in segments[allowed_count - 1:] if item)]
@@ -682,6 +689,53 @@ def _outcome_memory_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
     return _dedupe_segments(lines)
 
 
+def _intent_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    state = dict(packet.get("intent_state", {}))
+    if not state:
+        return []
+    lines: list[str] = []
+    for key in ("need", "query_focus", "tier", "why_now"):
+        value = str(state.get(key, "")).strip()
+        if value:
+            lines.append(f"{key}={value}")
+    for key in ("reply_pull", "resistance_pull", "continuity_pull", "expansion_pressure", "internal_pressure"):
+        if key in state:
+            lines.append(f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}")
+    for key in ("low_signal", "question_like", "defer_requested", "visual_requested"):
+        if key in state:
+            lines.append(f"{key}={bool(state.get(key, False))}")
+    return _dedupe_segments(lines)
+
+
+def _selected_action_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    selected = dict(packet.get("selected_action", {}))
+    if not selected:
+        return []
+    lines: list[str] = []
+    action_type = str(selected.get("action_type", "")).strip()
+    if action_type:
+        lines.append(f"action_type={action_type}")
+    if "score" in selected:
+        lines.append(f"score={round(float(selected.get('score', 0.0) or 0.0), 3)}")
+    for key in ("why_now", "drive_source", "value_rationale", "action_rationale"):
+        value = str(selected.get(key, packet.get(key, "")) or "").strip()
+        if value:
+            lines.append(f"{key}={value}")
+    budget = packet.get("expression_budget", selected.get("expression_budget", 0))
+    try:
+        budget_value = int(budget or 0)
+    except (TypeError, ValueError):
+        budget_value = 0
+    lines.append(f"expression_budget={budget_value}")
+    silence_reason = str(packet.get("silence_reason", selected.get("silence_reason", "")) or "").strip()
+    if silence_reason:
+        lines.append(f"silence_reason={silence_reason}")
+    defer_reason = str(packet.get("defer_reason", selected.get("defer_reason", "")) or "").strip()
+    if defer_reason:
+        lines.append(f"defer_reason={defer_reason}")
+    return _dedupe_segments(lines)
+
+
 def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> bool:
     if not config.memory.recall_reconstruct_enabled:
         return False
@@ -728,6 +782,8 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     value_lines = _value_state_lines_for_prompt(packet)
     conflict_lines = _conflict_state_lines_for_prompt(packet)
     resistance_lines = _resistance_posture_lines_for_prompt(packet)
+    intent_lines = _intent_state_lines_for_prompt(packet)
+    selected_action_lines = _selected_action_lines_for_prompt(packet)
     initiative_lines = _initiative_candidates_lines_for_prompt(packet)
     outcome_lines = _outcome_memory_lines_for_prompt(packet)
     game_state_lines = _game_state_lines_for_prompt(packet)
@@ -742,6 +798,8 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
     value_block = "\n".join(f"- {line}" for line in value_lines) if value_lines else "- none"
     conflict_block = "\n".join(f"- {line}" for line in conflict_lines) if conflict_lines else "- none"
     resistance_block = "\n".join(f"- {line}" for line in resistance_lines) if resistance_lines else "- none"
+    intent_block = "\n".join(f"- {line}" for line in intent_lines) if intent_lines else "- none"
+    selected_action_block = "\n".join(f"- {line}" for line in selected_action_lines) if selected_action_lines else "- none"
     initiative_block = "\n".join(f"- {line}" for line in initiative_lines) if initiative_lines else "- none"
     outcome_block = "\n".join(f"- {line}" for line in outcome_lines) if outcome_lines else "- none"
     game_block = "\n".join(f"- {line}" for line in game_state_lines) if game_state_lines else "- none"
@@ -790,6 +848,8 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         f"Value state:\n{value_block}\n\n"
         f"Conflict state:\n{conflict_block}\n\n"
         f"Resistance posture:\n{resistance_block}\n\n"
+        f"Intent state:\n{intent_block}\n\n"
+        f"Selected action:\n{selected_action_block}\n\n"
         f"Initiative candidates:\n{initiative_block}\n\n"
         f"Outcome memory:\n{outcome_block}\n\n"
         f"Game state:\n{game_block}\n\n"
@@ -837,6 +897,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     value_block = _render_section("Value State:", _value_state_lines_for_prompt(packet))
     conflict_block = _render_section("Conflict State:", _conflict_state_lines_for_prompt(packet))
     resistance_block = _render_section("Resistance Posture:", _resistance_posture_lines_for_prompt(packet))
+    intent_block = _render_section("Intent State:", _intent_state_lines_for_prompt(packet))
+    selected_action_block = _render_section("Selected Action:", _selected_action_lines_for_prompt(packet))
     initiative_candidates_block = _render_section("Initiative Candidates:", _initiative_candidates_lines_for_prompt(packet))
     outcome_block = _render_section("Outcome Memory:", _outcome_memory_lines_for_prompt(packet))
     game_state_block = _render_section("Game State:", _game_state_lines_for_prompt(packet))
@@ -888,6 +950,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         value_block,
         conflict_block,
         resistance_block,
+        intent_block,
+        selected_action_block,
         relationship_block,
         game_state_block,
         f"Current User Turn:\n{context.user_text}",
@@ -1000,6 +1064,7 @@ class CodexCliProcessor:
             utterance_plan=context.utterance_plan,
             route=route,
             target_count=turn_plan.bubble_target,
+            strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
         )
         joined = " ".join(bubble.text for bubble in bubbles).strip() or text
         return ReplyPlan(
@@ -1065,6 +1130,7 @@ class ResponsesProcessor:
             utterance_plan=context.utterance_plan,
             route=route,
             target_count=turn_plan.bubble_target,
+            strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
         )
         joined = " ".join(bubble.text for bubble in bubbles).strip() or text
         return ReplyPlan(

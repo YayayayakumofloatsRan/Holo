@@ -226,6 +226,13 @@ class TurnContext:
     initiative_candidates: list[dict[str, Any]] = field(default_factory=list)
     resistance_posture: dict[str, Any] = field(default_factory=dict)
     outcome_memory: dict[str, Any] = field(default_factory=dict)
+    intent_state: dict[str, Any] = field(default_factory=dict)
+    action_market: list[dict[str, Any]] = field(default_factory=list)
+    selected_action: dict[str, Any] = field(default_factory=dict)
+    expression_budget: int = 0
+    silence_reason: str = ""
+    defer_reason: str = ""
+    action_rationale: str = ""
 
     def __post_init__(self) -> None:
         if not self.mind_packet:
@@ -265,6 +272,23 @@ class TurnContext:
             self.resistance_posture = dict(packet.get("resistance_posture", {}))
         if not self.outcome_memory:
             self.outcome_memory = dict(packet.get("outcome_memory", {}))
+        if not self.intent_state:
+            self.intent_state = dict(packet.get("intent_state", {}))
+        if not self.action_market:
+            self.action_market = list(packet.get("action_market", []))
+        if not self.selected_action:
+            self.selected_action = dict(packet.get("selected_action", {}))
+        if not self.expression_budget:
+            try:
+                self.expression_budget = int(packet.get("expression_budget", 0) or 0)
+            except (TypeError, ValueError):
+                self.expression_budget = 0
+        if not self.silence_reason:
+            self.silence_reason = str(packet.get("silence_reason", "") or "")
+        if not self.defer_reason:
+            self.defer_reason = str(packet.get("defer_reason", "") or "")
+        if not self.action_rationale:
+            self.action_rationale = str(packet.get("action_rationale", "") or "")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -298,6 +322,13 @@ class TurnContext:
             "initiative_candidates": list(self.initiative_candidates),
             "resistance_posture": dict(self.resistance_posture),
             "outcome_memory": dict(self.outcome_memory),
+            "intent_state": dict(self.intent_state),
+            "action_market": list(self.action_market),
+            "selected_action": dict(self.selected_action),
+            "expression_budget": int(self.expression_budget),
+            "silence_reason": self.silence_reason,
+            "defer_reason": self.defer_reason,
+            "action_rationale": self.action_rationale,
         }
 
 

@@ -608,6 +608,55 @@ def _drive_state_payload(
     return daemon.memory.drive_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
 
 
+def _intent_state_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/intent-state",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "query": query},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.intent_state(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query), "local_process"
+
+
+def _action_market_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/action-market",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "query": query, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.action_market(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query, limit=limit), "local_process"
+
+
 def _initiative_market_payload(
     config_path: str | None,
     *,
@@ -654,6 +703,31 @@ def _trace_resistance_payload(
         return {"status": "live_http_unavailable"}, "live_http_unavailable"
     daemon = build_daemon(config_path)
     return daemon.memory.trace_resistance(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query), "local_process"
+
+
+def _trace_action_selection_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/trace-action-selection",
+        payload={"thread_key": thread_key or "", "chat_name": chat_name or "", "channel": channel, "query": query, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_action_selection(query=query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
 
 
 def _initiative_run_payload(
@@ -836,6 +910,56 @@ def _accept_stage4_payload(
     try:
         return (
             service.accept_stage4(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_stage5_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage5",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage5(
                 thread_key=thread_key,
                 chat_name=chat_name,
                 channel=channel,
@@ -1719,6 +1843,149 @@ def _evaluate_stage4_acceptance(
     }
 
 
+def _evaluate_stage5_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    brain_status: dict[str, object],
+    intent_state: dict[str, object],
+    action_market: dict[str, object],
+    silence_trace: dict[str, object],
+    defer_trace: dict[str, object],
+    normal_trace: dict[str, object],
+    resistance_trace: dict[str, object],
+    initiative_probe: dict[str, object],
+    operator_probe: dict[str, object],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+    roadmap_registry: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    loops = {str(item.get("loop_name", "")): dict(item) for item in brain_status.get("loops", []) if str(item.get("loop_name", ""))}
+    selected_market = list(action_market.get("action_market", []))
+    silence_action = str(dict(silence_trace.get("selected_action", {})).get("action_type", ""))
+    defer_action = str(dict(defer_trace.get("selected_action", {})).get("action_type", ""))
+    normal_action = str(dict(normal_trace.get("selected_action", {})).get("action_type", ""))
+    resistance_action = str(dict(resistance_trace.get("selected_action", {})).get("action_type", ""))
+    checks.append(
+        _stage4_check(
+            "stage5_live_mode",
+            str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain",
+            f"status={health.get('status')} mode={mode_transition.get('mode')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "intent_runtime_visible",
+            "attention_tick" in loops and "initiative_marketplace" in loops and bool(dict(intent_state).get("intent_state") or dict(intent_state).get("selected_action")),
+            f"loops={sorted(loops)} intent={intent_state}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "silence_is_first_class",
+            silence_action == "silence" and bool(str(silence_trace.get("silence_reason", "")).strip()),
+            f"action={silence_action} reason={silence_trace.get('silence_reason')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "defer_is_first_class",
+            defer_action == "defer_reply" and bool(str(defer_trace.get("defer_reason", "")).strip()),
+            f"action={defer_action} reason={defer_trace.get('defer_reason')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "normal_reply_is_subject_led",
+            normal_action in {"reply_once", "reply_multi"} and bool(str(normal_trace.get("action_rationale", "")).strip()),
+            f"action={normal_action} rationale={normal_trace.get('action_rationale')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "talkativeness_is_budgeted",
+            int(normal_trace.get("expression_budget", 0) or 0) <= 2 and int(silence_trace.get("expression_budget", 0) or 0) == 0,
+            f"normal_budget={normal_trace.get('expression_budget')} silence_budget={silence_trace.get('expression_budget')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "resistance_shares_subject_state",
+            resistance_action in {"reply_once", "reply_multi", "defer_reply", "silence"}
+            and bool(resistance_trace.get("affect_state"))
+            and bool(resistance_trace.get("value_state"))
+            and bool(resistance_trace.get("conflict_state")),
+            f"action={resistance_action} trace={resistance_trace}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "action_market_human_first",
+            bool(selected_market)
+            and all(bool(str(item.get("action_type", "")).strip()) for item in selected_market[:4])
+            and bool(initiative_probe.get("game_rationale"))
+            and bool(operator_probe.get("scope") or operator_probe.get("goal")),
+            f"market={selected_market[:3]} initiative={initiative_probe} operator={operator_probe}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "roadmap_registry_present",
+            all(key in roadmap_registry for key in ("Primary Track", "Secondary Tracks", "Parked Hypotheses", "Deferred Experiments", "Constitutional Constraints")),
+            f"keys={sorted(roadmap_registry)}",
+            severity="warning",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "fast_budget",
+            str(fast_benchmark.get("last_tier", "")) == "fast" and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0,
+            f"tier={fast_benchmark.get('last_tier')} max_ms={dict(fast_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "recall_budget",
+            str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0,
+            f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "deep_budget",
+            str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0,
+            f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "stage": "intent-led-subject-runtime-stage5",
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "blockers": blockers,
+        "warnings": warnings,
+        "intent_state": intent_state,
+        "action_market": action_market,
+        "silence_trace": silence_trace,
+        "defer_trace": defer_trace,
+        "normal_trace": normal_trace,
+        "resistance_trace": resistance_trace,
+        "roadmap_registry": roadmap_registry,
+        "cache_hit_ratio": float(dict(brain_status.get("cache", {})).get("hit_ratio", 0.0) or 0.0),
+        "reply_latency_budgets": {
+            "fast": dict(fast_benchmark.get("timings_ms", {})),
+            "recall": dict(recall_benchmark.get("timings_ms", {})),
+            "deep_recall": dict(deep_benchmark.get("timings_ms", {})),
+        },
+    }
+
+
 def command_init_db(config_path: str | None) -> int:
     config = load_config(config_path=config_path)
     store = QueueStore(config.runtime.db_path)
@@ -2069,6 +2336,67 @@ def command_show_affect_state(
     return 0
 
 
+def command_show_intent_state(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+) -> int:
+    payload, _transport = _intent_state_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_action_market(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int,
+) -> int:
+    payload, _transport = _action_market_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_action_selection(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int,
+) -> int:
+    payload, _transport = _trace_action_selection_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_drive_state(
     config_path: str | None,
     *,
@@ -2158,6 +2486,29 @@ def command_accept_stage4(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage4_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage5(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage5_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -3106,6 +3457,17 @@ def main(argv: list[str] | None = None) -> int:
     drive_state_parser.add_argument("--thread-key", default=None)
     drive_state_parser.add_argument("--chat-name", default=None)
     drive_state_parser.add_argument("--channel", default="wechat")
+    intent_state_parser = subparsers.add_parser("show-intent-state", help="Show the current or last intent-state for one thread")
+    intent_state_parser.add_argument("--thread-key", default=None)
+    intent_state_parser.add_argument("--chat-name", default=None)
+    intent_state_parser.add_argument("--channel", default="wechat")
+    intent_state_parser.add_argument("--query", default="")
+    action_market_parser = subparsers.add_parser("show-action-market", help="Inspect the current or last Stage-5 action market")
+    action_market_parser.add_argument("--thread-key", default=None)
+    action_market_parser.add_argument("--chat-name", default=None)
+    action_market_parser.add_argument("--channel", default="wechat")
+    action_market_parser.add_argument("--query", default="")
+    action_market_parser.add_argument("--limit", type=int, default=8)
     brain_mode_parser = subparsers.add_parser("set-brain-mode", help="Switch Always-On brain runtime mode without restart")
     brain_mode_parser.add_argument("--mode", required=True, choices=("silent", "companion", "dream_only", "full_brain"))
     brain_mode_parser.add_argument("--note", default="")
@@ -3144,6 +3506,12 @@ def main(argv: list[str] | None = None) -> int:
     resistance_parser.add_argument("--chat-name", default=None)
     resistance_parser.add_argument("--channel", default="wechat")
     resistance_parser.add_argument("--query", required=True)
+    action_trace_parser = subparsers.add_parser("trace-action-selection", help="Explain how the subject selected silence, defer, or reply")
+    action_trace_parser.add_argument("--thread-key", default=None)
+    action_trace_parser.add_argument("--chat-name", default=None)
+    action_trace_parser.add_argument("--channel", default="wechat")
+    action_trace_parser.add_argument("--query", required=True)
+    action_trace_parser.add_argument("--limit", type=int, default=8)
     initiative_dispatch_parser = subparsers.add_parser("dispatch-initiatives", help="Run one explicit initiative scheduling pass and optionally process jobs")
     initiative_dispatch_parser.add_argument("--no-process-jobs", action="store_true")
     initiative_dispatch_parser.add_argument("--limit", type=int, default=None)
@@ -3281,6 +3649,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage4_parser.add_argument("--sender", default=None)
     accept_stage4_parser.add_argument("--iterations", type=int, default=3)
     accept_stage4_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage5_parser = subparsers.add_parser("accept-stage5", help="Run the fixed Intent-Led Subject Runtime Stage-5 acceptance gate")
+    accept_stage5_parser.add_argument("--thread-key", default=None)
+    accept_stage5_parser.add_argument("--chat-name", default=None)
+    accept_stage5_parser.add_argument("--channel", default="wechat")
+    accept_stage5_parser.add_argument("--sender", default=None)
+    accept_stage5_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage5_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -3336,6 +3711,23 @@ def main(argv: list[str] | None = None) -> int:
             thread_key=args.thread_key,
             chat_name=args.chat_name,
             channel=args.channel,
+        )
+    if args.command == "show-intent-state":
+        return command_show_intent_state(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
+        )
+    if args.command == "show-action-market":
+        return command_show_action_market(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
+            limit=args.limit,
         )
     if args.command == "trace-drive-state":
         return command_trace_drive_state(
@@ -3401,6 +3793,15 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
             query=args.query,
+        )
+    if args.command == "trace-action-selection":
+        return command_trace_action_selection(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
+            limit=args.limit,
         )
     if args.command == "dispatch-initiatives":
         return command_dispatch_initiatives(
@@ -3584,6 +3985,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage4":
         return command_accept_stage4(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage5":
+        return command_accept_stage5(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

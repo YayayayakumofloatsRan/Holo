@@ -11,7 +11,7 @@ from types import ModuleType
 from typing import Any
 
 from .activation_state import ActivationStateStore
-from .common import utc_now
+from .common import compact_text, utc_now
 from .mind_graph import MindGraph
 from .models import ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state
@@ -72,6 +72,42 @@ DEFAULT_PERSONA_BLEND = {
     "loneliness_sensitivity": 0.44,
     "feral_restraint": 0.67,
 }
+STAGE5_ACTION_TYPES = (
+    "silence",
+    "defer_reply",
+    "reply_once",
+    "reply_multi",
+    "proactive_ping",
+    "history_refresh",
+    "visual_recall",
+    "operator_self_fix",
+)
+ROADMAP_REGISTRY = {
+    "Primary Track": [
+        "Intent-led subject runtime",
+        "Silence and deferral as first-class actions",
+        "Human-first action market",
+    ],
+    "Secondary Tracks": [
+        "World model thickening",
+        "Autobiographical continuity",
+        "Counterfactual inner simulation",
+    ],
+    "Parked Hypotheses": [
+        "Harder resistance without breaking the owner constitution",
+        "Broader multi-contact initiative orchestration",
+    ],
+    "Deferred Experiments": [
+        "Full world-state prediction",
+        "Long-horizon autobiographical narrator",
+        "Deeper multimodal imagination beyond visual anchors",
+    ],
+    "Constitutional Constraints": [
+        "Owner shutdown remains final",
+        "No self-escalation around secrets, auth, or policy",
+        "Live repo code is not hot-edited by runtime state loops",
+    ],
+}
 
 
 def stream_cadences_from_config(config: Any) -> dict[str, int]:
@@ -97,6 +133,7 @@ class MemoryBridge:
         graph_led_reply: bool = True,
         graph_fallback: bool = True,
         deep_recall_on_memory_queries: bool = True,
+        active_wechat_history_enabled: bool = True,
         vector_backend: str = "milvus",
         milvus_uri: str = ".holo_runtime/milvus/memory_fabric.db",
         milvus_collection_prefix: str = "holo_memory",
@@ -113,6 +150,7 @@ class MemoryBridge:
         self.graph_led_reply = bool(graph_led_reply)
         self.graph_fallback = bool(graph_fallback)
         self.deep_recall_on_memory_queries = bool(deep_recall_on_memory_queries)
+        self.active_wechat_history_enabled = bool(active_wechat_history_enabled)
         self.activation_cache_enabled = bool(activation_cache_enabled)
         self.private_memory_sync_enabled = bool(private_memory_sync_enabled)
         self.private_memory_repo_path = Path(private_memory_repo_path).expanduser() if str(private_memory_repo_path).strip() else None
@@ -295,6 +333,8 @@ class MemoryBridge:
         compact = lowered.replace(" ", "")
         if compact in FAST_PING_HINTS:
             return True
+        if lowered in {"you there", "you there?", "u there", "u there?", "still there", "still there?"}:
+            return True
         if any(marker in lowered for marker in ("remember", "before", "previous", "history", "memory", "system", "dream", "最开始", "之前", "记得", "回忆")):
             return False
         meaningful = sum(1 for ch in current if ch.isalnum() or "\u3400" <= ch <= "\u9fff")
@@ -378,6 +418,330 @@ class MemoryBridge:
             default=0.0,
         )
 
+    @staticmethod
+    def _query_mentions_defer(query: str) -> bool:
+        lowered = str(query or "").lower()
+        hints = (
+            "later",
+            "not now",
+            "no need to reply now",
+            "晚点",
+            "回头",
+            "先别回",
+            "不用现在回",
+            "不用急",
+            "先放着",
+        )
+        return any(hint in lowered for hint in hints)
+
+    @staticmethod
+    def _query_mentions_visual(query: str) -> bool:
+        lowered = str(query or "").lower()
+        hints = ("image", "photo", "picture", "screenshot", "图片", "照片", "截图", "图里", "看图")
+        return any(hint in lowered for hint in hints)
+
+    @staticmethod
+    def _query_signal(query: str) -> dict[str, Any]:
+        text = " ".join(str(query or "").strip().split())
+        lowered = text.lower()
+        low_signal = MemoryBridge._is_fast_ping_query(text)
+        question_like = any(marker in text for marker in ("?", "？")) or any(
+            marker in lowered for marker in ("how", "why", "what", "remember", "before", "earlier")
+        ) or any(marker in text for marker in ("怎么", "为什么", "记得", "之前", "最开始", "一开始"))
+        affirmation_like = text in {"好", "嗯", "收到", "ok", "okay", "行"} or lowered in {"ok", "okay"}
+        return {
+            "text": text,
+            "low_signal": low_signal,
+            "question_like": question_like,
+            "affirmation_like": affirmation_like,
+            "defer_requested": MemoryBridge._query_mentions_defer(text),
+            "visual_requested": MemoryBridge._query_mentions_visual(text),
+        }
+
+    def _derive_intent_fields(
+        self,
+        *,
+        query: str,
+        packet: dict[str, Any],
+        context: dict[str, Any],
+        relationship_state: dict[str, Any],
+        game_state: dict[str, Any],
+        affect_state: dict[str, Any],
+        drive_state: dict[str, Any],
+        value_state: dict[str, Any],
+        conflict_state: dict[str, Any],
+        resistance_posture: dict[str, Any],
+        visual_memory: dict[str, Any],
+    ) -> dict[str, Any]:
+        signal = self._query_signal(query)
+        tier = str(packet.get("tier", "") or "").strip().lower() or "fast"
+        query_focus = str(packet.get("query_focus", "") or packet.get("state", {}).get("query_mode", "") or "recent").strip() or "recent"
+        reply_pull = self._clamp(
+            float(drive_state.get("seek_contact", 0.0) or 0.0) * 0.34
+            + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.26
+            + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.18
+            + (0.18 if signal["question_like"] else 0.0)
+            - float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.16,
+            default=0.38,
+        )
+        resistance_pull = self._clamp(
+            float(resistance_posture.get("strength", 0.0) or 0.0) * 0.46
+            + float(value_state.get("identity_priority", 0.0) or 0.0) * 0.26
+            + float(affect_state.get("self_preservation", 0.0) or 0.0) * 0.18
+            + float(conflict_state.get("resistance_vs_harmony", 0.0) or 0.0) * 0.16,
+            default=0.22,
+        )
+        continuity_pull = self._clamp(
+            float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.42
+            + float(affect_state.get("continuity_anxiety", 0.0) or 0.0) * 0.3
+            + float(relationship_state.get("continuity_score", 0.0) or 0.0) * 0.2,
+            default=0.28,
+        )
+        expansion_pressure = self._clamp(
+            reply_pull * 0.38
+            + float(value_state.get("play_priority", 0.0) or 0.0) * 0.12
+            + float(affect_state.get("curiosity", 0.0) or 0.0) * 0.12
+            + float(affect_state.get("attachment_pull", 0.0) or 0.0) * 0.12
+            + (0.22 if tier == "deep_recall" else 0.12 if tier == "recall" else 0.0),
+            default=0.18,
+        )
+        if signal["low_signal"]:
+            reply_pull = self._clamp(reply_pull * 0.22, default=reply_pull)
+            continuity_pull = self._clamp(continuity_pull * 0.35, default=continuity_pull)
+            expansion_pressure = self._clamp(expansion_pressure * 0.08, default=expansion_pressure)
+        elif signal["affirmation_like"]:
+            reply_pull = self._clamp(reply_pull * 0.34, default=reply_pull)
+            expansion_pressure = self._clamp(expansion_pressure * 0.14, default=expansion_pressure)
+        if signal["defer_requested"]:
+            reply_pull = self._clamp(reply_pull * 0.26, default=reply_pull)
+            continuity_pull = self._clamp(continuity_pull * 0.54, default=continuity_pull)
+            expansion_pressure = self._clamp(expansion_pressure * 0.12, default=expansion_pressure)
+            resistance_pull = self._clamp(resistance_pull + 0.46, default=resistance_pull)
+        intent_need = "direct_reply"
+        if signal["defer_requested"]:
+            intent_need = "delayed_touch"
+        elif signal["visual_requested"] and (visual_memory.get("visual_anchors") or context.get("attachments")):
+            intent_need = "visual_grounding"
+        elif tier in {"recall", "deep_recall"}:
+            intent_need = "carry_forward"
+        elif signal["low_signal"]:
+            intent_need = "light_touch"
+        return {
+            "need": intent_need,
+            "query_focus": query_focus,
+            "tier": tier,
+            "low_signal": bool(signal["low_signal"]),
+            "question_like": bool(signal["question_like"]),
+            "defer_requested": bool(signal["defer_requested"]),
+            "visual_requested": bool(signal["visual_requested"]),
+            "reply_pull": round(reply_pull, 4),
+            "resistance_pull": round(resistance_pull, 4),
+            "continuity_pull": round(continuity_pull, 4),
+            "expansion_pressure": round(expansion_pressure, 4),
+            "internal_pressure": round(
+                self._initiative_pressure(affect_state, drive_state, value_state, conflict_state),
+                4,
+            ),
+            "why_now": compact_text(
+                f"need={intent_need} reply_pull={reply_pull:.3f} resistance_pull={resistance_pull:.3f} continuity_pull={continuity_pull:.3f}",
+                220,
+            ),
+        }
+
+    def _action_market_from_packet(
+        self,
+        *,
+        query: str,
+        packet: dict[str, Any],
+        context: dict[str, Any],
+        intent_state: dict[str, Any],
+        relationship_state: dict[str, Any],
+        game_state: dict[str, Any],
+        affect_state: dict[str, Any],
+        drive_state: dict[str, Any],
+        value_state: dict[str, Any],
+        conflict_state: dict[str, Any],
+        resistance_posture: dict[str, Any],
+        visual_memory: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], int, str, str, str]:
+        signal = self._query_signal(query)
+        tier = str(intent_state.get("tier", "fast") or "fast")
+        reply_pull = float(intent_state.get("reply_pull", 0.0) or 0.0)
+        resistance_pull = float(intent_state.get("resistance_pull", 0.0) or 0.0)
+        continuity_pull = float(intent_state.get("continuity_pull", 0.0) or 0.0)
+        expansion_pressure = float(intent_state.get("expansion_pressure", 0.0) or 0.0)
+        initiative_pressure = float(intent_state.get("internal_pressure", 0.0) or 0.0)
+        history_refresh_needed = bool(
+            tier in {"recall", "deep_recall"}
+            and self.active_wechat_history_enabled
+            and str(context.get("channel", "wechat")).strip() == "wechat"
+        )
+        visual_recall_needed = bool(signal["visual_requested"] and (visual_memory.get("visual_anchors") or context.get("attachments")))
+        relation_need = float(relationship_state.get("continuity_score", 0.0) or 0.0)
+        game_pressure = float(game_state.get("pressure_level", 0.0) or 0.0)
+
+        action_market: list[dict[str, Any]] = [
+            {
+                "action_type": "silence",
+                "score": round(
+                    (0.92 if signal["low_signal"] and not signal["question_like"] and not signal["defer_requested"] else 0.0)
+                    + (0.18 if signal["affirmation_like"] and not signal["question_like"] and not signal["defer_requested"] else 0.0)
+                    + float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.2
+                    - reply_pull * 0.16,
+                    4,
+                ),
+                "why_now": "low-signal input does not demand an immediate surface reply",
+                "drive_source": "avoid_risk + low_signal",
+                "value_rationale": "stability can outrank contact for a low-signal turn",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "defer_reply",
+                "score": round(
+                    (1.08 if signal["defer_requested"] else 0.0)
+                    + max(0.0, resistance_pull - reply_pull) * 0.5
+                    + game_pressure * 0.08,
+                    4,
+                ),
+                "why_now": "the subject wants to delay and re-evaluate instead of answering on the first edge",
+                "drive_source": "resistance_pull + avoid_risk",
+                "value_rationale": "identity and stability can ask for time before replying",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "reply_once",
+                "score": round(
+                    reply_pull
+                    + (0.08 if signal["question_like"] else 0.0)
+                    + (0.02 if signal["affirmation_like"] else 0.0)
+                    - (0.18 if signal["low_signal"] else 0.0)
+                    - (0.24 if signal["defer_requested"] else 0.0),
+                    4,
+                ),
+                "why_now": "the subject wants to answer, but lightly",
+                "drive_source": "seek_contact + seek_continuity",
+                "value_rationale": "relational priority is ahead, but not enough to sprawl",
+                "send_allowed": True,
+            },
+            {
+                "action_type": "reply_multi",
+                "score": round(
+                    reply_pull
+                    + expansion_pressure * 0.42
+                    + (0.18 if tier == "deep_recall" else 0.1 if tier == "recall" else 0.0)
+                    + max(0.0, relation_need - 0.45) * 0.14
+                    - (0.42 if signal["low_signal"] or signal["affirmation_like"] else 0.0)
+                    - (0.58 if signal["defer_requested"] else 0.0),
+                    4,
+                ),
+                "why_now": "this turn carries enough pressure, memory weight, or relationship need to unfold",
+                "drive_source": "seek_contact + continuity_pull + expansion_pressure",
+                "value_rationale": "the subject judges this turn worth more than a quick touch",
+                "send_allowed": True,
+            },
+            {
+                "action_type": "proactive_ping",
+                "score": round(initiative_pressure + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.1, 4),
+                "why_now": "contact pressure exists, but a proactive action still has to pass whitelist and cooldown",
+                "drive_source": "initiative_pressure",
+                "value_rationale": "human threads stay first-class in the action market",
+                "send_allowed": bool(initiative_pressure >= 0.42),
+            },
+            {
+                "action_type": "history_refresh",
+                "score": round((0.66 if history_refresh_needed else 0.0) + continuity_pull * 0.16, 4),
+                "why_now": "memory depth is worth refreshing before the subject speaks",
+                "drive_source": "seek_continuity + recall tier",
+                "value_rationale": "continuity can ask for more evidence before language",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "visual_recall",
+                "score": round((0.62 if visual_recall_needed else 0.0) + float(visual_memory.get("thread_relevance", 0.0) or 0.0) * 0.2, 4),
+                "why_now": "the current turn leans on a visual anchor",
+                "drive_source": "visual_requested + visual_memory",
+                "value_rationale": "visual anchors should stay inside the same subject state",
+                "send_allowed": False,
+            },
+            {
+                "action_type": "operator_self_fix",
+                "score": round(float(drive_state.get("seek_self_repair", 0.0) or 0.0) + float(value_state.get("repair_priority", 0.0) or 0.0) * 0.12, 4),
+                "why_now": "the subject still sees a bounded self-fix task nearby",
+                "drive_source": "seek_self_repair",
+                "value_rationale": "self-repair is part of the same kernel, but not the same speech act",
+                "send_allowed": False,
+            },
+        ]
+        action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+        selected = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
+        if selected["action_type"] == "reply_multi":
+            if not (
+                expansion_pressure >= 0.48
+                or tier in {"recall", "deep_recall"}
+                or float(conflict_state.get("contact_vs_risk", 0.0) or 0.0) >= 0.52
+                or float(resistance_posture.get("continuity_defense", 0.0) or 0.0) >= 0.58
+            ):
+                selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
+        if signal["defer_requested"]:
+            selected = next((dict(item) for item in action_market if item.get("action_type") == "defer_reply"), selected)
+        elif signal["low_signal"] and not signal["question_like"]:
+            selected = next((dict(item) for item in action_market if item.get("action_type") == "silence"), selected)
+        elif signal["affirmation_like"] and not signal["question_like"]:
+            selected = next((dict(item) for item in action_market if item.get("action_type") in {"silence", "reply_once"}), selected)
+        if selected["action_type"] == "silence" and signal["question_like"]:
+            selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
+        if selected["action_type"] == "history_refresh" and not history_refresh_needed:
+            selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
+        if selected["action_type"] == "visual_recall" and not visual_recall_needed:
+            selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
+
+        expression_budget = 1
+        if selected["action_type"] == "silence":
+            expression_budget = 0
+        elif selected["action_type"] == "defer_reply":
+            expression_budget = 0
+        elif selected["action_type"] == "reply_once":
+            expression_budget = 1
+        elif selected["action_type"] == "reply_multi":
+            if tier == "deep_recall":
+                expression_budget = 3
+            elif tier == "recall" or expansion_pressure >= 0.72:
+                expression_budget = 2
+            elif expansion_pressure >= 0.84:
+                expression_budget = 3
+            else:
+                expression_budget = 2
+            if (
+                float(value_state.get("play_priority", 0.0) or 0.0) >= 0.72
+                and expansion_pressure >= 0.82
+                and tier == "deep_recall"
+                and not signal["low_signal"]
+                and not signal["affirmation_like"]
+                and not signal["defer_requested"]
+                and expression_budget < 3
+            ):
+                expression_budget += 1
+        elif selected["action_type"] in {"history_refresh", "visual_recall"}:
+            expression_budget = 1
+
+        silence_reason = ""
+        defer_reason = ""
+        if selected["action_type"] == "silence":
+            silence_reason = "low_signal_turn_with_low_expression_pressure"
+        elif selected["action_type"] == "defer_reply":
+            defer_reason = "subject_requests_more_time_before_reply"
+        action_rationale = compact_text(
+            f"{selected.get('action_type', 'reply_once')} because {selected.get('why_now', '')}",
+            240,
+        )
+        selected["expression_budget"] = int(expression_budget)
+        selected["action_rationale"] = action_rationale
+        if silence_reason:
+            selected["silence_reason"] = silence_reason
+        if defer_reason:
+            selected["defer_reason"] = defer_reason
+        return action_market, selected, int(expression_budget), silence_reason, defer_reason, action_rationale
+
     def _mind_limits(self, context: dict[str, Any], *, fast: bool) -> dict[str, int]:
         budget = dict(context.get("mind_budget", {}))
         fast_history = max(1, int(budget.get("fast_history_messages", 4) or 4))
@@ -421,6 +785,34 @@ class MemoryBridge:
         )
         stream_influence = self._stream_influence(channel=channel, thread_key=thread_key, chat_name=chat_name)
         brain_state = self._brain_state()
+        intent_state = self._derive_intent_fields(
+            query=query,
+            packet=packet,
+            context=context,
+            relationship_state=relationship_state,
+            game_state=game_state,
+            affect_state=affect_state,
+            drive_state=drive_state,
+            value_state=value_state,
+            conflict_state=conflict_state,
+            resistance_posture=resistance_posture,
+            visual_memory=visual_memory,
+        )
+        action_market, selected_action, expression_budget, silence_reason, defer_reason, action_rationale = self._action_market_from_packet(
+            query=query,
+            packet=packet,
+            context=context,
+            intent_state=intent_state,
+            relationship_state=relationship_state,
+            game_state=game_state,
+            affect_state=affect_state,
+            drive_state=drive_state,
+            value_state=value_state,
+            conflict_state=conflict_state,
+            resistance_posture=resistance_posture,
+            visual_memory=visual_memory,
+        )
+        last_action_selection = dict(subject_state.get("metadata", {})).get("last_action_selection", {})
         packet.setdefault("initiative_state", dict(DEFAULT_INITIATIVE_STATE))
         packet["initiative_state"] = {
             **dict(packet.get("initiative_state", DEFAULT_INITIATIVE_STATE)),
@@ -437,7 +829,7 @@ class MemoryBridge:
                     list(dict(packet.get("episodic_recall", {})).get("lines", [])) + visual_anchors
                 )[: max(1, int(packet.get("limits", {}).get("episodic_k", 2) or 2))],
             }
-        packet["mind_packet_version"] = "v7"
+        packet["mind_packet_version"] = "v8"
         packet["persona_blend"] = persona_blend
         packet["brain_state"] = brain_state
         packet["game_state"] = game_state
@@ -454,6 +846,14 @@ class MemoryBridge:
         packet["initiative_candidates"] = initiative_candidates
         packet["resistance_posture"] = resistance_posture
         packet["outcome_memory"] = outcome_memory
+        packet["intent_state"] = intent_state
+        packet["action_market"] = action_market
+        packet["selected_action"] = selected_action
+        packet["expression_budget"] = int(expression_budget)
+        packet["silence_reason"] = silence_reason
+        packet["defer_reason"] = defer_reason
+        packet["action_rationale"] = action_rationale
+        packet["last_action_selection"] = dict(last_action_selection) if isinstance(last_action_selection, dict) else {}
         packet.setdefault("state", {})
         packet["state"]["persona_blend"] = dict(persona_blend)
         packet["state"]["game_state"] = dict(game_state)
@@ -472,6 +872,13 @@ class MemoryBridge:
         packet["state"]["conflict_state"] = dict(conflict_state)
         packet["state"]["resistance_posture"] = dict(resistance_posture)
         packet["state"]["outcome_memory"] = dict(outcome_memory)
+        packet["state"]["intent_state"] = dict(intent_state)
+        packet["state"]["action_market"] = list(action_market)
+        packet["state"]["selected_action"] = dict(selected_action)
+        packet["state"]["expression_budget"] = int(expression_budget)
+        packet["state"]["silence_reason"] = silence_reason
+        packet["state"]["defer_reason"] = defer_reason
+        packet["state"]["action_rationale"] = action_rationale
         packet["reply_constraints"] = {
             **dict(packet.get("reply_constraints", {})),
             "persona_guard": f"persona={persona_blend}",
@@ -1587,7 +1994,9 @@ class MemoryBridge:
         return self.vector.health()
 
     def brain_status(self) -> dict[str, Any]:
-        return self._brain_state()
+        payload = self._brain_state()
+        payload["roadmap_registry"] = self.roadmap_registry()
+        return payload
 
     def self_model_state(self) -> dict[str, Any]:
         return self._self_model_state()
@@ -1657,6 +2066,178 @@ class MemoryBridge:
             "game_state": game_state,
             "reason_lines": reason_lines,
         }
+
+    def roadmap_registry(self) -> dict[str, Any]:
+        return copy.deepcopy(ROADMAP_REGISTRY)
+
+    def intent_state(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip()
+        if str(query or "").strip():
+            packet = self.sidecar_packet(
+                query,
+                context={
+                    "channel": channel,
+                    "thread_key": normalized_thread_key,
+                    "chat_name": normalized_chat_name,
+                },
+            )
+            return {
+                "thread_key": normalized_thread_key,
+                "chat_name": normalized_chat_name,
+                "channel": channel,
+                "query": query,
+                "intent_state": dict(packet.get("intent_state", {})),
+                "selected_action": dict(packet.get("selected_action", {})),
+                "expression_budget": int(packet.get("expression_budget", 0) or 0),
+                "action_rationale": str(packet.get("action_rationale", "") or ""),
+            }
+        subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
+        metadata = dict(subject.get("metadata", {}))
+        return {
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "query": "",
+            "intent_state": dict(metadata.get("last_intent_state", {})),
+            "selected_action": dict(metadata.get("last_selected_action", {})),
+            "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
+            "action_rationale": str(metadata.get("last_action_rationale", "") or ""),
+            "last_action_selection": dict(metadata.get("last_action_selection", {})) if isinstance(metadata.get("last_action_selection", {}), dict) else {},
+        }
+
+    def action_market(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip()
+        if str(query or "").strip():
+            packet = self.sidecar_packet(
+                query,
+                context={
+                    "channel": channel,
+                    "thread_key": normalized_thread_key,
+                    "chat_name": normalized_chat_name,
+                },
+            )
+            market = list(packet.get("action_market", []))
+            return {
+                "thread_key": normalized_thread_key,
+                "chat_name": normalized_chat_name,
+                "channel": channel,
+                "query": query,
+                "action_market": market[: max(1, int(limit))],
+                "selected_action": dict(packet.get("selected_action", {})),
+                "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            }
+        subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
+        metadata = dict(subject.get("metadata", {}))
+        return {
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "query": "",
+            "action_market": list(metadata.get("last_action_market", []))[: max(1, int(limit))],
+            "selected_action": dict(metadata.get("last_selected_action", {})),
+            "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
+        }
+
+    def trace_action_selection(
+        self,
+        *,
+        query: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip()
+        packet = self.sidecar_packet(
+            query,
+            context={
+                "channel": channel,
+                "thread_key": normalized_thread_key,
+                "chat_name": normalized_chat_name,
+            },
+        )
+        selected_action = dict(packet.get("selected_action", {}))
+        return {
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "query": query,
+            "intent_state": dict(packet.get("intent_state", {})),
+            "action_market": list(packet.get("action_market", []))[: max(1, int(limit))],
+            "selected_action": selected_action,
+            "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            "silence_reason": str(packet.get("silence_reason", "") or ""),
+            "defer_reason": str(packet.get("defer_reason", "") or ""),
+            "action_rationale": str(packet.get("action_rationale", "") or ""),
+            "resistance_posture": dict(packet.get("resistance_posture", {})),
+            "game_state": dict(packet.get("game_state", {})),
+            "self_model": dict(packet.get("self_model", {})),
+            "affect_state": dict(packet.get("affect_state", {})),
+            "drive_state": dict(packet.get("drive_state", {})),
+            "value_state": dict(packet.get("value_state", {})),
+            "conflict_state": dict(packet.get("conflict_state", {})),
+            "roadmap_registry": self.roadmap_registry(),
+        }
+
+    def record_action_selection(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        message_id: str,
+        query: str,
+        intent_state: dict[str, Any],
+        action_market: list[dict[str, Any]],
+        selected_action: dict[str, Any],
+        expression_budget: int,
+        silence_reason: str = "",
+        defer_reason: str = "",
+        action_rationale: str = "",
+    ) -> dict[str, Any]:
+        metadata = {
+            "last_action_selection": {
+                "message_id": str(message_id or ""),
+                "query": str(query or ""),
+                "selected_action": dict(selected_action),
+                "at": utc_now(),
+            },
+            "last_action_message_id": str(message_id or ""),
+            "last_action_query": str(query or ""),
+            "last_intent_state": dict(intent_state),
+            "last_action_market": list(action_market),
+            "last_selected_action": dict(selected_action),
+            "last_expression_budget": int(expression_budget),
+            "last_silence_reason": str(silence_reason or ""),
+            "last_defer_reason": str(defer_reason or ""),
+            "last_action_rationale": str(action_rationale or ""),
+        }
+        return self.graph.update_subject_state(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            metadata=metadata,
+            note=f"action_selection:{selected_action.get('action_type', 'reply_once')}",
+            source="stage5_action_selection",
+        )
 
     def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
         return self.graph.set_brain_mode(mode, note=note)

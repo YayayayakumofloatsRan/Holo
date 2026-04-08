@@ -194,6 +194,7 @@ class HoloDaemon:
             graph_led_reply=config.memory.graph_led_reply,
             graph_fallback=config.memory.graph_fallback,
             deep_recall_on_memory_queries=config.memory.deep_recall_on_memory_queries,
+            active_wechat_history_enabled=config.memory.active_wechat_history_enabled,
             vector_backend=config.memory.vector_backend,
             milvus_uri=config.memory.milvus_uri,
             milvus_collection_prefix=config.memory.milvus_collection_prefix,
@@ -485,6 +486,8 @@ class HoloDaemon:
             try:
                 if job["task_type"] == "reply":
                     reports.append(self._handle_reply_job(bundle))
+                elif job["task_type"] == "deferred_reply":
+                    reports.append(self._handle_deferred_reply_job(bundle))
                 elif job["task_type"] == "proactive_followup":
                     reports.append(self._handle_proactive_job(bundle))
                 elif job["task_type"] == "initiative_ping":
@@ -497,6 +500,49 @@ class HoloDaemon:
                 reports.append(f"retry:{job_id}:{exc}")
                 self.logger.exception("job %s failed", job_id)
         return reports
+
+    def _handle_deferred_reply_job(self, bundle: dict[str, Any]) -> str:
+        from .reply_api import HoloReplyService
+
+        job = bundle["job"]
+        message = bundle["message"]
+        thread = bundle["thread"]
+        contact = bundle["contact"]
+        payload = dict(bundle.get("payload") or {})
+        service = HoloReplyService(
+            self.config,
+            store=self.store,
+            runner=self.runner,
+            memory=self.memory,
+            policy=self.policy,
+            logger=self.logger,
+        )
+        result = service.handle_reply(
+            {
+                "chat_name": str(payload.get("chat_name") or thread.get("subject") or contact.get("display_name") or thread.get("thread_key") or ""),
+                "thread_key": str(thread.get("thread_key") or payload.get("thread_key") or ""),
+                "channel": str(payload.get("channel") or thread.get("channel") or message.get("channel") or "wechat"),
+                "sender": str(payload.get("sender") or message.get("sender_name") or contact.get("display_name") or ""),
+                "text": str(message.get("body_text") or ""),
+                "message_id": str(message.get("message_id") or ""),
+                "metadata": dict(payload.get("metadata") or {}),
+            }
+        )
+        action = str(result.get("action", "") or "")
+        if action == "reply":
+            self.store.complete_job(int(job["id"]), status="completed", sent_message_id=str(result.get("message_id", "")))
+            return f"completed:{job['id']}:reply"
+        if action == "silence":
+            self.store.complete_job(int(job["id"]), status="silenced", sent_message_id="")
+            return f"completed:{job['id']}:silence"
+        if action == "defer_reply":
+            self.store.complete_job(int(job["id"]), status="rescheduled", sent_message_id="")
+            return f"completed:{job['id']}:defer_reply"
+        if action == "ignore":
+            self.store.complete_job(int(job["id"]), status="ignored", sent_message_id="")
+            return f"completed:{job['id']}:ignore"
+        self.store.retry_job(int(job["id"]), "deferred_reply_unresolved", delay_seconds=300)
+        return f"retry:{job['id']}:deferred_reply_unresolved"
 
     def _handle_reply_job(self, bundle: dict[str, Any]) -> str:
         job = bundle["job"]

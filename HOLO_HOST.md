@@ -6,6 +6,8 @@ Cross-thread handoff docs:
 - `HOLO_DEVELOPMENT.md`
 - `docs/MIND_OS_STAGE2_PERSONA_CONSCIOUSNESS.md`
 - `docs/MIND_OS_STAGE3_REFLECTIVE_SUBJECT.md`
+- `docs/MIND_OS_STAGE5_INTENT_LED_SUBJECT.md`
+- `docs/ROADMAP_REGISTRY.md`
 
 This is the first WSL-native outer body for Holo.
 
@@ -78,16 +80,14 @@ The local reply API also has bind settings under `[runtime]`:
 - `api_port = 8000`
 
 ## Delivery Model
-- New inbound mail becomes a normalized `IncomingMessage`
-- The daemon records it in SQLite and enqueues a `reply` job
-- The reply job builds a structured mind packet before prompt assembly
-- The mind packet uses adaptive `fast` / `recall` tiers instead of assuming one thin prompt pack
-- The processor returns a draft plus a structured `ReplyPlan`
-- `reply-loop` repairs drift, then a bubble planner shapes the result into 1-4 chat bubbles
-- The final reply is sent through the configured gateway
-- The turn is auto-observed into candidate memory and also archived as a full user/reply pair inside Holo memory
-- Ready candidates are promoted on a slower background cadence
-- A slower dream cadence samples the archive with weighted randomness, distills repeated patterns, and stages callback leads for old threads
+- New inbound mail or WeChat input becomes a normalized event, not an automatic promise to reply
+- The daemon and reply API record the event in SQLite and subject state
+- The memory bridge builds a structured packet with subject state, intent state, and action market
+- The subject kernel selects one action before any language is generated
+- Only a selected speech action enters the processor path
+- `reply-loop` still repairs drift, but bubble count is now constrained by subject-led `expression_budget`
+- The executed action is recorded back into runtime state, archive, and the active thread graph
+- Background cycles keep updating memory, initiatives, self model, and deferred actions
 - The host can also write a portable self snapshot and emit a compact revive packet for another main program
 
 ## Codex-Direct Reply API
@@ -118,6 +118,10 @@ Available endpoints:
 - `GET /activation-state`
 - `GET /vector-health`
 - `GET /reply-probe`
+- `GET /intent-state`
+- `GET /action-market`
+- `POST /trace-action-selection`
+- `POST /accept-stage5`
 - `GET /stream-status`
 - `POST /reply`
 - `POST /reply-probe`
