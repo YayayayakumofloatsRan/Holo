@@ -151,6 +151,15 @@ class AutonomyConfig:
     allow_proactive_existing_threads: bool = True
     allow_initiative_whitelist_contacts: bool = True
     initiative_probe_enabled: bool = True
+    initiative_gate_mode: str = "conservative"
+    main_brain_override_enabled: bool = True
+    main_brain_override_min_score: float = 0.58
+    initiative_soft_allow_threshold: float = 0.62
+    initiative_soft_override_floor: float = 0.48
+    initiative_soft_trust_weight: float = 0.26
+    initiative_soft_window_weight: float = 0.28
+    initiative_soft_pressure_weight: float = 0.18
+    initiative_soft_drive_weight: float = 0.28
     game_state_enabled: bool = True
     proactive_after_hours: int = 72
     initiative_cooldown_hours: int = 12
@@ -323,9 +332,18 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         allow_proactive_existing_threads=bool(autonomy_data.get("allow_proactive_existing_threads", True)),
         allow_initiative_whitelist_contacts=bool(autonomy_data.get("allow_initiative_whitelist_contacts", True)),
         initiative_probe_enabled=bool(autonomy_data.get("initiative_probe_enabled", True)),
+        initiative_gate_mode=str(autonomy_data.get("initiative_gate_mode", "conservative") or "conservative"),
+        main_brain_override_enabled=bool(autonomy_data.get("main_brain_override_enabled", True)),
+        main_brain_override_min_score=float(autonomy_data.get("main_brain_override_min_score", 0.58) or 0.58),
+        initiative_soft_allow_threshold=float(autonomy_data.get("initiative_soft_allow_threshold", 0.62) or 0.62),
+        initiative_soft_override_floor=float(autonomy_data.get("initiative_soft_override_floor", 0.48) or 0.48),
+        initiative_soft_trust_weight=float(autonomy_data.get("initiative_soft_trust_weight", 0.26) or 0.26),
+        initiative_soft_window_weight=float(autonomy_data.get("initiative_soft_window_weight", 0.28) or 0.28),
+        initiative_soft_pressure_weight=float(autonomy_data.get("initiative_soft_pressure_weight", 0.18) or 0.18),
+        initiative_soft_drive_weight=float(autonomy_data.get("initiative_soft_drive_weight", 0.28) or 0.28),
         game_state_enabled=bool(autonomy_data.get("game_state_enabled", True)),
         proactive_after_hours=int(autonomy_data.get("proactive_after_hours", 72)),
-        initiative_cooldown_hours=int(autonomy_data.get("initiative_cooldown_hours", 48)),
+        initiative_cooldown_hours=int(autonomy_data.get("initiative_cooldown_hours", 12)),
         max_auto_replies_per_contact_per_hour=int(
             autonomy_data.get("max_auto_replies_per_contact_per_hour", 4)
         ),

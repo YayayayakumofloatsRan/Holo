@@ -106,6 +106,15 @@ allow_proactive_existing_threads = true
 allow_initiative_whitelist_contacts = true
 proactive_after_hours = 72
 initiative_cooldown_hours = 12
+initiative_gate_mode = "conservative"
+main_brain_override_enabled = true
+main_brain_override_min_score = 0.58
+initiative_soft_allow_threshold = 0.62
+initiative_soft_override_floor = 0.48
+initiative_soft_trust_weight = 0.26
+initiative_soft_window_weight = 0.28
+initiative_soft_pressure_weight = 0.18
+initiative_soft_drive_weight = 0.28
 wechat_helper_config_path = "windows_helper/wechat_helper.live.json"
 # Optional: pin the Windows checkout if the WSL live repo lives elsewhere.
 # wechat_helper_windows_repo_root = "D:/Holo/holo"

@@ -64,6 +64,8 @@ It keeps the processor as a replaceable "compute brain", while a local daemon ha
 - `./scripts/holo-online.sh`
 - `./scripts/holo-offline.sh`
 - `./scripts/holo-status.sh`
+- `python3 -m holo_host show-initiative-status --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host accept-stage9 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
 ## Config
 Copy `.holo_host.example.toml` to `.holo_host.toml` and adjust it.
@@ -237,6 +239,7 @@ The intended deployment shape stays the same:
 - `python3 -m holo_host trace-visual-recall --thread-key Nemoqi --chat-name Nemoqi --query "苹果 酒 木桌"`
 - `python3 -m holo_host accept-stage2 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage3 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage9 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
 Additional Stage-2 API endpoints:
 - `GET /brain-status`
@@ -277,6 +280,37 @@ Rules:
 - no new-contact cold outreach
 - no forwarding or CC fanout
 - followups are only queued after a thread has gone quiet for `proactive_after_hours`
+- Stage-9 adds adaptive gate scoring and main_brain override for soft-block candidates.
+- `initiative_probe_blocked` remains in effect for hard-gate failures and policy-safe constraints.
+- `initiative_window` mismatch handling is now score-based rather than binary in adaptive mode.
+
+## Stage-9 Initiative Gate
+- hard_gate is the non-negotiable blocklist:
+- `initiative_probe_enabled=false`
+- `policy.allowed=false`
+- thread `allow_proactive` false
+- not in whitelist
+- cooldown not ready
+- pending initiative job exists
+- contact or thread missing
+- max auto replies per hour exceeded
+- soft_gate is directional scoring for:
+- trust from relationship
+- initiative_window from game state
+- drive pressure and continuity/attachment pressure signals
+- pressure_level penalty
+- main_brain_override is allowed only for soft-block outcomes in adaptive mode and only as designed by auto-governance config
+- safe fallback is to run `initiative_gate_mode=conservative` which preserves Stage-8 legacy hard checks.
+- recommended observables:
+- `initiative_status` includes `gate_level`, `soft_gate_score`, `hard_block_reasons`, `override_eligible`, `override_applied_count`
+- candidate/job metadata includes `gate_level`, `soft_gate_score`, `override_eligible`, and `main_brain_override_applied`
+
+## Stage-9 Acceptance
+- `accept-stage9` runs the same end-to-end stage checks used by Stage-8 plus the Stage-9 gate-specific checks:
+- soft-block candidates can be override-approved in adaptive mode
+- hard-block outcomes remain blocked regardless of override mode
+- whitelist/cooldown/policy constraints must remain intact
+- `initiative_probe_blocked` rate should be measured on whitelisted threads to verify calibration gains
 
 ## Deployment Notes
 Recommended on WSL:

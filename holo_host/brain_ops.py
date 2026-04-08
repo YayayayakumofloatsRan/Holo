@@ -232,11 +232,57 @@ def run_self_revision(
     }
 
 
+def _initiative_unit(value: Any, *, default: float = 0.0) -> float:
+    try:
+        numeric = float(value if value is not None else default)
+    except (TypeError, ValueError):
+        numeric = float(default)
+    return max(0.0, min(1.0, numeric))
+
+
+def _initiative_gate_mode(config) -> str:
+    return str(getattr(config.autonomy, "initiative_gate_mode", "conservative") or "conservative").strip().lower()
+
+
+def _initiative_soft_gate_weights(config) -> dict[str, float]:
+    weights = {
+        "trust": max(0.0, float(getattr(config.autonomy, "initiative_soft_trust_weight", 0.26) or 0.26)),
+        "initiative_window": max(0.0, float(getattr(config.autonomy, "initiative_soft_window_weight", 0.28) or 0.28)),
+        "pressure": max(0.0, float(getattr(config.autonomy, "initiative_soft_pressure_weight", 0.18) or 0.18)),
+        "drive": max(0.0, float(getattr(config.autonomy, "initiative_soft_drive_weight", 0.28) or 0.28)),
+    }
+    total = sum(weights.values()) or 1.0
+    return {key: value / total for key, value in weights.items()}
+
+
+def _initiative_soft_gate_score(*, config, game_state: dict[str, Any], drive_pressure: float) -> tuple[float, dict[str, float]]:
+    weights = _initiative_soft_gate_weights(config)
+    components = {
+        "trust": _initiative_unit(game_state.get("trust_score", 0.0)),
+        "initiative_window": _initiative_unit(game_state.get("initiative_window", 0.0)),
+        "drive_pressure": _initiative_unit(drive_pressure),
+        "pressure_penalty": _initiative_unit(game_state.get("pressure_level", 0.0)),
+    }
+    score = (
+        components["trust"] * weights["trust"]
+        + components["initiative_window"] * weights["initiative_window"]
+        + components["drive_pressure"] * weights["drive"]
+        + (1.0 - components["pressure_penalty"]) * weights["pressure"]
+    )
+    return round(score, 4), components
+
+
+def _recent_negative_initiative_feedback(outcome_memory: dict[str, Any]) -> bool:
+    return bool(outcome_memory.get("was_ignored")) or float(outcome_memory.get("future_initiative_bias", 0.5) or 0.5) < 0.35
+
+
 def effective_initiative_cooldown_hours(
     *,
     config,
     game_state: dict[str, Any] | None,
     mode: str = "companion",
+    override_applied: bool = False,
+    recent_negative_feedback: bool = False,
 ) -> int:
     base = max(1, int(getattr(config.autonomy, "initiative_cooldown_hours", 48) or 48))
     state = dict(game_state or {})
@@ -264,6 +310,8 @@ def effective_initiative_cooldown_hours(
         multiplier *= 1.3
     if pressure_level >= 0.85:
         multiplier *= 1.4
+    if override_applied and not recent_negative_feedback:
+        multiplier *= 0.8
     effective = int(round(base * multiplier))
     return max(2, min(base, effective))
 
@@ -279,6 +327,9 @@ def initiative_probe(
     channel: str,
     query: str,
     mode: str = "companion",
+    override_applied: bool = False,
+    recent_negative_feedback: bool = False,
+    ignore_pending_job: bool = False,
 ) -> dict[str, Any]:
     thread = store.find_thread(channel=channel, thread_key=thread_key) if thread_key else None
     game_state = memory.graph.game_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
@@ -288,16 +339,22 @@ def initiative_probe(
     drive_state = dict(subject_state.get("drive_state", {}))
     value_state = dict(subject_state.get("value_state", {}))
     conflict_state = dict(subject_state.get("conflict_state", {}))
+    outcome_memory = dict(subject_state.get("outcome_memory", {}))
+    gate_mode = _initiative_gate_mode(config)
     effective_cooldown_hours = effective_initiative_cooldown_hours(
         config=config,
         game_state=game_state,
         mode=mode,
+        override_applied=override_applied,
+        recent_negative_feedback=recent_negative_feedback,
     )
     contact = None
+    pending_job = False
     cooldown_ready = True
     cooldown_reason = "contact_unavailable"
     if thread:
         contact = store._fetchone("SELECT * FROM contacts WHERE id = ?", (int(thread["contact_id"]),))
+        pending_job = False if ignore_pending_job else bool(store.has_pending_initiative(int(thread["id"])))
     if contact:
         cooldown_ready = store.initiative_available(int(contact["id"]), cooldown_hours=effective_cooldown_hours)
         cooldown_reason = "cooldown_ready" if cooldown_ready else "cooldown_active"
@@ -324,23 +381,84 @@ def initiative_probe(
         and float(game_state.get("pressure_level", 0.0) or 0.0) <= 0.78
     )
     drive_ok = float(drive_pressure or 0.0) >= 0.34
-    allowed = bool(config.autonomy.initiative_probe_enabled) and cooldown_ready and policy_decision.allowed and game_ok and drive_ok
+    soft_gate_score, soft_gate_components = _initiative_soft_gate_score(
+        config=config,
+        game_state=game_state,
+        drive_pressure=float(drive_pressure or 0.0),
+    )
+    allow_threshold = float(getattr(config.autonomy, "initiative_soft_allow_threshold", 0.62) or 0.62)
+    override_floor = float(getattr(config.autonomy, "initiative_soft_override_floor", 0.48) or 0.48)
+    hard_block_reasons: list[str] = []
+    if not bool(config.autonomy.initiative_probe_enabled):
+        hard_block_reasons.append("initiative_probe_disabled")
+    if thread and not bool(thread.get("allow_proactive", 1)):
+        hard_block_reasons.append("thread_proactive_disabled")
+    if not contact:
+        hard_block_reasons.append("contact_unavailable")
+    if pending_job:
+        hard_block_reasons.append("pending_initiative_job")
+    if not cooldown_ready:
+        hard_block_reasons.append(cooldown_reason or "cooldown_active")
+    if not policy_decision.allowed:
+        hard_block_reasons.append(str(policy_decision.reason or "policy_blocked"))
+    if gate_mode == "conservative":
+        if not game_ok:
+            hard_block_reasons.append("game_state_cold")
+        if not drive_ok:
+            hard_block_reasons.append("drive_pressure_low")
+    # Keep reason ordering stable for CLI/status aggregation.
+    hard_block_reasons = list(dict.fromkeys(item for item in hard_block_reasons if item))
+    allowed = False
+    gate_level = "hard_block"
+    override_eligible = False
+    recommended_action = "block"
+    if not hard_block_reasons:
+        if gate_mode == "conservative":
+            allowed = bool(game_ok and drive_ok)
+            gate_level = "allowed" if allowed else "hard_block"
+            recommended_action = "allow" if allowed else "block"
+        elif soft_gate_score >= allow_threshold:
+            allowed = True
+            gate_level = "allowed"
+            recommended_action = "allow"
+        else:
+            gate_level = "soft_block"
+            override_eligible = (
+                bool(getattr(config.autonomy, "main_brain_override_enabled", True))
+                and str(mode or "").strip().lower() == "full_brain"
+                and soft_gate_score >= override_floor
+            )
+            recommended_action = "allow_with_override" if override_eligible else "block"
+    blocked_reason_code = ""
+    if hard_block_reasons:
+        blocked_reason_code = hard_block_reasons[0]
+    elif gate_level == "soft_block":
+        blocked_reason_code = "soft_gate_override_available" if override_eligible else "soft_gate_blocked"
     return {
         "allowed": allowed,
         "blocked": not allowed,
         "mode": mode,
+        "gate_mode": gate_mode,
+        "gate_level": gate_level,
+        "hard_block_reasons": hard_block_reasons,
+        "soft_gate_score": soft_gate_score,
+        "soft_gate_components": soft_gate_components,
+        "override_eligible": override_eligible,
+        "recommended_action": recommended_action,
+        "blocked_reason_code": blocked_reason_code,
         "game_state": game_state,
         "affect_state": affect_state,
         "drive_state": drive_state,
         "value_state": value_state,
         "conflict_state": conflict_state,
         "relationship_state": relationship,
+        "outcome_memory": outcome_memory,
         "game_rationale": {
             "trust_score": float(game_state.get("trust_score", 0.0) or 0.0),
             "teasing_tolerance": float(game_state.get("teasing_tolerance", 0.0) or 0.0),
             "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
             "pressure_level": float(game_state.get("pressure_level", 0.0) or 0.0),
-            "ok": game_ok,
+            "ok": game_ok if gate_mode == "conservative" else gate_level == "allowed",
         },
         "drive_rationale": {
             "pressure": round(float(drive_pressure or 0.0), 4),
@@ -348,18 +466,21 @@ def initiative_probe(
             "seek_continuity": float(drive_state.get("seek_continuity", 0.0) or 0.0),
             "seek_play": float(drive_state.get("seek_play", 0.0) or 0.0),
             "avoid_risk": float(drive_state.get("avoid_risk", 0.0) or 0.0),
-            "ok": drive_ok,
+            "ok": drive_ok if gate_mode == "conservative" else soft_gate_score >= allow_threshold,
         },
         "policy_rationale": {
             "allowed": policy_decision.allowed,
             "reason": policy_decision.reason,
             "initiative_probe_enabled": bool(config.autonomy.initiative_probe_enabled),
+            "pending_initiative_job": pending_job,
         },
         "cooldown_rationale": {
             "ready": cooldown_ready,
             "reason": cooldown_reason,
             "cooldown_hours": effective_cooldown_hours,
             "base_cooldown_hours": int(config.autonomy.initiative_cooldown_hours),
+            "override_applied": override_applied,
+            "recent_negative_feedback": recent_negative_feedback or _recent_negative_initiative_feedback(outcome_memory),
         },
     }
 

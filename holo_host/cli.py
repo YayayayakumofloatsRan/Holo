@@ -1262,6 +1262,56 @@ def _accept_stage8_payload(
             service.memory.graph.close()
 
 
+def _accept_stage9_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage9",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage9(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _backfill_vector_memory_payload(
     config_path: str | None,
     *,
@@ -2032,8 +2082,16 @@ def _evaluate_stage4_acceptance(
     checks.append(
         _stage4_check(
             "white_list_auto_send",
-            whitelist_send or bool(initiative_probe.get("allowed")),
-            f"market_send_allowed={whitelist_send} initiative_allowed={initiative_probe.get('allowed')}",
+            whitelist_send
+            or bool(initiative_probe.get("allowed"))
+            or (
+                str(initiative_probe.get("gate_level", "")).strip() == "soft_block"
+                and bool(initiative_probe.get("override_eligible", False))
+            ),
+            (
+                f"market_send_allowed={whitelist_send} initiative_allowed={initiative_probe.get('allowed')} "
+                f"gate_level={initiative_probe.get('gate_level')} override_eligible={initiative_probe.get('override_eligible')}"
+            ),
             severity="warning",
         )
     )
@@ -3224,6 +3282,117 @@ def command_accept_stage3(
     return 0
 
 
+def _evaluate_stage9_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    conservative_probe: dict[str, object],
+    adaptive_probe: dict[str, object],
+    adaptive_status: dict[str, object],
+    hard_gate_probe: dict[str, object],
+    brain_status: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    checks.append(
+        _stage4_check(
+            "stage9_live_mode",
+            str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain",
+            f"status={health.get('status')} mode={mode_transition.get('mode')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "conservative_probe_available",
+            str(conservative_probe.get("gate_mode", "")).strip() == "conservative" and bool(str(conservative_probe.get("gate_level", "")).strip()),
+            f"gate_mode={conservative_probe.get('gate_mode')} gate_level={conservative_probe.get('gate_level')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "adaptive_probe_exposes_soft_gate",
+            str(adaptive_probe.get("gate_mode", "")).strip() == "adaptive"
+            and bool(str(adaptive_probe.get("gate_level", "")).strip())
+            and "soft_gate_score" in adaptive_probe
+            and bool(dict(adaptive_probe.get("soft_gate_components", {}))),
+            (
+                f"gate_mode={adaptive_probe.get('gate_mode')} gate_level={adaptive_probe.get('gate_level')} "
+                f"soft_gate_score={adaptive_probe.get('soft_gate_score')} components={adaptive_probe.get('soft_gate_components')}"
+            ),
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "adaptive_override_signal_visible",
+            "override_eligible" in adaptive_probe and bool(str(adaptive_probe.get("recommended_action", "")).strip()),
+            f"override_eligible={adaptive_probe.get('override_eligible')} recommended_action={adaptive_probe.get('recommended_action')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "initiative_status_observable",
+            "gate_level_summary" in adaptive_status
+            and "hard_block_reason_counts" in adaptive_status
+            and "soft_block_reason_counts" in adaptive_status
+            and "override_applied_count" in adaptive_status,
+            (
+                f"gate_level_summary={adaptive_status.get('gate_level_summary')} "
+                f"hard_block_reason_counts={adaptive_status.get('hard_block_reason_counts')} "
+                f"soft_block_reason_counts={adaptive_status.get('soft_block_reason_counts')} "
+                f"override_applied_count={adaptive_status.get('override_applied_count')}"
+            ),
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "hard_gate_cannot_be_overridden",
+            str(hard_gate_probe.get("gate_level", "")).strip() == "hard_block"
+            and not bool(hard_gate_probe.get("allowed", False))
+            and "initiative_probe_disabled" in list(hard_gate_probe.get("hard_block_reasons", [])),
+            f"hard_gate_probe={hard_gate_probe}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "soft_block_is_explainable",
+            str(adaptive_probe.get("gate_level", "")).strip() != "soft_block"
+            or (
+                bool(str(adaptive_probe.get("blocked_reason_code", "")).strip())
+                and bool(dict(adaptive_probe.get("soft_gate_components", {})))
+            ),
+            (
+                f"gate_level={adaptive_probe.get('gate_level')} blocked_reason_code={adaptive_probe.get('blocked_reason_code')} "
+                f"soft_gate_components={adaptive_probe.get('soft_gate_components')}"
+            ),
+            severity="warning",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "brain_mode_stays_full_brain",
+            str(brain_status.get("mode", "")).strip() == "full_brain",
+            f"brain_mode={brain_status.get('mode')}",
+            severity="warning",
+        )
+    )
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "warnings": warnings,
+        "blockers": blockers,
+        "summary": {
+            "adaptive_gate_level": adaptive_probe.get("gate_level"),
+            "adaptive_soft_gate_score": adaptive_probe.get("soft_gate_score"),
+            "override_eligible": adaptive_probe.get("override_eligible"),
+            "override_applied_count": adaptive_status.get("override_applied_count"),
+        },
+    }
+
+
 def command_accept_stage4(
     config_path: str | None,
     *,
@@ -3327,6 +3496,29 @@ def command_accept_stage8(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage8_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage9(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage9_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -4518,6 +4710,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage8_parser.add_argument("--sender", default=None)
     accept_stage8_parser.add_argument("--iterations", type=int, default=3)
     accept_stage8_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage9_parser = subparsers.add_parser("accept-stage9", help="Run the fixed Adaptive Initiative Gate Stage-9 acceptance gate")
+    accept_stage9_parser.add_argument("--thread-key", default=None)
+    accept_stage9_parser.add_argument("--chat-name", default=None)
+    accept_stage9_parser.add_argument("--channel", default="wechat")
+    accept_stage9_parser.add_argument("--sender", default=None)
+    accept_stage9_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage9_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -4926,6 +5125,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage8":
         return command_accept_stage8(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage9":
+        return command_accept_stage9(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

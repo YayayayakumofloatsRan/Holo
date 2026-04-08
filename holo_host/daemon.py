@@ -229,6 +229,41 @@ class HoloDaemon:
             return False
         return chat_name.strip() in whitelist
 
+    def _candidate_initiative_confidence(self, row: dict[str, Any]) -> float:
+        return float(row.get("initiative_confidence", row.get("override_priority", 0.0)) or 0.0)
+
+    def _candidate_override_hint(self, *, row: dict[str, Any], mode: str) -> bool:
+        return (
+            str(getattr(self.config.autonomy, "initiative_gate_mode", "conservative") or "conservative").strip().lower() == "adaptive"
+            and bool(getattr(self.config.autonomy, "main_brain_override_enabled", True))
+            and str(mode or "").strip().lower() == "full_brain"
+            and self._candidate_initiative_confidence(row) >= float(getattr(self.config.autonomy, "main_brain_override_min_score", 0.58) or 0.58)
+        )
+
+    def _initiative_recent_negative_feedback(self, *, thread_key: str, chat_name: str, channel: str = "wechat") -> bool:
+        subject_state = self.memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        outcome_memory = dict(subject_state.get("outcome_memory", {}))
+        return bool(outcome_memory.get("was_ignored")) or float(outcome_memory.get("future_initiative_bias", 0.5) or 0.5) < 0.35
+
+    @staticmethod
+    def _initiative_probe_block_reason(probe: dict[str, Any]) -> str:
+        reasons = list(probe.get("hard_block_reasons", []))
+        return str(
+            probe.get("blocked_reason_code")
+            or (reasons[0] if reasons else "")
+            or probe.get("cooldown_rationale", {}).get("reason")
+            or probe.get("policy_rationale", {}).get("reason")
+            or "initiative_probe_blocked"
+        )
+
+    def _can_apply_main_brain_override(self, *, row: dict[str, Any], probe: dict[str, Any], mode: str) -> bool:
+        return (
+            self._candidate_override_hint(row=row, mode=mode)
+            and str(probe.get("gate_level", "")).strip() == "soft_block"
+            and bool(probe.get("override_eligible", False))
+            and float(probe.get("soft_gate_score", 0.0) or 0.0) >= float(getattr(self.config.autonomy, "initiative_soft_override_floor", 0.48) or 0.48)
+        )
+
     def _queue_wechat_send_task(self, *, chat_name: str, text: str, task_id: str) -> dict[str, Any]:
         settings = self._wechat_settings()
         send_queue_dir = settings.get("send_queue_dir")
@@ -767,6 +802,13 @@ class HoloDaemon:
         payload = dict(bundle["payload"])
         candidate_id = int(payload.get("id", 0) or 0)
         reason = str(payload.get("reason", "") or payload.get("prompt", "") or "initiative_ping")
+        mode = self.brain_mode()
+        override_hint = self._candidate_override_hint(row=payload, mode=mode)
+        recent_negative_feedback = self._initiative_recent_negative_feedback(
+            thread_key=str(thread.get("thread_key") or payload.get("thread_key") or ""),
+            chat_name=str(payload.get("chat_name") or contact.get("display_name") or thread.get("subject") or ""),
+            channel="wechat",
+        )
         probe = build_initiative_probe(
             config=self.config,
             policy=self.policy,
@@ -776,19 +818,19 @@ class HoloDaemon:
             chat_name=str(payload.get("chat_name") or contact.get("display_name") or thread.get("subject") or ""),
             channel="wechat",
             query=reason,
-            mode=self.brain_mode(),
+            mode=mode,
+            override_applied=override_hint,
+            recent_negative_feedback=recent_negative_feedback,
+            ignore_pending_job=True,
         )
-        if not bool(probe.get("allowed", False)):
-            block_reason = str(
-                probe.get("cooldown_rationale", {}).get("reason")
-                or probe.get("policy_rationale", {}).get("reason")
-                or "initiative_probe_blocked"
-            )
+        override_applied = self._can_apply_main_brain_override(row=payload, probe=probe, mode=mode)
+        if not bool(probe.get("allowed", False)) and not override_applied:
+            block_reason = self._initiative_probe_block_reason(probe)
             if candidate_id:
                 self.memory.graph.update_initiative_candidate(
                     candidate_id=candidate_id,
                     status="blocked",
-                    metadata={"blocked_reason": block_reason, "probe": probe},
+                    metadata={"blocked_reason": block_reason, "blocked_reason_code": block_reason, "probe": probe},
                     note=block_reason,
                 )
             self.store.block_job(int(job["id"]), block_reason)
@@ -873,6 +915,7 @@ class HoloDaemon:
             metadata={
                 "job_id": int(job["id"]),
                 "initiative": True,
+                "main_brain_override_applied": override_applied,
                 "codex_session_id": codex_result.session_id,
                 "queue_path": task_info["path"],
             },
@@ -890,7 +933,13 @@ class HoloDaemon:
             self.memory.graph.update_initiative_candidate(
                 candidate_id=candidate_id,
                 status="sent",
-                metadata={"remote_message_id": remote_message_id, "queue_path": task_info["path"]},
+                metadata={
+                    "remote_message_id": remote_message_id,
+                    "queue_path": task_info["path"],
+                    "main_brain_override_applied": override_applied,
+                    "gate_level": str(probe.get("gate_level", "") or ""),
+                    "soft_gate_score": float(probe.get("soft_gate_score", 0.0) or 0.0),
+                },
                 note="sent",
             )
         pseudo_turn = f"[initiative_ping] reason={reason}"
@@ -903,6 +952,7 @@ class HoloDaemon:
             "sender": str(payload.get("chat_name") or contact.get("display_name") or ""),
             "codex_session_id": codex_result.session_id,
             "initiative": True,
+            "main_brain_override_applied": override_applied,
             "reason": reason,
             "queue_path": task_info["path"],
             "mind_tier": str(sidecar.get("tier", "")),
@@ -1000,7 +1050,7 @@ class HoloDaemon:
                     self.memory.graph.update_initiative_candidate(
                         candidate_id=candidate_id,
                         status="blocked",
-                        metadata={"blocked_reason": "send_not_allowed"},
+                        metadata={"blocked_reason": "send_not_allowed", "blocked_reason_code": "send_not_allowed"},
                         note="send_not_allowed",
                     )
                 continue
@@ -1009,7 +1059,7 @@ class HoloDaemon:
                     self.memory.graph.update_initiative_candidate(
                         candidate_id=candidate_id,
                         status="blocked",
-                        metadata={"blocked_reason": "not_whitelisted"},
+                        metadata={"blocked_reason": "not_whitelisted", "blocked_reason_code": "not_whitelisted"},
                         note="not_whitelisted",
                     )
                 continue
@@ -1024,12 +1074,27 @@ class HoloDaemon:
                     subject=chat_name,
                 )
             if not bool(thread.get("allow_proactive", 1)):
+                if candidate_id:
+                    self.memory.graph.update_initiative_candidate(
+                        candidate_id=candidate_id,
+                        status="blocked",
+                        metadata={"blocked_reason": "thread_proactive_disabled", "blocked_reason_code": "thread_proactive_disabled"},
+                        note="thread_proactive_disabled",
+                    )
                 continue
+            override_hint = self._candidate_override_hint(row=row, mode=mode)
+            recent_negative_feedback = self._initiative_recent_negative_feedback(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel="wechat",
+            )
             game_state = self.memory.graph.game_state(thread_key=thread_key, chat_name=chat_name, channel="wechat")
             cooldown_hours = effective_initiative_cooldown_hours(
                 config=self.config,
                 game_state=game_state,
                 mode=mode,
+                override_applied=override_hint,
+                recent_negative_feedback=recent_negative_feedback,
             )
             if not self.store.initiative_available(
                 int(contact["id"]),
@@ -1047,11 +1112,25 @@ class HoloDaemon:
                     self.memory.graph.update_initiative_candidate(
                         candidate_id=candidate_id,
                         status="blocked",
-                        metadata={"blocked_reason": "cooldown_active"},
+                        metadata={"blocked_reason": "cooldown_active", "blocked_reason_code": "cooldown_active"},
                         note="cooldown_active",
                     )
                 continue
             if self.store.has_pending_initiative(int(thread["id"])):
+                blocked.append(
+                    {
+                        "thread_key": thread_key,
+                        "chat_name": chat_name,
+                        "reason": "pending_initiative_job",
+                    }
+                )
+                if candidate_id:
+                    self.memory.graph.update_initiative_candidate(
+                        candidate_id=candidate_id,
+                        status="blocked",
+                        metadata={"blocked_reason": "pending_initiative_job", "blocked_reason_code": "pending_initiative_job"},
+                        note="pending_initiative_job",
+                    )
                 continue
             probe = build_initiative_probe(
                 config=self.config,
@@ -1063,13 +1142,16 @@ class HoloDaemon:
                 channel="wechat",
                 query=str(row.get("prompt", "") or row.get("reason", "") or "initiative_ping"),
                 mode=mode,
+                override_applied=override_hint,
+                recent_negative_feedback=recent_negative_feedback,
             )
-            if not bool(probe.get("allowed", False)):
+            override_ready = self._can_apply_main_brain_override(row=row, probe=probe, mode=mode)
+            if str(probe.get("gate_level", "")).strip() == "hard_block":
                 blocked.append(
                     {
                         "thread_key": thread_key,
                         "chat_name": chat_name,
-                        "reason": "initiative_probe_blocked",
+                        "reason": self._initiative_probe_block_reason(probe),
                         "probe": probe,
                     }
                 )
@@ -1077,8 +1159,25 @@ class HoloDaemon:
                     self.memory.graph.update_initiative_candidate(
                         candidate_id=candidate_id,
                         status="blocked",
-                        metadata={"blocked_reason": "initiative_probe_blocked", "probe": probe},
-                        note="initiative_probe_blocked",
+                        metadata={"blocked_reason": self._initiative_probe_block_reason(probe), "blocked_reason_code": self._initiative_probe_block_reason(probe), "probe": probe},
+                        note=self._initiative_probe_block_reason(probe),
+                    )
+                continue
+            if not bool(probe.get("allowed", False)) and not override_ready:
+                blocked.append(
+                    {
+                        "thread_key": thread_key,
+                        "chat_name": chat_name,
+                        "reason": str(probe.get("blocked_reason_code", "") or "soft_gate_blocked"),
+                        "probe": probe,
+                    }
+                )
+                if candidate_id:
+                    self.memory.graph.update_initiative_candidate(
+                        candidate_id=candidate_id,
+                        status="blocked",
+                        metadata={"blocked_reason": str(probe.get("blocked_reason_code", "") or "soft_gate_blocked"), "blocked_reason_code": str(probe.get("blocked_reason_code", "") or "soft_gate_blocked"), "probe": probe},
+                        note=str(probe.get("blocked_reason_code", "") or "soft_gate_blocked"),
                     )
                 continue
             job_id = self.store.enqueue_job(
@@ -1086,15 +1185,27 @@ class HoloDaemon:
                 priority=int(row.get("priority", 55)),
                 thread_id=int(thread["id"]),
                 contact_id=int(contact["id"]),
-                payload=row,
+                payload={
+                    **row,
+                    "gate_level": str(probe.get("gate_level", "") or ""),
+                    "soft_gate_score": float(probe.get("soft_gate_score", 0.0) or 0.0),
+                    "override_eligible": bool(probe.get("override_eligible", False)),
+                    "main_brain_override_candidate": override_ready,
+                },
             )
             scheduled.append(job_id)
             if candidate_id:
                 self.memory.graph.update_initiative_candidate(
                     candidate_id=candidate_id,
-                    status="scheduled",
-                    metadata={"scheduled_job_id": job_id},
-                    note="scheduled",
+                    status="override_pending" if override_ready and not bool(probe.get("allowed", False)) else "scheduled",
+                    metadata={
+                        "scheduled_job_id": job_id,
+                        "gate_level": str(probe.get("gate_level", "") or ""),
+                        "soft_gate_score": float(probe.get("soft_gate_score", 0.0) or 0.0),
+                        "override_eligible": bool(probe.get("override_eligible", False)),
+                        "main_brain_override_candidate": override_ready,
+                    },
+                    note="override_pending" if override_ready and not bool(probe.get("allowed", False)) else "scheduled",
                 )
             if len(scheduled) >= self.config.runtime.max_jobs_per_cycle:
                 break
@@ -1642,6 +1753,23 @@ class HoloDaemon:
             if str(row.get("channel", "")).strip().lower() == channel
             and str(row.get("thread_key", "")).strip() == thread_key
         ][:limit]
+        gate_level_summary: dict[str, int] = {}
+        hard_block_reason_counts: dict[str, int] = {}
+        soft_block_reason_counts: dict[str, int] = {}
+        override_applied_count = 0
+        for row in candidates:
+            metadata = dict(row.get("metadata", {}))
+            gate_level = str(metadata.get("gate_level", "") or row.get("gate_level", "") or "")
+            if gate_level:
+                gate_level_summary[gate_level] = gate_level_summary.get(gate_level, 0) + 1
+            blocked_reason = str(metadata.get("blocked_reason_code", "") or metadata.get("blocked_reason", "") or "")
+            if str(row.get("status", "")).strip() == "blocked" and blocked_reason:
+                if gate_level == "soft_block" or blocked_reason.startswith("soft_gate_"):
+                    soft_block_reason_counts[blocked_reason] = soft_block_reason_counts.get(blocked_reason, 0) + 1
+                else:
+                    hard_block_reason_counts[blocked_reason] = hard_block_reason_counts.get(blocked_reason, 0) + 1
+            if bool(metadata.get("main_brain_override_applied", False)):
+                override_applied_count += 1
         pending_jobs = [
             row
             for row in self.store.list_jobs(limit=50)
@@ -1660,6 +1788,10 @@ class HoloDaemon:
             "chat_name": chat_name,
             "channel": channel,
             "probe": probe,
+            "gate_level_summary": gate_level_summary,
+            "hard_block_reason_counts": hard_block_reason_counts,
+            "soft_block_reason_counts": soft_block_reason_counts,
+            "override_applied_count": override_applied_count,
             "thread": {
                 "exists": bool(thread),
                 "allow_proactive": bool(thread.get("allow_proactive", 1)) if thread else False,

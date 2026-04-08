@@ -7,10 +7,11 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
 2. `docs/ENGINEERING_HANDOFF_STAGE8.md`
 3. `HOLO_SYSTEM.md`
 4. `HOLO_DEVELOPMENT.md`
-5. `HOLO_HOST.md`
-6. `OPERATIONS.md`
-7. `holo_memory_library/MEMORY_LIBRARY.md`
-8. `windows_helper/README.md`
+5. `docs/ENGINEERING_HANDOFF_STAGE9.md`
+6. `HOLO_HOST.md`
+7. `OPERATIONS.md`
+8. `holo_memory_library/MEMORY_LIBRARY.md`
+9. `windows_helper/README.md`
 
 ## What Holo Is
 - Holo is not one long Codex conversation.
@@ -18,7 +19,7 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage8-autobiographical-self`.
+- The current milestone tag is `stage9-adaptive-initiative-gate`.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -49,6 +50,7 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
   - `counterfactual`
   - `consciousness_ledger`
 - Holo can generate proactive initiative candidates, but current gates are conservative and often block auto-send.
+- Stage-9 adaptive initiative gate is implemented in code; rollout should still start from `initiative_gate_mode=conservative` before switching default behavior to `adaptive`.
 
 ## Memory Pyramid
 - `canonical`: persona core and non-negotiable boundaries
@@ -121,6 +123,20 @@ These files change while Holo is alive. Do not treat them like static docs.
 - cache reuse is still cold in practice
 - proactive initiative exists but is often blocked by `initiative_probe_blocked`
 - retrieval and expression control still feel more engineered than natural
+- main-brain override and initiative gate calibration can create false negatives under cold `initiative_window` states
+
+## Stage-9 Focus
+- goal: remove over-conservative proactive gating while preserving hard safety constraints
+- hard_gate: non-overridable constraints such as whitelist policy, cooldown, per-thread allow flag, policy decision, and explicit disable
+- soft_gate: `trust`, `initiative_window`, `drive_pressure`, `pressure_level` become directional scoring inputs
+- main_brain_override: allowed only when gate is soft-blocked and mode is healthy; never bypasses hard_gate
+- rollout: begin in `initiative_gate_mode=conservative`, verify, then switch default to adaptive
+
+## Stage-9 Entry Commands
+- `python3 -m holo_host initiative-probe --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host show-initiative-status --thread-key Nemoqi --chat-name Nemoqi`
+- `python3 -m holo_host accept-stage9 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage8 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
 ## Invariants
 - Do not silently change online transport modes
@@ -137,3 +153,4 @@ These files change while Holo is alive. Do not treat them like static docs.
 - state is observable
 - docs are updated
 - another thread can continue from disk without hidden oral context
+- when `accept-stage9` is available, run it before and after any gate-mode transition

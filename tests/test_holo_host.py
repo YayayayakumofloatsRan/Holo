@@ -535,6 +535,9 @@ class FakeMemory:
                     "drive_source": "seek_contact+seek_play",
                     "value_rationale": "relational_priority stays ahead of avoid_risk",
                     "send_allowed": True,
+                    "initiative_confidence": 0.61,
+                    "gate_hint": "tentative",
+                    "override_priority": 0.61,
                     "status": "candidate",
                 }
             ],
@@ -1245,17 +1248,21 @@ class FakeMemory:
             rows.append(
                 {
                     "id": index,
-                    "candidate_type": "contact_ping",
+                    "candidate_type": item.get("candidate_type", "contact_ping"),
                     "channel": item.get("channel", channel),
                     "thread_key": item.get("thread_key", thread_key or ""),
                     "chat_name": item.get("chat_name", chat_name or ""),
                     "why_now": item.get("reason", "thread still warm"),
-                    "drive_source": "seek_contact",
-                    "value_rationale": "relational priority stays above avoid risk",
-                    "send_allowed": True,
-                    "status": "candidate",
+                    "drive_source": item.get("drive_source", "seek_contact"),
+                    "value_rationale": item.get("value_rationale", "relational priority stays above avoid risk"),
+                    "send_allowed": bool(item.get("send_allowed", True)),
+                    "initiative_confidence": float(item.get("initiative_confidence", 0.0) or 0.0),
+                    "gate_hint": item.get("gate_hint", ""),
+                    "override_priority": float(item.get("override_priority", item.get("initiative_confidence", 0.0)) or 0.0),
+                    "status": item.get("status", "candidate"),
                     "priority": item.get("priority", 50),
                     "prompt": item.get("prompt", ""),
+                    "metadata": dict(item.get("metadata", {})),
                 }
             )
         normalized_thread_key = str(thread_key or "").strip()
@@ -1570,6 +1577,16 @@ class QueueStoreTests(unittest.TestCase):
                 self.assertFalse(store.initiative_available(int(contact["id"]), cooldown_hours=48))
             finally:
                 store.close()
+
+    def test_load_config_defaults_include_stage9_initiative_gate_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(repo_root=Path(tmpdir))
+            self.assertEqual(config.autonomy.initiative_cooldown_hours, 12)
+            self.assertEqual(config.autonomy.initiative_gate_mode, "conservative")
+            self.assertTrue(config.autonomy.main_brain_override_enabled)
+            self.assertAlmostEqual(config.autonomy.main_brain_override_min_score, 0.58)
+            self.assertAlmostEqual(config.autonomy.initiative_soft_allow_threshold, 0.62)
+            self.assertAlmostEqual(config.autonomy.initiative_soft_override_floor, 0.48)
 
     def test_initialize_merges_legacy_wechat_alias_contacts_and_threads(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2061,6 +2078,178 @@ class DaemonFlowTests(unittest.TestCase):
                 result = daemon.run_cycle()
                 self.assertEqual(result["initiative"]["scheduled_job_ids"], [])
                 self.assertTrue(result["initiative"]["blocked_candidates"])
+                self.assertFalse(send_queue_dir.exists() and list(send_queue_dir.glob("*.json")))
+            finally:
+                close_daemon_handles(daemon)
+
+    def test_initiative_probe_reports_soft_block_override_in_adaptive_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            config.autonomy.initiative_gate_mode = "adaptive"
+            store = QueueStore(config.runtime.db_path)
+            gateway = MaildirGateway(config)
+            runner = FakeRunner("What are you busy with?")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
+            try:
+                contact = store.ensure_contact("wechat:wechat:Nemoqi", "Nemoqi")
+                store.ensure_thread(
+                    channel="wechat",
+                    contact_id=int(contact["id"]),
+                    thread_key="wechat:Nemoqi",
+                    subject="Nemoqi",
+                )
+                probe = daemon.initiative_probe(thread_key="wechat:Nemoqi", chat_name="Nemoqi", channel="wechat", query="initiative_probe")
+                self.assertEqual(probe["gate_mode"], "adaptive")
+                self.assertEqual(probe["gate_level"], "soft_block")
+                self.assertTrue(probe["override_eligible"])
+                self.assertFalse(probe["allowed"])
+                self.assertIn("soft_gate_score", probe)
+            finally:
+                close_daemon_handles(daemon)
+
+    def test_daemon_cycle_adaptive_mode_can_send_soft_block_with_main_brain_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            send_queue_dir = root / "send_queue"
+            helper_dir = root / "windows_helper"
+            helper_dir.mkdir(parents=True, exist_ok=True)
+            (helper_dir / "wechat_helper.live.json").write_text(
+                json.dumps(
+                    {
+                        "whitelist": ["Nemoqi"],
+                        "send_queue_dir": str(send_queue_dir),
+                        "pywinauto_process_path": "C:/Program Files/Tencent/WeChat/WeChat.exe",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(repo_root=root)
+            config.autonomy.initiative_gate_mode = "adaptive"
+            gateway = MaildirGateway(config)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("What are you busy with?")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.initiatives.append(
+                {
+                    "channel": "wechat",
+                    "thread_key": "wechat:Nemoqi",
+                    "chat_name": "Nemoqi",
+                    "reason": "Old thread still warm",
+                    "prompt": "Lightly poke this thread",
+                    "priority": 66,
+                    "initiative_confidence": 0.72,
+                    "gate_hint": "warm",
+                    "override_priority": 0.72,
+                }
+            )
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
+            try:
+                result = daemon.run_cycle()
+                self.assertTrue(result["initiative"]["scheduled_job_ids"])
+                self.assertTrue(any(item.startswith("queued:") for item in result["processed_jobs"]))
+                queued = sorted(send_queue_dir.glob("*.json"))
+                self.assertEqual(len(queued), 1)
+                status = daemon.initiative_status(thread_key="wechat:Nemoqi", chat_name="Nemoqi", channel="wechat", limit=5)
+                self.assertIn("gate_level_summary", status)
+                self.assertIn("override_applied_count", status)
+            finally:
+                close_daemon_handles(daemon)
+
+    def test_daemon_cycle_adaptive_mode_keeps_soft_block_blocked_when_override_confidence_is_low(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            send_queue_dir = root / "send_queue"
+            helper_dir = root / "windows_helper"
+            helper_dir.mkdir(parents=True, exist_ok=True)
+            (helper_dir / "wechat_helper.live.json").write_text(
+                json.dumps(
+                    {
+                        "whitelist": ["Nemoqi"],
+                        "send_queue_dir": str(send_queue_dir),
+                        "pywinauto_process_path": "C:/Program Files/Tencent/WeChat/WeChat.exe",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(repo_root=root)
+            config.autonomy.initiative_gate_mode = "adaptive"
+            gateway = MaildirGateway(config)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("What are you busy with?")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.initiatives.append(
+                {
+                    "channel": "wechat",
+                    "thread_key": "wechat:Nemoqi",
+                    "chat_name": "Nemoqi",
+                    "reason": "Old thread still warm",
+                    "prompt": "Lightly poke this thread",
+                    "priority": 66,
+                    "initiative_confidence": 0.41,
+                    "gate_hint": "cold",
+                    "override_priority": 0.41,
+                }
+            )
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
+            try:
+                result = daemon.run_cycle()
+                self.assertEqual(result["initiative"]["scheduled_job_ids"], [])
+                self.assertTrue(result["initiative"]["blocked_candidates"])
+                self.assertFalse(send_queue_dir.exists() and list(send_queue_dir.glob("*.json")))
+            finally:
+                close_daemon_handles(daemon)
+
+    def test_daemon_cycle_adaptive_mode_does_not_override_hard_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            send_queue_dir = root / "send_queue"
+            helper_dir = root / "windows_helper"
+            helper_dir.mkdir(parents=True, exist_ok=True)
+            (helper_dir / "wechat_helper.live.json").write_text(
+                json.dumps(
+                    {
+                        "whitelist": ["Nemoqi"],
+                        "send_queue_dir": str(send_queue_dir),
+                        "pywinauto_process_path": "C:/Program Files/Tencent/WeChat/WeChat.exe",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(repo_root=root)
+            config.autonomy.initiative_gate_mode = "adaptive"
+            config.autonomy.initiative_probe_enabled = False
+            gateway = MaildirGateway(config)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("What are you busy with?")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.initiatives.append(
+                {
+                    "channel": "wechat",
+                    "thread_key": "wechat:Nemoqi",
+                    "chat_name": "Nemoqi",
+                    "reason": "Old thread still warm",
+                    "prompt": "Lightly poke this thread",
+                    "priority": 66,
+                    "initiative_confidence": 0.82,
+                    "gate_hint": "warm",
+                    "override_priority": 0.82,
+                }
+            )
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
+            try:
+                result = daemon.run_cycle()
+                self.assertEqual(result["initiative"]["scheduled_job_ids"], [])
+                self.assertTrue(result["initiative"]["blocked_candidates"])
+                self.assertEqual(result["initiative"]["blocked_candidates"][0]["reason"], "initiative_probe_disabled")
                 self.assertFalse(send_queue_dir.exists() and list(send_queue_dir.glob("*.json")))
             finally:
                 close_daemon_handles(daemon)

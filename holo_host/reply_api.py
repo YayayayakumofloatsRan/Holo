@@ -1706,6 +1706,80 @@ class HoloReplyService:
         report["chat_name"] = normalized_chat_name
         return report
 
+    def accept_stage9(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage9_acceptance
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip() or normalized_thread_key
+        mode_transition = self.set_brain_mode(mode="full_brain", note="accept-stage9")
+        original_gate_mode = str(getattr(self.config.autonomy, "initiative_gate_mode", "conservative") or "conservative")
+        original_probe_enabled = bool(self.config.autonomy.initiative_probe_enabled)
+        try:
+            self.config.autonomy.initiative_gate_mode = "conservative"
+            conservative_probe = self.initiative_probe(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                query="accept_stage9_conservative",
+            )
+            conservative_status = self.initiative_status(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                limit=5,
+            )
+            self.config.autonomy.initiative_gate_mode = "adaptive"
+            adaptive_probe = self.initiative_probe(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                query="accept_stage9_adaptive",
+            )
+            adaptive_status = self.initiative_status(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                limit=5,
+            )
+            self.config.autonomy.initiative_probe_enabled = False
+            hard_gate_probe = self.initiative_probe(
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                channel=channel,
+                query="accept_stage9_hard_gate",
+            )
+        finally:
+            self.config.autonomy.initiative_probe_enabled = original_probe_enabled
+            self.config.autonomy.initiative_gate_mode = original_gate_mode
+        report = _evaluate_stage9_acceptance(
+            health=self.health(),
+            mode_transition=mode_transition,
+            conservative_probe=conservative_probe,
+            adaptive_probe=adaptive_probe,
+            adaptive_status=adaptive_status,
+            hard_gate_probe=hard_gate_probe,
+            brain_status=self.brain_status(),
+        )
+        report["transport"] = "live_http"
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        report["conservative_status"] = conservative_status
+        report["adaptive_status"] = adaptive_status
+        report["original_gate_mode"] = original_gate_mode
+        report["sender"] = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        report["iterations"] = iterations
+        report["warmup"] = warmup
+        return report
+
     def initiative_status(
         self,
         *,
@@ -1742,6 +1816,23 @@ class HoloReplyService:
             if str(row.get("channel", "")).strip().lower() == channel
             and str(row.get("thread_key", "")).strip() == normalized_thread_key
         ][:limit]
+        gate_level_summary: dict[str, int] = {}
+        hard_block_reason_counts: dict[str, int] = {}
+        soft_block_reason_counts: dict[str, int] = {}
+        override_applied_count = 0
+        for row in candidates:
+            metadata = dict(row.get("metadata", {}))
+            gate_level = str(metadata.get("gate_level", "") or row.get("gate_level", "") or "")
+            if gate_level:
+                gate_level_summary[gate_level] = gate_level_summary.get(gate_level, 0) + 1
+            blocked_reason = str(metadata.get("blocked_reason_code", "") or metadata.get("blocked_reason", "") or "")
+            if str(row.get("status", "")).strip() == "blocked" and blocked_reason:
+                if gate_level == "soft_block" or blocked_reason.startswith("soft_gate_"):
+                    soft_block_reason_counts[blocked_reason] = soft_block_reason_counts.get(blocked_reason, 0) + 1
+                else:
+                    hard_block_reason_counts[blocked_reason] = hard_block_reason_counts.get(blocked_reason, 0) + 1
+            if bool(metadata.get("main_brain_override_applied", False)):
+                override_applied_count += 1
         pending_jobs = [
             row
             for row in self.store.list_jobs(limit=50)
@@ -1760,6 +1851,10 @@ class HoloReplyService:
             "chat_name": normalized_chat_name,
             "channel": channel,
             "probe": probe,
+            "gate_level_summary": gate_level_summary,
+            "hard_block_reason_counts": hard_block_reason_counts,
+            "soft_block_reason_counts": soft_block_reason_counts,
+            "override_applied_count": override_applied_count,
             "thread": {
                 "exists": bool(thread),
                 "allow_proactive": bool(thread.get("allow_proactive", 1)) if thread else False,
@@ -3666,6 +3761,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage8(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage9":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage9(
                             thread_key=str(payload.get("thread_key", "")).strip() or None,
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",

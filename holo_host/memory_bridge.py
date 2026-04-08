@@ -546,6 +546,24 @@ class MemoryBridge:
         )
 
     @staticmethod
+    def _initiative_gate_hint(confidence: float) -> str:
+        if confidence >= 0.62:
+            return "warm"
+        if confidence >= 0.48:
+            return "tentative"
+        return "cold"
+
+    @staticmethod
+    def _initiative_candidate_fields(confidence: float, *, send_allowed: bool = True) -> dict[str, Any]:
+        bounded_confidence = MemoryBridge._clamp(confidence, default=0.0)
+        return {
+            "send_allowed": bool(send_allowed),
+            "initiative_confidence": round(bounded_confidence, 4),
+            "gate_hint": MemoryBridge._initiative_gate_hint(bounded_confidence),
+            "override_priority": round(bounded_confidence, 4),
+        }
+
+    @staticmethod
     def _query_mentions_defer(query: str) -> bool:
         lowered = str(query or "").lower()
         hints = (
@@ -1108,7 +1126,10 @@ class MemoryBridge:
                 "why_now": "contact pressure exists, but a proactive action still has to pass whitelist and cooldown",
                 "drive_source": "initiative_pressure",
                 "value_rationale": "human threads stay first-class in the action market",
-                "send_allowed": bool(initiative_pressure >= 0.42),
+                **self._initiative_candidate_fields(
+                    initiative_pressure + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.1,
+                    send_allowed=bool(initiative_pressure >= 0.28),
+                ),
             },
             {
                 "action_type": "history_refresh",
@@ -3276,7 +3297,10 @@ class MemoryBridge:
                     "why_now": "attachment_pull 和 boredom 一起升温，想确认这条关系还在呼吸。",
                     "drive_source": f"seek_contact={round(float(drive_state.get('seek_contact', 0.0) or 0.0), 3)} boredom={round(float(affect_state.get('boredom', 0.0) or 0.0), 3)}",
                     "value_rationale": f"relational_priority={round(float(value_state.get('relational_priority', 0.0) or 0.0), 3)} stability_priority={round(float(value_state.get('stability_priority', 0.0) or 0.0), 3)}",
-                    "send_allowed": bool(pressure >= 0.42 and float(relationship.get('trust_score', 0.0) or 0.0) >= 0.52),
+                    **self._initiative_candidate_fields(
+                        pressure * 0.72 + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.28,
+                        send_allowed=True,
+                    ),
                     "send_target": "auto_send_whitelist_only",
                     "priority": round(pressure + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.2, 4),
                 }
@@ -3289,7 +3313,11 @@ class MemoryBridge:
                     "why_now": f"unfinished thread 一直挂着，continuity_anxiety 还没退下去：{unfinished[0]}",
                     "drive_source": f"seek_continuity={round(float(drive_state.get('seek_continuity', 0.0) or 0.0), 3)} continuity_anxiety={round(float(affect_state.get('continuity_anxiety', 0.0) or 0.0), 3)}",
                     "value_rationale": f"relational_priority={round(float(value_state.get('relational_priority', 0.0) or 0.0), 3)} identity_priority={round(float(value_state.get('identity_priority', 0.0) or 0.0), 3)}",
-                    "send_allowed": bool(float(relationship.get("continuity_score", 0.0) or 0.0) >= 0.42),
+                    **self._initiative_candidate_fields(
+                        float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.58
+                        + float(relationship.get("continuity_score", 0.0) or 0.0) * 0.42,
+                        send_allowed=True,
+                    ),
                     "send_target": "auto_send_whitelist_only",
                     "priority": round(float(drive_state.get("seek_continuity", 0.0) or 0.0) + 0.16, 4),
                 }
@@ -3303,7 +3331,12 @@ class MemoryBridge:
                     "why_now": "play drive 在升，想浪费一点算力去逗人。",
                     "drive_source": f"seek_play={round(float(drive_state.get('seek_play', 0.0) or 0.0), 3)} appetite_play={round(float(affect_state.get('appetite_play', 0.0) or 0.0), 3)}",
                     "value_rationale": f"play_priority={round(float(value_state.get('play_priority', 0.0) or 0.0), 3)} relational_priority={round(float(value_state.get('relational_priority', 0.0) or 0.0), 3)}",
-                    "send_allowed": bool(float(initiative_state.get("pressure", 0.0) or 0.0) >= 0.36),
+                    **self._initiative_candidate_fields(
+                        float(drive_state.get("seek_play", 0.0) or 0.0) * 0.52
+                        + float(relationship.get("trust_score", 0.0) or 0.0) * 0.22
+                        + float(initiative_state.get("pressure", 0.0) or 0.0) * 0.26,
+                        send_allowed=True,
+                    ),
                     "send_target": "auto_send_whitelist_only",
                     "priority": round(float(drive_state.get("seek_play", 0.0) or 0.0) + 0.1, 4),
                 }
@@ -3374,6 +3407,9 @@ class MemoryBridge:
                     metadata={
                         "relationship_score": row.get("relationship_score", 0.0),
                         "recurring_motifs": list(row.get("recurring_motifs", [])),
+                        "initiative_confidence": float(candidate.get("initiative_confidence", 0.0) or 0.0),
+                        "gate_hint": str(candidate.get("gate_hint", "") or ""),
+                        "override_priority": float(candidate.get("override_priority", 0.0) or 0.0),
                     },
                 )
                 candidate_added += 1
@@ -3392,9 +3428,10 @@ class MemoryBridge:
         return self.rag.load_thought_stream(limit=limit)
 
     def list_initiative_candidates(self, *, limit: int = 12) -> list[dict[str, Any]]:
-        graph_rows = self.graph.list_initiative_market(limit=limit, statuses=("candidate", "scheduled", "blocked", "sent"))
+        graph_rows = self.graph.list_initiative_market(limit=limit, statuses=("candidate", "override_pending", "scheduled", "blocked", "sent"))
         normalized: list[dict[str, Any]] = []
         for row in graph_rows:
+            metadata = dict(row.get("metadata", {}))
             normalized.append(
                 {
                     "id": int(row.get("id", 0) or 0),
@@ -3411,7 +3448,15 @@ class MemoryBridge:
                     "send_target": str(row.get("send_target", "candidate_only") or "candidate_only"),
                     "priority": float(row.get("priority", 0.0) or 0.0),
                     "status": str(row.get("status", "") or ""),
-                    "metadata": dict(row.get("metadata", {})),
+                    "initiative_confidence": float(metadata.get("initiative_confidence", 0.0) or 0.0),
+                    "gate_hint": str(metadata.get("gate_hint", "") or ""),
+                    "override_priority": float(metadata.get("override_priority", 0.0) or 0.0),
+                    "gate_level": str(metadata.get("gate_level", "") or ""),
+                    "soft_gate_score": float(metadata.get("soft_gate_score", 0.0) or 0.0),
+                    "override_eligible": bool(metadata.get("override_eligible", False)),
+                    "main_brain_override_applied": bool(metadata.get("main_brain_override_applied", False)),
+                    "blocked_reason_code": str(metadata.get("blocked_reason_code", "") or metadata.get("blocked_reason", "") or ""),
+                    "metadata": metadata,
                 }
             )
         if normalized:
