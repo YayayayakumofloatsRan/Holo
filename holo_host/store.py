@@ -113,6 +113,25 @@ class QueueStore:
             CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(status, available_at, priority DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_threads_contact ON threads(contact_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS event_bus (
+                id INTEGER PRIMARY KEY,
+                event_type TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                message_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                decision_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                executed_at TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_event_bus_thread ON event_bus(channel, thread_key, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_event_bus_status ON event_bus(status, updated_at DESC);
             """
         )
         self._ensure_column("contacts", "last_initiative_at", "TEXT")
@@ -723,6 +742,131 @@ class QueueStore:
     @_synchronized
     def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
         return self._fetchall("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,))
+
+    @_synchronized
+    def enqueue_event(
+        self,
+        *,
+        event_type: str,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        message_id: str = "",
+        payload: dict[str, Any] | None = None,
+        status: str = "pending",
+    ) -> dict[str, Any]:
+        normalized_thread_key = self._normalize_wechat_thread_key(channel, thread_key, subject=chat_name, display_name=chat_name)
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO event_bus(
+                event_type, channel, thread_key, chat_name, message_id, status,
+                payload_json, decision_json, result_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', '{}', ?, ?)
+            """,
+            (
+                str(event_type or "").strip(),
+                str(channel or "").strip(),
+                normalized_thread_key,
+                str(chat_name or normalized_thread_key).strip(),
+                str(message_id or "").strip(),
+                str(status or "pending").strip() or "pending",
+                json_dumps(payload or {}),
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+        return self.get_event(int(cursor.lastrowid)) or {}
+
+    @_synchronized
+    def get_event(self, event_row_id: int) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM event_bus WHERE id = ?", (int(event_row_id or 0),))
+
+    @_synchronized
+    def update_event_decision(
+        self,
+        event_row_id: int,
+        *,
+        decision: dict[str, Any],
+        selected_action: str = "",
+        status: str = "decided",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        payload = dict(decision or {})
+        if selected_action:
+            payload.setdefault("selected_action", selected_action)
+        self.conn.execute(
+            """
+            UPDATE event_bus
+            SET decision_json = ?,
+                status = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                json_dumps(payload),
+                str(status or "decided").strip() or "decided",
+                now,
+                int(event_row_id or 0),
+            ),
+        )
+        self.conn.commit()
+        return self.get_event(event_row_id) or {}
+
+    @_synchronized
+    def update_event_result(
+        self,
+        event_row_id: int,
+        *,
+        result: dict[str, Any],
+        status: str = "executed",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        normalized_status = str(status or "executed").strip() or "executed"
+        self.conn.execute(
+            """
+            UPDATE event_bus
+            SET result_json = ?,
+                status = ?,
+                updated_at = ?,
+                executed_at = CASE
+                    WHEN ? IN ('executed', 'silenced', 'deferred', 'replied', 'lookup_complete')
+                    THEN ?
+                    ELSE executed_at
+                END
+            WHERE id = ?
+            """,
+            (
+                json_dumps(dict(result or {})),
+                normalized_status,
+                now,
+                normalized_status,
+                now,
+                int(event_row_id or 0),
+            ),
+        )
+        self.conn.commit()
+        return self.get_event(event_row_id) or {}
+
+    @_synchronized
+    def recent_events(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        limit: int = 16,
+    ) -> list[dict[str, Any]]:
+        normalized_thread_key = self._normalize_wechat_thread_key(channel, thread_key)
+        return self._fetchall(
+            """
+            SELECT * FROM event_bus
+            WHERE channel = ? AND thread_key = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (str(channel or "").strip(), normalized_thread_key, max(1, int(limit))),
+        )
 
     @_synchronized
     def has_pending_proactive(self, thread_id: int) -> bool:

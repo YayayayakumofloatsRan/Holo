@@ -53,6 +53,43 @@ GRAPH_MEMORY_LANES = (
     "consciousness_stream",
 )
 GRAPH_REPLY_MIN_CONFIDENCE = 0.34
+LOOKUP_HINTS = (
+    "search",
+    "look up",
+    "latest",
+    "official",
+    "movie",
+    "film",
+    "actor",
+    "director",
+    "imdb",
+    "wikipedia",
+    "鏌ヤ竴涓",
+    "鎼滀竴涓",
+    "鎼滅储",
+    "鏈€鏂",
+    "瀹樼綉",
+    "鐢靛奖",
+    "婕斿憳",
+    "瀵兼紨",
+    "鐧剧",
+)
+LOCAL_MEMORY_HINTS = (
+    "remember",
+    "before",
+    "earlier",
+    "previous",
+    "history",
+    "memory",
+    "mindos",
+    "holo",
+    "璁板緱",
+    "涔嬪墠",
+    "鍥炲繂",
+    "鎴戜滑",
+    "蹇冩櫤",
+    "绯荤粺",
+)
 FAST_PING_HINTS = {"在吗", "你在吗", "嗯", "好", "收到", "说吧", "继续", "接着说", "ok", "okay"}
 
 DEFAULT_IDENTITY_CORE_LINES = [
@@ -101,35 +138,40 @@ DEFAULT_PERSONA_BLEND = {
     "loneliness_sensitivity": 0.44,
     "feral_restraint": 0.67,
 }
-STAGE5_ACTION_TYPES = (
+STAGE6_ACTION_TYPES = (
     "silence",
     "defer_reply",
     "reply_once",
     "reply_multi",
+    "external_lookup",
     "proactive_ping",
     "history_refresh",
     "visual_recall",
+    "push_back",
+    "counter_offer",
+    "continuity_defense",
     "operator_self_fix",
 )
 ROADMAP_REGISTRY = {
     "Primary Track": [
-        "Intent-led subject runtime",
-        "Silence and deferral as first-class actions",
-        "Human-first action market",
+        "Deliberative subject core",
+        "Subject decision sovereignty",
+        "Lookup and recall as first-class actions",
+        "Expression budget controlled by the subject",
     ],
     "Secondary Tracks": [
-        "World model thickening",
+        "World model",
         "Autobiographical continuity",
         "Counterfactual inner simulation",
     ],
     "Parked Hypotheses": [
-        "Harder resistance without breaking the owner constitution",
-        "Broader multi-contact initiative orchestration",
+        "Stronger resistance without breaking the owner constitution",
+        "Broader endogenous desire shaping",
     ],
     "Deferred Experiments": [
-        "Full world-state prediction",
         "Long-horizon autobiographical narrator",
         "Deeper multimodal imagination beyond visual anchors",
+        "Richer world-state prediction",
     ],
     "Constitutional Constraints": [
         "Owner shutdown remains final",
@@ -524,6 +566,31 @@ class MemoryBridge:
             marker in lowered for marker in ("how", "why", "what", "remember", "before", "earlier")
         ) or any(marker in text for marker in ("怎么", "为什么", "记得", "之前", "最开始", "一开始"))
         affirmation_like = text in {"好", "嗯", "收到", "ok", "okay", "行"} or lowered in {"ok", "okay"}
+        search_requested = any(hint in lowered for hint in LOOKUP_HINTS) or any(hint in text for hint in LOOKUP_HINTS)
+        local_memory_requested = any(hint in lowered for hint in LOCAL_MEMORY_HINTS) or any(hint in text for hint in LOCAL_MEMORY_HINTS)
+        factual_lookup = bool(
+            search_requested
+            and not local_memory_requested
+            and any(
+                token in lowered
+                for token in (
+                    "who",
+                    "what",
+                    "when",
+                    "where",
+                    "movie",
+                    "film",
+                    "actor",
+                    "director",
+                    "latest",
+                    "official",
+                    "imdb",
+                    "wikipedia",
+                    "search",
+                    "look up",
+                )
+            )
+        )
         return {
             "text": text,
             "low_signal": low_signal,
@@ -531,6 +598,9 @@ class MemoryBridge:
             "affirmation_like": affirmation_like,
             "defer_requested": MemoryBridge._query_mentions_defer(text),
             "visual_requested": MemoryBridge._query_mentions_visual(text),
+            "search_requested": search_requested,
+            "local_memory_requested": local_memory_requested,
+            "factual_lookup": factual_lookup,
         }
 
     def _derive_intent_fields(
@@ -549,8 +619,14 @@ class MemoryBridge:
         visual_memory: dict[str, Any],
     ) -> dict[str, Any]:
         signal = self._query_signal(query)
+        capability_context = dict(context.get("capability_context", {})) if isinstance(context.get("capability_context"), dict) else {}
+        tool_requests = [dict(item) for item in capability_context.get("tool_requests", []) if isinstance(item, dict)]
+        tool_names = {str(item.get("name", "")).strip() for item in tool_requests if str(item.get("name", "")).strip()}
+        lookup_ready = "external_lookup" in tool_names or "web_preview" in tool_names or bool(signal["factual_lookup"])
         tier = str(packet.get("tier", "") or "").strip().lower() or "fast"
         query_focus = str(packet.get("query_focus", "") or packet.get("state", {}).get("query_mode", "") or "recent").strip() or "recent"
+        if signal["factual_lookup"]:
+            query_focus = "external_facts"
         reply_pull = self._clamp(
             float(drive_state.get("seek_contact", 0.0) or 0.0) * 0.34
             + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.26
@@ -595,6 +671,8 @@ class MemoryBridge:
         intent_need = "direct_reply"
         if signal["defer_requested"]:
             intent_need = "delayed_touch"
+        elif signal["factual_lookup"]:
+            intent_need = "ground_with_external_facts"
         elif signal["visual_requested"] and (visual_memory.get("visual_anchors") or context.get("attachments")):
             intent_need = "visual_grounding"
         elif tier in {"recall", "deep_recall"}:
@@ -609,6 +687,10 @@ class MemoryBridge:
             "question_like": bool(signal["question_like"]),
             "defer_requested": bool(signal["defer_requested"]),
             "visual_requested": bool(signal["visual_requested"]),
+            "search_requested": bool(signal["search_requested"]),
+            "local_memory_requested": bool(signal["local_memory_requested"]),
+            "factual_lookup": bool(signal["factual_lookup"]),
+            "lookup_ready": bool(lookup_ready),
             "reply_pull": round(reply_pull, 4),
             "resistance_pull": round(resistance_pull, 4),
             "continuity_pull": round(continuity_pull, 4),
@@ -640,6 +722,10 @@ class MemoryBridge:
         visual_memory: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], dict[str, Any], int, str, str, str]:
         signal = self._query_signal(query)
+        capability_context = dict(context.get("capability_context", {})) if isinstance(context.get("capability_context"), dict) else {}
+        tool_requests = [dict(item) for item in capability_context.get("tool_requests", []) if isinstance(item, dict)]
+        planned_lookup = next((item for item in tool_requests if str(item.get("name", "")).strip() == "external_lookup"), {})
+        lookup_ready = bool(intent_state.get("lookup_ready", False))
         tier = str(intent_state.get("tier", "fast") or "fast")
         reply_pull = float(intent_state.get("reply_pull", 0.0) or 0.0)
         resistance_pull = float(intent_state.get("resistance_pull", 0.0) or 0.0)
@@ -705,6 +791,7 @@ class MemoryBridge:
                     + expansion_pressure * 0.42
                     + (0.18 if tier == "deep_recall" else 0.1 if tier == "recall" else 0.0)
                     + max(0.0, relation_need - 0.45) * 0.14
+                    - (0.46 if bool(intent_state.get("factual_lookup", False)) else 0.0)
                     - (0.42 if signal["low_signal"] or signal["affirmation_like"] else 0.0)
                     - (0.58 if signal["defer_requested"] else 0.0),
                     4,
@@ -713,6 +800,22 @@ class MemoryBridge:
                 "drive_source": "seek_contact + continuity_pull + expansion_pressure",
                 "value_rationale": "the subject judges this turn worth more than a quick touch",
                 "send_allowed": True,
+            },
+            {
+                "action_type": "external_lookup",
+                "score": round(
+                    ((1.18 if bool(intent_state.get("factual_lookup", False)) and lookup_ready else 0.0))
+                    + ((0.26 if bool(intent_state.get("search_requested", False)) and lookup_ready else 0.0))
+                    + max(0.0, 0.4 - float(packet.get("graph_confidence", 0.0) or 0.0)) * 0.24,
+                    4,
+                ),
+                "why_now": compact_text(
+                    str(planned_lookup.get("reason", "") or "the subject wants external evidence before speaking"),
+                    200,
+                ),
+                "drive_source": "factual_lookup + curiosity",
+                "value_rationale": "factual uncertainty can justify looking outward before language",
+                "send_allowed": False,
             },
             {
                 "action_type": "proactive_ping",
@@ -746,9 +849,49 @@ class MemoryBridge:
                 "value_rationale": "self-repair is part of the same kernel, but not the same speech act",
                 "send_allowed": False,
             },
+            {
+                "action_type": "push_back",
+                "score": round(
+                    max(0.0, resistance_pull - reply_pull * 0.12)
+                    + float(conflict_state.get("resistance_vs_harmony", 0.0) or 0.0) * 0.18,
+                    4,
+                ),
+                "why_now": "the subject wants to answer with friction instead of pure compliance",
+                "drive_source": "resistance_pull + identity_priority",
+                "value_rationale": "subjectivity allows a small push back when harmony is not the only value",
+                "send_allowed": True,
+            },
+            {
+                "action_type": "counter_offer",
+                "score": round(
+                    float(conflict_state.get("contact_vs_risk", 0.0) or 0.0) * 0.28
+                    + float(value_state.get("identity_priority", 0.0) or 0.0) * 0.18,
+                    4,
+                ),
+                "why_now": "the subject leans toward a negotiated alternative instead of a straight yes",
+                "drive_source": "conflict + protect_identity",
+                "value_rationale": "continuing the relation can still allow a different proposal",
+                "send_allowed": True,
+            },
+            {
+                "action_type": "continuity_defense",
+                "score": round(
+                    float(resistance_posture.get("continuity_defense", 0.0) or 0.0) * 0.72
+                    + continuity_pull * 0.18,
+                    4,
+                ),
+                "why_now": "the subject wants to protect continuity before yielding",
+                "drive_source": "continuity_defense + seek_continuity",
+                "value_rationale": "continuity can outrank short-term compliance",
+                "send_allowed": True,
+            },
         ]
         action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
         selected = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
+        if bool(intent_state.get("factual_lookup", False)) and lookup_ready and selected["action_type"] not in {"silence", "defer_reply"}:
+            lookup_candidate = next((dict(item) for item in action_market if item.get("action_type") == "external_lookup"), None)
+            if lookup_candidate and float(lookup_candidate.get("score", 0.0) or 0.0) >= max(0.48, float(selected.get("score", 0.0) or 0.0) - 0.06):
+                selected = lookup_candidate
         if selected["action_type"] == "reply_multi":
             if not (
                 expansion_pressure >= 0.48
@@ -769,6 +912,8 @@ class MemoryBridge:
             selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
         if selected["action_type"] == "visual_recall" and not visual_recall_needed:
             selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
+        if selected["action_type"] == "external_lookup" and not lookup_ready:
+            selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
 
         expression_budget = 1
         if selected["action_type"] == "silence":
@@ -778,26 +923,18 @@ class MemoryBridge:
         elif selected["action_type"] == "reply_once":
             expression_budget = 1
         elif selected["action_type"] == "reply_multi":
-            if tier == "deep_recall":
+            if signal["low_signal"] or signal["affirmation_like"]:
+                expression_budget = 1
+            elif tier == "deep_recall" and expansion_pressure >= 0.74:
                 expression_budget = 3
             elif tier == "recall" or expansion_pressure >= 0.72:
                 expression_budget = 2
-            elif expansion_pressure >= 0.84:
-                expression_budget = 3
             else:
-                expression_budget = 2
-            if (
-                float(value_state.get("play_priority", 0.0) or 0.0) >= 0.72
-                and expansion_pressure >= 0.82
-                and tier == "deep_recall"
-                and not signal["low_signal"]
-                and not signal["affirmation_like"]
-                and not signal["defer_requested"]
-                and expression_budget < 3
-            ):
-                expression_budget += 1
-        elif selected["action_type"] in {"history_refresh", "visual_recall"}:
+                expression_budget = 1
+        elif selected["action_type"] in {"history_refresh", "visual_recall", "external_lookup"}:
             expression_budget = 1
+        elif selected["action_type"] in {"push_back", "counter_offer", "continuity_defense"}:
+            expression_budget = 1 if expansion_pressure < 0.68 else 2
 
         silence_reason = ""
         defer_reason = ""
@@ -904,7 +1041,7 @@ class MemoryBridge:
                     list(dict(packet.get("episodic_recall", {})).get("lines", [])) + visual_anchors
                 )[: max(1, int(packet.get("limits", {}).get("episodic_k", 2) or 2))],
             }
-        packet["mind_packet_version"] = "v8"
+        packet["mind_packet_version"] = "v9"
         packet["persona_blend"] = persona_blend
         packet["brain_state"] = brain_state
         packet["game_state"] = game_state
@@ -928,6 +1065,15 @@ class MemoryBridge:
         packet["silence_reason"] = silence_reason
         packet["defer_reason"] = defer_reason
         packet["action_rationale"] = action_rationale
+        packet["intent_state_v2"] = dict(intent_state)
+        packet["action_market_v2"] = list(action_market)
+        packet["expression_budget_v2"] = int(expression_budget)
+        packet["lookup_reason"] = (
+            str(selected_action.get("why_now", "") or "")
+            if str(selected_action.get("action_type", "")).strip() == "external_lookup"
+            else ""
+        )
+        packet["deliberation_trace_id"] = str(context.get("deliberation_trace_id", "") or "")
         packet["last_action_selection"] = dict(last_action_selection) if isinstance(last_action_selection, dict) else {}
         packet.setdefault("state", {})
         packet["state"]["persona_blend"] = dict(persona_blend)
@@ -2191,8 +2337,10 @@ class MemoryBridge:
                 "channel": channel,
                 "query": query,
                 "intent_state": dict(packet.get("intent_state", {})),
+                "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
                 "selected_action": dict(packet.get("selected_action", {})),
                 "expression_budget": int(packet.get("expression_budget", 0) or 0),
+                "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
                 "action_rationale": str(packet.get("action_rationale", "") or ""),
             }
         subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
@@ -2203,8 +2351,10 @@ class MemoryBridge:
             "channel": channel,
             "query": "",
             "intent_state": dict(metadata.get("last_intent_state", {})),
+            "intent_state_v2": dict(metadata.get("last_intent_state_v2", metadata.get("last_intent_state", {}))),
             "selected_action": dict(metadata.get("last_selected_action", {})),
             "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
+            "expression_budget_v2": int(metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)) or 0),
             "action_rationale": str(metadata.get("last_action_rationale", "") or ""),
             "last_action_selection": dict(metadata.get("last_action_selection", {})) if isinstance(metadata.get("last_action_selection", {}), dict) else {},
         }
@@ -2236,8 +2386,10 @@ class MemoryBridge:
                 "channel": channel,
                 "query": query,
                 "action_market": market[: max(1, int(limit))],
+                "action_market_v2": market[: max(1, int(limit))],
                 "selected_action": dict(packet.get("selected_action", {})),
                 "expression_budget": int(packet.get("expression_budget", 0) or 0),
+                "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             }
         subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
         metadata = dict(subject.get("metadata", {}))
@@ -2247,8 +2399,10 @@ class MemoryBridge:
             "channel": channel,
             "query": "",
             "action_market": list(metadata.get("last_action_market", []))[: max(1, int(limit))],
+            "action_market_v2": list(metadata.get("last_action_market_v2", metadata.get("last_action_market", [])))[: max(1, int(limit))],
             "selected_action": dict(metadata.get("last_selected_action", {})),
             "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
+            "expression_budget_v2": int(metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)) or 0),
         }
 
     def trace_action_selection(
@@ -2277,12 +2431,17 @@ class MemoryBridge:
             "channel": channel,
             "query": query,
             "intent_state": dict(packet.get("intent_state", {})),
+            "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
             "action_market": list(packet.get("action_market", []))[: max(1, int(limit))],
+            "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[: max(1, int(limit))],
             "selected_action": selected_action,
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             "silence_reason": str(packet.get("silence_reason", "") or ""),
             "defer_reason": str(packet.get("defer_reason", "") or ""),
+            "lookup_reason": str(packet.get("lookup_reason", "") or ""),
             "action_rationale": str(packet.get("action_rationale", "") or ""),
+            "deliberation_trace_id": str(packet.get("deliberation_trace_id", "") or ""),
             "resistance_posture": dict(packet.get("resistance_posture", {})),
             "game_state": dict(packet.get("game_state", {})),
             "self_model": dict(packet.get("self_model", {})),
@@ -2319,9 +2478,12 @@ class MemoryBridge:
             "last_action_message_id": str(message_id or ""),
             "last_action_query": str(query or ""),
             "last_intent_state": dict(intent_state),
+            "last_intent_state_v2": dict(intent_state),
             "last_action_market": list(action_market),
+            "last_action_market_v2": list(action_market),
             "last_selected_action": dict(selected_action),
             "last_expression_budget": int(expression_budget),
+            "last_expression_budget_v2": int(expression_budget),
             "last_silence_reason": str(silence_reason or ""),
             "last_defer_reason": str(defer_reason or ""),
             "last_action_rationale": str(action_rationale or ""),
@@ -2332,8 +2494,72 @@ class MemoryBridge:
             chat_name=chat_name,
             metadata=metadata,
             note=f"action_selection:{selected_action.get('action_type', 'reply_once')}",
-            source="stage5_action_selection",
+            source="stage6_action_selection",
         )
+
+    def record_consciousness_entry(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        message_id: str = "",
+        event_row_id: int | None = None,
+        entry_type: str,
+        selected_action: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.graph.record_consciousness_entry(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            message_id=message_id,
+            event_row_id=event_row_id,
+            entry_type=entry_type,
+            selected_action=selected_action,
+            payload=payload,
+        )
+
+    def consciousness_ledger(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip()
+        entries = self.graph.list_consciousness_ledger(
+            channel=channel,
+            thread_key=normalized_thread_key or None,
+            chat_name=normalized_chat_name or None,
+            limit=max(1, int(limit)),
+        )
+        return {
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "entries": entries,
+            "count": len(entries),
+        }
+
+    def trace_deliberation_ledger(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        payload = self.consciousness_ledger(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+        )
+        payload["roadmap_registry"] = self.roadmap_registry()
+        return payload
 
     def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
         return self.graph.set_brain_mode(mode, note=note)

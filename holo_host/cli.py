@@ -977,6 +977,80 @@ def _accept_stage5_payload(
             service.memory.graph.close()
 
 
+def _deliberation_ledger_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/deliberation-ledger",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_deliberation_ledger(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+
+
+def _accept_stage6_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage6",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage6(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _backfill_vector_memory_payload(
     config_path: str | None,
     *,
@@ -1986,6 +2060,61 @@ def _evaluate_stage5_acceptance(
     }
 
 
+def _evaluate_stage6_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    silence_trace: dict[str, object],
+    defer_trace: dict[str, object],
+    lookup_trace: dict[str, object],
+    recall_trace: dict[str, object],
+    reply_probe: dict[str, object],
+    ledger: dict[str, object],
+    brain_status: dict[str, object],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    graph_led = dict(reply_probe.get("graph_led", {})) if isinstance(reply_probe.get("graph_led", {}), dict) else {}
+    reply_bubbles = list(graph_led.get("bubbles", [])) or list(reply_probe.get("bubbles", []))
+    ledger_entries = list(ledger.get("entries", []))
+    checks.append(_stage4_check("stage6_live_mode", str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain", f"status={health.get('status')} mode={mode_transition.get('mode')}"))
+    checks.append(_stage4_check("silence_first_class", str(dict(silence_trace.get("selected_action", {})).get("action_type", "")) == "silence" and bool(str(silence_trace.get("silence_reason", "")).strip()), f"trace={silence_trace}"))
+    checks.append(_stage4_check("defer_first_class", str(dict(defer_trace.get("selected_action", {})).get("action_type", "")) == "defer_reply" and bool(str(defer_trace.get("defer_reason", "")).strip()), f"trace={defer_trace}"))
+    checks.append(_stage4_check("lookup_is_subject_action", str(dict(lookup_trace.get("selected_action", {})).get("action_type", "")) == "external_lookup" and bool(str(lookup_trace.get("lookup_reason", "")).strip()), f"trace={lookup_trace}"))
+    checks.append(_stage4_check("recall_prefers_local_memory", str(dict(recall_trace.get("selected_action", {})).get("action_type", "")) in {"reply_once", "reply_multi", "history_refresh"} and not bool(str(recall_trace.get("lookup_reason", "")).strip()), f"trace={recall_trace}"))
+    checks.append(_stage4_check("talkativeness_reined_in", int(graph_led.get("expression_budget", reply_probe.get("expression_budget", 0)) or 0) <= 1 and len(reply_bubbles) <= 1, f"budget={graph_led.get('expression_budget', reply_probe.get('expression_budget'))} bubbles={reply_bubbles}"))
+    checks.append(_stage4_check("consciousness_ledger_visible", len(ledger_entries) >= 2 and all(bool(str(item.get('entry_type', '')).strip()) for item in ledger_entries[:2]), f"entries={ledger_entries[:3]}"))
+    checks.append(_stage4_check("fast_budget", str(fast_benchmark.get("last_tier", "")) == "fast" and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0, f"tier={fast_benchmark.get('last_tier')} max_ms={dict(fast_benchmark.get('timings_ms', {})).get('max')}"))
+    checks.append(_stage4_check("recall_budget", str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0, f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}"))
+    checks.append(_stage4_check("deep_budget", str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0, f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}"))
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "stage": "deliberative-subject-core-stage6",
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "blockers": blockers,
+        "warnings": warnings,
+        "silence_trace": silence_trace,
+        "defer_trace": defer_trace,
+        "lookup_trace": lookup_trace,
+        "recall_trace": recall_trace,
+        "reply_probe": reply_probe,
+        "ledger": ledger,
+        "cache_hit_ratio": float(dict(brain_status.get("cache", {})).get("hit_ratio", 0.0) or 0.0),
+        "reply_latency_budgets": {
+            "fast": dict(fast_benchmark.get("timings_ms", {})),
+            "recall": dict(recall_benchmark.get("timings_ms", {})),
+            "deep_recall": dict(deep_benchmark.get("timings_ms", {})),
+        },
+    }
+
+
 def command_init_db(config_path: str | None) -> int:
     config = load_config(config_path=config_path)
     store = QueueStore(config.runtime.db_path)
@@ -2397,6 +2526,25 @@ def command_trace_action_selection(
     return 0
 
 
+def command_trace_deliberation_ledger(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _deliberation_ledger_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_drive_state(
     config_path: str | None,
     *,
@@ -2509,6 +2657,29 @@ def command_accept_stage5(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage5_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage6(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage6_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -3656,6 +3827,18 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage5_parser.add_argument("--sender", default=None)
     accept_stage5_parser.add_argument("--iterations", type=int, default=3)
     accept_stage5_parser.add_argument("--warmup", type=int, default=1)
+    trace_deliberation_parser = subparsers.add_parser("trace-deliberation-ledger", help="Inspect the Stage-6 deliberation and consciousness ledger for one thread")
+    trace_deliberation_parser.add_argument("--thread-key", default=None)
+    trace_deliberation_parser.add_argument("--chat-name", default=None)
+    trace_deliberation_parser.add_argument("--channel", default="wechat")
+    trace_deliberation_parser.add_argument("--limit", type=int, default=24)
+    accept_stage6_parser = subparsers.add_parser("accept-stage6", help="Run the fixed Deliberative Subject Core Stage-6 acceptance gate")
+    accept_stage6_parser.add_argument("--thread-key", default=None)
+    accept_stage6_parser.add_argument("--chat-name", default=None)
+    accept_stage6_parser.add_argument("--channel", default="wechat")
+    accept_stage6_parser.add_argument("--sender", default=None)
+    accept_stage6_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage6_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -3995,6 +4178,24 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage5":
         return command_accept_stage5(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "trace-deliberation-ledger":
+        return command_trace_deliberation_ledger(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    if args.command == "accept-stage6":
+        return command_accept_stage6(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

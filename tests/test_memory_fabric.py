@@ -100,7 +100,7 @@ class MemoryFabricTests(unittest.TestCase):
                 context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
 
-            self.assertEqual(packet["mind_packet_version"], "v8")
+            self.assertEqual(packet["mind_packet_version"], "v9")
             self.assertIn(packet["retrieval_mode"], {"hybrid-led", "hybrid-led+fallback", "graph-led"})
             self.assertIn("graph_hits", packet)
             self.assertIn("vector_hits", packet)

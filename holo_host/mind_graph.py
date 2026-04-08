@@ -702,6 +702,19 @@ class MindGraph:
                 created_at TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_outcome_appraisals_thread ON outcome_appraisals(channel, thread_key, created_at DESC);
+            CREATE TABLE IF NOT EXISTS consciousness_ledger (
+                id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                message_id TEXT NOT NULL DEFAULT '',
+                event_row_id INTEGER NOT NULL DEFAULT 0,
+                entry_type TEXT NOT NULL DEFAULT '',
+                selected_action TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_consciousness_ledger_thread ON consciousness_ledger(channel, thread_key, created_at DESC);
                 """
             )
             for stream_name, payload in self.stream_cadences.items():
@@ -2952,6 +2965,91 @@ class MindGraph:
         channel: str = "wechat",
     ) -> dict[str, Any]:
         return dict(self.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel).get("outcome_memory", {}))
+
+    def record_consciousness_entry(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        entry_type: str,
+        payload: dict[str, Any] | None = None,
+        message_id: str = "",
+        event_row_id: int = 0,
+        selected_action: str = "",
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        if not normalized_thread_key:
+            return {"status": "skipped", "reason": "missing_thread_key"}
+        now = utc_now()
+        with self._lock:
+            row_id = self.conn.execute(
+                """
+                INSERT INTO consciousness_ledger(
+                    channel, thread_key, chat_name, message_id, event_row_id, entry_type, selected_action, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(channel or "").strip(),
+                    normalized_thread_key,
+                    str(chat_name or normalized_thread_key).strip(),
+                    str(message_id or "").strip(),
+                    int(event_row_id or 0),
+                    str(entry_type or "").strip(),
+                    str(selected_action or "").strip(),
+                    json.dumps(dict(payload or {}), ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            ).lastrowid
+            self.conn.commit()
+        return {
+            "id": int(row_id),
+            "status": "ok",
+            "channel": str(channel or "").strip(),
+            "thread_key": normalized_thread_key,
+            "chat_name": str(chat_name or normalized_thread_key).strip(),
+            "entry_type": str(entry_type or "").strip(),
+            "selected_action": str(selected_action or "").strip(),
+            "created_at": now,
+        }
+
+    def list_consciousness_ledger(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> list[dict[str, Any]]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        with self._lock:
+            if normalized_thread_key:
+                rows = self.conn.execute(
+                    """
+                    SELECT *
+                    FROM consciousness_ledger
+                    WHERE channel = ? AND thread_key = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (str(channel or "").strip(), normalized_thread_key, max(1, int(limit))),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT *
+                    FROM consciousness_ledger
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (max(1, int(limit)),),
+                ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["payload"] = _safe_json_dict(payload.get("payload_json", "{}"))
+            results.append(payload)
+        return results
 
     def recent_dialogue_window(
         self,

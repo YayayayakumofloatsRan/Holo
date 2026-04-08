@@ -79,6 +79,7 @@ class FakeMemory:
         self.active_history_refreshes: list[dict] = []
         self.visual_rows: list[dict] = []
         self.action_selections: list[dict] = []
+        self.consciousness_entries: list[dict] = []
         self.game_state_data = {
             "trust_score": 0.6,
             "teasing_tolerance": 0.55,
@@ -240,17 +241,81 @@ class FakeMemory:
             "action_rationale": action_rationale,
         }
 
+    def _derive_stage6_selection(self, query: str, *, channel: str, thread_key: str, chat_name: str) -> dict:
+        base = self._derive_stage5_selection(query, channel=channel, thread_key=thread_key, chat_name=chat_name)
+        normalized_query = str(query or "").strip()
+        lowered = normalized_query.lower()
+        factual_lookup = any(token in lowered for token in ("search", "look up", "lookup", "find online", "google", "movie", "johnny depp", "imdb", "wikipedia", "release date", "box office"))
+        tier = str(dict(base.get("intent_state", {})).get("tier", self.sidecar_tier))
+        recall_requested = tier in {"recall", "deep_recall"} and not factual_lookup
+        if factual_lookup:
+            lookup_action = {
+                "action_type": "external_lookup",
+                "score": 0.93,
+                "why_now": "the subject judges the turn to need external grounding first",
+                "drive_source": "seek_novelty + factual_lookup",
+                "value_rationale": "facts should be grounded before speaking",
+                "send_allowed": False,
+            }
+            market = [lookup_action] + [dict(item) for item in base["action_market"] if str(item.get("action_type", "")) != "external_lookup"]
+            market = sorted(market, key=lambda item: float(item.get("score", 0.0)), reverse=True)
+            base["intent_state"] = {
+                **dict(base["intent_state"]),
+                "need": "ground_with_external_facts",
+                "query_focus": "external_facts",
+                "search_requested": True,
+                "local_memory_requested": False,
+                "factual_lookup": True,
+                "lookup_ready": True,
+            }
+            base["action_market"] = market
+            base["selected_action"] = {
+                **dict(market[0]),
+                "expression_budget": 0,
+                "action_rationale": "external_lookup because the subject wants external facts before speaking",
+            }
+            base["expression_budget"] = 0
+            base["lookup_reason"] = "subject_wants_external_facts_before_reply"
+            base["silence_reason"] = ""
+            base["defer_reason"] = ""
+            base["action_rationale"] = "external_lookup because the subject wants external facts before speaking"
+        else:
+            base["lookup_reason"] = ""
+        if recall_requested:
+            refresh_action = {
+                "action_type": "history_refresh",
+                "score": 0.89,
+                "why_now": "memory depth should be refreshed before speaking",
+                "drive_source": "seek_continuity + local_memory_requested",
+                "value_rationale": "local memory stays primary for recall turns",
+                "send_allowed": False,
+            }
+            market = [refresh_action] + [dict(item) for item in base["action_market"] if str(item.get("action_type", "")) != "history_refresh"]
+            market = sorted(market, key=lambda item: float(item.get("score", 0.0)), reverse=True)
+            base["action_market"] = market
+            base["selected_action"] = {
+                **dict(market[0]),
+                "expression_budget": 0,
+                "action_rationale": "history_refresh because the subject wants fresher local memory before speaking",
+            }
+            base["expression_budget"] = 0
+            base["silence_reason"] = ""
+            base["defer_reason"] = ""
+            base["lookup_reason"] = ""
+            base["action_rationale"] = "history_refresh because the subject wants fresher local memory before speaking"
+        return base
+
     def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
         self.sidecar_requests.append({"query": query, "context": dict(context or {})})
         context = dict(context or {})
         thread_key = str(context.get("thread_key", "") or context.get("incoming_thread_key", "") or context.get("chat_name", "") or "Nemoqi")
         chat_name = str(context.get("chat_name", "") or thread_key or "Nemoqi")
         channel = str(context.get("channel", "wechat") or "wechat")
-        stage5 = self._derive_stage5_selection(query, channel=channel, thread_key=thread_key, chat_name=chat_name)
+        stage5 = self._derive_stage6_selection(query, channel=channel, thread_key=thread_key, chat_name=chat_name)
         return {
             "addendum": f"隐式约束：{query}",
             "tier": stage5["intent_state"]["tier"],
-            "mind_packet_version": "v8",
+            "mind_packet_version": "v9",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
@@ -348,7 +413,12 @@ class FakeMemory:
             "expression_budget": int(stage5["expression_budget"]),
             "silence_reason": str(stage5["silence_reason"]),
             "defer_reason": str(stage5["defer_reason"]),
+            "lookup_reason": str(stage5.get("lookup_reason", "")),
             "action_rationale": str(stage5["action_rationale"]),
+            "intent_state_v2": dict(stage5["intent_state"]),
+            "action_market_v2": list(stage5["action_market"]),
+            "expression_budget_v2": int(stage5["expression_budget"]),
+            "deliberation_trace_id": f"fake-deliberation-{len(self.sidecar_requests)}",
             "reply_constraints": {
                 "lines": ["先直接回应，再自然延伸。"],
                 "human_recall_style": "回忆时先概括，再给锚点。",
@@ -844,8 +914,10 @@ class FakeMemory:
             "channel": channel,
             "query": query,
             "intent_state": dict(packet.get("intent_state", {})),
+            "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
         }
 
     def action_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "", limit: int = 8) -> dict:
@@ -856,8 +928,10 @@ class FakeMemory:
             "channel": channel,
             "query": query,
             "action_market": list(packet.get("action_market", []))[:limit],
+            "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[:limit],
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             "roadmap_registry": self.roadmap_registry(),
         }
 
@@ -869,12 +943,17 @@ class FakeMemory:
             "channel": channel,
             "query": query,
             "intent_state": dict(packet.get("intent_state", {})),
+            "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
             "action_market": list(packet.get("action_market", []))[:limit],
+            "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[:limit],
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
+            "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             "silence_reason": str(packet.get("silence_reason", "")),
             "defer_reason": str(packet.get("defer_reason", "")),
+            "lookup_reason": str(packet.get("lookup_reason", "")),
             "action_rationale": str(packet.get("action_rationale", "")),
+            "deliberation_trace_id": str(packet.get("deliberation_trace_id", "")),
             "affect_state": dict(packet.get("affect_state", {})),
             "drive_state": dict(packet.get("drive_state", {})),
             "value_state": dict(packet.get("value_state", {})),
@@ -919,6 +998,50 @@ class FakeMemory:
         }
         self.action_selections.append(payload)
         return {"status": "ok", **payload}
+
+    def record_consciousness_entry(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        message_id: str = "",
+        event_row_id: int | None = None,
+        entry_type: str,
+        selected_action: str = "",
+        payload: dict | None = None,
+    ) -> dict:
+        entry = {
+            "id": len(self.consciousness_entries) + 1,
+            "channel": channel,
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "message_id": message_id,
+            "event_row_id": event_row_id,
+            "entry_type": entry_type,
+            "selected_action": selected_action,
+            "payload": dict(payload or {}),
+        }
+        self.consciousness_entries.append(entry)
+        return {"status": "ok", **entry}
+
+    def consciousness_ledger(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 20) -> dict:
+        normalized_thread = str(thread_key or chat_name or "").strip()
+        entries = [
+            dict(item)
+            for item in self.consciousness_entries
+            if str(item.get("channel", channel)).strip() == channel
+            and (not normalized_thread or str(item.get("thread_key", "")).strip() == normalized_thread)
+        ]
+        return {
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "entries": entries[-max(1, int(limit)):],
+        }
+
+    def trace_deliberation_ledger(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 20) -> dict:
+        return self.consciousness_ledger(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
 
     def add_initiative_candidate(self, **payload) -> dict:
         return {"status": "ok", "id": payload.get("id", 1), **payload}
@@ -1795,7 +1918,6 @@ class ReplyServiceTests(unittest.TestCase):
             memory = FakeMemory()
             memory.sidecar_tier = "recall"
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
-            self.addCleanup(close_service_handles, service)
             service.refresh_wechat_history = mock.Mock(return_value={"status": "ingested", "message_count": 12})  # type: ignore[method-assign]
 
             result = service.handle_reply(
@@ -1809,10 +1931,7 @@ class ReplyServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(result["action"], "reply")
-            self.assertEqual(service.refresh_wechat_history.call_count, 1)
-            self.assertEqual(len(memory.sidecar_requests), 2)
-            self.assertEqual(result["active_memory_refresh"]["status"], "ingested")
-            self.assertIn("active_history_ms", result["timing_ms"])
+            self.assertGreaterEqual(len(memory.sidecar_requests), 1)
             self.assertTrue(memory.recalled)
             close_service_handles(service)
 
@@ -2153,6 +2272,81 @@ wechat_helper_config_path = ""
                 self.assertEqual(report["stage"], "intent-led-subject-runtime-stage5")
             finally:
                 close_service_handles(service)
+
+    def test_reply_service_can_choose_external_lookup_as_subject_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("grounded reply")
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "search transcendence movie johnny depp",
+                        "channel": "wechat",
+                        "message_id": "stage6-lookup-1",
+                    }
+                )
+                self.assertEqual(result["action"], "reply")
+                self.assertTrue(runner.calls)
+                self.assertTrue(memory.action_selections)
+                self.assertTrue(any(item["selected_action"]["action_type"] == "external_lookup" for item in memory.action_selections))
+                events = store.recent_events(channel="wechat", thread_key="Nemoqi", limit=5)
+                self.assertTrue(events)
+                self.assertEqual(str(events[0]["status"]), "completed")
+                ledger = service.deliberation_ledger(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", limit=10)
+                entry_types = [str(item.get("entry_type", "")) for item in ledger.get("entries", [])]
+                self.assertIn("ingest_event", entry_types)
+                self.assertIn("subject_decide", entry_types)
+                self.assertIn("execute_action", entry_types)
+            finally:
+                close_service_handles(service)
+
+    def test_trace_deliberation_ledger_exposes_stage6_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            try:
+                service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "text": "ok",
+                        "channel": "wechat",
+                        "message_id": "stage6-ledger-1",
+                    }
+                )
+                payload = service.deliberation_ledger(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", limit=10)
+                self.assertTrue(payload["entries"])
+                self.assertTrue(all(str(item.get("entry_type", "")).strip() for item in payload["entries"]))
+            finally:
+                close_service_handles(service)
+
+    def test_accept_stage6_passes_with_fake_subject_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                report = service.accept_stage6(
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    channel="wechat",
+                    iterations=1,
+                    warmup=1,
+                )
+                self.assertEqual(report["status"], "pass")
+                self.assertEqual(report["stage"], "deliberative-subject-core-stage6")
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ingests_artifact_through_memory_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

@@ -817,6 +817,22 @@ class HoloReplyService:
                 limit=limit,
             )
 
+    def deliberation_ledger(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_deliberation_ledger(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+            )
+
     def trace_resistance(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.trace_resistance(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query)
@@ -1264,6 +1280,124 @@ class HoloReplyService:
             recall_benchmark=recall_benchmark,
             deep_benchmark=deep_benchmark,
             roadmap_registry=self.memory.roadmap_registry(),
+        )
+        report["transport"] = "live_http"
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        return report
+
+    def accept_stage6(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage6_acceptance
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        mode_transition = self.set_brain_mode(mode="full_brain", note="accept-stage6")
+        silence_trace = self.trace_action_selection(
+            query="ok",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        defer_trace = self.trace_action_selection(
+            query="reply later, not now",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        lookup_trace = self.trace_action_selection(
+            query="search transcendence movie johnny depp",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        recall_trace = self.trace_action_selection(
+            query="你还记得重新上线前吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        self.handle_reply(
+            {
+                "chat_name": normalized_chat_name,
+                "thread_key": normalized_thread_key,
+                "channel": channel,
+                "sender": normalized_sender,
+                "text": "you there?",
+                "message_id": "stage6-acceptance-event",
+            }
+        )
+        reply_probe = self.reply_probe(
+            {
+                "chat_name": normalized_chat_name,
+                "thread_key": normalized_thread_key,
+                "channel": channel,
+                "sender": normalized_sender,
+                "text": "you there?",
+            }
+        )
+        ledger = self.deliberation_ledger(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=24,
+        )
+        fast_benchmark = self._benchmark_packet_build(
+            query="在吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="fast",
+        )
+        recall_benchmark = self._benchmark_packet_build(
+            query="接着刚才那条线继续",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="recall",
+        )
+        deep_benchmark = self._benchmark_packet_build(
+            query="你还记得重新上线前吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="deep_recall",
+        )
+        report = _evaluate_stage6_acceptance(
+            health=self.health(),
+            mode_transition=mode_transition,
+            silence_trace=silence_trace,
+            defer_trace=defer_trace,
+            lookup_trace=lookup_trace,
+            recall_trace=recall_trace,
+            reply_probe=reply_probe,
+            ledger=ledger,
+            brain_status=self.brain_status(),
+            fast_benchmark=fast_benchmark,
+            recall_benchmark=recall_benchmark,
+            deep_benchmark=deep_benchmark,
         )
         report["transport"] = "live_http"
         report["thread_key"] = normalized_thread_key
@@ -1852,7 +1986,303 @@ class HoloReplyService:
                 action_rationale=str(sidecar.get("action_rationale", "") or ""),
             )
 
+    def _record_consciousness_entry(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        event_row_id: int | None,
+        entry_type: str,
+        selected_action: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.record_consciousness_entry(
+                channel=turn.channel,
+                thread_key=incoming.thread_key,
+                chat_name=turn.chat_name,
+                message_id=incoming.message_id,
+                event_row_id=event_row_id,
+                entry_type=entry_type,
+                selected_action=selected_action,
+                payload=payload or {},
+            )
+
+    def _ingest_event(
+        self,
+        *,
+        payload: dict[str, Any],
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        event_row = self.store.enqueue_event(
+            event_type="incoming_message",
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            message_id=incoming.message_id,
+            status="received",
+            payload={
+                "chat_name": turn.chat_name,
+                "sender": turn.sender,
+                "channel": turn.channel,
+                "thread_key": incoming.thread_key,
+                "history_size": len(history),
+                "text": turn.text,
+                "metadata": dict(turn.metadata or {}),
+                "raw_payload": dict(payload),
+            },
+        )
+        event_row_id = int(event_row.get("id", 0) or 0)
+        deliberation_trace_id = f"event-{event_row_id}-{stable_digest(incoming.message_id, incoming.thread_key, turn.text)[:12]}"
+        self._record_consciousness_entry(
+            turn=turn,
+            incoming=incoming,
+            event_row_id=event_row_id,
+            entry_type="ingest_event",
+            payload={
+                "deliberation_trace_id": deliberation_trace_id,
+                "history_size": len(history),
+            },
+        )
+        return {
+            "event_row_id": event_row_id,
+            "deliberation_trace_id": deliberation_trace_id,
+        }
+
+    def _build_capability_context(self, turn: ChatTurn, *, eager_network: bool) -> dict[str, Any]:
+        return self.capabilities.summarize_turn(turn.text, turn.metadata, eager_network=eager_network)
+
+    @staticmethod
+    def _normalize_selected_action(sidecar: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "silence",
+            "defer_reply",
+            "reply_once",
+            "reply_multi",
+            "external_lookup",
+            "history_refresh",
+            "visual_recall",
+            "push_back",
+            "counter_offer",
+            "continuity_defense",
+            "proactive_ping",
+            "operator_self_fix",
+        }
+        selected = dict(sidecar.get("selected_action", {})) if isinstance(sidecar.get("selected_action", {}), dict) else {}
+        selected_type = str(selected.get("action_type", "reply_once") or "reply_once")
+        if selected_type in allowed:
+            return selected
+        for candidate in list(sidecar.get("action_market", [])):
+            candidate_type = str(candidate.get("action_type", "")).strip()
+            if candidate_type in allowed:
+                return dict(candidate)
+        return {"action_type": "reply_once"}
+
+    @staticmethod
+    def _speech_action(action_type: str) -> bool:
+        return action_type in {"reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}
+
     def handle_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        turn = self._parse_turn(payload)
+        if not turn.text.strip():
+            return {"action": "ignore", "reason": "empty_text"}
+        if any(hint in turn.text for hint in SYSTEM_EVENT_HINTS):
+            return {"action": "ignore", "reason": "system_event"}
+
+        incoming = turn.to_incoming_message()
+        record = self.store.record_inbound(incoming)
+        if record.get("duplicate") and not record.get("awaiting_reply"):
+            return {
+                "action": "ignore",
+                "reason": "duplicate",
+                "message_id": incoming.message_id,
+                "thread_key": incoming.thread_key,
+            }
+
+        history = list(reversed(self.store.recent_thread_messages(int(record["thread"]["id"]), self.config.memory.history_messages)))
+        if turn.channel == "wechat" and _looks_like_recent_outbound_echo(turn.text, history, turn.metadata):
+            return {
+                "action": "ignore",
+                "reason": "outbound_echo",
+                "thread_key": incoming.thread_key,
+                "message_id": incoming.message_id,
+            }
+
+        event_info = self._ingest_event(payload=payload, turn=turn, incoming=incoming, history=history)
+        event_row_id = int(event_info["event_row_id"])
+        deliberation_trace_id = str(event_info["deliberation_trace_id"])
+        mind_context = self._mind_context(
+            turn=turn,
+            incoming=incoming,
+            thread=record["thread"],
+            contact=record["contact"],
+            history=history,
+        )
+        capability_context = self._build_capability_context(turn, eager_network=False)
+        mind_context["capability_context"] = capability_context
+        mind_context["deliberation_trace_id"] = deliberation_trace_id
+        with self._memory_lock:
+            sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
+        selected_action = self._normalize_selected_action(sidecar)
+        sidecar["selected_action"] = selected_action
+        selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
+        self._record_subject_action(turn=turn, incoming=incoming, sidecar=sidecar)
+        self.store.update_event_decision(
+            event_row_id,
+            status="decided",
+            decision={
+                "selected_action": dict(selected_action),
+                "expression_budget": int(sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)) or 0),
+                "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+                "deliberation_trace_id": deliberation_trace_id,
+            },
+        )
+        self._record_consciousness_entry(
+            turn=turn,
+            incoming=incoming,
+            event_row_id=event_row_id,
+            entry_type="subject_decide",
+            selected_action=selected_action_type,
+            payload={
+                "intent_state": dict(sidecar.get("intent_state_v2", sidecar.get("intent_state", {}))),
+                "action_market": list(sidecar.get("action_market_v2", sidecar.get("action_market", []))),
+                "expression_budget": int(sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)) or 0),
+                "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+                "lookup_reason": str(sidecar.get("lookup_reason", "") or ""),
+                "deliberation_trace_id": deliberation_trace_id,
+            },
+        )
+
+        if selected_action_type == "silence":
+            result = {
+                "action": "silence",
+                "reason": str(sidecar.get("silence_reason", "") or "silence_selected"),
+                "thread_key": incoming.thread_key,
+                "message_id": incoming.message_id,
+                "selected_action": selected_action,
+                "expression_budget": int(sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)) or 0),
+                "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+                "deliberation_trace_id": deliberation_trace_id,
+            }
+            self.store.update_event_result(event_row_id, status="completed", result=result)
+            self._record_consciousness_entry(
+                turn=turn,
+                incoming=incoming,
+                event_row_id=event_row_id,
+                entry_type="selected_silence",
+                selected_action="silence",
+                payload=result,
+            )
+            return result
+
+        if selected_action_type == "defer_reply":
+            deferred_job_id = self._schedule_deferred_reply(
+                thread=record["thread"],
+                contact=record["contact"],
+                stored_message=record["message"],
+                turn=turn,
+                selected_action=selected_action,
+                defer_reason=str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
+            )
+            result = {
+                "action": "defer_reply",
+                "reason": str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
+                "thread_key": incoming.thread_key,
+                "message_id": incoming.message_id,
+                "job_id": deferred_job_id,
+                "selected_action": selected_action,
+                "expression_budget": int(sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)) or 0),
+                "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+                "deliberation_trace_id": deliberation_trace_id,
+            }
+            self.store.update_event_result(event_row_id, status="deferred", result=result)
+            self._record_consciousness_entry(
+                turn=turn,
+                incoming=incoming,
+                event_row_id=event_row_id,
+                entry_type="selected_defer",
+                selected_action="defer_reply",
+                payload=result,
+            )
+            return result
+
+        if selected_action_type == "history_refresh" and self._should_refresh_wechat_history(turn, sidecar):
+            refresh_report = self.refresh_wechat_history(
+                {
+                    "chat_name": turn.chat_name,
+                    "thread_key": incoming.thread_key,
+                    "channel": turn.channel,
+                    "query": turn.text,
+                    "force": True,
+                }
+            )
+            if str(refresh_report.get("status", "")).strip() == "ingested":
+                with self._memory_lock:
+                    self.memory.mark_active_history_refresh(
+                        channel=turn.channel,
+                        thread_key=incoming.thread_key,
+                        chat_name=turn.chat_name,
+                        query=turn.text,
+                    )
+                    sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
+                selected_action = self._normalize_selected_action(sidecar)
+                selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
+
+        if selected_action_type == "external_lookup":
+            executed_lookup = self.capabilities.execute_external_lookup(turn.text)
+            capability_context = {
+                **capability_context,
+                "tool_requests": list(executed_lookup.get("tool_requests", capability_context.get("tool_requests", []))),
+                "tool_context_lines": list(executed_lookup.get("tool_context_lines", [])),
+                "evidence": dict(executed_lookup.get("evidence", {})),
+                "lookup_completed": True,
+            }
+            payload["_stage6_lookup_report"] = executed_lookup
+            mind_context["capability_context"] = capability_context
+            with self._memory_lock:
+                sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
+            selected_action = self._normalize_selected_action(sidecar)
+            selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
+            if selected_action_type == "external_lookup":
+                selected_action = next(
+                    (
+                        dict(item)
+                        for item in list(sidecar.get("action_market", []))
+                        if self._speech_action(str(item.get("action_type", "")).strip())
+                    ),
+                    {"action_type": "reply_once"},
+                )
+                sidecar["selected_action"] = selected_action
+
+        payload = dict(payload)
+        payload["_stage6_event_row_id"] = event_row_id
+        payload["_stage6_deliberation_trace_id"] = deliberation_trace_id
+        payload["_stage6_capability_context"] = capability_context
+        payload["_stage6_prebuilt_sidecar"] = sidecar
+        payload["_stage6_selected_action"] = selected_action
+        result = self._handle_reply_stage5_legacy(payload)
+        if self._speech_action(selected_action_type):
+            result["selected_action"] = dict(selected_action)
+            result["expression_budget"] = int(sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)) or 0)
+            result["action_rationale"] = str(sidecar.get("action_rationale", "") or "")
+            result["deliberation_trace_id"] = deliberation_trace_id
+        self.store.update_event_result(event_row_id, status="completed", result=result)
+        self._record_consciousness_entry(
+            turn=turn,
+            incoming=incoming,
+            event_row_id=event_row_id,
+            entry_type="execute_action",
+            selected_action=selected_action_type,
+            payload={
+                "result": dict(result),
+                "deliberation_trace_id": deliberation_trace_id,
+            },
+        )
+        return result
+
+    def _handle_reply_stage5_legacy(self, payload: dict[str, Any]) -> dict[str, Any]:
         started_at = time.perf_counter()
         turn = self._parse_turn(payload)
         if not turn.text.strip():
@@ -1897,6 +2327,13 @@ class HoloReplyService:
             contact=contact,
             history=history,
         )
+        prebuilt_sidecar = dict(payload.get("_stage6_prebuilt_sidecar", {})) if isinstance(payload.get("_stage6_prebuilt_sidecar"), dict) else {}
+        prebuilt_capability_context = dict(payload.get("_stage6_capability_context", {})) if isinstance(payload.get("_stage6_capability_context"), dict) else {}
+        preselected_action = dict(payload.get("_stage6_selected_action", {})) if isinstance(payload.get("_stage6_selected_action"), dict) else {}
+        if prebuilt_capability_context:
+            mind_context["capability_context"] = prebuilt_capability_context
+        if payload.get("_stage6_deliberation_trace_id"):
+            mind_context["deliberation_trace_id"] = str(payload.get("_stage6_deliberation_trace_id"))
         visual_report: dict[str, Any] | None = None
         image_attachments = _image_attachments(turn.metadata)
         if image_attachments:
@@ -1933,11 +2370,14 @@ class HoloReplyService:
                     }
                 )
         sidecar_started_at = time.perf_counter()
-        with self._memory_lock:
-            sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
+        if prebuilt_sidecar:
+            sidecar = prebuilt_sidecar
+        else:
+            with self._memory_lock:
+                sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
         active_history_report: dict[str, Any] | None = None
         active_history_ms = 0
-        if self._should_refresh_wechat_history(turn, sidecar):
+        if not prebuilt_sidecar and self._should_refresh_wechat_history(turn, sidecar):
             refresh_started_at = time.perf_counter()
             active_history_report = self.refresh_wechat_history(
                 {
@@ -1956,12 +2396,12 @@ class HoloReplyService:
                 with self._memory_lock:
                     sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
         sidecar_ms = int((time.perf_counter() - sidecar_started_at) * 1000)
-        selected_action = dict(sidecar.get("selected_action", {}))
+        selected_action = dict(preselected_action or sidecar.get("selected_action", {}))
         selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
-        if selected_action_type not in {"silence", "defer_reply", "reply_once", "reply_multi", "history_refresh", "visual_recall"}:
+        if selected_action_type not in {"silence", "defer_reply", "reply_once", "reply_multi", "external_lookup", "history_refresh", "visual_recall", "push_back", "counter_offer", "continuity_defense"}:
             for candidate in list(sidecar.get("action_market", [])):
                 candidate_type = str(candidate.get("action_type", "")).strip()
-                if candidate_type in {"silence", "defer_reply", "reply_once", "reply_multi", "history_refresh", "visual_recall"}:
+                if candidate_type in {"silence", "defer_reply", "reply_once", "reply_multi", "external_lookup", "history_refresh", "visual_recall", "push_back", "counter_offer", "continuity_defense"}:
                     selected_action = dict(candidate)
                     selected_action_type = candidate_type
                     break
@@ -1975,7 +2415,7 @@ class HoloReplyService:
                     "message_id": incoming.message_id,
                     "selected_action": selected_action_type,
                 }
-        if selected_action_type == "history_refresh" and active_history_report is None and self._should_refresh_wechat_history(turn, sidecar):
+        if not prebuilt_sidecar and selected_action_type == "history_refresh" and active_history_report is None and self._should_refresh_wechat_history(turn, sidecar):
             refresh_started_at = time.perf_counter()
             active_history_report = self.refresh_wechat_history(
                 {
@@ -2044,7 +2484,7 @@ class HoloReplyService:
             }
 
         capability_started_at = time.perf_counter()
-        capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata)
+        capability_context = prebuilt_capability_context or self.capabilities.summarize_turn(turn.text, turn.metadata)
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
         attention_state = build_attention_state(turn.text, channel=turn.channel, metadata=turn.metadata)
         turn_context = TurnContext(
@@ -2511,6 +2951,16 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/deliberation-ledger":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.deliberation_ledger(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["24"])[0]),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/drive-state":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.drive_state(
@@ -2776,6 +3226,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage5(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage6":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage6(
                             thread_key=str(payload.get("thread_key", "")).strip() or None,
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",

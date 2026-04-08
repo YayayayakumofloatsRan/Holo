@@ -104,12 +104,12 @@ def _decode_duckduckgo_href(raw_url: str) -> str:
 class CapabilityBroker:
     config: HostConfig
 
-    def summarize_turn(self, text: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    def summarize_turn(self, text: str, metadata: dict[str, Any] | None = None, *, eager_network: bool = True) -> dict[str, Any]:
         meta = dict(metadata or {})
         tool_requests: list[ToolRequest] = []
         tool_context_lines: list[str] = []
 
-        if self.config.runtime.network_enabled:
+        if self.config.runtime.network_enabled and eager_network:
             previews = self._preview_urls(text)
             for preview in previews:
                 tool_requests.append(
@@ -128,25 +128,31 @@ class CapabilityBroker:
                     if snippet:
                         line += f" | snippet: {snippet}"
                     tool_context_lines.append(line)
-            if not previews and self._should_external_lookup(text, meta):
-                lookup = self._external_lookup(text)
-                if lookup.get("results"):
-                    tool_requests.append(
-                        ToolRequest(
-                            name="external_lookup",
-                            reason=f"turn requests external lookup for {lookup.get('query', '')}",
-                            payload=lookup,
-                        )
-                    )
-                    for item in lookup.get("results", [])[:2]:
-                        line = f"external lookup: {lookup.get('query', '')}"
-                        title = str(item.get("title", "") or "")
-                        snippet = str(item.get("snippet", "") or "")
-                        if title:
-                            line += f" | title: {title}"
-                        if snippet:
-                            line += f" | snippet: {snippet}"
-                        tool_context_lines.append(line)
+        else:
+            previews = []
+
+        if not previews and self._should_external_lookup(text, meta):
+            query = self._normalize_lookup_query(text)
+            lookup = self._external_lookup(text) if eager_network else {"query": query, "results": [], "status": "planned"}
+            tool_requests.append(
+                ToolRequest(
+                    name="external_lookup",
+                    reason=f"turn requests external lookup for {lookup.get('query', query)}",
+                    payload=lookup,
+                )
+            )
+            if eager_network:
+                for item in lookup.get("results", [])[:2]:
+                    line = f"external lookup: {lookup.get('query', query)}"
+                    title = str(item.get("title", "") or "")
+                    snippet = str(item.get("snippet", "") or "")
+                    if title:
+                        line += f" | title: {title}"
+                    if snippet:
+                        line += f" | snippet: {snippet}"
+                    tool_context_lines.append(line)
+            elif query:
+                tool_context_lines.append(f"lookup planned: {query}")
 
         attachment_summaries = self._summarize_attachments(meta.get("attachments"))
         for item in attachment_summaries:
@@ -164,6 +170,9 @@ class CapabilityBroker:
             "tool_requests": [request.to_dict() for request in tool_requests],
             "attachment_summaries": attachment_summaries,
         }
+
+    def execute_external_lookup(self, text: str) -> dict[str, Any]:
+        return self._external_lookup(text)
 
     @staticmethod
     def _normalize_lookup_query(text: str) -> str:
