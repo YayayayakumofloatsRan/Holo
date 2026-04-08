@@ -154,27 +154,27 @@ STAGE6_ACTION_TYPES = (
 )
 ROADMAP_REGISTRY = {
     "Primary Track": [
-        "Social world model",
-        "Fast and deep counterfactual simulation",
-        "Simulation-led action rerank",
+        "autobiographical continuity",
+        "long-horizon goals",
+        "identity/goal-led deliberation",
     ],
     "Secondary Tracks": [
-        "Autobiographical continuity",
-        "Long-horizon goals",
+        "richer desire shaping",
+        "stronger negotiated will",
     ],
     "Parked Hypotheses": [
-        "Richer desire shaping",
-        "Stronger negotiated will",
+        "broader multi-agent social world",
+        "deeper imagination beyond current recall",
     ],
     "Deferred Experiments": [
-        "Open-ended world modeling",
-        "Broader multi-agent social world",
-        "Deeper imagination beyond current recall",
+        "open-ended world modeling",
+        "explicit multi-step planning",
+        "richer subjective report layer",
     ],
     "Constitutional Constraints": [
-        "Owner shutdown remains final",
-        "No self-escalation around secrets, auth, or policy",
-        "Live repo code is not hot-edited by runtime state loops",
+        "owner shutdown remains final",
+        "no self-escalation around secrets, auth, or policy",
+        "live repo code is not hot-edited by runtime state loops",
     ],
 }
 
@@ -432,6 +432,12 @@ class MemoryBridge:
     def _self_model_state(self) -> dict[str, Any]:
         return self.graph.self_model_state()
 
+    def _autobiographical_state(self) -> dict[str, Any]:
+        return self.graph.autobiographical_state()
+
+    def _goal_state(self) -> dict[str, Any]:
+        return self.graph.goal_state()
+
     def _homeostasis_state(self) -> dict[str, Any]:
         class _ConfigShim:
             memory = type("MemoryCfg", (), {"brain_mode_default": "full_brain"})()
@@ -614,6 +620,111 @@ class MemoryBridge:
     def _thread_world_model(self, world_state: dict[str, Any], *, thread_key: str) -> dict[str, Any]:
         thread_models = dict(world_state.get("thread_models", {}))
         return dict(thread_models.get(str(thread_key or ""), {}))
+
+    @staticmethod
+    def _chapter_keyword_score(text: str, *, current_chapter: str) -> float:
+        lowered = str(text or "").lower()
+        chapter = str(current_chapter or "").lower()
+        if not chapter:
+            return 0.0
+        hits = 0
+        for token in ("continuity", "repair", "lively", "warm", "contact", "goal", "memory", "alive"):
+            if token in chapter and token in lowered:
+                hits += 1
+        return min(0.18, hits * 0.06)
+
+    def _goal_identity_alignment(
+        self,
+        *,
+        action_type: str,
+        query: str,
+        intent_state: dict[str, Any],
+        relationship_state: dict[str, Any],
+        world_state: dict[str, Any],
+        autobiographical_state: dict[str, Any],
+        goal_state: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        active_goals = [dict(item) for item in goal_state.get("active_goals", []) if isinstance(item, dict)]
+        current_chapter = str(autobiographical_state.get("current_chapter", "") or "")
+        identity_arc = str(autobiographical_state.get("identity_arc", "") or "")
+        stable_traits = {str(item).strip().lower() for item in autobiographical_state.get("stable_traits", []) if str(item).strip()}
+        unresolved = {str(item).strip().lower() for item in autobiographical_state.get("unresolved_tensions", []) if str(item).strip()}
+        thread_key = str(context.get("thread_key", "") or "")
+        goal_hits: list[str] = []
+        goal_alignment_score = 0.0
+        for goal in active_goals:
+            goal_type = str(goal.get("goal_type", "") or "")
+            target_thread = str(goal.get("target_thread", "") or "")
+            priority = self._coerce_float(goal.get("priority", 0.0))
+            boost = 0.0
+            if goal_type == "identity_maintenance" and action_type in {"reply_once", "history_refresh", "continuity_defense", "operator_self_fix"}:
+                boost = 0.12 + priority * 0.08
+            elif goal_type == "relationship_continuity" and action_type in {"reply_once", "defer_reply", "history_refresh", "proactive_ping"}:
+                boost = 0.14 + priority * 0.08
+                if target_thread and target_thread == thread_key:
+                    boost += 0.06
+            elif goal_type == "recall_quality" and action_type in {"history_refresh", "reply_once", "reply_multi"}:
+                boost = 0.1 + priority * 0.06
+            elif goal_type == "liveliness_balance" and action_type in {"reply_once", "proactive_ping", "counter_offer"}:
+                boost = 0.08 + priority * 0.06
+            elif goal_type == "self_repair" and action_type in {"operator_self_fix", "defer_reply"}:
+                boost = 0.1 + priority * 0.06
+            elif goal_type == "contact_maintenance" and action_type in {"reply_once", "proactive_ping", "defer_reply"}:
+                boost = 0.08 + priority * 0.06
+            if action_type == "silence" and goal_type in {"relationship_continuity", "contact_maintenance"}:
+                boost -= 0.14
+            if action_type == "reply_multi" and str(intent_state.get("low_signal", False)).lower() in {"true", "1"}:
+                boost -= 0.16
+            if boost > 0.01:
+                goal_hits.append(goal_type)
+            goal_alignment_score += boost
+        goal_alignment_score = self._clamp(goal_alignment_score, lower=-1.0, upper=1.0, default=0.0)
+
+        identity_consistency_score = 0.0
+        if "continuity-minded" in stable_traits and action_type in {"reply_once", "history_refresh", "continuity_defense"}:
+            identity_consistency_score += 0.14
+        if "curious" in stable_traits and action_type in {"external_lookup", "history_refresh"}:
+            identity_consistency_score += 0.08
+        if "protective" in stable_traits and action_type in {"defer_reply", "continuity_defense", "push_back"}:
+            identity_consistency_score += 0.09
+        if "wry" in stable_traits and action_type in {"reply_once", "counter_offer", "proactive_ping"}:
+            identity_consistency_score += 0.06
+        if "stiffness_drift" in unresolved and action_type == "reply_multi":
+            identity_consistency_score -= 0.08
+        if "cache_coldness" in unresolved and action_type == "history_refresh":
+            identity_consistency_score += 0.05
+        if str(intent_state.get("low_signal", False)).lower() in {"true", "1"} and action_type == "reply_multi":
+            identity_consistency_score -= 0.14
+        identity_consistency_score += self._chapter_keyword_score(action_type, current_chapter=current_chapter)
+        identity_consistency_score = self._clamp(identity_consistency_score, lower=-1.0, upper=1.0, default=0.0)
+
+        chapter_relevance = compact_text(
+            current_chapter
+            or ("keeping continuity alive" if float(relationship_state.get("continuity_score", 0.0) or 0.0) >= 0.45 else "staying lively without sprawling"),
+            160,
+        )
+        goal_rationale = compact_text(
+            f"{action_type} aligns with goals: {', '.join(goal_hits) if goal_hits else 'no strong goal pull'}",
+            180,
+        )
+        identity_rationale = compact_text(
+            f"{action_type} fits the current identity arc because {chapter_relevance or identity_arc or 'it stays inside the same self-shape'}",
+            180,
+        )
+        self_narrative_hint = compact_text(
+            f"这一步更像是在 {chapter_relevance} 这一章里继续往前挪，而不是另起炉灶。",
+            180,
+        )
+        return {
+            "goal_alignment_score": round(goal_alignment_score, 4),
+            "identity_consistency_score": round(identity_consistency_score, 4),
+            "goal_rationale": goal_rationale,
+            "identity_rationale": identity_rationale,
+            "chapter_rationale": chapter_relevance,
+            "chapter_relevance": chapter_relevance,
+            "self_narrative_hint": self_narrative_hint,
+        }
 
     def _simulate_action_candidate(
         self,
@@ -1195,6 +1306,8 @@ class MemoryBridge:
         game_state = self._game_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
         self_revision_state = self._self_revision_state()
         self_model_state = self._self_model_state()
+        autobiographical_state = self._autobiographical_state()
+        goal_state = self._goal_state()
         homeostasis_state = self._homeostasis_state()
         operator_state = self._operator_state()
         visual_memory = self._visual_memory(channel=channel, thread_key=thread_key, chat_name=chat_name)
@@ -1244,6 +1357,64 @@ class MemoryBridge:
             resistance_posture=resistance_posture,
             visual_memory=visual_memory,
         )
+        stage8_market: list[dict[str, Any]] = []
+        for candidate in action_market:
+            annotated = dict(candidate)
+            alignment = self._goal_identity_alignment(
+                action_type=str(candidate.get("action_type", "") or ""),
+                query=query,
+                intent_state=intent_state,
+                relationship_state=relationship_state,
+                world_state=world_state,
+                autobiographical_state=autobiographical_state,
+                goal_state=goal_state,
+                context=context,
+            )
+            rerank_delta = round(
+                float(candidate.get("rerank_delta", 0.0) or 0.0)
+                + float(alignment.get("goal_alignment_score", 0.0) or 0.0) * 0.22
+                + float(alignment.get("identity_consistency_score", 0.0) or 0.0) * 0.18,
+                4,
+            )
+            annotated.update(alignment)
+            annotated["rerank_delta"] = rerank_delta
+            annotated["_stage8_score"] = round(float(candidate.get("score", 0.0) or 0.0) + rerank_delta, 4)
+            stage8_market.append(annotated)
+        stage8_market.sort(key=lambda item: (float(item.get("_stage8_score", 0.0) or 0.0), float(item.get("score", 0.0) or 0.0)), reverse=True)
+        if stage8_market:
+            selected_action = dict(stage8_market[0])
+            selected_prediction = dict(selected_action.get("predicted_outcome", selected_prediction or {}))
+            action_market = [{key: value for key, value in item.items() if key != "_stage8_score"} for item in stage8_market]
+
+        reply_once_candidate = next((dict(item) for item in action_market if str(item.get("action_type", "")) == "reply_once"), {})
+        if str(selected_action.get("action_type", "")).strip() == "reply_multi":
+            multi_score = float(selected_action.get("goal_alignment_score", 0.0) or 0.0) + float(selected_action.get("identity_consistency_score", 0.0) or 0.0)
+            once_score = float(reply_once_candidate.get("goal_alignment_score", 0.0) or 0.0) + float(reply_once_candidate.get("identity_consistency_score", 0.0) or 0.0)
+            if multi_score <= once_score + 0.08:
+                selected_action = dict(reply_once_candidate or selected_action)
+                selected_prediction = dict(selected_action.get("predicted_outcome", selected_prediction or {}))
+                expression_budget = 1
+
+        chapter_relevance = str(selected_action.get("chapter_rationale", "") or str(autobiographical_state.get("current_chapter", "") or "")).strip()
+        goal_alignment = {
+            "selected_action": str(selected_action.get("action_type", "") or ""),
+            "score": round(float(selected_action.get("goal_alignment_score", 0.0) or 0.0), 4),
+            "rationale": str(selected_action.get("goal_rationale", "") or ""),
+            "active_goal_ids": [str(item.get("goal_id", "")) for item in goal_state.get("active_goals", []) if str(item.get("goal_id", ""))],
+        }
+        identity_consistency = {
+            "selected_action": str(selected_action.get("action_type", "") or ""),
+            "score": round(float(selected_action.get("identity_consistency_score", 0.0) or 0.0), 4),
+            "rationale": str(selected_action.get("identity_rationale", "") or ""),
+            "current_chapter": str(autobiographical_state.get("current_chapter", "") or ""),
+        }
+        self_narrative_hint = str(selected_action.get("self_narrative_hint", "") or "").strip()
+        action_rationale = compact_text(
+            f"{str(selected_action.get('action_type', '') or 'reply_once')} because {str(selected_action.get('why_now', '') or '')}; "
+            f"goal={goal_alignment.get('rationale', '')}; identity={identity_consistency.get('rationale', '')}; "
+            f"sim={selected_prediction.get('simulation_rationale', '')}",
+            240,
+        )
         last_action_selection = dict(subject_state.get("metadata", {})).get("last_action_selection", {})
         packet.setdefault("initiative_state", dict(DEFAULT_INITIATIVE_STATE))
         packet["initiative_state"] = {
@@ -1267,13 +1438,15 @@ class MemoryBridge:
             1.0 - max((float(item.get("confidence", 0.0) or 0.0) for item in counterfactual_set), default=0.0),
             4,
         )
-        packet["mind_packet_version"] = "v10"
+        packet["mind_packet_version"] = "v11"
         packet["persona_blend"] = persona_blend
         packet["brain_state"] = brain_state
         packet["game_state"] = game_state
         packet["stream_influence"] = stream_influence
         packet["self_revision_state"] = self_revision_state
         packet["self_model"] = self_model_state
+        packet["autobiographical_state"] = autobiographical_state
+        packet["goal_state"] = goal_state
         packet["homeostasis_state"] = homeostasis_state
         packet["operator_state"] = operator_state
         packet["visual_memory"] = visual_memory
@@ -1290,6 +1463,10 @@ class MemoryBridge:
         packet["selected_action"] = selected_action
         packet["selected_prediction"] = selected_prediction
         packet["expression_budget"] = int(expression_budget)
+        packet["goal_alignment"] = goal_alignment
+        packet["identity_consistency"] = identity_consistency
+        packet["chapter_relevance"] = chapter_relevance
+        packet["self_narrative_hint"] = self_narrative_hint
         packet["silence_reason"] = silence_reason
         packet["defer_reason"] = defer_reason
         packet["action_rationale"] = action_rationale
@@ -1310,10 +1487,21 @@ class MemoryBridge:
             "predicted_worst_outcome": dict(predicted_worst_outcome),
             "uncertainty_level": float(uncertainty_level),
         }
+        packet["intent_state_v4"] = {
+            **dict(packet["intent_state_v3"]),
+            "autobiographical_state": dict(autobiographical_state),
+            "goal_state": dict(goal_state),
+            "goal_alignment": dict(goal_alignment),
+            "identity_consistency": dict(identity_consistency),
+            "chapter_relevance": chapter_relevance,
+            "self_narrative_hint": self_narrative_hint,
+        }
         packet["action_market_v2"] = list(action_market)
         packet["action_market_v3"] = list(action_market)
+        packet["action_market_v4"] = list(action_market)
         packet["expression_budget_v2"] = int(expression_budget)
         packet["expression_budget_v3"] = int(expression_budget)
+        packet["expression_budget_v4"] = int(expression_budget)
         packet["lookup_reason"] = (
             str(selected_action.get("why_now", "") or "")
             if str(selected_action.get("action_type", "")).strip() == "external_lookup"
@@ -1330,6 +1518,8 @@ class MemoryBridge:
         }
         packet["state"]["stream_influence"] = dict(stream_influence)
         packet["state"]["self_model"] = dict(self_model_state)
+        packet["state"]["autobiographical_state"] = dict(autobiographical_state)
+        packet["state"]["goal_state"] = dict(goal_state)
         packet["state"]["homeostasis_state"] = dict(homeostasis_state)
         packet["state"]["operator_state"] = dict(operator_state)
         packet["state"]["visual_memory"] = dict(visual_memory)
@@ -1340,12 +1530,16 @@ class MemoryBridge:
         packet["state"]["world_state"] = dict(world_state)
         packet["state"]["resistance_posture"] = dict(resistance_posture)
         packet["state"]["outcome_memory"] = dict(outcome_memory)
-        packet["state"]["intent_state"] = dict(packet["intent_state_v3"])
+        packet["state"]["intent_state"] = dict(packet["intent_state_v4"])
         packet["state"]["action_market"] = list(action_market)
         packet["state"]["selected_action"] = dict(selected_action)
         packet["state"]["selected_prediction"] = dict(selected_prediction)
         packet["state"]["counterfactual_summary"] = dict(packet["counterfactual_summary"])
         packet["state"]["expression_budget"] = int(expression_budget)
+        packet["state"]["goal_alignment"] = dict(goal_alignment)
+        packet["state"]["identity_consistency"] = dict(identity_consistency)
+        packet["state"]["chapter_relevance"] = chapter_relevance
+        packet["state"]["self_narrative_hint"] = self_narrative_hint
         packet["state"]["silence_reason"] = silence_reason
         packet["state"]["defer_reason"] = defer_reason
         packet["state"]["action_rationale"] = action_rationale
@@ -2538,6 +2732,12 @@ class MemoryBridge:
             "updated_at": str(state.get("updated_at", "")),
         }
 
+    def autobiographical_state(self) -> dict[str, Any]:
+        return self.graph.autobiographical_state()
+
+    def goal_state(self) -> dict[str, Any]:
+        return self.graph.goal_state()
+
     def trace_resistance(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "") -> dict[str, Any]:
         subject = self.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
         affect_state = dict(subject.get("affect_state", {}))
@@ -2600,13 +2800,21 @@ class MemoryBridge:
                 "intent_state": dict(packet.get("intent_state", {})),
                 "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
                 "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
+                "intent_state_v4": dict(packet.get("intent_state_v4", packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {}))))),
                 "selected_action": dict(packet.get("selected_action", {})),
                 "expression_budget": int(packet.get("expression_budget", 0) or 0),
                 "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
                 "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget", 0)) or 0),
+                "expression_budget_v4": int(packet.get("expression_budget_v4", packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0)))) or 0),
                 "action_rationale": str(packet.get("action_rationale", "") or ""),
                 "world_state": dict(packet.get("world_state", {})),
                 "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
+                "autobiographical_state": dict(packet.get("autobiographical_state", {})),
+                "goal_state": dict(packet.get("goal_state", {})),
+                "goal_alignment": dict(packet.get("goal_alignment", {})),
+                "identity_consistency": dict(packet.get("identity_consistency", {})),
+                "chapter_relevance": str(packet.get("chapter_relevance", "") or ""),
+                "self_narrative_hint": str(packet.get("self_narrative_hint", "") or ""),
             }
         subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
         metadata = dict(subject.get("metadata", {}))
@@ -2618,14 +2826,22 @@ class MemoryBridge:
             "intent_state": dict(metadata.get("last_intent_state", {})),
             "intent_state_v2": dict(metadata.get("last_intent_state_v2", metadata.get("last_intent_state", {}))),
             "intent_state_v3": dict(metadata.get("last_intent_state_v3", metadata.get("last_intent_state_v2", metadata.get("last_intent_state", {})))),
+            "intent_state_v4": dict(metadata.get("last_intent_state_v4", metadata.get("last_intent_state_v3", metadata.get("last_intent_state_v2", metadata.get("last_intent_state", {}))))),
             "selected_action": dict(metadata.get("last_selected_action", {})),
             "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
             "expression_budget_v2": int(metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)) or 0),
             "expression_budget_v3": int(metadata.get("last_expression_budget_v3", metadata.get("last_expression_budget", 0)) or 0),
+            "expression_budget_v4": int(metadata.get("last_expression_budget_v4", metadata.get("last_expression_budget_v3", metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)))) or 0),
             "action_rationale": str(metadata.get("last_action_rationale", "") or ""),
             "last_action_selection": dict(metadata.get("last_action_selection", {})) if isinstance(metadata.get("last_action_selection", {}), dict) else {},
             "world_state": dict(subject.get("world_state", {})),
             "counterfactual_summary": dict(metadata.get("last_counterfactual_summary", {})),
+            "autobiographical_state": self.autobiographical_state(),
+            "goal_state": self.goal_state(),
+            "goal_alignment": dict(metadata.get("last_goal_alignment", {})),
+            "identity_consistency": dict(metadata.get("last_identity_consistency", {})),
+            "chapter_relevance": str(metadata.get("last_chapter_relevance", "") or ""),
+            "self_narrative_hint": str(metadata.get("last_self_narrative_hint", "") or ""),
         }
 
     def action_market(
@@ -2657,10 +2873,14 @@ class MemoryBridge:
                 "action_market": market[: max(1, int(limit))],
                 "action_market_v2": market[: max(1, int(limit))],
                 "action_market_v3": market[: max(1, int(limit))],
+                "action_market_v4": list(packet.get("action_market_v4", market))[: max(1, int(limit))],
                 "selected_action": dict(packet.get("selected_action", {})),
                 "expression_budget": int(packet.get("expression_budget", 0) or 0),
                 "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
                 "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget", 0)) or 0),
+                "expression_budget_v4": int(packet.get("expression_budget_v4", packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0)))) or 0),
+                "goal_alignment": dict(packet.get("goal_alignment", {})),
+                "identity_consistency": dict(packet.get("identity_consistency", {})),
             }
         subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
         metadata = dict(subject.get("metadata", {}))
@@ -2672,10 +2892,14 @@ class MemoryBridge:
             "action_market": list(metadata.get("last_action_market", []))[: max(1, int(limit))],
             "action_market_v2": list(metadata.get("last_action_market_v2", metadata.get("last_action_market", [])))[: max(1, int(limit))],
             "action_market_v3": list(metadata.get("last_action_market_v3", metadata.get("last_action_market_v2", metadata.get("last_action_market", []))))[: max(1, int(limit))],
+            "action_market_v4": list(metadata.get("last_action_market_v4", metadata.get("last_action_market_v3", metadata.get("last_action_market_v2", metadata.get("last_action_market", [])))))[: max(1, int(limit))],
             "selected_action": dict(metadata.get("last_selected_action", {})),
             "expression_budget": int(metadata.get("last_expression_budget", 0) or 0),
             "expression_budget_v2": int(metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)) or 0),
             "expression_budget_v3": int(metadata.get("last_expression_budget_v3", metadata.get("last_expression_budget", 0)) or 0),
+            "expression_budget_v4": int(metadata.get("last_expression_budget_v4", metadata.get("last_expression_budget_v3", metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)))) or 0),
+            "goal_alignment": dict(metadata.get("last_goal_alignment", {})),
+            "identity_consistency": dict(metadata.get("last_identity_consistency", {})),
         }
 
     def trace_action_selection(
@@ -2706,13 +2930,16 @@ class MemoryBridge:
             "intent_state": dict(packet.get("intent_state", {})),
             "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
             "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
+            "intent_state_v4": dict(packet.get("intent_state_v4", packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {}))))),
             "action_market": list(packet.get("action_market", []))[: max(1, int(limit))],
             "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[: max(1, int(limit))],
             "action_market_v3": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[: max(1, int(limit))],
+            "action_market_v4": list(packet.get("action_market_v4", packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", [])))))[: max(1, int(limit))],
             "selected_action": selected_action,
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget", 0)) or 0),
+            "expression_budget_v4": int(packet.get("expression_budget_v4", packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0)))) or 0),
             "silence_reason": str(packet.get("silence_reason", "") or ""),
             "defer_reason": str(packet.get("defer_reason", "") or ""),
             "lookup_reason": str(packet.get("lookup_reason", "") or ""),
@@ -2727,6 +2954,12 @@ class MemoryBridge:
             "resistance_posture": dict(packet.get("resistance_posture", {})),
             "game_state": dict(packet.get("game_state", {})),
             "self_model": dict(packet.get("self_model", {})),
+            "autobiographical_state": dict(packet.get("autobiographical_state", {})),
+            "goal_state": dict(packet.get("goal_state", {})),
+            "goal_alignment": dict(packet.get("goal_alignment", {})),
+            "identity_consistency": dict(packet.get("identity_consistency", {})),
+            "chapter_relevance": str(packet.get("chapter_relevance", "") or ""),
+            "self_narrative_hint": str(packet.get("self_narrative_hint", "") or ""),
             "affect_state": dict(packet.get("affect_state", {})),
             "drive_state": dict(packet.get("drive_state", {})),
             "value_state": dict(packet.get("value_state", {})),
@@ -2760,6 +2993,45 @@ class MemoryBridge:
             "lookup_reason": str(trace.get("lookup_reason", "") or ""),
             "action_rationale": str(trace.get("action_rationale", "") or ""),
             "world_state": dict(trace.get("world_state", {})),
+            "goal_alignment": dict(trace.get("goal_alignment", {})),
+            "identity_consistency": dict(trace.get("identity_consistency", {})),
+            "chapter_relevance": str(trace.get("chapter_relevance", "") or ""),
+        }
+
+    def trace_self_continuity(self) -> dict[str, Any]:
+        autobiographical_state = self.autobiographical_state()
+        self_model = self.self_model_state()
+        goal_state = self.goal_state()
+        recent_changes = list(autobiographical_state.get("recent_changes", []))
+        turning_points = list(autobiographical_state.get("turning_points", []))
+        explanations = list(autobiographical_state.get("self_explanations", []))
+        current_chapter = str(autobiographical_state.get("current_chapter", "") or "")
+        identity_arc = str(autobiographical_state.get("identity_arc", "") or "")
+        why_changed = explanations[-3:]
+        return {
+            "autobiographical_state": autobiographical_state,
+            "goal_state": goal_state,
+            "self_model": self_model,
+            "identity_arc": identity_arc,
+            "current_chapter": current_chapter,
+            "turning_points": turning_points[-6:],
+            "recent_changes": recent_changes[-6:],
+            "self_explanations": why_changed,
+            "why_changed_summary": " | ".join(str(item.get("summary", "") or "") for item in why_changed if isinstance(item, dict) and str(item.get("summary", "")).strip()),
+        }
+
+    def trace_goal_arbitration(self) -> dict[str, Any]:
+        goal_state = self.goal_state()
+        autobio = self.autobiographical_state()
+        active_goals = list(goal_state.get("active_goals", []))
+        return {
+            "goal_state": goal_state,
+            "autobiographical_state": autobio,
+            "active_goals": active_goals,
+            "goal_conflicts": list(goal_state.get("goal_conflicts", [])),
+            "goal_commitments": list(goal_state.get("goal_commitments", [])),
+            "next_goal_windows": list(goal_state.get("next_goal_windows", [])),
+            "current_chapter": str(autobio.get("current_chapter", "") or ""),
         }
 
     def trace_world_calibration(
@@ -2801,6 +3073,14 @@ class MemoryBridge:
     ) -> dict[str, Any]:
         selected_prediction = dict(selected_action.get("predicted_outcome", {}))
         next_world_state = dict(world_state or {})
+        goal_alignment = {
+            "score": float(selected_action.get("goal_alignment_score", 0.0) or 0.0),
+            "rationale": str(selected_action.get("goal_rationale", "") or ""),
+        }
+        identity_consistency = {
+            "score": float(selected_action.get("identity_consistency_score", 0.0) or 0.0),
+            "rationale": str(selected_action.get("identity_rationale", "") or ""),
+        }
         next_world_state["last_counterfactual_summary"] = {
             "selected_action": str(selected_action.get("action_type", "") or ""),
             "selected_prediction": selected_prediction,
@@ -2819,17 +3099,24 @@ class MemoryBridge:
             "last_intent_state": dict(intent_state),
             "last_intent_state_v2": dict(intent_state),
             "last_intent_state_v3": dict(intent_state),
+            "last_intent_state_v4": dict(intent_state),
             "last_action_market": list(action_market),
             "last_action_market_v2": list(action_market),
             "last_action_market_v3": list(action_market),
+            "last_action_market_v4": list(action_market),
             "last_selected_action": dict(selected_action),
             "last_expression_budget": int(expression_budget),
             "last_expression_budget_v2": int(expression_budget),
             "last_expression_budget_v3": int(expression_budget),
+            "last_expression_budget_v4": int(expression_budget),
             "last_silence_reason": str(silence_reason or ""),
             "last_defer_reason": str(defer_reason or ""),
             "last_action_rationale": str(action_rationale or ""),
             "last_counterfactual_summary": selected_prediction,
+            "last_goal_alignment": goal_alignment,
+            "last_identity_consistency": identity_consistency,
+            "last_chapter_relevance": str(selected_action.get("chapter_relevance", "") or ""),
+            "last_self_narrative_hint": str(selected_action.get("self_narrative_hint", "") or ""),
         }
         updated = self.graph.update_subject_state(
             channel=channel,

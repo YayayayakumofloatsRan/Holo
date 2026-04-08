@@ -102,6 +102,9 @@ class MemoryConfig:
     drive_arbitration_interval_seconds: int = 120
     initiative_marketplace_interval_seconds: int = 180
     outcome_appraisal_interval_seconds: int = 240
+    autobiographical_consolidation_interval_seconds: int = 360
+    goal_arbitration_interval_seconds: int = 420
+    continuity_audit_interval_seconds: int = 300
     operator_planning_interval_seconds: int = 420
     operator_shadow_cycle_interval_seconds: int = 300
     visual_ingest_cycle_interval_seconds: int = 45
@@ -267,6 +270,9 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         drive_arbitration_interval_seconds=int(memory_data.get("drive_arbitration_interval_seconds", 120)),
         initiative_marketplace_interval_seconds=int(memory_data.get("initiative_marketplace_interval_seconds", 180)),
         outcome_appraisal_interval_seconds=int(memory_data.get("outcome_appraisal_interval_seconds", 240)),
+        autobiographical_consolidation_interval_seconds=int(memory_data.get("autobiographical_consolidation_interval_seconds", 360)),
+        goal_arbitration_interval_seconds=int(memory_data.get("goal_arbitration_interval_seconds", 420)),
+        continuity_audit_interval_seconds=int(memory_data.get("continuity_audit_interval_seconds", 300)),
         operator_planning_interval_seconds=int(memory_data.get("operator_planning_interval_seconds", 420)),
         operator_shadow_cycle_interval_seconds=int(memory_data.get("operator_shadow_cycle_interval_seconds", 300)),
         visual_ingest_cycle_interval_seconds=int(memory_data.get("visual_ingest_cycle_interval_seconds", 45)),

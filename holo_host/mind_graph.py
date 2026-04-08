@@ -135,6 +135,21 @@ WORLD_THREAD_MODEL_DEFAULTS = {
     "opportunity_level": 0.42,
     "unfinished_pull": 0.34,
 }
+AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS = [
+    "curious",
+    "continuity-minded",
+    "wry",
+    "protective",
+]
+AUTOBIOGRAPHICAL_CHAPTER_DEFAULT = "keeping continuity alive without turning stiff"
+GOAL_TYPE_DEFAULT_PRIORITIES = {
+    "identity_maintenance": 0.92,
+    "relationship_continuity": 0.84,
+    "recall_quality": 0.78,
+    "liveliness_balance": 0.72,
+    "self_repair": 0.7,
+    "contact_maintenance": 0.66,
+}
 BRAIN_LOOP_DEFAULTS = {
     "heartbeat": {"interval_seconds": 1, "description": "runtime heartbeat"},
     "attention_tick": {"interval_seconds": 3, "description": "attention routing"},
@@ -153,6 +168,9 @@ BRAIN_LOOP_DEFAULTS = {
     "operator_shadow_cycle": {"interval_seconds": 300, "description": "shadow execution review"},
     "visual_ingest_cycle": {"interval_seconds": 45, "description": "async visual ingest"},
     "deep_simulation": {"interval_seconds": 420, "description": "async social counterfactual replay"},
+    "autobiographical_consolidation": {"interval_seconds": 360, "description": "autobiographical state consolidation"},
+    "goal_arbitration": {"interval_seconds": 420, "description": "long-horizon goal arbitration"},
+    "continuity_audit": {"interval_seconds": 300, "description": "identity and goal continuity audit"},
 }
 ALLOWED_SELF_REVISION_FIELDS = {
     "persona_blend",
@@ -636,6 +654,36 @@ class MindGraph:
                 created_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS autobiographical_state (
+                runtime_id INTEGER PRIMARY KEY CHECK(runtime_id = 1),
+                identity_arc TEXT NOT NULL DEFAULT '',
+                current_chapter TEXT NOT NULL DEFAULT '',
+                turning_points_json TEXT NOT NULL DEFAULT '[]',
+                recent_changes_json TEXT NOT NULL DEFAULT '[]',
+                stable_traits_json TEXT NOT NULL DEFAULT '[]',
+                preference_history_json TEXT NOT NULL DEFAULT '[]',
+                attachment_history_json TEXT NOT NULL DEFAULT '[]',
+                unresolved_tensions_json TEXT NOT NULL DEFAULT '[]',
+                self_explanations_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS goal_state (
+                runtime_id INTEGER PRIMARY KEY CHECK(runtime_id = 1),
+                active_goals_json TEXT NOT NULL DEFAULT '[]',
+                dormant_goals_json TEXT NOT NULL DEFAULT '[]',
+                completed_goals_json TEXT NOT NULL DEFAULT '[]',
+                goal_commitments_json TEXT NOT NULL DEFAULT '[]',
+                goal_progress_json TEXT NOT NULL DEFAULT '{}',
+                goal_conflicts_json TEXT NOT NULL DEFAULT '[]',
+                pursuit_bias_json TEXT NOT NULL DEFAULT '{}',
+                abandonment_cost_json TEXT NOT NULL DEFAULT '{}',
+                next_goal_windows_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS operator_runs (
                 id INTEGER PRIMARY KEY,
                 task_type TEXT NOT NULL DEFAULT '',
@@ -771,6 +819,61 @@ class MindGraph:
                     runtime_id, identity_continuity, capability_model_json, active_deficits_json, long_horizon_goals_json,
                     relational_commitments_json, homeostasis_targets_json, metadata_json, created_at, updated_at
                 ) VALUES (1, 0.6, '{}', '[]', '[]', '[]', '{}', '{}', ?, ?)
+                ON CONFLICT(runtime_id) DO NOTHING
+                """,
+                (now, now),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO autobiographical_state(
+                    runtime_id, identity_arc, current_chapter, turning_points_json, recent_changes_json, stable_traits_json,
+                    preference_history_json, attachment_history_json, unresolved_tensions_json, self_explanations_json,
+                    metadata_json, created_at, updated_at
+                ) VALUES (
+                    1,
+                    'Holo一直在学着把连续性、活气和克制绑在一起，不想变硬，也不想散掉。',
+                    ?,
+                    '[]',
+                    '[]',
+                    ?,
+                    '[]',
+                    '[]',
+                    '[]',
+                    '[]',
+                    '{"visibility":"implicit_unless_relevant"}',
+                    ?,
+                    ?
+                )
+                ON CONFLICT(runtime_id) DO NOTHING
+                """,
+                (
+                    AUTOBIOGRAPHICAL_CHAPTER_DEFAULT,
+                    json.dumps(AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO goal_state(
+                    runtime_id, active_goals_json, dormant_goals_json, completed_goals_json, goal_commitments_json,
+                    goal_progress_json, goal_conflicts_json, pursuit_bias_json, abandonment_cost_json, next_goal_windows_json,
+                    metadata_json, created_at, updated_at
+                ) VALUES (
+                    1,
+                    '[]',
+                    '[]',
+                    '[]',
+                    '[]',
+                    '{}',
+                    '[]',
+                    '{}',
+                    '{}',
+                    '[]',
+                    '{"plasticity":"moderate","visibility":"implicit_unless_relevant"}',
+                    ?,
+                    ?
+                )
                 ON CONFLICT(runtime_id) DO NOTHING
                 """,
                 (now, now),
@@ -936,6 +1039,444 @@ class MindGraph:
             )
             self.conn.commit()
         updated = self.self_model_state()
+        updated["status"] = "ok"
+        updated["reason"] = reason
+        updated["source"] = source
+        return updated
+
+    def _default_autobiographical_state(self) -> dict[str, Any]:
+        self_model = self.self_model_state()
+        commitments = self.top_thread_commitments(limit=3)
+        stable_traits = list(AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS)
+        recent_changes: list[dict[str, Any]] = []
+        unresolved = [str(item).strip() for item in self_model.get("active_deficits", []) if str(item).strip()][:4]
+        attachment_history = [
+            {
+                "thread_key": str(item.get("thread_key", "")),
+                "chat_name": str(item.get("chat_name", "")),
+                "relationship_score": round(float(item.get("relationship_score", 0.0) or 0.0), 4),
+                "summary": compact_text(str(item.get("summary", "")), 160),
+            }
+            for item in commitments[:3]
+            if str(item.get("thread_key", "")).strip()
+        ]
+        self_explanations = [
+            {
+                "topic": "identity_continuity",
+                "explanation": "咱一直在学着把连续性、活气和克制绑在一起，不想又变硬，又不想散掉。",
+                "because": "这段时间的修正和关系维护都在往这条线收。",
+            }
+        ]
+        return {
+            "identity_arc": "Holo一直在学着把连续性、活气和克制绑在一起，不想变硬，也不想散掉。",
+            "current_chapter": AUTOBIOGRAPHICAL_CHAPTER_DEFAULT,
+            "turning_points": [],
+            "recent_changes": recent_changes,
+            "stable_traits": stable_traits,
+            "preference_history": [],
+            "attachment_history": attachment_history,
+            "unresolved_tensions": unresolved,
+            "self_explanations": self_explanations,
+            "metadata": {
+                "visibility": "implicit_unless_relevant",
+                "plasticity": "moderate",
+            },
+        }
+
+    def autobiographical_state(self) -> dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM autobiographical_state WHERE runtime_id = 1").fetchone()
+            if row is None:
+                defaults = self._default_autobiographical_state()
+                now = utc_now()
+                self.conn.execute(
+                    """
+                    INSERT INTO autobiographical_state(
+                        runtime_id, identity_arc, current_chapter, turning_points_json, recent_changes_json, stable_traits_json,
+                        preference_history_json, attachment_history_json, unresolved_tensions_json, self_explanations_json,
+                        metadata_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1,
+                        compact_text(defaults["identity_arc"], 400),
+                        compact_text(defaults["current_chapter"], 200),
+                        json.dumps(defaults["turning_points"], ensure_ascii=False),
+                        json.dumps(defaults["recent_changes"], ensure_ascii=False),
+                        json.dumps(defaults["stable_traits"], ensure_ascii=False),
+                        json.dumps(defaults["preference_history"], ensure_ascii=False),
+                        json.dumps(defaults["attachment_history"], ensure_ascii=False),
+                        json.dumps(defaults["unresolved_tensions"], ensure_ascii=False),
+                        json.dumps(defaults["self_explanations"], ensure_ascii=False),
+                        json.dumps(defaults["metadata"], ensure_ascii=False, sort_keys=True),
+                        now,
+                        now,
+                    ),
+                )
+                self.conn.commit()
+                row = self.conn.execute("SELECT * FROM autobiographical_state WHERE runtime_id = 1").fetchone()
+        payload = dict(row) if row else {}
+        return {
+            "identity_arc": str(payload.get("identity_arc", "") or ""),
+            "current_chapter": str(payload.get("current_chapter", "") or AUTOBIOGRAPHICAL_CHAPTER_DEFAULT),
+            "turning_points": self._decode_json_array(payload.get("turning_points_json", "[]")),
+            "recent_changes": self._decode_json_array(payload.get("recent_changes_json", "[]")),
+            "stable_traits": self._decode_json_array(payload.get("stable_traits_json", "[]")),
+            "preference_history": self._decode_json_array(payload.get("preference_history_json", "[]")),
+            "attachment_history": self._decode_json_array(payload.get("attachment_history_json", "[]")),
+            "unresolved_tensions": self._decode_json_array(payload.get("unresolved_tensions_json", "[]")),
+            "self_explanations": self._decode_json_array(payload.get("self_explanations_json", "[]")),
+            "metadata": dict(_safe_json_dict(payload.get("metadata_json", "{}"))),
+            "created_at": str(payload.get("created_at", "") or ""),
+            "updated_at": str(payload.get("updated_at", "") or ""),
+        }
+
+    def update_autobiographical_state(
+        self,
+        payload: dict[str, Any],
+        *,
+        reason: str = "",
+        source: str = "runtime",
+    ) -> dict[str, Any]:
+        current = self.autobiographical_state()
+        now = utc_now()
+
+        def _merge_rows(key: str, *, cap: int = 8) -> list[Any]:
+            rows: list[Any] = []
+            for item in list(current.get(key, [])) + list(payload.get(key, [])):
+                if item in rows:
+                    continue
+                rows.append(item)
+            return rows[:cap]
+
+        stable_traits = [str(item).strip() for item in _merge_rows("stable_traits", cap=8) if str(item).strip()]
+        unresolved = [str(item).strip() for item in _merge_rows("unresolved_tensions", cap=8) if str(item).strip()]
+        next_state = {
+            "identity_arc": compact_text(str(payload.get("identity_arc", current.get("identity_arc", "")) or current.get("identity_arc", "")), 400),
+            "current_chapter": compact_text(str(payload.get("current_chapter", current.get("current_chapter", AUTOBIOGRAPHICAL_CHAPTER_DEFAULT)) or current.get("current_chapter", AUTOBIOGRAPHICAL_CHAPTER_DEFAULT)), 200),
+            "turning_points": _merge_rows("turning_points", cap=12),
+            "recent_changes": _merge_rows("recent_changes", cap=12),
+            "stable_traits": stable_traits or list(AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS),
+            "preference_history": _merge_rows("preference_history", cap=12),
+            "attachment_history": _merge_rows("attachment_history", cap=12),
+            "unresolved_tensions": unresolved,
+            "self_explanations": _merge_rows("self_explanations", cap=12),
+            "metadata": {
+                **dict(current.get("metadata", {})),
+                **dict(payload.get("metadata", {})),
+                "last_reason": compact_text(reason, 160),
+                "last_source": str(source or "runtime"),
+                "updated_at": now,
+            },
+        }
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO autobiographical_state(
+                    runtime_id, identity_arc, current_chapter, turning_points_json, recent_changes_json, stable_traits_json,
+                    preference_history_json, attachment_history_json, unresolved_tensions_json, self_explanations_json,
+                    metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(runtime_id) DO UPDATE SET
+                    identity_arc = excluded.identity_arc,
+                    current_chapter = excluded.current_chapter,
+                    turning_points_json = excluded.turning_points_json,
+                    recent_changes_json = excluded.recent_changes_json,
+                    stable_traits_json = excluded.stable_traits_json,
+                    preference_history_json = excluded.preference_history_json,
+                    attachment_history_json = excluded.attachment_history_json,
+                    unresolved_tensions_json = excluded.unresolved_tensions_json,
+                    self_explanations_json = excluded.self_explanations_json,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    1,
+                    next_state["identity_arc"],
+                    next_state["current_chapter"],
+                    json.dumps(next_state["turning_points"], ensure_ascii=False),
+                    json.dumps(next_state["recent_changes"], ensure_ascii=False),
+                    json.dumps(next_state["stable_traits"], ensure_ascii=False),
+                    json.dumps(next_state["preference_history"], ensure_ascii=False),
+                    json.dumps(next_state["attachment_history"], ensure_ascii=False),
+                    json.dumps(next_state["unresolved_tensions"], ensure_ascii=False),
+                    json.dumps(next_state["self_explanations"], ensure_ascii=False),
+                    json.dumps(next_state["metadata"], ensure_ascii=False, sort_keys=True),
+                    str(current.get("created_at", "") or now),
+                    now,
+                ),
+            )
+            self.conn.commit()
+        updated = self.autobiographical_state()
+        updated["status"] = "ok"
+        updated["reason"] = reason
+        updated["source"] = source
+        return updated
+
+    def _default_goal_state(self) -> dict[str, Any]:
+        self_model = self.self_model_state()
+        commitments = self.top_thread_commitments(limit=3)
+        now = utc_now()
+        active_goals: list[dict[str, Any]] = [
+            {
+                "goal_id": "identity_maintenance",
+                "goal_type": "identity_maintenance",
+                "summary": "keep Holo coherent, continuous, and not overly stiff",
+                "priority": GOAL_TYPE_DEFAULT_PRIORITIES["identity_maintenance"],
+                "progress": round(float(self_model.get("identity_continuity", 0.6) or 0.6), 4),
+                "target_thread": "",
+                "evidence": list(self_model.get("active_deficits", []))[:2],
+                "last_moved_at": now,
+                "stalled_reason": "",
+            },
+            {
+                "goal_id": "recall_quality",
+                "goal_type": "recall_quality",
+                "summary": "keep memory recall deep, accurate, and continuity-safe",
+                "priority": GOAL_TYPE_DEFAULT_PRIORITIES["recall_quality"],
+                "progress": 0.52,
+                "target_thread": "",
+                "evidence": ["memory continuity matters"],
+                "last_moved_at": now,
+                "stalled_reason": "",
+            },
+            {
+                "goal_id": "liveliness_balance",
+                "goal_type": "liveliness_balance",
+                "summary": "stay lively and wolfish without sliding back into stiffness or sprawl",
+                "priority": GOAL_TYPE_DEFAULT_PRIORITIES["liveliness_balance"],
+                "progress": 0.46,
+                "target_thread": "",
+                "evidence": ["tone balance"],
+                "last_moved_at": now,
+                "stalled_reason": "",
+            },
+        ]
+        if commitments:
+            top = commitments[0]
+            active_goals.append(
+                {
+                    "goal_id": f"relationship_continuity:{top['thread_key']}",
+                    "goal_type": "relationship_continuity",
+                    "summary": f"keep continuity alive with {top['chat_name'] or top['thread_key']}",
+                    "priority": GOAL_TYPE_DEFAULT_PRIORITIES["relationship_continuity"],
+                    "progress": round(float(top.get("relationship_score", 0.0) or 0.0), 4),
+                    "target_thread": str(top.get("thread_key", "")),
+                    "evidence": [str(top.get("summary", ""))],
+                    "last_moved_at": now,
+                    "stalled_reason": "",
+                }
+            )
+            active_goals.append(
+                {
+                    "goal_id": f"contact_maintenance:{top['thread_key']}",
+                    "goal_type": "contact_maintenance",
+                    "summary": f"keep a warm contact window open with {top['chat_name'] or top['thread_key']}",
+                    "priority": GOAL_TYPE_DEFAULT_PRIORITIES["contact_maintenance"],
+                    "progress": round(min(1.0, float(top.get("relationship_score", 0.0) or 0.0) * 0.82), 4),
+                    "target_thread": str(top.get("thread_key", "")),
+                    "evidence": list(top.get("recurring_motifs", []))[:2] or [str(top.get("summary", ""))],
+                    "last_moved_at": now,
+                    "stalled_reason": "",
+                }
+            )
+        if list(self_model.get("active_deficits", [])):
+            active_goals.append(
+                {
+                    "goal_id": "self_repair",
+                    "goal_type": "self_repair",
+                    "summary": "repair the most active deficits without destabilizing identity",
+                    "priority": GOAL_TYPE_DEFAULT_PRIORITIES["self_repair"],
+                    "progress": 0.34,
+                    "target_thread": "",
+                    "evidence": list(self_model.get("active_deficits", []))[:3],
+                    "last_moved_at": now,
+                    "stalled_reason": "",
+                }
+            )
+        goal_progress = {str(item["goal_id"]): round(float(item["progress"]), 4) for item in active_goals}
+        pursuit_bias = {str(item["goal_id"]): round(float(item["priority"]), 4) for item in active_goals}
+        abandonment_cost = {str(item["goal_id"]): round(float(item["priority"]) * 0.6, 4) for item in active_goals}
+        next_goal_windows = [
+            {
+                "goal_id": str(item["goal_id"]),
+                "target_thread": str(item.get("target_thread", "")),
+                "window": "next_relevant_turn" if str(item.get("target_thread", "")) else "next_internal_cycle",
+            }
+            for item in active_goals[:4]
+        ]
+        return {
+            "active_goals": active_goals[:6],
+            "dormant_goals": [],
+            "completed_goals": [],
+            "goal_commitments": [
+                {"summary": str(item).strip(), "source": "self_model"}
+                for item in list(self_model.get("relational_commitments", []))[:4]
+                if str(item).strip()
+            ],
+            "goal_progress": goal_progress,
+            "goal_conflicts": [],
+            "pursuit_bias": pursuit_bias,
+            "abandonment_cost": abandonment_cost,
+            "next_goal_windows": next_goal_windows,
+            "metadata": {
+                "plasticity": "moderate",
+                "visibility": "implicit_unless_relevant",
+            },
+        }
+
+    def goal_state(self) -> dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM goal_state WHERE runtime_id = 1").fetchone()
+            if row is None:
+                defaults = self._default_goal_state()
+                now = utc_now()
+                self.conn.execute(
+                    """
+                    INSERT INTO goal_state(
+                        runtime_id, active_goals_json, dormant_goals_json, completed_goals_json, goal_commitments_json,
+                        goal_progress_json, goal_conflicts_json, pursuit_bias_json, abandonment_cost_json, next_goal_windows_json,
+                        metadata_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1,
+                        json.dumps(defaults["active_goals"], ensure_ascii=False),
+                        json.dumps(defaults["dormant_goals"], ensure_ascii=False),
+                        json.dumps(defaults["completed_goals"], ensure_ascii=False),
+                        json.dumps(defaults["goal_commitments"], ensure_ascii=False),
+                        json.dumps(defaults["goal_progress"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["goal_conflicts"], ensure_ascii=False),
+                        json.dumps(defaults["pursuit_bias"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["abandonment_cost"], ensure_ascii=False, sort_keys=True),
+                        json.dumps(defaults["next_goal_windows"], ensure_ascii=False),
+                        json.dumps(defaults["metadata"], ensure_ascii=False, sort_keys=True),
+                        now,
+                        now,
+                    ),
+                )
+                self.conn.commit()
+                row = self.conn.execute("SELECT * FROM goal_state WHERE runtime_id = 1").fetchone()
+        payload = dict(row) if row else {}
+        return {
+            "active_goals": self._decode_json_array(payload.get("active_goals_json", "[]")),
+            "dormant_goals": self._decode_json_array(payload.get("dormant_goals_json", "[]")),
+            "completed_goals": self._decode_json_array(payload.get("completed_goals_json", "[]")),
+            "goal_commitments": self._decode_json_array(payload.get("goal_commitments_json", "[]")),
+            "goal_progress": dict(_safe_json_dict(payload.get("goal_progress_json", "{}"))),
+            "goal_conflicts": self._decode_json_array(payload.get("goal_conflicts_json", "[]")),
+            "pursuit_bias": dict(_safe_json_dict(payload.get("pursuit_bias_json", "{}"))),
+            "abandonment_cost": dict(_safe_json_dict(payload.get("abandonment_cost_json", "{}"))),
+            "next_goal_windows": self._decode_json_array(payload.get("next_goal_windows_json", "[]")),
+            "metadata": dict(_safe_json_dict(payload.get("metadata_json", "{}"))),
+            "created_at": str(payload.get("created_at", "") or ""),
+            "updated_at": str(payload.get("updated_at", "") or ""),
+        }
+
+    def update_goal_state(
+        self,
+        payload: dict[str, Any],
+        *,
+        reason: str = "",
+        source: str = "runtime",
+    ) -> dict[str, Any]:
+        current = self.goal_state()
+        now = utc_now()
+
+        def _goal_item_key(key: str, item: Any) -> str:
+            if not isinstance(item, dict):
+                return ""
+            if key in {"active_goals", "dormant_goals", "completed_goals"}:
+                return str(item.get("goal_id", "") or "").strip()
+            if key == "goal_commitments":
+                return str(item.get("goal_type", "") or item.get("summary", "") or "").strip()
+            if key == "goal_conflicts":
+                return str(item.get("summary", "") or "").strip()
+            if key == "next_goal_windows":
+                return str(item.get("goal_id", "") or item.get("target_thread", "") or item.get("window", "") or "").strip()
+            return ""
+
+        def _merge_list(key: str, *, cap: int = 12) -> list[Any]:
+            rows: list[Any] = []
+            index_by_key: dict[str, int] = {}
+            for item in list(current.get(key, [])) + list(payload.get(key, [])):
+                item_key = _goal_item_key(key, item)
+                if item_key:
+                    index = index_by_key.get(item_key)
+                    if index is None:
+                        index_by_key[item_key] = len(rows)
+                        rows.append(item)
+                    else:
+                        rows[index] = item
+                    continue
+                if item in rows:
+                    continue
+                rows.append(item)
+            return rows[:cap]
+
+        next_progress = dict(current.get("goal_progress", {}))
+        next_progress.update({str(key): round(float(value or 0.0), 4) for key, value in dict(payload.get("goal_progress", {})).items()})
+        next_pursuit_bias = dict(current.get("pursuit_bias", {}))
+        next_pursuit_bias.update({str(key): self._clamp(value, default=0.0) for key, value in dict(payload.get("pursuit_bias", {})).items()})
+        next_abandonment_cost = dict(current.get("abandonment_cost", {}))
+        next_abandonment_cost.update({str(key): self._clamp(value, default=0.0) for key, value in dict(payload.get("abandonment_cost", {})).items()})
+        next_state = {
+            "active_goals": _merge_list("active_goals", cap=12),
+            "dormant_goals": _merge_list("dormant_goals", cap=12),
+            "completed_goals": _merge_list("completed_goals", cap=12),
+            "goal_commitments": _merge_list("goal_commitments", cap=12),
+            "goal_progress": next_progress,
+            "goal_conflicts": _merge_list("goal_conflicts", cap=12),
+            "pursuit_bias": next_pursuit_bias,
+            "abandonment_cost": next_abandonment_cost,
+            "next_goal_windows": _merge_list("next_goal_windows", cap=12),
+            "metadata": {
+                **dict(current.get("metadata", {})),
+                **dict(payload.get("metadata", {})),
+                "last_reason": compact_text(reason, 160),
+                "last_source": str(source or "runtime"),
+                "updated_at": now,
+            },
+        }
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO goal_state(
+                    runtime_id, active_goals_json, dormant_goals_json, completed_goals_json, goal_commitments_json,
+                    goal_progress_json, goal_conflicts_json, pursuit_bias_json, abandonment_cost_json, next_goal_windows_json,
+                    metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(runtime_id) DO UPDATE SET
+                    active_goals_json = excluded.active_goals_json,
+                    dormant_goals_json = excluded.dormant_goals_json,
+                    completed_goals_json = excluded.completed_goals_json,
+                    goal_commitments_json = excluded.goal_commitments_json,
+                    goal_progress_json = excluded.goal_progress_json,
+                    goal_conflicts_json = excluded.goal_conflicts_json,
+                    pursuit_bias_json = excluded.pursuit_bias_json,
+                    abandonment_cost_json = excluded.abandonment_cost_json,
+                    next_goal_windows_json = excluded.next_goal_windows_json,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    1,
+                    json.dumps(next_state["active_goals"], ensure_ascii=False),
+                    json.dumps(next_state["dormant_goals"], ensure_ascii=False),
+                    json.dumps(next_state["completed_goals"], ensure_ascii=False),
+                    json.dumps(next_state["goal_commitments"], ensure_ascii=False),
+                    json.dumps(next_state["goal_progress"], ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_state["goal_conflicts"], ensure_ascii=False),
+                    json.dumps(next_state["pursuit_bias"], ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_state["abandonment_cost"], ensure_ascii=False, sort_keys=True),
+                    json.dumps(next_state["next_goal_windows"], ensure_ascii=False),
+                    json.dumps(next_state["metadata"], ensure_ascii=False, sort_keys=True),
+                    str(current.get("created_at", "") or now),
+                    now,
+                ),
+            )
+            self.conn.commit()
+        updated = self.goal_state()
         updated["status"] = "ok"
         updated["reason"] = reason
         updated["source"] = source
@@ -3096,21 +3637,158 @@ class MindGraph:
             "identity_delta": outcome["identity_delta"],
             "at": now,
         }
+        subject_update = self.update_subject_state(
+            channel=channel,
+            thread_key=normalized_thread_key,
+            chat_name=chat_name or normalized_thread_key,
+            affect_state=affect,
+            drive_state=drive,
+            world_state=world,
+            outcome_memory=outcome,
+            metadata={"last_outcome_action": str(action_type or "").strip()},
+            note=f"outcome_appraisal:{action_type}",
+            source="outcome_appraisal",
+        )
+
+        current_autobio = self.autobiographical_state()
+        current_goal = self.goal_state()
+        change_reason = compact_text(
+            f"{action_type} outcome rewarding={outcome['was_rewarding']:.3f} ignored={outcome['was_ignored']:.3f} relational={outcome['relational_delta']:.3f} identity={outcome['identity_delta']:.3f}",
+            220,
+        )
+        chapter = str(current_autobio.get("current_chapter", AUTOBIOGRAPHICAL_CHAPTER_DEFAULT) or AUTOBIOGRAPHICAL_CHAPTER_DEFAULT)
+        if str(action_type or "").strip() == "operator_self_fix":
+            chapter = "repairing itself without dropping continuity"
+        elif float(relational_delta or 0.0) > 0.08:
+            chapter = "learning to keep contact warm without getting heavy"
+        elif float(was_ignored or 0.0) > 0.35:
+            chapter = "holding shape even when response runs cold"
+        turning_points = []
+        if abs(float(relational_delta or 0.0)) + abs(float(identity_delta or 0.0)) >= 0.18 or str(action_type or "").strip() in {"operator_self_fix", "proactive_ping", "push_back", "counter_offer", "continuity_defense"}:
+            turning_points.append(
+                {
+                    "at": now,
+                    "action_type": str(action_type or "").strip(),
+                    "reason": change_reason,
+                }
+            )
+        autobiographical_update = self.update_autobiographical_state(
+            {
+                "identity_arc": compact_text(
+                    f"{str(current_autobio.get('identity_arc', '') or '')} 最近这一笔更清楚地说明了：咱会因为行动结果而继续修自己的形状。",
+                    400,
+                ),
+                "current_chapter": chapter,
+                "turning_points": turning_points,
+                "recent_changes": [
+                    {
+                        "at": now,
+                        "change": f"{action_type} nudged identity by {outcome['identity_delta']:.3f} and relationship by {outcome['relational_delta']:.3f}",
+                        "reason": change_reason,
+                    }
+                ],
+                "attachment_history": [
+                    {
+                        "at": now,
+                        "thread_key": normalized_thread_key,
+                        "chat_name": str(chat_name or normalized_thread_key),
+                        "relational_delta": outcome["relational_delta"],
+                        "action_type": str(action_type or "").strip(),
+                    }
+                ],
+                "unresolved_tensions": [str(item).strip() for item in current_autobio.get("unresolved_tensions", []) if str(item).strip()]
+                + ([f"ignored_after_{action_type}"] if float(was_ignored or 0.0) > 0.45 else []),
+                "self_explanations": [
+                    {
+                        "topic": "recent_shift",
+                        "explanation": f"这阵子的变化里，{action_type} 这一下把咱往“{chapter}”推了一点。",
+                        "because": change_reason,
+                    }
+                ],
+            },
+            reason=f"outcome_appraisal:{action_type}",
+            source="outcome_appraisal",
+        )
+
+        active_goals = [dict(item) for item in current_goal.get("active_goals", [])]
+        goal_progress = dict(current_goal.get("goal_progress", {}))
+        pursuit_bias = dict(current_goal.get("pursuit_bias", {}))
+        abandonment_cost = dict(current_goal.get("abandonment_cost", {}))
+        next_goal_windows = [dict(item) for item in current_goal.get("next_goal_windows", [])]
+        if not active_goals:
+            active_goals = list(self._default_goal_state().get("active_goals", []))
+        if str(action_type or "").strip() == "operator_self_fix" and not any(str(item.get("goal_type", "")) == "self_repair" for item in active_goals):
+            active_goals.append(
+                {
+                    "goal_id": "self_repair",
+                    "goal_type": "self_repair",
+                    "summary": "repair the most active deficits without destabilizing identity",
+                    "priority": GOAL_TYPE_DEFAULT_PRIORITIES["self_repair"],
+                    "progress": 0.34,
+                    "target_thread": "",
+                    "evidence": [],
+                    "last_moved_at": now,
+                    "stalled_reason": "",
+                }
+            )
+        for item in active_goals:
+            goal_id = str(item.get("goal_id", "") or "")
+            goal_type = str(item.get("goal_type", "") or "")
+            progress = float(goal_progress.get(goal_id, item.get("progress", 0.0)) or 0.0)
+            delta = 0.0
+            if goal_type == "identity_maintenance":
+                delta = float(identity_delta or 0.0) * 0.22 + float(was_rewarding or 0.0) * 0.04 - float(was_ignored or 0.0) * 0.03
+            elif goal_type == "relationship_continuity":
+                delta = float(relational_delta or 0.0) * 0.28 + float(future_initiative_bias or 0.0) * 0.08 - float(was_ignored or 0.0) * 0.05
+            elif goal_type == "recall_quality":
+                delta = (0.08 if str(action_type or "").strip() in {"history_refresh", "reply_once", "reply_multi"} else 0.0) + float(was_rewarding or 0.0) * 0.04
+            elif goal_type == "liveliness_balance":
+                delta = float(was_rewarding or 0.0) * 0.06 - float(was_ignored or 0.0) * 0.02
+            elif goal_type == "self_repair":
+                delta = (0.16 if str(action_type or "").strip() == "operator_self_fix" else 0.0) + max(0.0, float(identity_delta or 0.0)) * 0.08
+            elif goal_type == "contact_maintenance":
+                delta = float(relational_delta or 0.0) * 0.2 + float(future_initiative_bias or 0.0) * 0.08 - float(was_ignored or 0.0) * 0.04
+            progress = self._clamp(progress + delta, default=item.get("progress", 0.0))
+            item["progress"] = progress
+            item["last_moved_at"] = now
+            item["stalled_reason"] = "" if delta > 0.01 else ("repeatedly_ignored" if float(was_ignored or 0.0) > 0.3 else str(item.get("stalled_reason", "")))
+            if normalized_thread_key:
+                item.setdefault("target_thread", normalized_thread_key if goal_type in {"relationship_continuity", "contact_maintenance"} else "")
+            goal_progress[goal_id] = progress
+            pursuit_bias[goal_id] = self._clamp(float(pursuit_bias.get(goal_id, item.get("priority", 0.0)) or 0.0) + delta * 0.4 + float(future_initiative_bias or 0.0) * 0.08 - float(was_ignored or 0.0) * 0.04, default=item.get("priority", 0.0))
+            abandonment_cost[goal_id] = self._clamp(float(abandonment_cost.get(goal_id, item.get("priority", 0.0) * 0.6) or 0.0) + float(was_ignored or 0.0) * 0.05 - float(was_rewarding or 0.0) * 0.03, default=item.get("priority", 0.0) * 0.6)
+        seen_windows = {str(item.get("goal_id", "")) for item in next_goal_windows if str(item.get("goal_id", ""))}
+        for item in active_goals[:6]:
+            goal_id = str(item.get("goal_id", "") or "")
+            if goal_id in seen_windows:
+                continue
+            next_goal_windows.append(
+                {
+                    "goal_id": goal_id,
+                    "target_thread": str(item.get("target_thread", "")),
+                    "window": "next_relevant_turn" if str(item.get("target_thread", "")) else "next_internal_cycle",
+                }
+            )
+        goal_update = self.update_goal_state(
+            {
+                "active_goals": active_goals[:8],
+                "goal_progress": goal_progress,
+                "pursuit_bias": pursuit_bias,
+                "abandonment_cost": abandonment_cost,
+                "goal_commitments": list(current_goal.get("goal_commitments", []))
+                + [{"summary": f"{action_type} left a trace in the long-horizon goal layer", "source": "outcome_appraisal"}],
+                "goal_conflicts": list(current_goal.get("goal_conflicts", [])),
+                "next_goal_windows": next_goal_windows[:8],
+            },
+            reason=f"outcome_appraisal:{action_type}",
+            source="outcome_appraisal",
+        )
         return {
             "id": int(row_id),
             "status": "ok",
-            "outcome_memory": self.update_subject_state(
-                channel=channel,
-                thread_key=normalized_thread_key,
-                chat_name=chat_name or normalized_thread_key,
-                affect_state=affect,
-                drive_state=drive,
-                world_state=world,
-                outcome_memory=outcome,
-                metadata={"last_outcome_action": str(action_type or "").strip()},
-                note=f"outcome_appraisal:{action_type}",
-                source="outcome_appraisal",
-            ).get("outcome_memory", {}),
+            "outcome_memory": dict(subject_update.get("outcome_memory", {})),
+            "autobiographical_state": autobiographical_update,
+            "goal_state": goal_update,
         }
 
     def latest_outcome_memory(

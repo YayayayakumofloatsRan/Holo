@@ -224,6 +224,8 @@ class TurnContext:
     value_state: dict[str, Any] = field(default_factory=dict)
     conflict_state: dict[str, Any] = field(default_factory=dict)
     world_state: dict[str, Any] = field(default_factory=dict)
+    autobiographical_state: dict[str, Any] = field(default_factory=dict)
+    goal_state: dict[str, Any] = field(default_factory=dict)
     counterfactual_summary: dict[str, Any] = field(default_factory=dict)
     predicted_best_outcome: dict[str, Any] = field(default_factory=dict)
     predicted_worst_outcome: dict[str, Any] = field(default_factory=dict)
@@ -236,6 +238,10 @@ class TurnContext:
     selected_action: dict[str, Any] = field(default_factory=dict)
     selected_prediction: dict[str, Any] = field(default_factory=dict)
     expression_budget: int = 0
+    goal_alignment: dict[str, Any] = field(default_factory=dict)
+    identity_consistency: dict[str, Any] = field(default_factory=dict)
+    chapter_relevance: str = ""
+    self_narrative_hint: str = ""
     silence_reason: str = ""
     defer_reason: str = ""
     action_rationale: str = ""
@@ -276,6 +282,10 @@ class TurnContext:
             self.conflict_state = dict(packet.get("conflict_state", {}))
         if not self.world_state:
             self.world_state = dict(packet.get("world_state", {}))
+        if not self.autobiographical_state:
+            self.autobiographical_state = dict(packet.get("autobiographical_state", {}))
+        if not self.goal_state:
+            self.goal_state = dict(packet.get("goal_state", {}))
         if not self.counterfactual_summary:
             self.counterfactual_summary = dict(packet.get("counterfactual_summary", {}))
         if not self.predicted_best_outcome:
@@ -306,6 +316,14 @@ class TurnContext:
                 self.expression_budget = int(packet.get("expression_budget", 0) or 0)
             except (TypeError, ValueError):
                 self.expression_budget = 0
+        if not self.goal_alignment:
+            self.goal_alignment = dict(packet.get("goal_alignment", {}))
+        if not self.identity_consistency:
+            self.identity_consistency = dict(packet.get("identity_consistency", {}))
+        if not self.chapter_relevance:
+            self.chapter_relevance = str(packet.get("chapter_relevance", "") or "")
+        if not self.self_narrative_hint:
+            self.self_narrative_hint = str(packet.get("self_narrative_hint", "") or "")
         if not self.silence_reason:
             self.silence_reason = str(packet.get("silence_reason", "") or "")
         if not self.defer_reason:
@@ -347,6 +365,8 @@ class TurnContext:
             "value_state": dict(self.value_state),
             "conflict_state": dict(self.conflict_state),
             "world_state": dict(self.world_state),
+            "autobiographical_state": dict(self.autobiographical_state),
+            "goal_state": dict(self.goal_state),
             "counterfactual_summary": dict(self.counterfactual_summary),
             "predicted_best_outcome": dict(self.predicted_best_outcome),
             "predicted_worst_outcome": dict(self.predicted_worst_outcome),
@@ -359,6 +379,10 @@ class TurnContext:
             "selected_action": dict(self.selected_action),
             "selected_prediction": dict(self.selected_prediction),
             "expression_budget": int(self.expression_budget),
+            "goal_alignment": dict(self.goal_alignment),
+            "identity_consistency": dict(self.identity_consistency),
+            "chapter_relevance": self.chapter_relevance,
+            "self_narrative_hint": self.self_narrative_hint,
             "silence_reason": self.silence_reason,
             "defer_reason": self.defer_reason,
             "action_rationale": self.action_rationale,

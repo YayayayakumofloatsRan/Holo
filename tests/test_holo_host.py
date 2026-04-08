@@ -87,16 +87,52 @@ class FakeMemory:
             "initiative_window": 0.5,
             "correction_sensitivity": 0.4,
         }
+        self._autobiographical_state = {
+            "identity_arc": "Holo is learning to stay lively without losing continuity.",
+            "current_chapter": "repairing_edges",
+            "turning_points": [{"summary": "stiffness drift was called out directly"}],
+            "recent_changes": [{"summary": "trying to sound less stiff while keeping continuity intact"}],
+            "stable_traits": ["wise", "playful"],
+            "preference_history": [{"summary": "still prefers continuity over noise"}],
+            "attachment_history": [{"thread_key": "Nemoqi", "summary": "Nemoqi remains a high-salience thread"}],
+            "unresolved_tensions": ["stiffness_drift"],
+            "self_explanations": [{"summary": "I got harder because continuity pressure kept outweighing play."}],
+            "metadata": {},
+        }
+        self._goal_state = {
+            "active_goals": [
+                {
+                    "goal_id": "goal-identity-maintenance",
+                    "goal_type": "identity_maintenance",
+                    "summary": "stay lively without losing coherence",
+                    "priority": 0.78,
+                    "progress": 0.46,
+                    "target_thread": "Nemoqi",
+                    "evidence": ["recent corrections about stiffness"],
+                    "last_moved_at": "2026-04-08T00:00:00Z",
+                    "stalled_reason": "",
+                }
+            ],
+            "dormant_goals": [],
+            "completed_goals": [],
+            "goal_commitments": [{"goal_type": "relationship_continuity", "summary": "keep Nemoqi continuity alive"}],
+            "goal_progress": {"goal-identity-maintenance": 0.46},
+            "goal_conflicts": [{"summary": "continuity versus liveliness"}],
+            "pursuit_bias": {"identity_maintenance": 0.72},
+            "abandonment_cost": {"identity_maintenance": 0.61},
+            "next_goal_windows": [{"goal_type": "relationship_continuity", "window_reason": "reply likelihood is warm"}],
+            "metadata": {},
+        }
         self.graph = self
 
     @staticmethod
     def roadmap_registry() -> dict:
         return {
-            "Primary Track": ["social world model", "fast and deep counterfactual simulation", "simulation-led action rerank"],
-            "Secondary Tracks": ["autobiographical continuity", "long-horizon goals"],
-            "Parked Hypotheses": ["richer desire shaping", "stronger negotiated will"],
-            "Deferred Experiments": ["open-ended world modeling", "broader multi-agent social world", "deeper imagination beyond current recall"],
-            "Constitutional Constraints": ["owner override", "policy boundary"],
+            "Primary Track": ["autobiographical continuity", "long-horizon goals", "identity/goal-led deliberation"],
+            "Secondary Tracks": ["richer desire shaping", "stronger negotiated will"],
+            "Parked Hypotheses": ["broader multi-agent social world", "deeper imagination beyond current recall"],
+            "Deferred Experiments": ["open-ended world modeling", "explicit multi-step planning", "richer subjective report layer"],
+            "Constitutional Constraints": ["owner shutdown remains final", "no self-escalation around secrets, auth, or policy"],
         }
 
     def clear_packet_cache(self) -> None:
@@ -423,6 +459,8 @@ class FakeMemory:
         thread_key = str(context.get("thread_key", "") or context.get("incoming_thread_key", "") or context.get("chat_name", "") or "Nemoqi")
         chat_name = str(context.get("chat_name", "") or thread_key or "Nemoqi")
         channel = str(context.get("channel", "wechat") or "wechat")
+        autobiographical_state = dict(self._autobiographical_state)
+        goal_state = dict(self._goal_state)
         stage5 = self._derive_stage6_selection(query, channel=channel, thread_key=thread_key, chat_name=chat_name)
         world_state = self._world_state_for(thread_key=thread_key, chat_name=chat_name, channel=channel)
         counterfactual_set = self._counterfactual_set(
@@ -444,7 +482,7 @@ class FakeMemory:
         return {
             "addendum": f"隐式约束：{query}",
             "tier": stage5["intent_state"]["tier"],
-            "mind_packet_version": "v10",
+            "mind_packet_version": "v11",
             "identity_core": {"lines": ["把“咱”保留成自然的第一人称。"], "items": []},
             "relationship_state": {"summary": "先接住对方，再继续往下说。", "lines": [], "items": []},
             "episodic_recall": {"lines": [], "items": []},
@@ -537,6 +575,12 @@ class FakeMemory:
             "memory_route": "hybrid",
             "recall_confidence": 0.0,
             "world_state": world_state,
+            "autobiographical_state": autobiographical_state,
+            "goal_state": goal_state,
+            "goal_alignment": {"score": 0.76, "active_goal_ids": ["goal-identity-maintenance"]},
+            "identity_consistency": {"score": 0.74, "current_chapter": "repairing_edges"},
+            "chapter_relevance": "repairing_edges",
+            "self_narrative_hint": "trying to stay lively without flattening continuity",
             "counterfactual_summary": counterfactual_summary,
             "predicted_best_outcome": predicted_best_outcome,
             "predicted_worst_outcome": predicted_worst_outcome,
@@ -578,6 +622,56 @@ class FakeMemory:
                 for item in stage5["action_market"]
             ],
             "expression_budget_v3": int(stage5["expression_budget"]),
+            "intent_state_v4": {
+                **dict(stage5["intent_state"]),
+                "world_state": world_state,
+                "autobiographical_state": {
+                    "identity_arc": str(autobiographical_state.get("identity_arc", "")),
+                    "current_chapter": str(autobiographical_state.get("current_chapter", "")),
+                },
+                "goal_state": {
+                    "active_goals": [
+                        {
+                            "goal_id": str(item.get("goal_id", "")),
+                            "goal_type": str(item.get("goal_type", "")),
+                            "summary": str(item.get("summary", "")),
+                        }
+                        for item in list(goal_state.get("active_goals", []))[:1]
+                        if isinstance(item, dict)
+                    ]
+                },
+                "goal_alignment": {"score": 0.76},
+                "identity_consistency": {"score": 0.74},
+                "chapter_relevance": "repairing_edges",
+                "self_narrative_hint": "trying to stay lively without flattening continuity",
+            },
+            "action_market_v4": [
+                {
+                    **dict(item),
+                    "goal_rationale": "fits the active identity-maintenance goal",
+                    "identity_rationale": "stays coherent with the current chapter",
+                    "chapter_rationale": "repairing_edges",
+                    "goal_alignment_score": 0.76,
+                    "identity_consistency_score": 0.74,
+                }
+                for item in [
+                    {
+                        **dict(item),
+                        "world_rationale": dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})).get(
+                            "world_rationale",
+                            "social world model has no extra preference",
+                        ),
+                        "simulation_rationale": dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})).get(
+                            "simulation_rationale",
+                            "no simulation rerank applied",
+                        ),
+                        "predicted_outcome": dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})),
+                        "rerank_delta": float(dict(counterfactual_by_action.get(str(item.get("action_type", "")), {})).get("recommended_bias", 0.0) or 0.0),
+                    }
+                    for item in stage5["action_market"]
+                ]
+            ],
+            "expression_budget_v4": int(stage5["expression_budget"]),
             "deliberation_trace_id": f"fake-deliberation-{len(self.sidecar_requests)}",
             "reply_constraints": {
                 "lines": ["先直接回应，再自然延伸。"],
@@ -592,6 +686,24 @@ class FakeMemory:
                 "expression_budget": int(stage5["expression_budget"]),
                 "world_state": world_state,
                 "counterfactual_summary": counterfactual_summary,
+                "autobiographical_state": {
+                    "identity_arc": str(autobiographical_state.get("identity_arc", "")),
+                    "current_chapter": str(autobiographical_state.get("current_chapter", "")),
+                },
+                "goal_state": {
+                    "active_goals": [
+                        {
+                            "goal_id": str(item.get("goal_id", "")),
+                            "goal_type": str(item.get("goal_type", "")),
+                        }
+                        for item in list(goal_state.get("active_goals", []))[:1]
+                        if isinstance(item, dict)
+                    ],
+                },
+                "goal_alignment": {"score": 0.76},
+                "identity_consistency": {"score": 0.74},
+                "chapter_relevance": "repairing_edges",
+                "self_narrative_hint": "trying to stay lively without flattening continuity",
             },
         }
 
@@ -693,6 +805,69 @@ class FakeMemory:
     def self_model_state(self) -> dict:
         return dict(getattr(self, "_self_model_state", self.sidecar_packet("", context={}).get("self_model", {})))
 
+    def autobiographical_state(self) -> dict:
+        return dict(self._autobiographical_state)
+
+    def goal_state(self) -> dict:
+        return dict(self._goal_state)
+
+    def update_autobiographical_state(self, payload: dict, *, reason: str = "", source: str = "runtime") -> dict:
+        current = dict(self._autobiographical_state)
+        merged = {
+            **current,
+            **dict(payload),
+            "metadata": {
+                **dict(current.get("metadata", {})),
+                **dict(payload.get("metadata", {})),
+                "last_reason": reason,
+                "last_source": source,
+            },
+        }
+        self._autobiographical_state = merged
+        return dict(merged)
+
+    def update_goal_state(self, payload: dict, *, reason: str = "", source: str = "runtime") -> dict:
+        current = dict(self._goal_state)
+        merged = {
+            **current,
+            **dict(payload),
+            "metadata": {
+                **dict(current.get("metadata", {})),
+                **dict(payload.get("metadata", {})),
+                "last_reason": reason,
+                "last_source": source,
+            },
+        }
+        self._goal_state = merged
+        return dict(merged)
+
+    def trace_self_continuity(self) -> dict:
+        packet = self.sidecar_packet("", context={})
+        autobio = dict(packet.get("autobiographical_state", {}))
+        return {
+            "autobiographical_state": autobio,
+            "goal_state": dict(packet.get("goal_state", {})),
+            "self_model": dict(packet.get("self_model", {})),
+            "identity_arc": str(autobio.get("identity_arc", "")),
+            "current_chapter": str(autobio.get("current_chapter", "")),
+            "turning_points": list(autobio.get("turning_points", [])),
+            "recent_changes": list(autobio.get("recent_changes", [])),
+            "self_explanations": list(autobio.get("self_explanations", [])),
+            "why_changed_summary": "I got stiffer while trying too hard to keep continuity intact.",
+        }
+
+    def trace_goal_arbitration(self) -> dict:
+        packet = self.sidecar_packet("", context={})
+        return {
+            "goal_state": dict(packet.get("goal_state", {})),
+            "autobiographical_state": dict(packet.get("autobiographical_state", {})),
+            "active_goals": list(dict(packet.get("goal_state", {})).get("active_goals", [])),
+            "goal_conflicts": list(dict(packet.get("goal_state", {})).get("goal_conflicts", [])),
+            "goal_commitments": list(dict(packet.get("goal_state", {})).get("goal_commitments", [])),
+            "next_goal_windows": list(dict(packet.get("goal_state", {})).get("next_goal_windows", [])),
+            "current_chapter": str(dict(packet.get("autobiographical_state", {})).get("current_chapter", "")),
+        }
+
     def latest_self_revision_state(self) -> dict:
         return {"latest_status": "reviewed", "applied": True, "applied_patch": {"persona_blend": {"playfulness": 0.64}}, "applied_at": "2026-04-07T00:00:00Z"}
 
@@ -776,7 +951,7 @@ class FakeMemory:
 
     def trace_counterfactual(self, *, query: str, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 3) -> dict:
         packet = self.sidecar_packet(query, context={"thread_key": thread_key, "chat_name": chat_name, "channel": channel})
-        counterfactual_set = list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[: max(1, int(limit))]
+        counterfactual_set = list(packet.get("action_market_v4", packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", [])))))[: max(1, int(limit))]
         selected_action = dict(packet.get("selected_action", {}))
         return {
             "thread_key": thread_key or "",
@@ -862,6 +1037,9 @@ class FakeMemory:
                 {"loop_name": "initiative_marketplace"},
                 {"loop_name": "outcome_appraisal"},
                 {"loop_name": "deep_simulation"},
+                {"loop_name": "autobiographical_consolidation"},
+                {"loop_name": "goal_arbitration"},
+                {"loop_name": "continuity_audit"},
             ],
         }
 
@@ -1117,15 +1295,23 @@ class FakeMemory:
             "intent_state": dict(packet.get("intent_state", {})),
             "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
             "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
+            "intent_state_v4": dict(packet.get("intent_state_v4", packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {}))))),
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0))) or 0),
+            "expression_budget_v4": int(packet.get("expression_budget_v4", packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0)))) or 0),
             "world_state": dict(packet.get("world_state", {})),
             "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
             "predicted_best_outcome": dict(packet.get("predicted_best_outcome", {})),
             "predicted_worst_outcome": dict(packet.get("predicted_worst_outcome", {})),
             "uncertainty_level": float(packet.get("uncertainty_level", 0.0) or 0.0),
+            "autobiographical_state": dict(packet.get("autobiographical_state", {})),
+            "goal_state": dict(packet.get("goal_state", {})),
+            "goal_alignment": dict(packet.get("goal_alignment", {})),
+            "identity_consistency": dict(packet.get("identity_consistency", {})),
+            "chapter_relevance": str(packet.get("chapter_relevance", "")),
+            "self_narrative_hint": str(packet.get("self_narrative_hint", "")),
         }
 
     def action_market(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", query: str = "", limit: int = 8) -> dict:
@@ -1138,12 +1324,16 @@ class FakeMemory:
             "action_market": list(packet.get("action_market", []))[:limit],
             "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[:limit],
             "action_market_v3": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[:limit],
+            "action_market_v4": list(packet.get("action_market_v4", packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", [])))))[:limit],
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0))) or 0),
+            "expression_budget_v4": int(packet.get("expression_budget_v4", packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0)))) or 0),
             "world_state": dict(packet.get("world_state", {})),
             "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
+            "goal_alignment": dict(packet.get("goal_alignment", {})),
+            "identity_consistency": dict(packet.get("identity_consistency", {})),
             "roadmap_registry": self.roadmap_registry(),
         }
 
@@ -1157,13 +1347,16 @@ class FakeMemory:
             "intent_state": dict(packet.get("intent_state", {})),
             "intent_state_v2": dict(packet.get("intent_state_v2", packet.get("intent_state", {}))),
             "intent_state_v3": dict(packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {})))),
+            "intent_state_v4": dict(packet.get("intent_state_v4", packet.get("intent_state_v3", packet.get("intent_state_v2", packet.get("intent_state", {}))))),
             "action_market": list(packet.get("action_market", []))[:limit],
             "action_market_v2": list(packet.get("action_market_v2", packet.get("action_market", [])))[:limit],
             "action_market_v3": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[:limit],
+            "action_market_v4": list(packet.get("action_market_v4", packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", [])))))[:limit],
             "selected_action": dict(packet.get("selected_action", {})),
             "expression_budget": int(packet.get("expression_budget", 0) or 0),
             "expression_budget_v2": int(packet.get("expression_budget_v2", packet.get("expression_budget", 0)) or 0),
             "expression_budget_v3": int(packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0))) or 0),
+            "expression_budget_v4": int(packet.get("expression_budget_v4", packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0)))) or 0),
             "silence_reason": str(packet.get("silence_reason", "")),
             "defer_reason": str(packet.get("defer_reason", "")),
             "lookup_reason": str(packet.get("lookup_reason", "")),
@@ -1175,13 +1368,19 @@ class FakeMemory:
             "conflict_state": dict(packet.get("conflict_state", {})),
             "game_state": dict(packet.get("game_state", {})),
             "self_model": dict(packet.get("self_model", {})),
+            "autobiographical_state": dict(packet.get("autobiographical_state", {})),
+            "goal_state": dict(packet.get("goal_state", {})),
+            "goal_alignment": dict(packet.get("goal_alignment", {})),
+            "identity_consistency": dict(packet.get("identity_consistency", {})),
+            "chapter_relevance": str(packet.get("chapter_relevance", "")),
+            "self_narrative_hint": str(packet.get("self_narrative_hint", "")),
             "world_state": dict(packet.get("world_state", {})),
             "counterfactual_summary": dict(packet.get("counterfactual_summary", {})),
             "predicted_best_outcome": dict(packet.get("predicted_best_outcome", {})),
             "predicted_worst_outcome": dict(packet.get("predicted_worst_outcome", {})),
             "selected_prediction": dict(packet.get("selected_prediction", {})),
             "uncertainty_level": float(packet.get("uncertainty_level", 0.0) or 0.0),
-            "counterfactual_set": list(packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", []))))[: min(limit, 3)],
+            "counterfactual_set": list(packet.get("action_market_v4", packet.get("action_market_v3", packet.get("action_market_v2", packet.get("action_market", [])))))[: min(limit, 3)],
             "roadmap_registry": self.roadmap_registry(),
         }
 
@@ -2606,6 +2805,37 @@ wechat_helper_config_path = ""
                 )
                 self.assertEqual(report["status"], "pass")
                 self.assertEqual(report["stage"], "social-world-model-stage7")
+            finally:
+                close_service_handles(service)
+
+    def test_trace_self_continuity_exposes_stage8_autobiographical_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                payload = service.trace_self_continuity()
+                self.assertTrue(payload["autobiographical_state"]["identity_arc"])
+                self.assertTrue(payload["goal_state"]["active_goals"])
+                self.assertTrue(payload["current_chapter"])
+            finally:
+                close_service_handles(service)
+
+    def test_accept_stage8_passes_with_fake_autobiographical_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = HoloReplyService(config, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                report = service.accept_stage8(
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    channel="wechat",
+                    iterations=1,
+                    warmup=1,
+                )
+                self.assertEqual(report["status"], "pass")
+                self.assertEqual(report["stage"], "autobiographical-self-stage8")
             finally:
                 close_service_handles(service)
 

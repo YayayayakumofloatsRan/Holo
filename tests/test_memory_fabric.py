@@ -46,7 +46,43 @@ class _FakeVectorMemory:
 
 
 class MemoryFabricTests(unittest.TestCase):
-    def test_sidecar_packet_v10_exposes_world_and_counterfactual_layers(self) -> None:
+    def test_goal_state_merge_dedupes_by_goal_id(self) -> None:
+        with TempMemoryRepo() as temp:
+            bridge = MemoryBridge(
+                temp.repo_root,
+                graph_db_path=temp.runtime_dir / "mind_graph.sqlite3",
+                vector_backend="milvus",
+                rag=rm,
+            )
+            initial = {
+                "goal_id": "goal-identity-maintenance",
+                "goal_type": "identity_maintenance",
+                "summary": "stay lively without losing coherence",
+                "priority": 0.71,
+                "progress": 0.34,
+                "target_thread": "Nemoqi",
+                "evidence": ["stiffness_drift"],
+                "last_moved_at": "2026-04-08T00:00:00Z",
+                "stalled_reason": "",
+            }
+            updated = {
+                **initial,
+                "priority": 0.89,
+                "progress": 0.58,
+                "last_moved_at": "2026-04-08T01:00:00Z",
+            }
+
+            bridge.graph.update_goal_state({"active_goals": [initial]}, reason="unit:first", source="unit")
+            state = bridge.graph.update_goal_state({"active_goals": [updated]}, reason="unit:second", source="unit")
+
+            matching = [goal for goal in state["active_goals"] if dict(goal).get("goal_id") == initial["goal_id"]]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(matching[0]["priority"], updated["priority"])
+            self.assertEqual(matching[0]["progress"], updated["progress"])
+            bridge.activation.close()
+            bridge.graph.close()
+
+    def test_sidecar_packet_v11_exposes_autobiography_and_goal_layers(self) -> None:
         with TempMemoryRepo() as temp:
             rm.archive_turn(
                 "remember before",
@@ -100,7 +136,7 @@ class MemoryFabricTests(unittest.TestCase):
                 context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
 
-            self.assertEqual(packet["mind_packet_version"], "v10")
+            self.assertEqual(packet["mind_packet_version"], "v11")
             self.assertIn(packet["retrieval_mode"], {"hybrid-led", "hybrid-led+fallback", "graph-led"})
             self.assertIn("graph_hits", packet)
             self.assertIn("vector_hits", packet)
@@ -130,6 +166,15 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertIn("predicted_worst_outcome", packet)
             self.assertIn("selected_prediction", packet)
             self.assertIn("uncertainty_level", packet)
+            self.assertIn("autobiographical_state", packet)
+            self.assertIn("goal_state", packet)
+            self.assertIn("goal_alignment", packet)
+            self.assertIn("identity_consistency", packet)
+            self.assertIn("chapter_relevance", packet)
+            self.assertIn("self_narrative_hint", packet)
+            self.assertIn("intent_state_v4", packet)
+            self.assertIn("action_market_v4", packet)
+            self.assertIn("expression_budget_v4", packet)
             self.assertIn("intent_state_v3", packet)
             self.assertIn("action_market_v3", packet)
             self.assertIn("expression_budget_v3", packet)

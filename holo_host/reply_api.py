@@ -750,6 +750,22 @@ class HoloReplyService:
         with self._memory_lock:
             return self.memory.self_model_state()
 
+    def autobiographical_state(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.autobiographical_state()
+
+    def goal_state(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.goal_state()
+
+    def trace_self_continuity(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_self_continuity()
+
+    def trace_goal_arbitration(self) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_goal_arbitration()
+
     def operator_status(self) -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.operator_status()
@@ -1546,6 +1562,150 @@ class HoloReplyService:
         report["chat_name"] = normalized_chat_name
         return report
 
+    def accept_stage8(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage8_acceptance
+        from .daemon import build_daemon
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        mode_transition = self.set_brain_mode(mode="full_brain", note="accept-stage8")
+        daemon = build_daemon(str(self.config.config_path) if self.config.config_path else None)
+        try:
+            autobio_loop = daemon._run_autobiographical_consolidation()
+            goal_loop = daemon._run_goal_arbitration()
+            continuity_loop = daemon._run_continuity_audit()
+        finally:
+            daemon.store.close()
+            if hasattr(daemon.memory, "activation"):
+                daemon.memory.activation.close()
+            if hasattr(daemon.memory, "graph"):
+                daemon.memory.graph.close()
+        with self._memory_lock:
+            self.memory.clear_packet_cache()
+        self_continuity = self.trace_self_continuity()
+        goal_state = self.goal_state()
+        goal_trace = self.trace_goal_arbitration()
+        action_trace = self.trace_action_selection(
+            query="你为什么最近变了",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=4,
+        )
+        continuity_defense_trace = self.trace_action_selection(
+            query="别总顺着我说，也别把自己又弄硬了",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=4,
+        )
+        with self._memory_lock:
+            self.memory.record_consciousness_entry(
+                channel=channel,
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                message_id="accept-stage8-self-history",
+                entry_type="stage8_self_continuity",
+                selected_action=str(dict(action_trace.get("selected_action", {})).get("action_type", "") or ""),
+                payload={
+                    "autobiographical_snapshot": dict(self_continuity.get("autobiographical_state", {})),
+                    "goal_snapshot": dict(goal_state),
+                    "goal_alignment": dict(action_trace.get("goal_alignment", {})),
+                    "identity_consistency": dict(action_trace.get("identity_consistency", {})),
+                    "chapter_transition": str(action_trace.get("chapter_relevance", "") or ""),
+                    "self_update_reason": str(action_trace.get("self_narrative_hint", "") or ""),
+                },
+            )
+            self.memory.record_consciousness_entry(
+                channel=channel,
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                message_id="accept-stage8-goal-audit",
+                entry_type="stage8_goal_arbitration",
+                selected_action=str(dict(continuity_defense_trace.get("selected_action", {})).get("action_type", "") or ""),
+                payload={
+                    "autobiographical_snapshot": dict(continuity_defense_trace.get("autobiographical_state", {})),
+                    "goal_snapshot": dict(goal_trace.get("goal_state", goal_state)),
+                    "goal_alignment": dict(continuity_defense_trace.get("goal_alignment", {})),
+                    "identity_consistency": dict(continuity_defense_trace.get("identity_consistency", {})),
+                    "chapter_transition": str(continuity_defense_trace.get("chapter_relevance", "") or ""),
+                    "self_update_reason": str(continuity_defense_trace.get("self_narrative_hint", "") or ""),
+                },
+            )
+        reply_probe = self.reply_probe(
+            {
+                "chat_name": normalized_chat_name,
+                "thread_key": normalized_thread_key,
+                "channel": channel,
+                "sender": normalized_sender,
+                "text": "只是随便聊聊",
+            }
+        )
+        ledger = self.deliberation_ledger(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel, limit=24)
+        fast_benchmark = self._benchmark_packet_build(
+            query="在吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="fast",
+        )
+        recall_benchmark = self._benchmark_packet_build(
+            query="你最近在想什么，接着说",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="recall",
+        )
+        deep_benchmark = self._benchmark_packet_build(
+            query="你为什么最近变了，和之前有什么不一样",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="deep_recall",
+        )
+        report = _evaluate_stage8_acceptance(
+            health=self.health(),
+            mode_transition=mode_transition,
+            self_continuity=self_continuity,
+            goal_state=goal_state,
+            goal_trace=goal_trace,
+            action_trace=action_trace,
+            continuity_defense_trace=continuity_defense_trace,
+            reply_probe=reply_probe,
+            ledger=ledger,
+            brain_status=self.brain_status(),
+            fast_benchmark=fast_benchmark,
+            recall_benchmark=recall_benchmark,
+            deep_benchmark=deep_benchmark,
+            roadmap_registry=self.memory.roadmap_registry(),
+        )
+        report["transport"] = "live_http"
+        report["autobiographical_consolidation"] = autobio_loop
+        report["goal_arbitration_loop"] = goal_loop
+        report["continuity_audit"] = continuity_loop
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        return report
+
     def initiative_status(
         self,
         *,
@@ -2119,10 +2279,10 @@ class HoloReplyService:
                 chat_name=turn.chat_name,
                 message_id=incoming.message_id,
                 query=turn.text,
-                intent_state=dict(sidecar.get("intent_state_v3", sidecar.get("intent_state_v2", sidecar.get("intent_state", {})))),
-                action_market=list(sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", [])))),
+                intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state_v3", sidecar.get("intent_state_v2", sidecar.get("intent_state", {}))))),
+                action_market=list(sidecar.get("action_market_v4", sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", []))))),
                 selected_action=dict(sidecar.get("selected_action", {})),
-                expression_budget=int(sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0))) or 0),
+                expression_budget=int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0),
                 silence_reason=str(sidecar.get("silence_reason", "") or ""),
                 defer_reason=str(sidecar.get("defer_reason", "") or ""),
                 action_rationale=str(sidecar.get("action_rationale", "") or ""),
@@ -2277,7 +2437,7 @@ class HoloReplyService:
             status="decided",
             decision={
                 "selected_action": dict(selected_action),
-                "expression_budget": int(sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0))) or 0),
+                "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
             },
@@ -2289,16 +2449,22 @@ class HoloReplyService:
             entry_type="subject_decide",
             selected_action=selected_action_type,
             payload={
-                "intent_state": dict(sidecar.get("intent_state_v3", sidecar.get("intent_state_v2", sidecar.get("intent_state", {})))),
-                "action_market": list(sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", [])))),
-                "expression_budget": int(sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0))) or 0),
+                "intent_state": dict(sidecar.get("intent_state_v4", sidecar.get("intent_state_v3", sidecar.get("intent_state_v2", sidecar.get("intent_state", {}))))),
+                "action_market": list(sidecar.get("action_market_v4", sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", []))))),
+                "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "lookup_reason": str(sidecar.get("lookup_reason", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
                 "world_snapshot": dict(sidecar.get("world_state", {})),
+                "autobiographical_snapshot": dict(sidecar.get("autobiographical_state", {})),
+                "goal_snapshot": dict(sidecar.get("goal_state", {})),
+                "goal_alignment": dict(sidecar.get("goal_alignment", {})),
+                "identity_consistency": dict(sidecar.get("identity_consistency", {})),
+                "chapter_transition": str(sidecar.get("chapter_relevance", "") or ""),
+                "self_update_reason": str(sidecar.get("self_narrative_hint", "") or ""),
                 "counterfactual_set": [
                     dict(item.get("predicted_outcome", {})) | {"action_type": str(item.get("action_type", ""))}
-                    for item in list(sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", []))))[:3]
+                    for item in list(sidecar.get("action_market_v4", sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", [])))))[:3]
                 ],
                 "selected_prediction": dict(sidecar.get("selected_prediction", {})),
             },
@@ -2311,7 +2477,7 @@ class HoloReplyService:
                 "thread_key": incoming.thread_key,
                 "message_id": incoming.message_id,
                 "selected_action": selected_action,
-                "expression_budget": int(sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0))) or 0),
+                "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
             }
@@ -2342,7 +2508,7 @@ class HoloReplyService:
                 "message_id": incoming.message_id,
                 "job_id": deferred_job_id,
                 "selected_action": selected_action,
-                "expression_budget": int(sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0))) or 0),
+                "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
             }
@@ -2387,9 +2553,11 @@ class HoloReplyService:
                     payload={
                         "source": "history_refresh",
                         "world_snapshot": dict(sidecar.get("world_state", {})),
+                        "autobiographical_snapshot": dict(sidecar.get("autobiographical_state", {})),
+                        "goal_snapshot": dict(sidecar.get("goal_state", {})),
                         "counterfactual_set": [
                             dict(item.get("predicted_outcome", {})) | {"action_type": str(item.get("action_type", ""))}
-                            for item in list(sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", []))))[:3]
+                            for item in list(sidecar.get("action_market_v4", sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", [])))))[:3]
                         ],
                         "selected_prediction": dict(sidecar.get("selected_prediction", {})),
                     },
@@ -2420,9 +2588,11 @@ class HoloReplyService:
                     "source": "external_lookup",
                     "lookup_report": executed_lookup,
                     "world_snapshot": dict(sidecar.get("world_state", {})),
+                    "autobiographical_snapshot": dict(sidecar.get("autobiographical_state", {})),
+                    "goal_snapshot": dict(sidecar.get("goal_state", {})),
                     "counterfactual_set": [
                         dict(item.get("predicted_outcome", {})) | {"action_type": str(item.get("action_type", ""))}
-                        for item in list(sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", []))))[:3]
+                        for item in list(sidecar.get("action_market_v4", sidecar.get("action_market_v3", sidecar.get("action_market_v2", sidecar.get("action_market", [])))))[:3]
                     ],
                     "selected_prediction": dict(sidecar.get("selected_prediction", {})),
                 },
@@ -2447,7 +2617,7 @@ class HoloReplyService:
         result = self._handle_reply_stage5_legacy(payload)
         if self._speech_action(selected_action_type):
             result["selected_action"] = dict(selected_action)
-            result["expression_budget"] = int(sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0))) or 0)
+            result["expression_budget"] = int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0)
             result["action_rationale"] = str(sidecar.get("action_rationale", "") or "")
             result["deliberation_trace_id"] = deliberation_trace_id
         self.store.update_event_result(event_row_id, status="completed", result=result)
@@ -2460,6 +2630,10 @@ class HoloReplyService:
             payload={
                 "result": dict(result),
                 "deliberation_trace_id": deliberation_trace_id,
+                "autobiographical_snapshot": dict(sidecar.get("autobiographical_state", {})),
+                "goal_snapshot": dict(sidecar.get("goal_state", {})),
+                "goal_alignment": dict(sidecar.get("goal_alignment", {})),
+                "identity_consistency": dict(sidecar.get("identity_consistency", {})),
             },
         )
         return result
@@ -3103,6 +3277,18 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/self-model":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.self_model())
                     return
+                if parsed.path == "/autobiographical-state":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.autobiographical_state())
+                    return
+                if parsed.path == "/goal-state":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.goal_state())
+                    return
+                if parsed.path == "/self-continuity":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.trace_self_continuity())
+                    return
+                if parsed.path == "/goal-arbitration":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.trace_goal_arbitration())
+                    return
                 if parsed.path == "/world-state":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.world_state(
@@ -3467,6 +3653,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage7(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage8":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage8(
                             thread_key=str(payload.get("thread_key", "")).strip() or None,
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",

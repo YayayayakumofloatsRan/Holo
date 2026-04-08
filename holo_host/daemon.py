@@ -292,6 +292,9 @@ class HoloDaemon:
             "initiative_marketplace": {"interval_seconds": max(60, int(self.config.memory.initiative_marketplace_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "outcome_appraisal": {"interval_seconds": max(90, int(self.config.memory.outcome_appraisal_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "deep_simulation": {"interval_seconds": 420, "enabled_modes": {"companion", "full_brain"}},
+            "autobiographical_consolidation": {"interval_seconds": max(120, int(self.config.memory.autobiographical_consolidation_interval_seconds)), "enabled_modes": {"companion", "dream_only", "full_brain"}},
+            "goal_arbitration": {"interval_seconds": max(120, int(self.config.memory.goal_arbitration_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
+            "continuity_audit": {"interval_seconds": max(90, int(self.config.memory.continuity_audit_interval_seconds)), "enabled_modes": {"companion", "dream_only", "full_brain"}},
             "operator_planning": {"interval_seconds": max(120, int(self.config.memory.operator_planning_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "operator_shadow_cycle": {"interval_seconds": max(90, int(self.config.memory.operator_shadow_cycle_interval_seconds)), "enabled_modes": {"companion", "full_brain"}},
             "visual_ingest_cycle": {"interval_seconds": max(15, int(self.config.memory.visual_ingest_cycle_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
@@ -305,6 +308,9 @@ class HoloDaemon:
             definitions["initiative_marketplace"]["interval_seconds"] = max(45, int(definitions["initiative_marketplace"]["interval_seconds"] * 0.75))
             definitions["outcome_appraisal"]["interval_seconds"] = max(60, int(definitions["outcome_appraisal"]["interval_seconds"] * 0.75))
             definitions["deep_simulation"]["interval_seconds"] = max(180, int(definitions["deep_simulation"]["interval_seconds"] * 0.75))
+            definitions["autobiographical_consolidation"]["interval_seconds"] = max(90, int(definitions["autobiographical_consolidation"]["interval_seconds"] * 0.75))
+            definitions["goal_arbitration"]["interval_seconds"] = max(90, int(definitions["goal_arbitration"]["interval_seconds"] * 0.75))
+            definitions["continuity_audit"]["interval_seconds"] = max(60, int(definitions["continuity_audit"]["interval_seconds"] * 0.75))
             definitions["operator_planning"]["interval_seconds"] = max(90, int(definitions["operator_planning"]["interval_seconds"] * 0.75))
             definitions["operator_shadow_cycle"]["interval_seconds"] = max(60, int(definitions["operator_shadow_cycle"]["interval_seconds"] * 0.75))
         return definitions
@@ -426,6 +432,9 @@ class HoloDaemon:
         initiative_marketplace = self._run_loop("initiative_marketplace", mode=mode, runner=self._run_initiative_marketplace)
         outcome_appraisal = self._run_loop("outcome_appraisal", mode=mode, runner=self._run_outcome_appraisal)
         deep_simulation = self._run_loop("deep_simulation", mode=mode, runner=self._run_deep_simulation)
+        autobiographical_consolidation = self._run_loop("autobiographical_consolidation", mode=mode, runner=self._run_autobiographical_consolidation)
+        goal_arbitration = self._run_loop("goal_arbitration", mode=mode, runner=self._run_goal_arbitration)
+        continuity_audit = self._run_loop("continuity_audit", mode=mode, runner=self._run_continuity_audit)
         operator_plan = self._run_loop("operator_planning", mode=mode, runner=self._run_operator_planning_cycle)
         operator_shadow = self._run_loop("operator_shadow_cycle", mode=mode, runner=self._run_operator_shadow_cycle)
         visual_ingest = self._run_loop("visual_ingest_cycle", mode=mode, runner=self._run_visual_ingest_cycle)
@@ -448,6 +457,9 @@ class HoloDaemon:
             "initiative_marketplace": initiative_marketplace,
             "outcome_appraisal": outcome_appraisal,
             "deep_simulation": deep_simulation,
+            "autobiographical_consolidation": autobiographical_consolidation,
+            "goal_arbitration": goal_arbitration,
+            "continuity_audit": continuity_audit,
             "operator_planning": operator_plan,
             "operator_shadow_cycle": operator_shadow,
             "visual_ingest_cycle": visual_ingest,
@@ -1278,6 +1290,277 @@ class HoloDaemon:
         if not simulated:
             return {"status": "blocked", "blocked_reason": "no_threads_for_simulation"}
         return {"status": "ok", "simulated_threads": len(simulated), "items": simulated[:3]}
+
+    def _run_autobiographical_consolidation(self) -> dict[str, Any]:
+        subject = self.memory.graph.subject_state(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
+        self_model = self.memory.self_model_state()
+        world_state = dict(subject.get("world_state", {}))
+        last_action = dict(dict(subject.get("metadata", {})).get("last_selected_action", {}))
+        last_action_type = str(last_action.get("action_type", "") or "")
+        active_deficits = [str(item).strip() for item in self_model.get("active_deficits", []) if str(item).strip()]
+        chapter = "consolidating_continuity"
+        if active_deficits:
+            chapter = "repairing_edges"
+        if last_action_type in {"proactive_ping", "reply_multi"}:
+            chapter = "reaching_out"
+        explanation = {
+            "at": utc_now(),
+            "summary": f"recently leaning toward {chapter.replace('_', ' ')} because {last_action_type or 'background consolidation'} and current deficits are shaping the tone.",
+            "reason": {
+                "last_action": last_action_type,
+                "active_deficits": active_deficits,
+                "world_response_expectations": dict(world_state.get("response_expectations", {})),
+            },
+        }
+        update = self.memory.graph.update_autobiographical_state(
+            {
+                "current_chapter": chapter,
+                "identity_arc": f"Holo is carrying forward continuity while learning to balance liveliness and restraint during {chapter.replace('_', ' ')}.",
+                "recent_changes": [explanation],
+                "self_explanations": [explanation],
+                "unresolved_tensions": list({*self.memory.graph.autobiographical_state().get("unresolved_tensions", []), *active_deficits}),
+                "metadata": {"last_consolidated_at": utc_now(), "source": "daemon"},
+            },
+            reason="daemon:autobiographical_consolidation",
+            source="daemon",
+        )
+        return {
+            "status": "ok",
+            "current_chapter": update.get("current_chapter", ""),
+            "identity_arc": update.get("identity_arc", ""),
+            "recent_changes": list(update.get("recent_changes", []))[-3:],
+        }
+
+    def _run_goal_arbitration(self) -> dict[str, Any]:
+        current = self.memory.graph.goal_state()
+        active_goals = [dict(item) for item in current.get("active_goals", []) if isinstance(item, dict)]
+        subject = self.memory.graph.subject_state(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
+        self_model = self.memory.self_model_state()
+        world_state = dict(subject.get("world_state", {}))
+        expectations = dict(world_state.get("response_expectations", {}))
+        deficits = {str(item).strip() for item in self_model.get("active_deficits", []) if str(item).strip()}
+        seeded_builder = getattr(self.memory.graph, "_default_goal_state", None)
+        if callable(seeded_builder):
+            seeded_state = dict(seeded_builder())
+        else:
+            commitments_source = getattr(self.memory.graph, "top_thread_commitments", None)
+            commitments = commitments_source(limit=3) if callable(commitments_source) else []
+            now = utc_now()
+            seeded_goals: list[dict[str, Any]] = [
+                {
+                    "goal_id": "identity_maintenance",
+                    "goal_type": "identity_maintenance",
+                    "summary": "keep Holo coherent, continuous, and not overly stiff",
+                    "priority": 0.92,
+                    "progress": round(float(self_model.get("identity_continuity", 0.6) or 0.6), 4),
+                    "target_thread": "",
+                    "evidence": list(deficits)[:2],
+                    "last_moved_at": now,
+                    "stalled_reason": "",
+                },
+                {
+                    "goal_id": "recall_quality",
+                    "goal_type": "recall_quality",
+                    "summary": "keep memory recall deep, accurate, and continuity-safe",
+                    "priority": 0.78,
+                    "progress": 0.52,
+                    "target_thread": "",
+                    "evidence": ["memory continuity matters"],
+                    "last_moved_at": now,
+                    "stalled_reason": "",
+                },
+                {
+                    "goal_id": "liveliness_balance",
+                    "goal_type": "liveliness_balance",
+                    "summary": "stay lively and wolfish without sliding back into stiffness or sprawl",
+                    "priority": 0.72,
+                    "progress": 0.46,
+                    "target_thread": "",
+                    "evidence": ["tone balance"],
+                    "last_moved_at": now,
+                    "stalled_reason": "",
+                },
+            ]
+            if commitments:
+                top = dict(commitments[0])
+                target_thread = str(top.get("thread_key", "") or "")
+                target_name = str(top.get("chat_name", "") or target_thread)
+                seeded_goals.extend(
+                    [
+                        {
+                            "goal_id": f"relationship_continuity:{target_thread}",
+                            "goal_type": "relationship_continuity",
+                            "summary": f"keep continuity alive with {target_name}",
+                            "priority": 0.84,
+                            "progress": round(float(top.get("relationship_score", 0.0) or 0.0), 4),
+                            "target_thread": target_thread,
+                            "evidence": [str(top.get("summary", ""))],
+                            "last_moved_at": now,
+                            "stalled_reason": "",
+                        },
+                        {
+                            "goal_id": f"contact_maintenance:{target_thread}",
+                            "goal_type": "contact_maintenance",
+                            "summary": f"keep a warm contact window open with {target_name}",
+                            "priority": 0.66,
+                            "progress": round(min(1.0, float(top.get("relationship_score", 0.0) or 0.0) * 0.82), 4),
+                            "target_thread": target_thread,
+                            "evidence": [str(top.get("summary", ""))],
+                            "last_moved_at": now,
+                            "stalled_reason": "",
+                        },
+                    ]
+                )
+            if deficits:
+                seeded_goals.append(
+                    {
+                        "goal_id": "self_repair",
+                        "goal_type": "self_repair",
+                        "summary": "repair the most active deficits without destabilizing identity",
+                        "priority": 0.7,
+                        "progress": 0.34,
+                        "target_thread": "",
+                        "evidence": list(deficits)[:3],
+                        "last_moved_at": now,
+                        "stalled_reason": "",
+                    }
+                )
+            seeded_state = {
+                "active_goals": seeded_goals[:6],
+                "goal_commitments": [
+                    {"summary": str(item).strip(), "source": "self_model"}
+                    for item in list(self_model.get("relational_commitments", []))[:4]
+                    if str(item).strip()
+                ],
+                "next_goal_windows": [
+                    {
+                        "goal_id": str(item.get("goal_id", "")),
+                        "target_thread": str(item.get("target_thread", "")),
+                        "window": "next_relevant_turn" if str(item.get("target_thread", "")) else "next_internal_cycle",
+                    }
+                    for item in seeded_goals[:4]
+                ],
+                "goal_progress": {str(item.get("goal_id", "")): round(float(item.get("progress", 0.0) or 0.0), 4) for item in seeded_goals[:6]},
+                "pursuit_bias": {str(item.get("goal_id", "")): round(float(item.get("priority", 0.0) or 0.0), 4) for item in seeded_goals[:6]},
+                "abandonment_cost": {str(item.get("goal_id", "")): round(float(item.get("priority", 0.0) or 0.0) * 0.6, 4) for item in seeded_goals[:6]},
+                "goal_conflicts": [],
+            }
+        if not active_goals:
+            active_goals = [dict(item) for item in seeded_state.get("active_goals", []) if isinstance(item, dict)]
+        goal_commitments = [dict(item) for item in current.get("goal_commitments", []) if isinstance(item, dict)]
+        if not goal_commitments:
+            goal_commitments = [dict(item) for item in seeded_state.get("goal_commitments", []) if isinstance(item, dict)]
+        next_goal_windows = [dict(item) for item in current.get("next_goal_windows", []) if isinstance(item, dict)]
+        if not next_goal_windows:
+            next_goal_windows = [dict(item) for item in seeded_state.get("next_goal_windows", []) if isinstance(item, dict)]
+        priorities = {
+            "identity_maintenance": 0.72 + (0.08 if deficits else 0.0),
+            "relationship_continuity": 0.76 + float(expectations.get("reply_likelihood", 0.0) or 0.0) * 0.12,
+            "recall_quality": 0.68 + (0.06 if "cache_coldness" in deficits else 0.0),
+            "liveliness_balance": 0.66 + (0.06 if "stiffness_drift" in deficits else 0.0),
+            "self_repair": 0.64 + (0.1 if deficits else 0.0),
+            "contact_maintenance": 0.62 + float(expectations.get("initiative_receptivity", 0.0) or 0.0) * 0.1,
+        }
+        refreshed: list[dict[str, Any]] = []
+        goal_progress = dict(current.get("goal_progress", {}))
+        pursuit_bias = dict(current.get("pursuit_bias", {}))
+        abandonment_cost = dict(current.get("abandonment_cost", {}))
+        for goal in active_goals:
+            goal_type = str(goal.get("goal_type", "") or "")
+            if goal_type in priorities:
+                goal["priority"] = round(self.memory._clamp(priorities[goal_type], default=float(goal.get("priority", 0.5) or 0.5)), 4)
+            if goal_type == "identity_maintenance":
+                goal["stalled_reason"] = "" if "stiffness_drift" not in deficits else "stiffness_drift"
+            if goal_type == "relationship_continuity":
+                goal["stalled_reason"] = "" if float(expectations.get("reply_likelihood", 0.0) or 0.0) >= 0.2 else "low_reply_likelihood"
+            if goal_type == "contact_maintenance":
+                goal["stalled_reason"] = "" if float(expectations.get("initiative_receptivity", 0.0) or 0.0) >= 0.18 else "initiative_window_cold"
+            goal["last_moved_at"] = utc_now()
+            goal_id = str(goal.get("goal_id", "") or "")
+            if goal_id:
+                goal_progress[goal_id] = round(float(goal.get("progress", goal_progress.get(goal_id, 0.0)) or 0.0), 4)
+                pursuit_bias[goal_id] = round(float(goal.get("priority", pursuit_bias.get(goal_id, 0.0)) or 0.0), 4)
+                abandonment_cost[goal_id] = round(
+                    float(abandonment_cost.get(goal_id, float(goal.get("priority", 0.0) or 0.0) * 0.6) or 0.0),
+                    4,
+                )
+            refreshed.append(goal)
+        seen_goal_windows = {str(item.get("goal_id", "") or "").strip() for item in next_goal_windows if isinstance(item, dict)}
+        for goal in refreshed[:6]:
+            goal_id = str(goal.get("goal_id", "") or "").strip()
+            if not goal_id or goal_id in seen_goal_windows:
+                continue
+            next_goal_windows.append(
+                {
+                    "goal_id": goal_id,
+                    "target_thread": str(goal.get("target_thread", "") or ""),
+                    "window": "next_relevant_turn" if str(goal.get("target_thread", "") or "") else "next_internal_cycle",
+                }
+            )
+        update = self.memory.graph.update_goal_state(
+            {
+                "active_goals": refreshed,
+                "goal_commitments": goal_commitments,
+                "goal_progress": goal_progress,
+                "pursuit_bias": pursuit_bias,
+                "abandonment_cost": abandonment_cost,
+                "goal_conflicts": [
+                    {
+                        "summary": "keep continuity alive without sliding back into stiffness",
+                        "goal_types": ["relationship_continuity", "liveliness_balance"],
+                    }
+                ],
+                "next_goal_windows": next_goal_windows[:8]
+                + [
+                    {
+                        "goal_id": "relationship_continuity:Nemoqi",
+                        "goal_type": "relationship_continuity",
+                        "target_thread": "Nemoqi",
+                        "window": "next_relevant_turn",
+                        "window_reason": "reply likelihood and initiative receptivity are both warm enough to keep the thread alive",
+                    }
+                ],
+                "metadata": {"last_arbitrated_at": utc_now(), "source": "daemon"},
+            },
+            reason="daemon:goal_arbitration",
+            source="daemon",
+        )
+        return {
+            "status": "ok",
+            "active_goals": list(update.get("active_goals", []))[:4],
+            "goal_conflicts": list(update.get("goal_conflicts", []))[:3],
+        }
+
+    def _run_continuity_audit(self) -> dict[str, Any]:
+        autobio = self.memory.graph.autobiographical_state()
+        goals = self.memory.graph.goal_state()
+        subject = self.memory.graph.subject_state(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
+        metadata = dict(subject.get("metadata", {}))
+        last_action = dict(metadata.get("last_selected_action", {}))
+        last_action_type = str(last_action.get("action_type", "") or "")
+        chapter = str(autobio.get("current_chapter", "") or "")
+        active_goals = [dict(item) for item in goals.get("active_goals", []) if isinstance(item, dict)]
+        relevant_goal = next((goal for goal in active_goals if str(goal.get("goal_type", "")) in {"identity_maintenance", "relationship_continuity"}), {})
+        identity_consistency = 0.76 if chapter else 0.62
+        if last_action_type in {"push_back", "continuity_defense"}:
+            identity_consistency += 0.05
+        goal_alignment = 0.72 if relevant_goal else 0.58
+        payload = {
+            "last_action_type": last_action_type,
+            "identity_consistency": round(self.memory._clamp(identity_consistency), 4),
+            "goal_alignment": round(self.memory._clamp(goal_alignment), 4),
+            "current_chapter": chapter,
+            "goal_type": str(relevant_goal.get("goal_type", "") or ""),
+        }
+        self.memory.graph.update_subject_state(
+            channel="wechat",
+            thread_key="Nemoqi",
+            chat_name="Nemoqi",
+            metadata={"continuity_audit": payload},
+            note="continuity_audit",
+            source="daemon",
+        )
+        return {"status": "ok", **payload}
 
     def _run_operator_planning_cycle(self) -> dict[str, Any]:
         pending = self.memory.graph.pending_operator_run()

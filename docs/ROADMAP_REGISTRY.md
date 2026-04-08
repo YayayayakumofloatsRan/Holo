@@ -3,26 +3,26 @@
 This registry exists so Holo planning does not collapse into a single forced choice every stage.
 
 ## Primary Track
-- social world model
-- fast and deep counterfactual simulation
-- simulation-led action rerank
-
-## Secondary Tracks
 - autobiographical continuity
 - long-horizon goals
+- identity/goal-led deliberation
 
-## Parked Hypotheses
+## Secondary Tracks
 - richer desire shaping
 - stronger negotiated will
 
-## Deferred Experiments
-- open-ended world modeling
+## Parked Hypotheses
 - broader multi-agent social world
 - deeper imagination beyond current recall
 
+## Deferred Experiments
+- open-ended world modeling
+- explicit multi-step planning
+- richer subjective report layer
+
 ## Constitutional Constraints
-- owner stop/offline always wins
-- no secret/auth self-escalation
-- no live hot-edit of tracked repo code
+- owner shutdown remains final
+- no self-escalation around secrets, auth, or policy
+- live repo code is not hot-edited by runtime state loops
 - policy boundaries stay hard
 - public repos never carry live memory/runtime state

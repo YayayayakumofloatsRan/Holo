@@ -680,6 +680,46 @@ def _world_state_payload(
     return daemon.memory.world_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
 
 
+def _autobiographical_state_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/autobiographical-state")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.autobiographical_state(), "local_process"
+
+
+def _goal_state_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/goal-state")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.goal_state(), "local_process"
+
+
+def _self_continuity_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/self-continuity", timeout=30.0)
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_self_continuity(), "local_process"
+
+
+def _goal_arbitration_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/goal-arbitration", timeout=30.0)
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_goal_arbitration(), "local_process"
+
+
 def _counterfactual_payload(
     config_path: str | None,
     *,
@@ -1155,6 +1195,56 @@ def _accept_stage7_payload(
     try:
         return (
             service.accept_stage7(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_stage8_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage8",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage8(
                 thread_key=thread_key,
                 chat_name=chat_name,
                 channel=channel,
@@ -2408,6 +2498,145 @@ def _evaluate_stage7_acceptance(
     }
 
 
+def _evaluate_stage8_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    self_continuity: dict[str, object],
+    goal_state: dict[str, object],
+    goal_trace: dict[str, object],
+    action_trace: dict[str, object],
+    continuity_defense_trace: dict[str, object],
+    reply_probe: dict[str, object],
+    ledger: dict[str, object],
+    brain_status: dict[str, object],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+    roadmap_registry: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    autobio = dict(self_continuity.get("autobiographical_state", {}))
+    goals = dict(goal_state)
+    active_goals = list(goals.get("active_goals", []))
+    action_budget = int(action_trace.get("expression_budget_v4", action_trace.get("expression_budget_v3", action_trace.get("expression_budget", 0))) or 0)
+    continuity_budget = int(
+        continuity_defense_trace.get(
+            "expression_budget_v4",
+            continuity_defense_trace.get("expression_budget_v3", continuity_defense_trace.get("expression_budget", 0)),
+        )
+        or 0
+    )
+    graph_led = dict(reply_probe.get("graph_led", {})) if isinstance(reply_probe.get("graph_led", {}), dict) else {}
+    reply_bubbles = list(graph_led.get("bubbles", [])) or list(reply_probe.get("bubbles", []))
+    ledger_entries = list(ledger.get("entries", []))
+    checks.append(_stage4_check("stage8_live_mode", str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain", f"status={health.get('status')} mode={mode_transition.get('mode')}"))
+    checks.append(
+        _stage4_check(
+            "autobiographical_continuity_present",
+            bool(str(autobio.get("identity_arc", "")).strip()) and bool(str(autobio.get("current_chapter", "")).strip()) and bool(list(self_continuity.get("turning_points", [])) or list(self_continuity.get("recent_changes", []))),
+            f"autobio={autobio}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "goal_state_persists",
+            bool(active_goals) and bool(list(goal_trace.get("goal_commitments", []))) and bool(list(goal_trace.get("next_goal_windows", []))),
+            f"goals={active_goals}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "identity_and_goal_enter_action_selection",
+            bool(action_trace.get("goal_alignment", {}))
+            and bool(action_trace.get("identity_consistency", {}))
+            and bool(str(action_trace.get("chapter_relevance", "")).strip())
+            and bool(str(action_trace.get("self_narrative_hint", "")).strip()),
+            f"trace={action_trace}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "continuity_defense_reads_same_self_history",
+            bool(continuity_defense_trace.get("goal_alignment", {}))
+            and bool(continuity_defense_trace.get("identity_consistency", {}))
+            and bool(continuity_defense_trace.get("autobiographical_state", {})),
+            f"trace={continuity_defense_trace}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "ordinary_chat_stays_implicit",
+            action_budget <= 1 and len(reply_bubbles) <= 1,
+            f"budget={action_budget} bubbles={reply_bubbles}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "consciousness_ledger_carries_autobio_and_goals",
+            bool(ledger_entries)
+            and any(bool(dict(item.get("payload", {})).get("autobiographical_snapshot")) for item in ledger_entries)
+            and any(bool(dict(item.get("payload", {})).get("goal_snapshot")) for item in ledger_entries),
+            f"entries={ledger_entries[:4]}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "roadmap_registry_updated",
+            "Primary Track" in roadmap_registry and "identity/goal-led deliberation" in str(roadmap_registry.get("Primary Track", "")),
+            f"roadmap={roadmap_registry}",
+            severity="warning",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "fast_budget",
+            str(fast_benchmark.get("last_tier", "")) == "fast" and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0,
+            f"tier={fast_benchmark.get('last_tier')} max_ms={dict(fast_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "recall_budget",
+            str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0,
+            f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "deep_budget",
+            str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0,
+            f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}",
+        )
+    )
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass" if not failures and not blockers and not warnings else "fail" if failures else "blocked" if blockers else "warn"
+    return {
+        "stage": "autobiographical-self-stage8",
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "blockers": blockers,
+        "warnings": warnings,
+        "self_continuity": self_continuity,
+        "goal_state": goal_state,
+        "goal_trace": goal_trace,
+        "action_trace": action_trace,
+        "continuity_defense_trace": continuity_defense_trace,
+        "reply_probe": reply_probe,
+        "ledger": ledger,
+        "roadmap_registry": roadmap_registry,
+        "cache_hit_ratio": float(dict(brain_status.get("cache", {})).get("hit_ratio", 0.0) or 0.0),
+        "reply_latency_budgets": {
+            "fast": dict(fast_benchmark.get("timings_ms", {})),
+            "recall": dict(recall_benchmark.get("timings_ms", {})),
+            "deep_recall": dict(deep_benchmark.get("timings_ms", {})),
+        },
+    }
+
+
 def command_init_db(config_path: str | None) -> int:
     config = load_config(config_path=config_path)
     store = QueueStore(config.runtime.db_path)
@@ -2536,6 +2765,18 @@ def command_show_self_model(config_path: str | None) -> int:
     return 0
 
 
+def command_show_autobiographical_state(config_path: str | None) -> int:
+    payload, _transport = _autobiographical_state_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_goal_state(config_path: str | None) -> int:
+    payload, _transport = _goal_state_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_self_model(config_path: str | None) -> int:
     self_model, _ = _self_model_payload(config_path)
     brain_status, _ = _brain_status_payload(config_path)
@@ -2547,6 +2788,18 @@ def command_trace_self_model(config_path: str | None) -> int:
         "operator_status": operator_status,
         "stream_status": stream_status,
     }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_self_continuity(config_path: str | None) -> int:
+    payload, _transport = _self_continuity_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_goal_arbitration(config_path: str | None) -> int:
+    payload, _transport = _goal_arbitration_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
@@ -3051,6 +3304,29 @@ def command_accept_stage7(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage7_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage8(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage8_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -3990,7 +4266,11 @@ def main(argv: list[str] | None = None) -> int:
     initiatives_parser.add_argument("--limit", type=int, default=20)
     subparsers.add_parser("show-brain-status", help="Show Always-On brain runtime state")
     subparsers.add_parser("show-self-model", help="Show the current persisted self-model state")
+    subparsers.add_parser("show-autobiographical-state", help="Show the persisted autobiographical self state")
+    subparsers.add_parser("show-goal-state", help="Show the persisted long-horizon goal state")
     subparsers.add_parser("trace-self-model", help="Show the self-model alongside runtime and operator state")
+    subparsers.add_parser("trace-self-continuity", help="Explain Stage-8 autobiographical continuity and recent self change")
+    subparsers.add_parser("trace-goal-arbitration", help="Explain Stage-8 goal arbitration and current goal commitments")
     affect_state_parser = subparsers.add_parser("show-affect-state", help="Show the current affect-state for one thread")
     affect_state_parser.add_argument("--thread-key", default=None)
     affect_state_parser.add_argument("--chat-name", default=None)
@@ -4231,6 +4511,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage7_parser.add_argument("--sender", default=None)
     accept_stage7_parser.add_argument("--iterations", type=int, default=3)
     accept_stage7_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage8_parser = subparsers.add_parser("accept-stage8", help="Run the fixed Autobiographical Self + Long-Horizon Goal Core Stage-8 acceptance gate")
+    accept_stage8_parser.add_argument("--thread-key", default=None)
+    accept_stage8_parser.add_argument("--chat-name", default=None)
+    accept_stage8_parser.add_argument("--channel", default="wechat")
+    accept_stage8_parser.add_argument("--sender", default=None)
+    accept_stage8_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage8_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
@@ -4278,8 +4565,16 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_brain_status(args.config)
     if args.command == "show-self-model":
         return command_show_self_model(args.config)
+    if args.command == "show-autobiographical-state":
+        return command_show_autobiographical_state(args.config)
+    if args.command == "show-goal-state":
+        return command_show_goal_state(args.config)
     if args.command == "trace-self-model":
         return command_trace_self_model(args.config)
+    if args.command == "trace-self-continuity":
+        return command_trace_self_continuity(args.config)
+    if args.command == "trace-goal-arbitration":
+        return command_trace_goal_arbitration(args.config)
     if args.command == "show-affect-state":
         return command_show_affect_state(
             args.config,
@@ -4621,6 +4916,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage7":
         return command_accept_stage7(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage8":
+        return command_accept_stage8(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,
