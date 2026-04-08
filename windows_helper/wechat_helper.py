@@ -389,7 +389,7 @@ class AgentClient:
                 continue
         raise RuntimeError(f"agent unreachable: {last_error}") from last_error
 
-    def _candidate_base_urls(self, parsed: parse.ParseResult) -> list[str]:
+def _candidate_base_urls(self, parsed: parse.ParseResult) -> list[str]:
         bases = [self.base_url]
         if os.name != "nt" or parsed.hostname not in {"127.0.0.1", "localhost"}:
             return bases
@@ -399,10 +399,14 @@ class AgentClient:
         return bases
 
 
+def _sanitize_windows_cli_text(value: Any) -> str:
+    return str(value or "").replace("\x00", "").replace("\ufeff", "").strip()
+
+
 def _candidate_wsl_distros() -> list[str]:
     seen: set[str] = set()
     distros: list[str] = []
-    env_name = str(os.environ.get("HOLO_WSL_DISTRO", "") or "").strip()
+    env_name = _sanitize_windows_cli_text(os.environ.get("HOLO_WSL_DISTRO", ""))
     if env_name:
         seen.add(env_name.casefold())
         distros.append(env_name)
@@ -416,8 +420,9 @@ def _candidate_wsl_distros() -> list[str]:
         )
     except (OSError, subprocess.SubprocessError):
         return distros
-    for raw in str(proc.stdout or "").splitlines():
-        name = raw.strip()
+    stdout = _sanitize_windows_cli_text(proc.stdout)
+    for raw in stdout.splitlines():
+        name = _sanitize_windows_cli_text(raw)
         if not name:
             continue
         key = name.casefold()
@@ -440,6 +445,9 @@ def _resolve_wsl_agent_base_url(base_url: str) -> str:
         return ""
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     for distro in _candidate_wsl_distros():
+        distro = _sanitize_windows_cli_text(distro)
+        if not distro:
+            continue
         try:
             proc = subprocess.run(
                 ["wsl.exe", "-d", distro, "--", "bash", "-lc", "hostname -I | awk '{print $1}'"],
@@ -448,9 +456,9 @@ def _resolve_wsl_agent_base_url(base_url: str) -> str:
                 timeout=6,
                 check=False,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError, ValueError):
             continue
-        ip_tokens = str(proc.stdout or "").strip().split()
+        ip_tokens = _sanitize_windows_cli_text(proc.stdout).split()
         if not ip_tokens:
             continue
         return f"{parsed.scheme or 'http'}://{ip_tokens[0]}:{port}"
