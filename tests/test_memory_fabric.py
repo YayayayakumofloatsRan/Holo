@@ -100,7 +100,7 @@ class MemoryFabricTests(unittest.TestCase):
                 context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
             )
 
-            self.assertEqual(packet["mind_packet_version"], "v7")
+            self.assertEqual(packet["mind_packet_version"], "v8")
             self.assertIn(packet["retrieval_mode"], {"hybrid-led", "hybrid-led+fallback", "graph-led"})
             self.assertIn("graph_hits", packet)
             self.assertIn("vector_hits", packet)
@@ -180,6 +180,79 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertEqual(packet["retrieval_mode"], "graph-led")
             self.assertEqual(packet["memory_route"], "graph")
             self.assertEqual(packet["vector_hits"], [])
+            bridge.activation.close()
+            bridge.graph.close()
+
+    def test_hybrid_recall_prefers_semantic_topic_hits_over_generic_continuity(self) -> None:
+        with TempMemoryRepo() as temp:
+            rm.archive_turn(
+                "我们之前一直在修主脑",
+                "先把连续性和速度拉回来",
+                source="unit.archive",
+                tags=["wechat", "chat_reply"],
+                turn_id="turn-generic",
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
+            )
+            rm.archive_turn(
+                "transcendence 超验骇客 电影 德普",
+                "那部片子的中文翻译我一直觉得不太对",
+                source="unit.archive",
+                tags=["wechat", "chat_reply", "movie"],
+                turn_id="turn-movie",
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
+            )
+            bridge = MemoryBridge(
+                temp.repo_root,
+                graph_db_path=temp.runtime_dir / "mind_graph.sqlite3",
+                vector_backend="milvus",
+                rag=rm,
+            )
+            bridge.backfill_mind_graph()
+            docs = bridge.graph.export_vector_documents(channel="wechat", thread_key="Nemoqi", chat_name="Nemoqi")
+            movie_doc = next(doc for doc in docs if "transcendence" in doc["text"].lower() or "超验骇客" in doc["text"])
+            generic_doc = next(doc for doc in docs if "连续性" in doc["text"] or "速度" in doc["text"])
+            bridge.vector = _FakeVectorMemory(
+                [
+                    {
+                        "node_id": generic_doc["id"],
+                        "score": 0.84,
+                        "channel": generic_doc["channel"],
+                        "thread_key": generic_doc["thread_key"],
+                        "chat_name": generic_doc["chat_name"],
+                        "memory_class": generic_doc["memory_class"],
+                        "source_store": generic_doc["source_store"],
+                        "source_id": generic_doc["source_id"],
+                        "text": generic_doc["text"],
+                        "importance": generic_doc["importance"],
+                        "confidence": generic_doc["confidence"],
+                    },
+                    {
+                        "node_id": movie_doc["id"],
+                        "score": 0.79,
+                        "channel": movie_doc["channel"],
+                        "thread_key": movie_doc["thread_key"],
+                        "chat_name": movie_doc["chat_name"],
+                        "memory_class": movie_doc["memory_class"],
+                        "source_store": movie_doc["source_store"],
+                        "source_id": movie_doc["source_id"],
+                        "text": movie_doc["text"],
+                        "importance": movie_doc["importance"],
+                        "confidence": movie_doc["confidence"],
+                    },
+                ]
+            )
+
+            trace = bridge.trace_hybrid_recall(
+                "transcendence 超验骇客 电影 德普",
+                thread_key="Nemoqi",
+                chat_name="Nemoqi",
+                channel="wechat",
+                limit=4,
+                record=False,
+            )
+
+            top_text = str(trace["trace"][0]["text"])
+            self.assertTrue("transcendence" in top_text.lower() or "超验骇客" in top_text)
             bridge.activation.close()
             bridge.graph.close()
 

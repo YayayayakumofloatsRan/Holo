@@ -70,6 +70,8 @@ def build_turn_plan(context: TurnContext, config: HostConfig) -> TurnPlan:
     mind_tier = str(context.mind_packet.get("tier", "") or "").strip().lower() or "fast"
     recall_tier = mind_tier in {"recall", "deep_recall"}
     fast_path = should_use_fast_path(context) and not recall_tier
+    tool_requests = list(context.capability_context.get("tool_requests", []))
+    tool_names = {str(item.get("name", "")).strip() for item in tool_requests if isinstance(item, dict)}
     if mind_tier == "deep_recall":
         route = "deep_recall"
     elif mind_tier == "recall":
@@ -78,6 +80,8 @@ def build_turn_plan(context: TurnContext, config: HostConfig) -> TurnPlan:
         route = "fast" if fast_path else "main"
     if context.metadata.get("attachments"):
         tool_mode = "attachment_summary"
+    elif "external_lookup" in tool_names:
+        tool_mode = "external_lookup"
     elif context.capability_context.get("tool_context_lines"):
         tool_mode = "web_preview"
     else:

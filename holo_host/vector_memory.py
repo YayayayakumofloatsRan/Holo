@@ -12,7 +12,29 @@ TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
 
 
 def _tokenize(text: str) -> list[str]:
-    return [match.group(0).lower() for match in TOKEN_RE.finditer(str(text or ""))]
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for match in TOKEN_RE.finditer(str(text or "")):
+        token = match.group(0).lower()
+        expanded: list[str]
+        if token and all("\u3400" <= ch <= "\u9fff" for ch in token):
+            chars = [ch for ch in token if ch.strip()]
+            expanded = []
+            if 1 < len(token) <= 8:
+                expanded.append(token)
+            expanded.extend(chars)
+            for size in (2, 3):
+                if len(chars) >= size:
+                    expanded.extend("".join(chars[index : index + size]) for index in range(len(chars) - size + 1))
+        else:
+            expanded = [token]
+        for item in expanded:
+            current = str(item or "").strip()
+            if not current or current in seen:
+                continue
+            seen.add(current)
+            tokens.append(current)
+    return tokens
 
 
 def _normalize(vec: list[float]) -> list[float]:

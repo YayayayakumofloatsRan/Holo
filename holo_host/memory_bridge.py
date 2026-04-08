@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 import shutil
 import sys
 import time
@@ -16,6 +17,34 @@ from .mind_graph import MindGraph
 from .models import ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state
 from .vector_memory import VectorMemory
+
+TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
+SEMANTIC_STOP_TOKENS = {
+    "remember",
+    "before",
+    "earlier",
+    "previous",
+    "history",
+    "memory",
+    "holo",
+    "mindos",
+    "system",
+    "thread",
+    "session",
+    "记得",
+    "之前",
+    "以前",
+    "我们",
+    "什么",
+    "怎么",
+    "为什么",
+    "一下",
+    "还是",
+    "聊",
+    "说",
+    "系统",
+    "架构",
+}
 
 GRAPH_MEMORY_LANES = (
     "relationship_state",
@@ -221,6 +250,52 @@ class MemoryBridge:
         except (TypeError, ValueError):
             numeric = float(default)
         return round(max(lower, min(upper, numeric)), 4)
+
+    @staticmethod
+    def _tokenize_text(text: str) -> list[str]:
+        tokens: list[str] = []
+        seen: set[str] = set()
+        for match in TOKEN_RE.finditer(str(text or "")):
+            token = match.group(0).lower()
+            expanded: list[str]
+            if token and all("\u3400" <= ch <= "\u9fff" for ch in token):
+                chars = [ch for ch in token if ch.strip()]
+                expanded = []
+                if 1 < len(token) <= 8:
+                    expanded.append(token)
+                expanded.extend(chars)
+                for size in (2, 3):
+                    if len(chars) >= size:
+                        expanded.extend("".join(chars[index : index + size]) for index in range(len(chars) - size + 1))
+            else:
+                expanded = [token]
+            for item in expanded:
+                current = str(item or "").strip()
+                if not current or current in seen:
+                    continue
+                seen.add(current)
+                tokens.append(current)
+        return tokens
+
+    @classmethod
+    def _semantic_tokens(cls, text: str) -> set[str]:
+        filtered: set[str] = set()
+        for token in cls._tokenize_text(text):
+            if token in SEMANTIC_STOP_TOKENS:
+                continue
+            if len(token) == 1 and "\u3400" <= token <= "\u9fff":
+                continue
+            if len(token) <= 1:
+                continue
+            filtered.add(token)
+        return filtered
+
+    @classmethod
+    def _semantic_overlap_count(cls, query: str, text: str) -> int:
+        query_tokens = cls._semantic_tokens(query)
+        if not query_tokens:
+            return 0
+        return len(query_tokens & cls._semantic_tokens(text))
 
     def _packet_cache_key(self, query: str, *, context: dict[str, Any]) -> str:
         return json.dumps(
@@ -1100,6 +1175,7 @@ class MemoryBridge:
         chat_name: str,
         limit: int,
     ) -> dict[str, Any]:
+        query_semantic_tokens = self._semantic_tokens(query)
         graph_trace = self.graph.trace_recall(
             query,
             thread_key=thread_key,
@@ -1167,6 +1243,26 @@ class MemoryBridge:
                     "text": str(item.get("text", "")),
                     "source": "vector",
                 }
+        for candidate in candidates.values():
+            text = str(candidate.get("text", "") or "")
+            semantic_overlap = self._semantic_overlap_count(query, text)
+            semantic_delta = 0.0
+            semantic_reasons: list[str] = []
+            if semantic_overlap:
+                semantic_delta += min(0.72, 0.18 * semantic_overlap)
+                semantic_reasons.append(f"semantic_overlap:{semantic_overlap}")
+                if str(candidate.get("memory_class", "")) == "episodic_memory":
+                    semantic_delta += 0.08
+                    semantic_reasons.append("episodic_semantic_fit")
+            elif query_semantic_tokens:
+                semantic_delta -= 0.2
+                semantic_reasons.append("semantic_miss")
+                if "thread_match" in list(candidate.get("activation_reason", [])) or "thread_match_softened" in list(candidate.get("activation_reason", [])):
+                    semantic_delta -= 0.14
+                    semantic_reasons.append("thread_only_penalty")
+            candidate["hybrid_score"] = round(float(candidate.get("hybrid_score", 0.0) or 0.0) + semantic_delta, 4)
+            candidate["semantic_overlap"] = semantic_overlap
+            candidate["rerank_reason"] = self._unique_strings(list(candidate.get("activation_reason", [])) + semantic_reasons)
         ordered = sorted(candidates.values(), key=lambda item: item.get("hybrid_score", 0.0), reverse=True)[: max(1, limit)]
         top_score = self._coerce_float(ordered[0].get("hybrid_score", 0.0)) if ordered else 0.0
         if vector_payload.get("status") == "ok" and ordered:

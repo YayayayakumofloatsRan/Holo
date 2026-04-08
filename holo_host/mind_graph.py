@@ -31,6 +31,34 @@ ORIGIN_RECALL_HINTS = (
     "initially",
     "first thing",
 )
+SEMANTIC_STOP_TOKENS = {
+    "remember",
+    "before",
+    "earlier",
+    "previous",
+    "history",
+    "memory",
+    "holo",
+    "mindos",
+    "thread",
+    "session",
+    "系统",
+    "架构",
+    "记得",
+    "之前",
+    "以前",
+    "我们",
+    "那个",
+    "这个",
+    "什么",
+    "怎么",
+    "为什么",
+    "一下",
+    "还是",
+    "聊",
+    "说",
+    "回",
+}
 STREAM_DEFAULTS = {
     "maintenance_stream": {"cadence_seconds": 300, "description": "promotion and maintenance"},
     "association_stream": {"cadence_seconds": 900, "description": "thought and association"},
@@ -241,7 +269,42 @@ FAST_PING_HINTS = {
 
 
 def _tokenize(text: str) -> list[str]:
-    return [match.group(0).lower() for match in TOKEN_RE.finditer(str(text or ""))]
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for match in TOKEN_RE.finditer(str(text or "")):
+        token = match.group(0).lower()
+        expanded: list[str]
+        if token and all("\u3400" <= ch <= "\u9fff" for ch in token):
+            chars = [ch for ch in token if ch.strip()]
+            expanded = []
+            if 1 < len(token) <= 8:
+                expanded.append(token)
+            expanded.extend(chars)
+            for size in (2, 3):
+                if len(chars) >= size:
+                    expanded.extend("".join(chars[index : index + size]) for index in range(len(chars) - size + 1))
+        else:
+            expanded = [token]
+        for item in expanded:
+            current = str(item or "").strip()
+            if not current or current in seen:
+                continue
+            seen.add(current)
+            tokens.append(current)
+    return tokens
+
+
+def _semantic_tokens(text: str) -> list[str]:
+    filtered: list[str] = []
+    for token in _tokenize(text):
+        if token in SEMANTIC_STOP_TOKENS:
+            continue
+        if len(token) == 1 and "\u3400" <= token <= "\u9fff":
+            continue
+        if len(token) <= 1:
+            continue
+        filtered.append(token)
+    return filtered
 
 
 def _dedupe_strings(lines: Iterable[str]) -> list[str]:
@@ -3131,11 +3194,17 @@ class MindGraph:
         text = str(row.get("text", "")).strip()
         query_tokens = _tokenize(query)
         text_tokens = _tokenize(text)
+        query_semantic_tokens = set(_semantic_tokens(query))
+        text_semantic_tokens = set(_semantic_tokens(text))
+        semantic_overlap = len(query_semantic_tokens & text_semantic_tokens) if query_semantic_tokens and text_semantic_tokens else 0
         if query_tokens and text_tokens:
             overlap = len(set(query_tokens) & set(text_tokens))
             if overlap:
-                score *= 1.0 + min(overlap, 6) * 0.18
+                score *= 1.0 + min(overlap, 6) * 0.08
                 reasons.append(f"token_overlap:{overlap}")
+        if semantic_overlap:
+            score *= 1.0 + min(semantic_overlap, 6) * 0.24
+            reasons.append(f"semantic_overlap:{semantic_overlap}")
         lowered_query = query.lower()
         lowered_text = text.lower()
         if lowered_query and lowered_query in lowered_text:
@@ -3144,14 +3213,25 @@ class MindGraph:
         row_thread_key = str(row.get("thread_key", "")).strip()
         row_chat_name = str(row.get("chat_name", "")).strip()
         if row_thread_key and row_thread_key in aliases:
-            score *= 1.52
-            reasons.append("thread_match")
+            if query_semantic_tokens and not semantic_overlap:
+                score *= 1.18
+                reasons.append("thread_match_softened")
+            else:
+                score *= 1.52
+                reasons.append("thread_match")
         elif row_chat_name and row_chat_name in aliases:
-            score *= 1.3
-            reasons.append("chat_match")
+            if query_semantic_tokens and not semantic_overlap:
+                score *= 1.12
+                reasons.append("chat_match_softened")
+            else:
+                score *= 1.3
+                reasons.append("chat_match")
         elif row_thread_key:
             score *= 0.74
             reasons.append("other_thread")
+        if query_semantic_tokens and not semantic_overlap:
+            score *= 0.82
+            reasons.append("semantic_miss")
         score *= 0.82 + min(float(row.get("importance", 0.7) or 0.7), 1.5) * 0.26
         score *= 0.84 + min(float(row.get("confidence", 0.7) or 0.7), 1.5) * 0.18
         score *= 1.0 + min(float(row.get("thread_affinity", 0.0) or 0.0), 1.0) * 0.16
