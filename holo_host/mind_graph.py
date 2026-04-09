@@ -6,6 +6,7 @@ import re
 import sqlite3
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Iterable
@@ -468,6 +469,9 @@ WORLD_EXPRESSION_SIGNAL_DEFAULTS = {
     "reply_budget_fit": 0.56,
     "stiffness_risk": 0.32,
 }
+ACTION_CALIBRATION_HISTORY_LIMIT = 8
+ACTION_CALIBRATION_RECENT_WINDOW_HOURS = 72.0
+ACTION_CALIBRATION_RECENT_METRICS_LIMIT = 6
 
 
 def _is_state_object(raw: Any) -> bool:
@@ -623,6 +627,95 @@ class MindGraph:
     @staticmethod
     def metric_confidence(raw: Any, default: float = 0.58) -> float:
         return _state_confidence(raw, default=default)
+
+    @staticmethod
+    def _parse_timestamp(raw: Any) -> datetime | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        normalized = text.replace("Z", "+00:00")
+        try:
+            value = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @classmethod
+    def _recent_support_weight(cls, created_at: Any, *, now: datetime | None = None) -> float:
+        created_dt = cls._parse_timestamp(created_at)
+        if created_dt is None:
+            return 0.0
+        baseline = now or datetime.now(timezone.utc)
+        age_hours = max(0.0, (baseline - created_dt).total_seconds() / 3600.0)
+        if age_hours <= 0.0:
+            return 1.0
+        return round(max(0.0, 1.0 - min(1.0, age_hours / ACTION_CALIBRATION_RECENT_WINDOW_HOURS)), 4)
+
+    @staticmethod
+    def _bounded_recent_list(items: Iterable[dict[str, Any]], *, limit: int = ACTION_CALIBRATION_HISTORY_LIMIT) -> list[dict[str, Any]]:
+        values = [dict(item) for item in items if isinstance(item, dict)]
+        if len(values) <= limit:
+            return values
+        return values[-limit:]
+
+    @staticmethod
+    def _action_family(action_type: str) -> str:
+        normalized = str(action_type or "").strip()
+        if normalized in {"reply_once", "reply_multi"}:
+            return "reply"
+        if normalized in {"push_back", "counter_offer", "continuity_defense"}:
+            return "resistance"
+        if normalized in {"silence", "defer_reply"}:
+            return "hold"
+        if normalized == "initiative_ping":
+            return "initiative"
+        return normalized or "unknown"
+
+    @classmethod
+    def action_calibration_bucket(
+        cls,
+        *,
+        action_type: str,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        normalized_channel = str(channel or "").strip() or "wechat"
+        canonical_thread_key = _normalize_thread_key(normalized_channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        thread_key_bucket = canonical_thread_key
+        if not thread_key_bucket:
+            fallback = str(chat_name or "").strip()
+            thread_key_bucket = fallback if fallback else "global"
+        signal_bits: list[str] = []
+        meta = dict(metadata or {})
+        if bool(meta.get("low_signal")):
+            signal_bits.append("low_signal")
+        if bool(meta.get("question_like")):
+            signal_bits.append("question_like")
+        if bool(meta.get("defer_requested")):
+            signal_bits.append("defer_requested")
+        relationship_pressure = float(meta.get("relationship_pressure", 0.0) or 0.0)
+        risk_level = float(meta.get("predicted_risk", meta.get("observed_risk", 0.0)) or 0.0)
+        if relationship_pressure >= 0.6:
+            signal_bits.append("relationship_pressure")
+        if risk_level >= 0.45:
+            signal_bits.append("high_risk")
+        signal_bucket = "+".join(signal_bits) if signal_bits else "ordinary"
+        scenario_bucket = f"{cls._action_family(action_type)}:{signal_bucket}"
+        bucket_reason = compact_text(
+            f"{action_type} on {normalized_channel} in {thread_key_bucket} under {signal_bucket}",
+            160,
+        )
+        return {
+            "action_type": str(action_type or "").strip(),
+            "channel": normalized_channel,
+            "thread_key_bucket": thread_key_bucket,
+            "scenario_bucket": scenario_bucket,
+            "bucket_reason": bucket_reason,
+        }
 
     def initialize(self) -> None:
         with self._lock:
@@ -890,6 +983,27 @@ class MindGraph:
                 created_at TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_outcome_appraisals_thread ON outcome_appraisals(channel, thread_key, created_at DESC);
+            CREATE TABLE IF NOT EXISTS action_calibration (
+                id INTEGER PRIMARY KEY,
+                action_type TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key_bucket TEXT NOT NULL DEFAULT '',
+                scenario_bucket TEXT NOT NULL DEFAULT '',
+                support_count INTEGER NOT NULL DEFAULT 0,
+                recent_support_count REAL NOT NULL DEFAULT 0.0,
+                avg_reply_latency REAL NOT NULL DEFAULT 0.0,
+                ignored_rate REAL NOT NULL DEFAULT 0.0,
+                correction_rate REAL NOT NULL DEFAULT 0.0,
+                response_quality_mae REAL NOT NULL DEFAULT 0.0,
+                relational_delta_mae REAL NOT NULL DEFAULT 0.0,
+                risk_mae REAL NOT NULL DEFAULT 0.0,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                last_updated_at TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                UNIQUE(action_type, channel, thread_key_bucket, scenario_bucket)
+            );
+            CREATE INDEX IF NOT EXISTS idx_action_calibration_bucket
+            ON action_calibration(channel, thread_key_bucket, action_type, last_updated_at DESC);
             CREATE TABLE IF NOT EXISTS consciousness_ledger (
                 id INTEGER PRIMARY KEY,
                 channel TEXT NOT NULL DEFAULT '',
@@ -3509,6 +3623,9 @@ class MindGraph:
             },
             "last_counterfactual_summary": {},
             "last_post_outcome_calibration": {},
+            "recent_outcome_history": [],
+            "recent_prediction_errors": [],
+            "action_calibration_summary": {},
         }
         return {
             "affect_state": affect,
@@ -3642,6 +3759,12 @@ class MindGraph:
                 hydrated_world["last_counterfactual_summary"] = dict(default_world.get("last_counterfactual_summary", {}))
             if not hydrated_world.get("last_post_outcome_calibration"):
                 hydrated_world["last_post_outcome_calibration"] = dict(default_world.get("last_post_outcome_calibration", {}))
+            if not hydrated_world.get("recent_outcome_history"):
+                hydrated_world["recent_outcome_history"] = list(default_world.get("recent_outcome_history", []))
+            if not hydrated_world.get("recent_prediction_errors"):
+                hydrated_world["recent_prediction_errors"] = list(default_world.get("recent_prediction_errors", []))
+            if not hydrated_world.get("action_calibration_summary"):
+                hydrated_world["action_calibration_summary"] = dict(default_world.get("action_calibration_summary", {}))
             with self._lock:
                 self.conn.execute(
                     """
@@ -3993,6 +4116,315 @@ class MindGraph:
             source="initiative_market",
         )
 
+    def list_action_calibration(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        action_type: str | None = None,
+        scenario_bucket: str | None = None,
+        limit: int = 24,
+    ) -> list[dict[str, Any]]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        clauses = ["channel = ?"]
+        args: list[Any] = [str(channel or "").strip() or "wechat"]
+        if normalized_thread_key:
+            clauses.append("thread_key_bucket = ?")
+            args.append(normalized_thread_key)
+        if str(action_type or "").strip():
+            clauses.append("action_type = ?")
+            args.append(str(action_type).strip())
+        if str(scenario_bucket or "").strip():
+            clauses.append("scenario_bucket = ?")
+            args.append(str(scenario_bucket).strip())
+        args.append(max(1, int(limit or 24)))
+        with self._lock:
+            rows = self.conn.execute(
+                f"""
+                SELECT * FROM action_calibration
+                WHERE {' AND '.join(clauses)}
+                ORDER BY confidence DESC, support_count DESC, last_updated_at DESC
+                LIMIT ?
+                """,
+                tuple(args),
+            ).fetchall()
+        payload: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = dict(_safe_json_dict(item.pop("metadata_json", "{}")))
+            payload.append(item)
+        return payload
+
+    def action_calibration_summary(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        action_type: str | None = None,
+        scenario_bucket: str | None = None,
+    ) -> dict[str, Any]:
+        rows = self.list_action_calibration(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            action_type=action_type,
+            scenario_bucket=scenario_bucket,
+            limit=6,
+        )
+        top = dict(rows[0]) if rows else {}
+        return {
+            "rows": rows,
+            "top": top,
+            "count": len(rows),
+        }
+
+    def trace_outcome_history(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        action_type: str | None = None,
+        limit: int = ACTION_CALIBRATION_HISTORY_LIMIT,
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        clauses = ["channel = ?"]
+        args: list[Any] = [str(channel or "").strip() or "wechat"]
+        if normalized_thread_key:
+            clauses.append("thread_key = ?")
+            args.append(normalized_thread_key)
+        if str(action_type or "").strip():
+            clauses.append("action_type = ?")
+            args.append(str(action_type).strip())
+        args.append(max(1, int(limit or ACTION_CALIBRATION_HISTORY_LIMIT)))
+        with self._lock:
+            rows = self.conn.execute(
+                f"""
+                SELECT * FROM outcome_appraisals
+                WHERE {' AND '.join(clauses)}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(args),
+            ).fetchall()
+        history: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = dict(_safe_json_dict(item.pop("metadata_json", "{}")))
+            history.append(item)
+        return {
+            "channel": channel,
+            "thread_key": normalized_thread_key,
+            "chat_name": str(chat_name or normalized_thread_key),
+            "history": history,
+        }
+
+    def trace_action_prediction_error(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        action_type: str | None = None,
+        limit: int = ACTION_CALIBRATION_HISTORY_LIMIT,
+    ) -> dict[str, Any]:
+        history = self.trace_outcome_history(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            action_type=action_type,
+            limit=limit,
+        )
+        rows = list(history.get("history", []))
+        comparisons: list[dict[str, Any]] = []
+        response_errors: list[float] = []
+        relational_errors: list[float] = []
+        risk_errors: list[float] = []
+        for row in rows:
+            metadata = dict(row.get("metadata", {}))
+            predicted = dict(metadata.get("predicted_outcome", {}))
+            realized = {
+                "response_quality": float(metadata.get("observed_response_quality", metadata.get("was_rewarding", 0.0)) or 0.0),
+                "relational_delta": float(row.get("relational_delta", 0.0) or 0.0),
+                "risk": float(metadata.get("observed_risk", metadata.get("was_ignored", 0.0)) or 0.0),
+            }
+            comparison = {
+                "action_ref": str(row.get("action_ref", "") or ""),
+                "action_type": str(row.get("action_type", "") or ""),
+                "predicted_outcome": predicted,
+                "realized_outcome": realized,
+                "prediction_error": {
+                    "response_quality": round(realized["response_quality"] - float(predicted.get("predicted_response_quality", realized["response_quality"]) or realized["response_quality"]), 4),
+                    "relational_delta": round(realized["relational_delta"] - float(predicted.get("predicted_relational_delta", realized["relational_delta"]) or realized["relational_delta"]), 4),
+                    "risk": round(realized["risk"] - float(predicted.get("predicted_risk", realized["risk"]) or realized["risk"]), 4),
+                },
+                "created_at": str(row.get("created_at", "") or ""),
+            }
+            comparisons.append(comparison)
+            response_errors.append(abs(float(comparison["prediction_error"]["response_quality"])))
+            relational_errors.append(abs(float(comparison["prediction_error"]["relational_delta"])))
+            risk_errors.append(abs(float(comparison["prediction_error"]["risk"])))
+        return {
+            **history,
+            "comparisons": comparisons,
+            "summary": {
+                "response_quality_mae": round(sum(response_errors) / len(response_errors), 4) if response_errors else 0.0,
+                "relational_delta_mae": round(sum(relational_errors) / len(relational_errors), 4) if relational_errors else 0.0,
+                "risk_mae": round(sum(risk_errors) / len(risk_errors), 4) if risk_errors else 0.0,
+            },
+        }
+
+    def _update_action_calibration(
+        self,
+        *,
+        bucket: dict[str, str],
+        action_ref: str,
+        realized_outcome: dict[str, Any],
+        prediction_error: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        created_at: str,
+    ) -> dict[str, Any]:
+        normalized_bucket = {
+            "action_type": str(bucket.get("action_type", "") or ""),
+            "channel": str(bucket.get("channel", "wechat") or "wechat"),
+            "thread_key_bucket": str(bucket.get("thread_key_bucket", "") or ""),
+            "scenario_bucket": str(bucket.get("scenario_bucket", "ordinary") or "ordinary"),
+            "bucket_reason": str(bucket.get("bucket_reason", "") or ""),
+        }
+        recent_weight = self._recent_support_weight(created_at)
+        reply_latency_seconds = float(realized_outcome.get("reply_latency_seconds", 0.0) or 0.0)
+        correction_count = max(0, int(realized_outcome.get("correction_count", 0) or 0))
+        ignored = self._clamp(realized_outcome.get("was_ignored", 0.0), default=0.0)
+        response_mae = abs(float(prediction_error.get("response_quality", 0.0) or 0.0))
+        relational_mae = abs(float(prediction_error.get("relational_delta", 0.0) or 0.0))
+        risk_mae = abs(float(prediction_error.get("risk", 0.0) or 0.0))
+        consistency = self._clamp(1.0 - ((response_mae + relational_mae + risk_mae) / 3.0), default=0.0)
+        recency_factor = recent_weight
+        volume_factor = min(1.0, (float(metadata.get("support_count_bias", 0.0) or 0.0) + 1.0) / 6.0) if isinstance(metadata, dict) else min(1.0, 1.0 / 6.0)
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT * FROM action_calibration
+                WHERE action_type = ? AND channel = ? AND thread_key_bucket = ? AND scenario_bucket = ?
+                """,
+                (
+                    normalized_bucket["action_type"],
+                    normalized_bucket["channel"],
+                    normalized_bucket["thread_key_bucket"],
+                    normalized_bucket["scenario_bucket"],
+                ),
+            ).fetchone()
+            current = dict(row) if row else {}
+            current_metadata = dict(_safe_json_dict(current.get("metadata_json", "{}"))) if current else {}
+            support_count = int(current.get("support_count", 0) or 0) + 1
+            current_recent_support = float(current.get("recent_support_count", 0.0) or 0.0)
+            recent_support_count = round(current_recent_support * 0.72 + recent_weight, 4)
+            current_avg_reply_latency = float(current.get("avg_reply_latency", 0.0) or 0.0)
+            avg_reply_latency = round(
+                ((current_avg_reply_latency * max(0, support_count - 1)) + max(0.0, reply_latency_seconds)) / max(1, support_count),
+                4,
+            )
+            def _avg(field: str, sample: float) -> float:
+                current_value = float(current.get(field, 0.0) or 0.0)
+                return round(((current_value * max(0, support_count - 1)) + sample) / max(1, support_count), 4)
+            ignored_rate = _avg("ignored_rate", ignored)
+            correction_rate = _avg("correction_rate", min(1.0, correction_count / 3.0))
+            response_quality_mae = _avg("response_quality_mae", response_mae)
+            relational_delta_mae = _avg("relational_delta_mae", relational_mae)
+            risk_mae = _avg("risk_mae", risk_mae)
+            error_penalty = min(1.0, (response_quality_mae + relational_delta_mae + risk_mae) / 1.8)
+            volume_factor = min(1.0, support_count / 6.0)
+            confidence = round(max(0.0, min(1.0, volume_factor * 0.45 + recency_factor * 0.25 + consistency * 0.3 - error_penalty * 0.35)), 4)
+            recent_outcomes = self._bounded_recent_list(
+                list(current_metadata.get("recent_outcomes", []))
+                + [
+                    {
+                        "action_ref": str(action_ref or ""),
+                        "was_ignored": ignored,
+                        "reply_latency_seconds": reply_latency_seconds,
+                        "relational_delta": round(float(realized_outcome.get("relational_delta", 0.0) or 0.0), 4),
+                        "identity_delta": round(float(realized_outcome.get("identity_delta", 0.0) or 0.0), 4),
+                        "response_quality": round(float(realized_outcome.get("response_quality", 0.0) or 0.0), 4),
+                        "risk": round(float(realized_outcome.get("risk", 0.0) or 0.0), 4),
+                        "at": str(created_at or utc_now()),
+                    }
+                ],
+                limit=ACTION_CALIBRATION_RECENT_METRICS_LIMIT,
+            )
+            recent_errors = self._bounded_recent_list(
+                list(current_metadata.get("recent_errors", []))
+                + [
+                    {
+                        "action_ref": str(action_ref or ""),
+                        "response_quality": round(float(prediction_error.get("response_quality", 0.0) or 0.0), 4),
+                        "relational_delta": round(float(prediction_error.get("relational_delta", 0.0) or 0.0), 4),
+                        "risk": round(float(prediction_error.get("risk", 0.0) or 0.0), 4),
+                        "at": str(created_at or utc_now()),
+                    }
+                ],
+                limit=ACTION_CALIBRATION_RECENT_METRICS_LIMIT,
+            )
+            next_metadata = {
+                **current_metadata,
+                "recent_errors": recent_errors,
+                "recent_outcomes": recent_outcomes,
+                "evidence_refs": [str(item).strip() for item in list((metadata or {}).get("evidence_refs", [])) if str(item).strip()][:8],
+                "last_action_ref": str(action_ref or ""),
+                "last_prediction": dict((metadata or {}).get("predicted_outcome", {})),
+                "last_realized": dict(realized_outcome),
+                "updated_by": str((metadata or {}).get("source", "outcome_appraisal") or "outcome_appraisal"),
+                "bucket_reason": normalized_bucket["bucket_reason"],
+            }
+            self.conn.execute(
+                """
+                INSERT INTO action_calibration(
+                    action_type, channel, thread_key_bucket, scenario_bucket, support_count, recent_support_count,
+                    avg_reply_latency, ignored_rate, correction_rate, response_quality_mae, relational_delta_mae,
+                    risk_mae, confidence, last_updated_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(action_type, channel, thread_key_bucket, scenario_bucket) DO UPDATE SET
+                    support_count = excluded.support_count,
+                    recent_support_count = excluded.recent_support_count,
+                    avg_reply_latency = excluded.avg_reply_latency,
+                    ignored_rate = excluded.ignored_rate,
+                    correction_rate = excluded.correction_rate,
+                    response_quality_mae = excluded.response_quality_mae,
+                    relational_delta_mae = excluded.relational_delta_mae,
+                    risk_mae = excluded.risk_mae,
+                    confidence = excluded.confidence,
+                    last_updated_at = excluded.last_updated_at,
+                    metadata_json = excluded.metadata_json
+                """,
+                (
+                    normalized_bucket["action_type"],
+                    normalized_bucket["channel"],
+                    normalized_bucket["thread_key_bucket"],
+                    normalized_bucket["scenario_bucket"],
+                    support_count,
+                    recent_support_count,
+                    avg_reply_latency,
+                    ignored_rate,
+                    correction_rate,
+                    response_quality_mae,
+                    relational_delta_mae,
+                    risk_mae,
+                    confidence,
+                    str(created_at or utc_now()),
+                    json.dumps(next_metadata, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            self.conn.commit()
+        rows = self.list_action_calibration(
+            channel=normalized_bucket["channel"],
+            thread_key=normalized_bucket["thread_key_bucket"],
+            action_type=normalized_bucket["action_type"],
+            scenario_bucket=normalized_bucket["scenario_bucket"],
+            limit=1,
+        )
+        return dict(rows[0]) if rows else {}
+
     def record_outcome_appraisal(
         self,
         *,
@@ -4049,6 +4481,8 @@ class MindGraph:
         thread_model = dict(thread_models.get(normalized_thread_key, WORLD_THREAD_MODEL_DEFAULTS))
         evidence_metadata = dict(metadata or {})
         predicted_outcome = dict(evidence_metadata.get("predicted_outcome", {}))
+        if not predicted_outcome:
+            predicted_outcome = dict(evidence_metadata.get("selected_prediction", {}))
         reply_latency_seconds = max(0.0, float(evidence_metadata.get("reply_latency_seconds", -1) or -1))
         correction_count = max(0, int(evidence_metadata.get("correction_count", 0) or 0))
         initiative_success_raw = evidence_metadata.get("initiative_success")
@@ -4098,13 +4532,27 @@ class MindGraph:
             "evidence_refs": [str(item).strip() for item in evidence_metadata.get("evidence_refs", []) if str(item).strip()][:6],
         }
         evidence_refs = outcome["evidence_refs"] + [f"outcome_appraisal:{action_type}:{row_id}"]
+        calibration_bucket = self.action_calibration_bucket(
+            action_type=str(action_type or "").strip(),
+            channel=channel,
+            thread_key=normalized_thread_key,
+            chat_name=str(chat_name or normalized_thread_key),
+            metadata={
+                "low_signal": evidence_metadata.get("low_signal", False),
+                "question_like": evidence_metadata.get("question_like", False),
+                "defer_requested": evidence_metadata.get("defer_requested", False),
+                "relationship_pressure": evidence_metadata.get("relationship_pressure", 0.0),
+                "predicted_risk": predicted_outcome.get("predicted_risk", evidence_metadata.get("predicted_risk", 0.0)),
+                "observed_risk": observed_risk,
+            },
+        )
         drive["seek_contact"] = self._clamp(
             float(drive.get("seek_contact", 0.0) or 0.0) * 0.62 + initiative_success * 0.22 + observed_response_quality * 0.16,
             default=DRIVE_STATE_DEFAULTS["seek_contact"],
         )
         drive["protect_identity"] = self._clamp(
             float(drive.get("protect_identity", 0.0) or 0.0) * 0.66
-            + max(0.0, float(identity_delta or 0.0)) * 0.18
+            + abs(float(identity_delta or 0.0)) * 0.18
             + self._clamp(future_resistance_bias, default=0.0) * 0.16,
             default=DRIVE_STATE_DEFAULTS["protect_identity"],
         )
@@ -4140,7 +4588,11 @@ class MindGraph:
         )
         contact_model["reply_likelihood"] = self._metric_blend(
             contact_model.get("reply_likelihood", WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]),
-            observations=[max(0.0, float(relational_delta or 0.0)), observed_response_quality, max(0.0, 1.0 - self._clamp(was_ignored, default=0.0))],
+            observations=[
+                self._clamp(0.5 + float(relational_delta or 0.0), default=0.5),
+                observed_response_quality,
+                max(0.0, 1.0 - self._clamp(was_ignored, default=0.0)),
+            ],
             default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"],
             confidence=0.74,
             evidence_refs=evidence_refs + ["reply_likelihood"],
@@ -4168,8 +4620,14 @@ class MindGraph:
             updated_by="outcome_appraisal",
             decay_policy="interaction_window",
         )
-        contact_model["conflict_fragility"] = self._clamp(contact_model.get("conflict_fragility", 0.0) - max(0.0, float(relational_delta or 0.0)) * 0.08 + max(0.0, float(future_resistance_bias or 0.0)) * 0.05, default=WORLD_CONTACT_MODEL_DEFAULTS["conflict_fragility"])
-        thread_model["reply_fit"] = self._clamp(thread_model.get("reply_fit", 0.0) + float(relational_delta or 0.0) * 0.1 - float(was_ignored or 0.0) * 0.05, default=WORLD_THREAD_MODEL_DEFAULTS["reply_fit"])
+        contact_model["conflict_fragility"] = self._clamp(
+            contact_model.get("conflict_fragility", 0.0) - float(relational_delta or 0.0) * 0.08 + max(0.0, float(future_resistance_bias or 0.0)) * 0.05,
+            default=WORLD_CONTACT_MODEL_DEFAULTS["conflict_fragility"],
+        )
+        thread_model["reply_fit"] = self._clamp(
+            thread_model.get("reply_fit", 0.0) + float(relational_delta or 0.0) * 0.1 - float(was_ignored or 0.0) * 0.05,
+            default=WORLD_THREAD_MODEL_DEFAULTS["reply_fit"],
+        )
         thread_model["defer_fit"] = self._clamp(thread_model.get("defer_fit", 0.0) + float(was_ignored or 0.0) * 0.08, default=WORLD_THREAD_MODEL_DEFAULTS["defer_fit"])
         thread_model["risk_level"] = self._clamp(thread_model.get("risk_level", 0.0) + max(0.0, float(future_resistance_bias or 0.0)) * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["risk_level"])
         world["contact_models"] = {**contact_models, contact_key: contact_model}
@@ -4184,6 +4642,27 @@ class MindGraph:
             "response_quality": round(observed_response_quality - predicted_response_quality, 4),
             "risk": round(observed_risk - predicted_risk, 4),
         }
+        realized_outcome = {
+            "relational_delta": outcome["relational_delta"],
+            "identity_delta": outcome["identity_delta"],
+            "response_quality": observed_response_quality,
+            "risk": observed_risk,
+            "reply_latency_seconds": outcome["reply_latency_seconds"],
+            "correction_count": correction_count,
+            "was_ignored": outcome["was_ignored"],
+        }
+        calibration_row = self._update_action_calibration(
+            bucket=calibration_bucket,
+            action_ref=str(action_ref or "").strip(),
+            realized_outcome=realized_outcome,
+            prediction_error=prediction_error,
+            metadata={
+                **evidence_metadata,
+                "predicted_outcome": predicted_outcome,
+                "evidence_refs": evidence_refs,
+            },
+            created_at=now,
+        )
         world["response_expectations"] = {
             "reply_likelihood": self.metric_state(
                 contact_model.get("reply_likelihood", WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]),
@@ -4225,7 +4704,11 @@ class MindGraph:
         world["expression_calibration_signals"] = {
             "reply_budget_fit": self._metric_blend(
                 world.get("expression_calibration_signals", {}).get("reply_budget_fit", WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"]),
-                observations=[max(0.0, 1.0 - abs(prediction_error["response_quality"])), max(0.0, 1.0 - abs(prediction_error["relational_delta"]))],
+                observations=[
+                    max(0.0, 1.0 - abs(prediction_error["response_quality"])),
+                    max(0.0, 1.0 - abs(prediction_error["relational_delta"])),
+                    max(0.0, 1.0 - float(calibration_row.get("response_quality_mae", 0.0) or 0.0)),
+                ],
                 default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"],
                 confidence=0.72,
                 evidence_refs=evidence_refs + ["selected_prediction", "realized_outcome"],
@@ -4244,6 +4727,86 @@ class MindGraph:
                 decay_policy="conversation_carryover",
             ),
         }
+        recent_outcome_history = self._bounded_recent_list(
+            list(world.get("recent_outcome_history", []))
+            + [
+                {
+                    "action_type": str(action_type or "").strip(),
+                    "action_ref": str(action_ref or "").strip(),
+                    "thread_key": normalized_thread_key,
+                    "scenario_bucket": str(calibration_bucket.get("scenario_bucket", "") or ""),
+                    "relational_delta": outcome["relational_delta"],
+                    "identity_delta": outcome["identity_delta"],
+                    "response_quality": observed_response_quality,
+                    "risk": observed_risk,
+                    "at": now,
+                }
+            ],
+            limit=ACTION_CALIBRATION_HISTORY_LIMIT,
+        )
+        recent_prediction_errors = self._bounded_recent_list(
+            list(world.get("recent_prediction_errors", []))
+            + [
+                {
+                    "action_type": str(action_type or "").strip(),
+                    "action_ref": str(action_ref or "").strip(),
+                    "scenario_bucket": str(calibration_bucket.get("scenario_bucket", "") or ""),
+                    "response_quality": prediction_error["response_quality"],
+                    "relational_delta": prediction_error["relational_delta"],
+                    "identity_delta": prediction_error["identity_delta"],
+                    "risk": prediction_error["risk"],
+                    "at": now,
+                }
+            ],
+            limit=ACTION_CALIBRATION_HISTORY_LIMIT,
+        )
+        thread_calibration_rows = self.list_action_calibration(
+            channel=channel,
+            thread_key=normalized_thread_key,
+            chat_name=chat_name,
+            limit=8,
+        )
+        action_calibration_summary = {
+            "strongest_actions": [
+                {
+                    "action_type": str(item.get("action_type", "") or ""),
+                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
+                    "confidence": float(item.get("confidence", 0.0) or 0.0),
+                }
+                for item in thread_calibration_rows[:3]
+            ],
+            "weakest_actions": [
+                {
+                    "action_type": str(item.get("action_type", "") or ""),
+                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
+                    "ignored_rate": float(item.get("ignored_rate", 0.0) or 0.0),
+                }
+                for item in sorted(thread_calibration_rows, key=lambda item: float(item.get("ignored_rate", 0.0) or 0.0), reverse=True)[:3]
+            ],
+            "highest_confidence_buckets": [
+                {
+                    "action_type": str(item.get("action_type", "") or ""),
+                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
+                    "confidence": float(item.get("confidence", 0.0) or 0.0),
+                }
+                for item in sorted(thread_calibration_rows, key=lambda item: float(item.get("confidence", 0.0) or 0.0), reverse=True)[:3]
+            ],
+            "recent_adverse_buckets": [
+                {
+                    "action_type": str(item.get("action_type", "") or ""),
+                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
+                    "last_action_ref": str(dict(item.get("metadata", {})).get("last_action_ref", "") or ""),
+                }
+                for item in sorted(
+                    thread_calibration_rows,
+                    key=lambda item: float(item.get("ignored_rate", 0.0) or 0.0) + float(item.get("risk_mae", 0.0) or 0.0),
+                    reverse=True,
+                )[:3]
+            ],
+        }
+        world["recent_outcome_history"] = recent_outcome_history
+        world["recent_prediction_errors"] = recent_prediction_errors
+        world["action_calibration_summary"] = action_calibration_summary
         world["last_post_outcome_calibration"] = {
             "action_type": str(action_type or "").strip(),
             "action_ref": str(action_ref or "").strip(),
@@ -4252,13 +4815,17 @@ class MindGraph:
             "relational_delta": outcome["relational_delta"],
             "identity_delta": outcome["identity_delta"],
             "predicted_outcome": predicted_outcome,
-            "realized_outcome": {
-                "relational_delta": outcome["relational_delta"],
-                "identity_delta": outcome["identity_delta"],
-                "response_quality": observed_response_quality,
-                "risk": observed_risk,
-            },
+            "realized_outcome": realized_outcome,
             "prediction_error": prediction_error,
+            "calibration_bucket": calibration_bucket,
+            "calibration_stats": {
+                "support_count": int(calibration_row.get("support_count", 0) or 0),
+                "recent_support_count": float(calibration_row.get("recent_support_count", 0.0) or 0.0),
+                "confidence": float(calibration_row.get("confidence", 0.0) or 0.0),
+                "response_quality_mae": float(calibration_row.get("response_quality_mae", 0.0) or 0.0),
+                "relational_delta_mae": float(calibration_row.get("relational_delta_mae", 0.0) or 0.0),
+                "risk_mae": float(calibration_row.get("risk_mae", 0.0) or 0.0),
+            },
             "evidence_refs": evidence_refs[:6],
             "at": now,
         }

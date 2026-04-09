@@ -31,6 +31,14 @@ def _clamp_int(value: int, lower: int, upper: int) -> int:
     return max(lower, min(upper, value))
 
 
+def _metric_float(raw: Any, default: float = 0.0) -> float:
+    target = raw.get("value", default) if isinstance(raw, dict) else raw
+    try:
+        return float(target or 0.0)
+    except (TypeError, ValueError):
+        return float(default or 0.0)
+
+
 def _dynamic_wechat_bubble_target(context: TurnContext, *, fast_path: bool, mind_tier: str) -> int:
     text_len = len(str(context.user_text or "").strip())
     focus = str(context.attention_state.primary_focus or "").strip()
@@ -602,7 +610,7 @@ def _affect_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
         "appetite_play",
         "self_preservation",
     )
-    return _dedupe_segments([f"{key}={round(float(state.get(key, 0.0) or 0.0), 3)}" for key in ordered if key in state])
+    return _dedupe_segments([f"{key}={round(_metric_float(state.get(key, 0.0), 0.0), 3)}" for key in ordered if key in state])
 
 
 def _drive_state_lines_for_prompt(packet: dict[str, Any]) -> list[str]:

@@ -16,11 +16,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 11. `docs/ENGINEERING_HANDOFF_STAGE10.md`
 12. `docs/STAGE12_OUTCOME_CLOSURE_AND_CANONICAL_IDENTITY.md`
 13. `docs/ENGINEERING_HANDOFF_STAGE12.md`
-14. `HOLO_SYSTEM.md`
-15. `HOLO_HOST.md`
-16. `OPERATIONS.md`
-17. `holo_memory_library/MEMORY_LIBRARY.md`
-18. `windows_helper/README.md`
+14. `docs/STAGE13_EMPIRICAL_ACTION_CALIBRATION.md`
+15. `docs/ENGINEERING_HANDOFF_STAGE13.md`
+16. `HOLO_SYSTEM.md`
+17. `HOLO_HOST.md`
+18. `OPERATIONS.md`
+19. `holo_memory_library/MEMORY_LIBRARY.md`
+20. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -35,10 +37,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage12-outcome-closure-and-canonical-identity`.
+- The current milestone tag is `stage13-empirical-action-calibration`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage12 outcome closure and canonical WeChat direct-message identity preservation.
-- Next stage focus is tighter evidence weighting after deferred/silent actions and continued reducer-style cleanup without adding a second brain layer.
+- Current focus is Stage13 empirical action calibration, persistent bucketed outcome statistics, and feeding inspectable calibration overlays back into action selection.
+- Next stage focus is reducer cleanup and calibration-window refinement without adding a second brain layer or opaque learned weights.
 
 ## Source Of Truth
 - Persona and prompt bones:

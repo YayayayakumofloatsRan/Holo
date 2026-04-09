@@ -639,6 +639,48 @@ class MemoryBridge:
         thread_models = dict(world_state.get("thread_models", {}))
         return dict(thread_models.get(str(thread_key or ""), {}))
 
+    def _empirical_action_overlay(
+        self,
+        *,
+        action_type: str,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        signal: dict[str, Any],
+        predicted_outcome: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, str], float]:
+        bucket = MindGraph.action_calibration_bucket(
+            action_type=action_type,
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            metadata={
+                "low_signal": signal.get("low_signal", False),
+                "question_like": signal.get("question_like", False),
+                "defer_requested": signal.get("defer_requested", False),
+                "predicted_risk": predicted_outcome.get("predicted_risk", 0.0),
+                "relationship_pressure": max(0.0, float(predicted_outcome.get("predicted_relational_delta", 0.0) or 0.0)),
+            },
+        )
+        summary = self.graph.action_calibration_summary(
+            channel=channel,
+            thread_key=bucket["thread_key_bucket"],
+            chat_name=chat_name,
+            action_type=action_type,
+            scenario_bucket=bucket["scenario_bucket"],
+        )
+        calibration = dict(summary.get("top", {}))
+        if not calibration:
+            return {}, bucket, 0.0
+        confidence = self._clamp(calibration.get("confidence", 0.0), default=0.0)
+        support_scale = min(1.0, float(calibration.get("support_count", 0) or 0) / 6.0)
+        response_fit = max(0.0, 1.0 - float(calibration.get("response_quality_mae", 0.0) or 0.0))
+        relational_fit = max(0.0, 1.0 - float(calibration.get("relational_delta_mae", 0.0) or 0.0))
+        risk_penalty = float(calibration.get("ignored_rate", 0.0) or 0.0) * 0.45 + float(calibration.get("correction_rate", 0.0) or 0.0) * 0.35 + float(calibration.get("risk_mae", 0.0) or 0.0) * 0.2
+        positive = (response_fit * 0.5 + relational_fit * 0.3 + max(0.0, 1.0 - float(calibration.get("avg_reply_latency", 0.0) or 0.0) / 3600.0) * 0.2)
+        empirical_overlay_delta = round((positive - risk_penalty - 0.45) * confidence * support_scale * 0.35, 4)
+        return calibration, bucket, empirical_overlay_delta
+
     @staticmethod
     def _chapter_keyword_score(text: str, *, current_chapter: str) -> float:
         lowered = str(text or "").lower()
@@ -873,15 +915,32 @@ class MemoryBridge:
             confidence = 0.42
             rationale = "fallback simulation for auxiliary action"
 
-        return {
-            "action_type": action_type,
+        predicted_outcome = {
             "predicted_relational_delta": round(predicted_relational_delta, 4),
             "predicted_identity_delta": round(predicted_identity_delta, 4),
             "predicted_response_quality": round(predicted_response_quality, 4),
             "predicted_risk": round(predicted_risk, 4),
             "predicted_regret": round(predicted_regret, 4),
+        }
+        empirical_calibration, calibration_bucket, empirical_overlay_delta = self._empirical_action_overlay(
+            action_type=action_type,
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            signal=signal,
+            predicted_outcome=predicted_outcome,
+        )
+        recommended_bias += empirical_overlay_delta
+
+        return {
+            "action_type": action_type,
+            **predicted_outcome,
             "confidence": round(confidence, 4),
             "recommended_bias": round(recommended_bias, 4),
+            "empirical_overlay_delta": round(empirical_overlay_delta, 4),
+            "empirical_calibration": empirical_calibration,
+            "calibration_bucket": calibration_bucket,
+            "calibration_confidence": round(float(empirical_calibration.get("confidence", 0.0) or 0.0), 4),
             "simulation_rationale": compact_text(rationale, 220),
         }
 
@@ -1233,6 +1292,10 @@ class MemoryBridge:
             candidate["simulation_rationale"] = str(simulation.get("simulation_rationale", "") or "")
             candidate["predicted_outcome"] = simulation
             candidate["rerank_delta"] = round(rerank_delta, 4)
+            candidate["empirical_overlay_delta"] = round(float(simulation.get("empirical_overlay_delta", 0.0) or 0.0), 4)
+            candidate["empirical_calibration"] = dict(simulation.get("empirical_calibration", {}))
+            candidate["calibration_bucket"] = dict(simulation.get("calibration_bucket", {}))
+            candidate["calibration_confidence"] = round(float(simulation.get("calibration_confidence", 0.0) or 0.0), 4)
             candidate["score"] = round(float(candidate.get("score", 0.0) or 0.0) + rerank_delta, 4)
         action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
         selected = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
@@ -3093,9 +3156,72 @@ class MemoryBridge:
             "world_state": world_state,
             "last_counterfactual_summary": dict(world_state.get("last_counterfactual_summary", {})),
             "last_post_outcome_calibration": dict(world_state.get("last_post_outcome_calibration", {})),
+            "recent_outcome_history": list(world_state.get("recent_outcome_history", [])),
+            "recent_prediction_errors": list(world_state.get("recent_prediction_errors", [])),
+            "action_calibration_summary": dict(world_state.get("action_calibration_summary", {})),
             "response_expectations": dict(world_state.get("response_expectations", {})),
             "updated_at": str(state.get("updated_at", "")),
         }
+
+    def show_action_calibration(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        action_type: str | None = None,
+        scenario_bucket: str | None = None,
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        state = self._subject_state(channel=channel, thread_key=str(thread_key or ""), chat_name=str(chat_name or ""))
+        rows = self.graph.list_action_calibration(
+            channel=channel,
+            thread_key=str(state.get("thread_key", thread_key or "")),
+            chat_name=str(state.get("chat_name", chat_name or "")),
+            action_type=action_type,
+            scenario_bucket=scenario_bucket,
+            limit=limit,
+        )
+        return {
+            "thread_key": str(state.get("thread_key", thread_key or "")),
+            "chat_name": str(state.get("chat_name", chat_name or "")),
+            "channel": channel,
+            "rows": rows,
+        }
+
+    def trace_outcome_history(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        action_type: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        return self.graph.trace_outcome_history(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            action_type=action_type,
+            limit=limit,
+        )
+
+    def trace_action_prediction_error(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        action_type: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        return self.graph.trace_action_prediction_error(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            action_type=action_type,
+            limit=limit,
+        )
 
     def record_action_selection(
         self,

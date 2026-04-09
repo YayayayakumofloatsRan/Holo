@@ -803,6 +803,120 @@ def _engineering_state_payload(config_path: str | None, *, allow_local_fallback:
             service.memory.graph.close()
 
 
+def _action_calibration_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    action_type: str | None = None,
+    scenario_bucket: str | None = None,
+    limit: int = 24,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/action-calibration",
+        params={
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "channel": channel,
+            "action_type": action_type,
+            "scenario_bucket": scenario_bucket,
+            "limit": limit,
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.show_action_calibration(
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        action_type=action_type,
+        scenario_bucket=scenario_bucket,
+        limit=limit,
+    ), "local_process"
+
+
+def _outcome_history_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    action_type: str | None = None,
+    limit: int = 8,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/outcome-history",
+        params={
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "channel": channel,
+            "action_type": action_type,
+            "limit": limit,
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_outcome_history(
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        action_type=action_type,
+        limit=limit,
+    ), "local_process"
+
+
+def _prediction_error_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    action_type: str | None = None,
+    limit: int = 8,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/action-prediction-error",
+        params={
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "channel": channel,
+            "action_type": action_type,
+            "limit": limit,
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    daemon = build_daemon(config_path)
+    return daemon.memory.trace_action_prediction_error(
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        action_type=action_type,
+        limit=limit,
+    ), "local_process"
+
+
 def _self_continuity_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
     live_payload = _live_api_request(config_path, method="GET", path="/self-continuity", timeout=30.0)
     if live_payload is not None:
@@ -2994,6 +3108,71 @@ def command_show_engineering_state(config_path: str | None) -> int:
     return 0
 
 
+def command_show_action_calibration(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    action_type: str | None,
+    scenario_bucket: str | None,
+    limit: int,
+) -> int:
+    payload, _transport = _action_calibration_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        action_type=action_type,
+        scenario_bucket=scenario_bucket,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_outcome_history(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    action_type: str | None,
+    limit: int,
+) -> int:
+    payload, _transport = _outcome_history_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        action_type=action_type,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_action_prediction_error(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    action_type: str | None,
+    limit: int,
+) -> int:
+    payload, _transport = _prediction_error_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        action_type=action_type,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_self_model(config_path: str | None) -> int:
     self_model, _ = _self_model_payload(config_path)
     brain_status, _ = _brain_status_payload(config_path)
@@ -4142,6 +4321,121 @@ def _accept_stage12_payload(
             service.memory.graph.close()
 
 
+def _evaluate_stage13_acceptance(
+    *,
+    health: dict[str, Any],
+    thread_key: str,
+    chat_name: str,
+    calibration_rows: list[dict[str, Any]],
+    before_rows: list[dict[str, Any]],
+    outcome_history: list[dict[str, Any]],
+    prediction_trace: dict[str, Any],
+    subject_after_reload: dict[str, Any],
+    ranking_fixture: dict[str, Any],
+) -> dict[str, Any]:
+    latest_row = dict(calibration_rows[0]) if calibration_rows else {}
+    latest_world = dict(subject_after_reload.get("world_state", {}))
+    summary = dict(prediction_trace.get("summary", {}))
+    strongest_actions = list(dict(latest_world.get("action_calibration_summary", {})).get("strongest_actions", []))
+    before_by_key = {
+        (str(item.get("action_type", "") or ""), str(item.get("scenario_bucket", "") or "")): dict(item)
+        for item in before_rows
+    }
+    confidence_decreased = False
+    for row in calibration_rows:
+        key = (str(row.get("action_type", "") or ""), str(row.get("scenario_bucket", "") or ""))
+        if key in before_by_key and float(row.get("confidence", 0.0) or 0.0) < float(before_by_key[key].get("confidence", 0.0) or 0.0):
+            confidence_decreased = True
+            break
+    if not confidence_decreased:
+        errors = [abs(float(item.get("response_quality", 0.0) or 0.0)) for item in list(latest_row.get("metadata", {}).get("recent_errors", []))]
+        if len(errors) >= 2 and errors[-1] > errors[0]:
+            confidence_decreased = True
+    after_market = list(ranking_fixture.get("after_market", []))
+    ranking_changed = str(ranking_fixture.get("before_top_action", "") or "") != str(ranking_fixture.get("after_top_action", "") or "")
+    overlay_visible = any(abs(float(item.get("empirical_overlay_delta", 0.0) or 0.0)) > 0.0 for item in after_market)
+    support_changed = any(
+        int(item.get("support_count", 0) or 0)
+        > int(before_by_key.get((str(item.get("action_type", "") or ""), str(item.get("scenario_bucket", "") or "")), {}).get("support_count", 0) or 0)
+        for item in calibration_rows
+    )
+    negative_supported = any(float(item.get("relational_delta", 0.0) or 0.0) < 0.0 or float(item.get("identity_delta", 0.0) or 0.0) < 0.0 for item in outcome_history)
+    checks = {
+        "health_ok": str(health.get("status", "")).strip() == "ok",
+        "canonical_wechat_identity": str(thread_key).startswith("wechat:"),
+        "calibration_rows_persist": bool(calibration_rows) and bool(latest_row.get("last_updated_at")),
+        "support_counts_change": support_changed,
+        "confidence_can_decrease": confidence_decreased,
+        "negative_outcomes_representable": negative_supported,
+        "prediction_trace_visible": bool(prediction_trace.get("comparisons")) and "response_quality_mae" in summary,
+        "recent_history_preserved": bool(latest_world.get("recent_outcome_history")) and bool(latest_world.get("recent_prediction_errors")),
+        "summary_visible": bool(strongest_actions),
+        "empirical_overlay_visible": overlay_visible,
+        "ranking_can_change": ranking_changed,
+        "action_market_first_preserved": bool(after_market),
+    }
+    score = round((sum(1.0 for value in checks.values() if value) / max(1, len(checks))) * 10.0, 2)
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "score": score,
+        "thread_key": thread_key,
+        "chat_name": chat_name,
+        "checks": checks,
+        "latest_calibration": latest_row,
+        "prediction_summary": summary,
+    }
+
+
+def _accept_stage13_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage13",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage13(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -4176,6 +4470,29 @@ def command_accept_stage12(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage12_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage13(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage13_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -5187,6 +5504,25 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-autobiographical-state", help="Show the persisted autobiographical self state")
     subparsers.add_parser("show-goal-state", help="Show the persisted long-horizon goal state")
     subparsers.add_parser("show-engineering-state", help="Show the Stage-10 engineering self-model and bounded runtime state")
+    action_calibration_parser = subparsers.add_parser("show-action-calibration", help="Show persistent empirical action-calibration overlay rows")
+    action_calibration_parser.add_argument("--thread-key", default=None)
+    action_calibration_parser.add_argument("--chat-name", default=None)
+    action_calibration_parser.add_argument("--channel", default="wechat")
+    action_calibration_parser.add_argument("--action-type", default=None)
+    action_calibration_parser.add_argument("--scenario-bucket", default=None)
+    action_calibration_parser.add_argument("--limit", type=int, default=24)
+    outcome_history_parser = subparsers.add_parser("trace-outcome-history", help="Show recent outcome appraisal history for one thread")
+    outcome_history_parser.add_argument("--thread-key", default=None)
+    outcome_history_parser.add_argument("--chat-name", default=None)
+    outcome_history_parser.add_argument("--channel", default="wechat")
+    outcome_history_parser.add_argument("--action-type", default=None)
+    outcome_history_parser.add_argument("--limit", type=int, default=8)
+    prediction_error_parser = subparsers.add_parser("trace-action-prediction-error", help="Show predicted-vs-realized outcome error history")
+    prediction_error_parser.add_argument("--thread-key", default=None)
+    prediction_error_parser.add_argument("--chat-name", default=None)
+    prediction_error_parser.add_argument("--channel", default="wechat")
+    prediction_error_parser.add_argument("--action-type", default=None)
+    prediction_error_parser.add_argument("--limit", type=int, default=8)
     subparsers.add_parser("trace-self-model", help="Show the self-model alongside runtime and operator state")
     subparsers.add_parser("trace-self-continuity", help="Explain Stage-8 autobiographical continuity and recent self change")
     subparsers.add_parser("trace-goal-arbitration", help="Explain Stage-8 goal arbitration and current goal commitments")
@@ -5465,6 +5801,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage12_parser.add_argument("--sender", default=None)
     accept_stage12_parser.add_argument("--iterations", type=int, default=1)
     accept_stage12_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage13_parser = subparsers.add_parser("accept-stage13", help="Run the fixed Empirical Action Calibration Stage-13 acceptance gate")
+    accept_stage13_parser.add_argument("--thread-key", default=None)
+    accept_stage13_parser.add_argument("--chat-name", default=None)
+    accept_stage13_parser.add_argument("--channel", default="wechat")
+    accept_stage13_parser.add_argument("--sender", default=None)
+    accept_stage13_parser.add_argument("--iterations", type=int, default=1)
+    accept_stage13_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -5523,6 +5866,34 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_goal_state(args.config)
     if args.command == "show-engineering-state":
         return command_show_engineering_state(args.config)
+    if args.command == "show-action-calibration":
+        return command_show_action_calibration(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            action_type=args.action_type,
+            scenario_bucket=args.scenario_bucket,
+            limit=args.limit,
+        )
+    if args.command == "trace-outcome-history":
+        return command_trace_outcome_history(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            action_type=args.action_type,
+            limit=args.limit,
+        )
+    if args.command == "trace-action-prediction-error":
+        return command_trace_action_prediction_error(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            action_type=args.action_type,
+            limit=args.limit,
+        )
     if args.command == "trace-self-model":
         return command_trace_self_model(args.config)
     if args.command == "trace-self-continuity":
@@ -5922,6 +6293,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage12":
         return command_accept_stage12(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage13":
+        return command_accept_stage13(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

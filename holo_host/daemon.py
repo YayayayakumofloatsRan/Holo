@@ -301,8 +301,9 @@ class HoloDaemon:
         if correction_count:
             rewarding_signals.append(max(0.0, 1.0 - min(1.0, correction_count / 3.0)))
         was_rewarding = round(sum(rewarding_signals) / len(rewarding_signals), 4) if rewarding_signals else 0.0
-        relational_delta = round(max(0.0, was_rewarding - (correction_count * 0.12)), 4)
-        identity_delta = round(max(0.0, 1.0 - min(1.0, correction_count / max(1, len(inbound_after) or 1))) * 0.18, 4)
+        correction_ratio = min(1.0, correction_count / max(1, len(inbound_after) or 1))
+        relational_delta = round(max(-1.0, min(1.0, was_rewarding - was_ignored * 0.34 - correction_count * 0.12)), 4)
+        identity_delta = round(max(-1.0, min(1.0, 0.18 - correction_ratio * 0.2 - was_ignored * 0.1 + initiative_success * 0.06)), 4)
         future_initiative_bias = round(max(0.0, was_rewarding - was_ignored * 0.25), 4)
         future_resistance_bias = round(min(1.0, correction_count / 3.0), 4)
         usage_rows = [dict(item) for item in list(usage_rows or [])]

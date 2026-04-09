@@ -899,6 +899,62 @@ class HoloReplyService:
         with self._memory_lock:
             return self.memory.trace_world_calibration(thread_key=thread_key, chat_name=chat_name, channel=channel)
 
+    def show_action_calibration(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        action_type: str | None = None,
+        scenario_bucket: str | None = None,
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.show_action_calibration(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                action_type=action_type,
+                scenario_bucket=scenario_bucket,
+                limit=limit,
+            )
+
+    def trace_outcome_history(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        action_type: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_outcome_history(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                action_type=action_type,
+                limit=limit,
+            )
+
+    def trace_action_prediction_error(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        action_type: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_action_prediction_error(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                action_type=action_type,
+                limit=limit,
+            )
+
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
@@ -2106,7 +2162,11 @@ class HoloReplyService:
         with self._memory_lock:
             if hasattr(self.memory, "clear_packet_cache"):
                 self.memory.clear_packet_cache()
-        subject_after_reload = self.memory.subject_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        subject_after_reload = self.memory.graph.subject_state(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+        )
         thread_row = self.store.find_thread(channel=channel, thread_key=normalized_thread_key) or {}
         usage_rows = [row for row in self.store.list_processor_usage(limit=24) if str(row.get("thread_key", "")).strip() in {normalized_thread_key, legacy_thread_key}]
         appraisal_rows = []
@@ -2151,6 +2211,287 @@ class HoloReplyService:
         report["reply_result"] = reply_result
         report["defer_result"] = defer_result
         report["silence_result"] = silence_result
+        return report
+
+    def accept_stage13(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 1,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage13_acceptance
+
+        acceptance_default = "Stage13Acceptance"
+        normalized_thread_key = str(thread_key or chat_name or acceptance_default).strip() or acceptance_default
+        if channel == "wechat" and normalized_thread_key and not normalized_thread_key.startswith("wechat:") and not normalized_thread_key.endswith("@chatroom") and not normalized_thread_key.startswith("wxid_"):
+            normalized_thread_key = f"wechat:{normalized_thread_key}"
+        normalized_chat_name = str(chat_name or thread_key or acceptance_default or normalized_thread_key.replace("wechat:", "", 1)).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+
+        before_market = self.action_market(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            query="接着说刚才那条线",
+            limit=6,
+        )
+        subject_before = self.memory.graph.subject_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        simulation_context = {"channel": channel, "thread_key": normalized_thread_key, "chat_name": normalized_chat_name}
+        simulation_intent = {
+            "reply_pull": 0.7,
+            "resistance_pull": 0.15,
+            "continuity_pull": 0.35,
+            "internal_pressure": 0.2,
+            "low_signal": False,
+        }
+        simulation_relationship = {"continuity_score": 0.6}
+        simulation_game = {"pressure_level": 0.2}
+        before_reply_sim = self.memory._simulate_action_candidate(
+            action={"action_type": "reply_once"},
+            query="continue building this",
+            intent_state=simulation_intent,
+            relationship_state=simulation_relationship,
+            game_state=simulation_game,
+            affect_state=subject_before["affect_state"],
+            drive_state=subject_before["drive_state"],
+            value_state=subject_before["value_state"],
+            conflict_state=subject_before["conflict_state"],
+            world_state=subject_before["world_state"],
+            context=simulation_context,
+        )
+        before_defer_sim = self.memory._simulate_action_candidate(
+            action={"action_type": "defer_reply"},
+            query="continue building this",
+            intent_state=simulation_intent,
+            relationship_state=simulation_relationship,
+            game_state=simulation_game,
+            affect_state=subject_before["affect_state"],
+            drive_state=subject_before["drive_state"],
+            value_state=subject_before["value_state"],
+            conflict_state=subject_before["conflict_state"],
+            world_state=subject_before["world_state"],
+            context=simulation_context,
+        )
+        reply_bucket = self.memory.graph.action_calibration_bucket(
+            action_type="reply_once",
+            channel=channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            metadata={"low_signal": False, "question_like": False, "defer_requested": False},
+        )
+        defer_bucket = self.memory.graph.action_calibration_bucket(
+            action_type="defer_reply",
+            channel=channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            metadata={"low_signal": False, "question_like": False, "defer_requested": False},
+        )
+        before_rows = {
+            "rows": [
+                *self.memory.graph.list_action_calibration(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    action_type="reply_once",
+                    scenario_bucket=reply_bucket["scenario_bucket"],
+                    limit=1,
+                ),
+                *self.memory.graph.list_action_calibration(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    action_type="defer_reply",
+                    scenario_bucket=defer_bucket["scenario_bucket"],
+                    limit=1,
+                ),
+            ]
+        }
+        appraisal_payloads = [
+            {
+                "action_type": "reply_once",
+                "action_ref": f"accept-stage13-good-{idx}",
+                "was_rewarding": 0.78,
+                "was_ignored": 0.04,
+                "relational_delta": 0.18,
+                "identity_delta": 0.08,
+                "future_initiative_bias": 0.62,
+                "future_resistance_bias": 0.08,
+                "metadata": {
+                    "predicted_outcome": {
+                        "predicted_relational_delta": 0.16,
+                        "predicted_identity_delta": 0.06,
+                        "predicted_response_quality": 0.74,
+                        "predicted_risk": 0.14,
+                    },
+                    "reply_latency_seconds": 90.0,
+                    "initiative_success": 1.0,
+                    "correction_count": 0,
+                    "evidence_refs": [f"accept-stage13:good:{idx}"],
+                    "source": "accept_stage13",
+                },
+            }
+            for idx in range(max(1, warmup))
+        ]
+        replay_count = max(3, int(iterations or 1) * 4)
+        appraisal_payloads.extend(
+            [
+                {
+                    "action_type": "reply_once",
+                    "action_ref": f"accept-stage13-bad-reply-{idx}",
+                    "was_rewarding": 0.12,
+                    "was_ignored": 0.84,
+                    "relational_delta": -0.24,
+                    "identity_delta": -0.1,
+                    "future_initiative_bias": 0.0,
+                    "future_resistance_bias": 0.64,
+                    "metadata": {
+                        "predicted_outcome": {
+                            "predicted_relational_delta": 0.14,
+                            "predicted_identity_delta": 0.05,
+                            "predicted_response_quality": 0.72,
+                            "predicted_risk": 0.16,
+                        },
+                        "reply_latency_seconds": 5400.0,
+                        "initiative_success": 0.0,
+                        "correction_count": 2,
+                        "evidence_refs": [f"accept-stage13:bad-reply:{idx}"],
+                        "source": "accept_stage13",
+                    },
+                }
+                for idx in range(replay_count)
+            ]
+        )
+        appraisal_payloads.extend(
+            [
+                {
+                    "action_type": "defer_reply",
+                    "action_ref": f"accept-stage13-good-defer-{idx}",
+                    "was_rewarding": 0.66,
+                    "was_ignored": 0.08,
+                    "relational_delta": 0.1,
+                    "identity_delta": 0.1,
+                    "future_initiative_bias": 0.44,
+                    "future_resistance_bias": 0.12,
+                    "metadata": {
+                        "predicted_outcome": {
+                            "predicted_relational_delta": 0.08,
+                            "predicted_identity_delta": 0.09,
+                            "predicted_response_quality": 0.58,
+                            "predicted_risk": 0.16,
+                        },
+                        "reply_latency_seconds": 300.0,
+                        "initiative_success": 1.0,
+                        "correction_count": 0,
+                        "evidence_refs": [f"accept-stage13:good-defer:{idx}"],
+                        "source": "accept_stage13",
+                    },
+                }
+                for idx in range(replay_count)
+            ]
+        )
+        for payload in appraisal_payloads:
+            self.memory.appraise_outcome(
+                channel=channel,
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                **payload,
+            )
+
+        with self._memory_lock:
+            if hasattr(self.memory, "clear_packet_cache"):
+                self.memory.clear_packet_cache()
+        after_market = self.action_market(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            query="接着说刚才那条线",
+            limit=6,
+        )
+        subject_after_sim = self.memory.graph.subject_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        after_reply_sim = self.memory._simulate_action_candidate(
+            action={"action_type": "reply_once"},
+            query="continue building this",
+            intent_state=simulation_intent,
+            relationship_state=simulation_relationship,
+            game_state=simulation_game,
+            affect_state=subject_after_sim["affect_state"],
+            drive_state=subject_after_sim["drive_state"],
+            value_state=subject_after_sim["value_state"],
+            conflict_state=subject_after_sim["conflict_state"],
+            world_state=subject_after_sim["world_state"],
+            context=simulation_context,
+        )
+        after_defer_sim = self.memory._simulate_action_candidate(
+            action={"action_type": "defer_reply"},
+            query="continue building this",
+            intent_state=simulation_intent,
+            relationship_state=simulation_relationship,
+            game_state=simulation_game,
+            affect_state=subject_after_sim["affect_state"],
+            drive_state=subject_after_sim["drive_state"],
+            value_state=subject_after_sim["value_state"],
+            conflict_state=subject_after_sim["conflict_state"],
+            world_state=subject_after_sim["world_state"],
+            context=simulation_context,
+        )
+        calibration_rows = {
+            "rows": [
+                *self.memory.graph.list_action_calibration(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    action_type="reply_once",
+                    scenario_bucket=reply_bucket["scenario_bucket"],
+                    limit=1,
+                ),
+                *self.memory.graph.list_action_calibration(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    action_type="defer_reply",
+                    scenario_bucket=defer_bucket["scenario_bucket"],
+                    limit=1,
+                ),
+            ]
+        }
+        outcome_history = self.trace_outcome_history(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        prediction_trace = self.trace_action_prediction_error(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            limit=8,
+        )
+        subject_after_reload = self.memory.graph.subject_state(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+        )
+        report = _evaluate_stage13_acceptance(
+            health=self.health(),
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            calibration_rows=list(calibration_rows.get("rows", [])),
+            before_rows=list(before_rows.get("rows", [])),
+            outcome_history=list(outcome_history.get("history", [])),
+            prediction_trace=prediction_trace,
+            subject_after_reload=subject_after_reload,
+            ranking_fixture={
+                "before_top_action": "reply_once" if float(before_reply_sim.get("recommended_bias", 0.0) or 0.0) >= float(before_defer_sim.get("recommended_bias", 0.0) or 0.0) else "defer_reply",
+                "after_top_action": "reply_once" if float(after_reply_sim.get("recommended_bias", 0.0) or 0.0) >= float(after_defer_sim.get("recommended_bias", 0.0) or 0.0) else "defer_reply",
+                "before_market": [before_reply_sim, before_defer_sim],
+                "after_market": [after_reply_sim, after_defer_sim],
+            },
+        )
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        report["sender"] = normalized_sender
+        report["before_market"] = before_market
+        report["after_market"] = after_market
         return report
 
     def initiative_status(
@@ -4160,6 +4501,40 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/action-calibration":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_action_calibration(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        action_type=params.get("action_type", [None])[0],
+                        scenario_bucket=params.get("scenario_bucket", [None])[0],
+                        limit=int(params.get("limit", ["24"])[0] or 24),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/outcome-history":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_outcome_history(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        action_type=params.get("action_type", [None])[0],
+                        limit=int(params.get("limit", ["8"])[0] or 8),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/action-prediction-error":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_action_prediction_error(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        action_type=params.get("action_type", [None])[0],
+                        limit=int(params.get("limit", ["8"])[0] or 8),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/affect-state":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.affect_state(
@@ -4567,6 +4942,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage12(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 1) or 1),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage13":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage13(
                             thread_key=str(payload.get("thread_key", "")).strip() or None,
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",
