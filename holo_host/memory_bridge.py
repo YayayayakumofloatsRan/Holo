@@ -3223,6 +3223,75 @@ class MemoryBridge:
             limit=limit,
         )
 
+    def run_stage14_replay(
+        self,
+        *,
+        source_type: str = "synthetic_fixture",
+        fixture_path: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+        artifact_dir: str | None = None,
+        mode: str = "all",
+    ) -> dict[str, Any]:
+        from .stage14_replay import Stage14ReplayHarness
+
+        return Stage14ReplayHarness(self).run(
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            artifact_dir=artifact_dir,
+            mode=mode,
+        )
+
+    def replay_calibration_fixture(
+        self,
+        *,
+        source_type: str = "synthetic_fixture",
+        fixture_path: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self.run_stage14_replay(
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            artifact_dir=artifact_dir,
+            mode="calibration",
+        )
+
+    def replay_policy_regret(
+        self,
+        *,
+        source_type: str = "synthetic_fixture",
+        fixture_path: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self.run_stage14_replay(
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            artifact_dir=artifact_dir,
+            mode="policy",
+        )
+
     def record_action_selection(
         self,
         *,

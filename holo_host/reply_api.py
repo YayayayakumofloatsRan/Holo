@@ -955,6 +955,50 @@ class HoloReplyService:
                 limit=limit,
             )
 
+    def replay_calibration_fixture(
+        self,
+        *,
+        source_type: str = "synthetic_fixture",
+        fixture_path: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.replay_calibration_fixture(
+                source_type=source_type,
+                fixture_path=fixture_path,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+                artifact_dir=artifact_dir,
+            )
+
+    def replay_policy_regret(
+        self,
+        *,
+        source_type: str = "synthetic_fixture",
+        fixture_path: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.replay_policy_regret(
+                source_type=source_type,
+                fixture_path=fixture_path,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+                artifact_dir=artifact_dir,
+            )
+
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
@@ -2492,6 +2536,93 @@ class HoloReplyService:
         report["sender"] = normalized_sender
         report["before_market"] = before_market
         report["after_market"] = after_market
+        return report
+
+    def accept_stage14(
+        self,
+        *,
+        source_type: str = "synthetic_fixture",
+        fixture_path: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage14_acceptance
+        from .stage14_replay import Stage14ReplayHarness
+
+        harness = Stage14ReplayHarness(self.memory)
+        fixtures = harness.load_fixtures(
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+        )
+        live_before: dict[str, int] = {}
+        for item in fixtures:
+            current_thread_key = str(item.get("thread_key", "") or "")
+            current_action = str(item.get("realized_evidence", {}).get("selected_action", "") or "")
+            if not current_thread_key or not current_action:
+                continue
+            key = f"{current_thread_key}:{current_action}"
+            live_before[key] = len(
+                self.memory.graph.list_action_calibration(
+                    channel=str(item.get("channel", channel) or channel),
+                    thread_key=current_thread_key,
+                    chat_name=str(item.get("chat_name", "") or ""),
+                    action_type=current_action,
+                    limit=24,
+                )
+            )
+        primary = self.memory.run_stage14_replay(
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            artifact_dir=artifact_dir,
+            mode="all",
+        )
+        with tempfile.TemporaryDirectory(prefix="holo-stage14-accept-") as secondary_artifact_dir:
+            secondary = self.memory.run_stage14_replay(
+                source_type=source_type,
+                fixture_path=fixture_path,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+                artifact_dir=secondary_artifact_dir,
+                mode="all",
+            )
+        live_after: dict[str, int] = {}
+        for item in fixtures:
+            current_thread_key = str(item.get("thread_key", "") or "")
+            current_action = str(item.get("realized_evidence", {}).get("selected_action", "") or "")
+            if not current_thread_key or not current_action:
+                continue
+            key = f"{current_thread_key}:{current_action}"
+            live_after[key] = len(
+                self.memory.graph.list_action_calibration(
+                    channel=str(item.get("channel", channel) or channel),
+                    thread_key=current_thread_key,
+                    chat_name=str(item.get("chat_name", "") or ""),
+                    action_type=current_action,
+                    limit=24,
+                )
+            )
+        report = _evaluate_stage14_acceptance(
+            health=self.health(),
+            primary_report=primary,
+            secondary_report=secondary,
+            live_before=live_before,
+            live_after=live_after,
+        )
+        report["primary_report"] = primary
+        report["secondary_report"] = secondary
         return report
 
     def initiative_status(
@@ -4961,6 +5092,48 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             sender=str(payload.get("sender", "")).strip() or None,
                             iterations=int(payload.get("iterations", 1) or 1),
                             warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/replay-calibration-fixture":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.replay_calibration_fixture(
+                            source_type=str(payload.get("source_type", "synthetic_fixture")).strip() or "synthetic_fixture",
+                            fixture_path=str(payload.get("fixture_path", "")).strip() or None,
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            limit=int(payload.get("limit", 8) or 8),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/replay-policy-regret":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.replay_policy_regret(
+                            source_type=str(payload.get("source_type", "synthetic_fixture")).strip() or "synthetic_fixture",
+                            fixture_path=str(payload.get("fixture_path", "")).strip() or None,
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            limit=int(payload.get("limit", 8) or 8),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage14":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage14(
+                            source_type=str(payload.get("source_type", "synthetic_fixture")).strip() or "synthetic_fixture",
+                            fixture_path=str(payload.get("fixture_path", "")).strip() or None,
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            limit=int(payload.get("limit", 8) or 8),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
                         ),
                     )
                     return

@@ -18,11 +18,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 13. `docs/ENGINEERING_HANDOFF_STAGE12.md`
 14. `docs/STAGE13_EMPIRICAL_ACTION_CALIBRATION.md`
 15. `docs/ENGINEERING_HANDOFF_STAGE13.md`
-16. `HOLO_SYSTEM.md`
-17. `HOLO_HOST.md`
-18. `OPERATIONS.md`
-19. `holo_memory_library/MEMORY_LIBRARY.md`
-20. `windows_helper/README.md`
+16. `docs/STAGE14_OFFLINE_REPLAY_AND_POLICY_EVAL.md`
+17. `docs/ENGINEERING_HANDOFF_STAGE14.md`
+18. `HOLO_SYSTEM.md`
+19. `HOLO_HOST.md`
+20. `OPERATIONS.md`
+21. `holo_memory_library/MEMORY_LIBRARY.md`
+22. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -37,10 +39,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage13-empirical-action-calibration`.
+- The current milestone tag is `stage14-offline-replay-and-policy-eval`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage13 empirical action calibration, persistent bucketed outcome statistics, and feeding inspectable calibration overlays back into action selection.
-- Next stage focus is reducer cleanup and calibration-window refinement without adding a second brain layer or opaque learned weights.
+- Current focus is Stage14 offline replay, reproducible calibration metrics, and policy-regret evaluation from deterministic fixtures.
+- Next stage focus is reducer cleanup and calibration-window refinement using replay evidence instead of ad hoc trace reading.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -121,8 +123,14 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host show-provider-status`
 - Usage ledger:
   - `python3 -m holo_host show-usage-ledger --limit 50`
+- Replay calibration fixture:
+  - `python3 -m holo_host replay-calibration-fixture --fixture-path tests/fixtures/stage14`
+- Replay policy regret:
+  - `python3 -m holo_host replay-policy-regret --fixture-path tests/fixtures/stage14`
 - Processor fabric acceptance:
   - `python3 -m holo_host accept-processor-fabric`
+- Stage14 acceptance:
+  - `python3 -m holo_host accept-stage14`
 
 ## When A New Thread Starts Work
 1. Read the docs above in order.
@@ -166,6 +174,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - main-brain override and initiative gate calibration can create false negatives under cold `initiative_window` states
 - token accounting now exists, but some providers still rely on estimates rather than ground-truth usage
 - provider fallback behavior is standardized, but fallback paths still need more live soak time
+- replay coverage is now deterministic, but fixture breadth is still narrow and should grow only when it exposes a real blind spot
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -179,6 +188,8 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host show-initiative-status --thread-key Nemoqi --chat-name Nemoqi`
 - `python3 -m holo_host accept-stage9 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage12 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage13 --thread-key wechat:Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage14`
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host accept-stage8 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
@@ -204,3 +215,4 @@ These files change while Holo is alive. Do not treat them like static docs.
 - another thread can continue from disk without hidden oral context
 - when `accept-stage9` is available, run it before and after any gate-mode transition
 - when model routing, provider fallback, or token policy changes, run `accept-processor-fabric`
+- when calibration or policy quality changes, rerun `accept-stage14` and inspect replay artifacts

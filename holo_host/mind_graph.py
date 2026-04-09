@@ -4276,6 +4276,31 @@ class MindGraph:
             },
         }
 
+    def replay_subject_snapshot(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        subject = self.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        return {
+            "thread_key": str(subject.get("thread_key", thread_key or "")),
+            "chat_name": str(subject.get("chat_name", chat_name or "")),
+            "channel": channel,
+            "relationship_state": self.relationship_snapshot(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=3),
+            "game_state": self.game_state(thread_key=thread_key, chat_name=chat_name, channel=channel),
+            "affect_state": dict(subject.get("affect_state", {})),
+            "drive_state": dict(subject.get("drive_state", {})),
+            "value_state": dict(subject.get("value_state", {})),
+            "conflict_state": dict(subject.get("conflict_state", {})),
+            "world_state": dict(subject.get("world_state", {})),
+            "resistance_posture": dict(subject.get("resistance_posture", {})),
+            "initiative_state": dict(subject.get("initiative_state", {})),
+            "outcome_memory": dict(subject.get("outcome_memory", {})),
+            "metadata": dict(subject.get("metadata", {})),
+        }
+
     def _update_action_calibration(
         self,
         *,

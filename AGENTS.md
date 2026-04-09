@@ -19,16 +19,22 @@
 
 - Full suite: `pytest -q`
 - Targeted calibration: `pytest -q tests/test_stage11_calibration.py tests/test_stage12_acceptance.py`
+- Stage14 replay: `pytest -q tests/test_stage14_replay.py`
 - Targeted host/runtime: `pytest -q tests/test_holo_host.py tests/test_rag_memory.py tests/test_windows_helper.py`
 - Acceptance probes:
   - `python -m holo_host --config .holo_host.example.toml accept-stage10`
   - `python -m holo_host --config .holo_host.example.toml accept-stage12`
+  - `python -m holo_host --config .holo_host.example.toml accept-stage13`
+  - `python -m holo_host --config .holo_host.example.toml accept-stage14`
+  - `python -m holo_host --config .holo_host.example.toml replay-calibration-fixture --fixture-path tests/fixtures/stage14`
+  - `python -m holo_host --config .holo_host.example.toml replay-policy-regret --fixture-path tests/fixtures/stage14`
 
 ## Stage Doc Update Rules
 
 - When a stage lands, add `docs/STAGEXX_*.md` and `docs/ENGINEERING_HANDOFF_STAGEXX.md`.
 - Update `HOLO_HANDOFF.md` in the same change so current stage, completed work, and next focus are not stale.
 - Acceptance surfaces and docs must move together; do not add a stage gate without updating handoff docs.
+- Replay artifact conventions belong in the stage doc and handoff doc; do not rely on thread-local memory for rerun instructions.
 
 ## Preferred Workflow
 

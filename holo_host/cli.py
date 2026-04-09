@@ -917,6 +917,86 @@ def _prediction_error_payload(
     ), "local_process"
 
 
+def _stage14_replay_payload(
+    config_path: str | None,
+    *,
+    path: str,
+    source_type: str,
+    fixture_path: str | None,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path=path,
+        payload={
+            "source_type": source_type,
+            "fixture_path": fixture_path or "",
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "limit": limit,
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        if path == "/replay-calibration-fixture":
+            return (
+                service.replay_calibration_fixture(
+                    source_type=source_type,
+                    fixture_path=fixture_path,
+                    thread_key=thread_key,
+                    chat_name=chat_name,
+                    channel=channel,
+                    limit=limit,
+                    artifact_dir=artifact_dir,
+                ),
+                "local_service",
+            )
+        if path == "/replay-policy-regret":
+            return (
+                service.replay_policy_regret(
+                    source_type=source_type,
+                    fixture_path=fixture_path,
+                    thread_key=thread_key,
+                    chat_name=chat_name,
+                    channel=channel,
+                    limit=limit,
+                    artifact_dir=artifact_dir,
+                ),
+                "local_service",
+            )
+        return (
+            service.accept_stage14(
+                source_type=source_type,
+                fixture_path=fixture_path,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _self_continuity_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
     live_payload = _live_api_request(config_path, method="GET", path="/self-continuity", timeout=30.0)
     if live_payload is not None:
@@ -4386,6 +4466,52 @@ def _evaluate_stage13_acceptance(
     }
 
 
+def _evaluate_stage14_acceptance(
+    *,
+    health: dict[str, Any],
+    primary_report: dict[str, Any],
+    secondary_report: dict[str, Any],
+    live_before: dict[str, int],
+    live_after: dict[str, int],
+) -> dict[str, Any]:
+    primary_aggregate = dict(primary_report.get("aggregate_metrics", {}))
+    secondary_aggregate = dict(secondary_report.get("aggregate_metrics", {}))
+    fixtures = list(primary_report.get("fixtures", []))
+    artifacts = dict(primary_report.get("artifacts", {}))
+    reproducible = primary_aggregate == secondary_aggregate
+    canonical_identity = all(
+        str(item.get("thread_key", "")).startswith("wechat:")
+        or str(item.get("thread_key", "")).endswith("@chatroom")
+        or str(item.get("thread_key", "")).startswith("wxid_")
+        or str(item.get("channel", "")) != "wechat"
+        for item in fixtures
+    )
+    artifact_written = bool(artifacts.get("summary_json")) and bool(artifacts.get("summary_md"))
+    support_counter = dict(primary_aggregate.get("calibration_support_by_action_type", {}))
+    support_changed = any(int(value or 0) > 0 for value in support_counter.values())
+    checks = {
+        "health_ok": str(health.get("status", "")).strip() == "ok",
+        "metrics_reproducible": reproducible,
+        "calibration_mae_visible": "response_quality_mae" in primary_aggregate and "relational_delta_mae" in primary_aggregate and "risk_mae" in primary_aggregate,
+        "policy_regret_visible": float(primary_aggregate.get("policy_regret_vs_best_available_action", 0.0) or 0.0) > 0.0,
+        "support_counts_change": support_changed,
+        "false_initiative_block_accounted": float(primary_aggregate.get("false_initiative_block_rate", 0.0) or 0.0) > 0.0,
+        "expression_overflow_accounted": float(primary_aggregate.get("overlong_reply_rate", 0.0) or 0.0) > 0.0 and float(primary_aggregate.get("stiffness_overflow_rate", 0.0) or 0.0) > 0.0,
+        "canonical_identity_preserved": canonical_identity,
+        "no_live_state_mutation": dict(live_before) == dict(live_after),
+        "artifact_written": artifact_written,
+    }
+    score = round((sum(1.0 for value in checks.values() if value) / max(1, len(checks))) * 10.0, 2)
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "score": score,
+        "checks": checks,
+        "aggregate_metrics": primary_aggregate,
+        "artifacts": artifacts,
+        "fixture_count": int(primary_report.get("fixture_count", 0) or 0),
+    }
+
+
 def _accept_stage13_payload(
     config_path: str | None,
     *,
@@ -4434,6 +4560,32 @@ def _accept_stage13_payload(
             service.memory.activation.close()
         if hasattr(service.memory, "graph"):
             service.memory.graph.close()
+
+
+def _accept_stage14_payload(
+    config_path: str | None,
+    *,
+    source_type: str,
+    fixture_path: str | None,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    return _stage14_replay_payload(
+        config_path,
+        path="/accept-stage14",
+        source_type=source_type,
+        fixture_path=fixture_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+        artifact_dir=artifact_dir,
+        allow_local_fallback=allow_local_fallback,
+    )
 
 
 def command_accept_stage10(
@@ -4500,6 +4652,83 @@ def command_accept_stage13(
         sender=sender,
         iterations=iterations,
         warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_replay_calibration_fixture(
+    config_path: str | None,
+    *,
+    source_type: str,
+    fixture_path: str | None,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _stage14_replay_payload(
+        config_path,
+        path="/replay-calibration-fixture",
+        source_type=source_type,
+        fixture_path=fixture_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_replay_policy_regret(
+    config_path: str | None,
+    *,
+    source_type: str,
+    fixture_path: str | None,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _stage14_replay_payload(
+        config_path,
+        path="/replay-policy-regret",
+        source_type=source_type,
+        fixture_path=fixture_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage14(
+    config_path: str | None,
+    *,
+    source_type: str,
+    fixture_path: str | None,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage14_payload(
+        config_path,
+        source_type=source_type,
+        fixture_path=fixture_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+        artifact_dir=artifact_dir,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -5808,6 +6037,30 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage13_parser.add_argument("--sender", default=None)
     accept_stage13_parser.add_argument("--iterations", type=int, default=1)
     accept_stage13_parser.add_argument("--warmup", type=int, default=1)
+    replay_calibration_parser = subparsers.add_parser("replay-calibration-fixture", help="Run the Stage-14 offline calibration replay harness")
+    replay_calibration_parser.add_argument("--source-type", choices=("synthetic_fixture", "archive_fixture", "calibration_history_fixture"), default="synthetic_fixture")
+    replay_calibration_parser.add_argument("--fixture-path", default=None)
+    replay_calibration_parser.add_argument("--thread-key", default=None)
+    replay_calibration_parser.add_argument("--chat-name", default=None)
+    replay_calibration_parser.add_argument("--channel", default="wechat")
+    replay_calibration_parser.add_argument("--limit", type=int, default=8)
+    replay_calibration_parser.add_argument("--artifact-dir", default=None)
+    replay_policy_parser = subparsers.add_parser("replay-policy-regret", help="Run the Stage-14 offline policy-regret replay harness")
+    replay_policy_parser.add_argument("--source-type", choices=("synthetic_fixture", "archive_fixture", "calibration_history_fixture"), default="synthetic_fixture")
+    replay_policy_parser.add_argument("--fixture-path", default=None)
+    replay_policy_parser.add_argument("--thread-key", default=None)
+    replay_policy_parser.add_argument("--chat-name", default=None)
+    replay_policy_parser.add_argument("--channel", default="wechat")
+    replay_policy_parser.add_argument("--limit", type=int, default=8)
+    replay_policy_parser.add_argument("--artifact-dir", default=None)
+    accept_stage14_parser = subparsers.add_parser("accept-stage14", help="Run the fixed offline replay and policy evaluation Stage-14 acceptance gate")
+    accept_stage14_parser.add_argument("--source-type", choices=("synthetic_fixture", "archive_fixture", "calibration_history_fixture"), default="synthetic_fixture")
+    accept_stage14_parser.add_argument("--fixture-path", default=None)
+    accept_stage14_parser.add_argument("--thread-key", default=None)
+    accept_stage14_parser.add_argument("--chat-name", default=None)
+    accept_stage14_parser.add_argument("--channel", default="wechat")
+    accept_stage14_parser.add_argument("--limit", type=int, default=8)
+    accept_stage14_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -6310,6 +6563,39 @@ def main(argv: list[str] | None = None) -> int:
             sender=args.sender,
             iterations=args.iterations,
             warmup=args.warmup,
+        )
+    if args.command == "replay-calibration-fixture":
+        return command_replay_calibration_fixture(
+            args.config,
+            source_type=args.source_type,
+            fixture_path=args.fixture_path,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "replay-policy-regret":
+        return command_replay_policy_regret(
+            args.config,
+            source_type=args.source_type,
+            fixture_path=args.fixture_path,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage14":
+        return command_accept_stage14(
+            args.config,
+            source_type=args.source_type,
+            fixture_path=args.fixture_path,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+            artifact_dir=args.artifact_dir,
         )
     if args.command == "show-processor-mesh":
         return command_show_processor_mesh(args.config)
