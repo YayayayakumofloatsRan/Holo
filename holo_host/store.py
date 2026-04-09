@@ -194,15 +194,32 @@ class QueueStore:
     def _normalize_wechat_thread_key(channel: str, thread_key: str, *, subject: str = "", display_name: str = "") -> str:
         normalized_channel = str(channel or "").strip().lower()
         current = str(thread_key or "").strip()
-        if normalized_channel != "wechat" or not current.startswith("wechat:"):
+        if normalized_channel != "wechat":
             return current
-        suffix = current[len("wechat:") :].strip()
-        if not suffix or suffix.endswith("@chatroom") or suffix.startswith("wxid_"):
+        if current.startswith("wechat:"):
+            suffix = current[len("wechat:") :].strip()
+            if not suffix or suffix.endswith("@chatroom") or suffix.startswith("wxid_"):
+                return current
+            return f"wechat:{suffix}"
+        if not current or current.endswith("@chatroom") or current.startswith("wxid_"):
             return current
-        names = {str(subject or "").strip(), str(display_name or "").strip()}
+        names = {
+            current,
+            str(subject or "").strip(),
+            str(display_name or "").strip(),
+        }
         names.discard("")
-        if not names or suffix in names:
-            return suffix
+        if names:
+            preferred = next(
+                (
+                    name
+                    for name in (str(display_name or "").strip(), str(subject or "").strip(), current)
+                    if name and not name.endswith("@chatroom") and not name.startswith("wxid_")
+                ),
+                "",
+            )
+            if preferred:
+                return f"wechat:{preferred}"
         return current
 
     def _normalize_wechat_aliases(self) -> None:
@@ -261,7 +278,7 @@ class QueueStore:
             SELECT threads.*, contacts.display_name AS contact_display_name
             FROM threads
             LEFT JOIN contacts ON contacts.id = threads.contact_id
-            WHERE threads.channel = 'wechat' AND threads.thread_key LIKE 'wechat:%'
+            WHERE threads.channel = 'wechat'
             """
         )
         for legacy in rows:
@@ -938,6 +955,8 @@ class QueueStore:
         task_type: str | None = None,
         lane: str | None = None,
         provider: str | None = None,
+        event_id: str | None = None,
+        thread_key: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses = ["1=1"]
         args: list[Any] = []
@@ -950,6 +969,12 @@ class QueueStore:
         if str(provider or "").strip():
             clauses.append("provider = ?")
             args.append(str(provider).strip())
+        if str(event_id or "").strip():
+            clauses.append("event_id = ?")
+            args.append(str(event_id).strip())
+        if str(thread_key or "").strip():
+            clauses.append("thread_key = ?")
+            args.append(str(thread_key).strip())
         args.append(max(1, int(limit)))
         return self._fetchall(
             f"""

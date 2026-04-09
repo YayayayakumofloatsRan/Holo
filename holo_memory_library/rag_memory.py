@@ -746,6 +746,24 @@ def unique_strings(items: Iterable[str]) -> list[str]:
     return ordered
 
 
+def _canonical_archive_thread_key(channel: str, thread_key: str, *, chat_name: str = "") -> str:
+    normalized_channel = str(channel or "").strip().lower()
+    current = str(thread_key or "").strip()
+    if normalized_channel != "wechat":
+        return current
+    if current.startswith("wechat:"):
+        suffix = current[len("wechat:") :].strip()
+        if suffix and not suffix.endswith("@chatroom") and not suffix.startswith("wxid_"):
+            return f"wechat:{suffix}"
+        return current
+    if current and not current.endswith("@chatroom") and not current.startswith("wxid_"):
+        return f"wechat:{current}"
+    normalized_chat = str(chat_name or "").strip()
+    if normalized_chat and not normalized_chat.endswith("@chatroom") and not normalized_chat.startswith("wxid_"):
+        return f"wechat:{normalized_chat}"
+    return current
+
+
 def normalize_tags(tags: Iterable[str]) -> list[str]:
     return unique_strings(tag.strip().lower().replace(" ", "_") for tag in tags if str(tag).strip())
 
@@ -1157,6 +1175,33 @@ def thread_context_aliases(
         elif prefix and ":" not in text:
             aliases.append(f"{prefix}{text}")
     return unique_strings(aliases)
+
+
+def _canonical_archive_thread_key(
+    channel: str,
+    thread_key: str,
+    *,
+    chat_name: str = "",
+    sender: str = "",
+    contact_display_name: str = "",
+) -> str:
+    normalized_channel = str(channel or "").strip().lower()
+    current = str(thread_key or "").strip()
+    if normalized_channel != "wechat":
+        return current
+    while current.startswith("wechat:wechat:"):
+        current = "wechat:" + current[len("wechat:wechat:") :]
+    if not current:
+        for raw in (chat_name, sender, contact_display_name):
+            fallback = str(raw or "").strip()
+            if fallback and not fallback.endswith("@chatroom") and not fallback.startswith("wxid_"):
+                return f"wechat:{fallback}"
+        return current
+    if current.endswith("@chatroom") or current.startswith("wxid_"):
+        return current
+    if current.startswith("wechat:"):
+        return current
+    return f"wechat:{current}"
 
 
 def normalize_thread_context(context: dict[str, Any] | None) -> dict[str, Any]:
@@ -1645,6 +1690,16 @@ def prepare_archive_row(row: dict) -> dict:
     prepared["user_text"] = extract_runtime_user_text(str(prepared.get("user_text", "")))
     prepared["reply_text"] = normalize_multiline_text(str(prepared.get("reply_text", "")))
     prepared["metadata"] = safe_json_metadata(prepared.get("metadata", {}))
+    channel = str(prepared["metadata"].get("channel", prepared.get("channel", "")) or "").strip().lower()
+    chat_name = str(prepared["metadata"].get("chat_name", prepared.get("chat_name", "")) or "").strip()
+    canonical_thread_key = _canonical_archive_thread_key(
+        channel,
+        str(prepared["metadata"].get("thread_key", prepared.get("thread_key", "")) or "").strip(),
+        chat_name=chat_name,
+    )
+    if canonical_thread_key:
+        prepared["thread_key"] = canonical_thread_key
+        prepared["metadata"]["thread_key"] = canonical_thread_key
     prepared["user_excerpt"] = compact_text(prepared["user_text"], 120)
     prepared["reply_excerpt"] = compact_text(prepared["reply_text"], 120)
     if not prepared["id"]:
@@ -1691,7 +1746,11 @@ def prepare_row(row: dict, default_status: str) -> dict:
     prepared["explicit_user_signal"] = bool(prepared.get("explicit_user_signal", False))
     prepared["metadata"] = metadata
     prepared["channel"] = str(prepared.get("channel", metadata.get("channel", "")) or "").strip().lower()
-    prepared["thread_key"] = str(prepared.get("thread_key", metadata.get("thread_key", "")) or "").strip()
+    prepared["thread_key"] = _canonical_archive_thread_key(
+        prepared["channel"],
+        str(prepared.get("thread_key", metadata.get("thread_key", "")) or "").strip(),
+        chat_name=str(prepared.get("chat_name", metadata.get("chat_name", "")) or "").strip(),
+    )
     prepared["chat_name"] = str(prepared.get("chat_name", metadata.get("chat_name", "")) or "").strip()
     prepared["thread_affinity"] = clamp(float(prepared.get("thread_affinity", metadata.get("thread_affinity", 0.0))))
     prepared["recall_count"] = max(0, int(prepared.get("recall_count", metadata.get("recall_count", 0))))
@@ -1777,7 +1836,6 @@ def prepare_callback_row(row: dict) -> dict:
     prepared = dict(row)
     metadata = safe_json_metadata(prepared.get("metadata", {}))
     prepared["channel"] = str(prepared.get("channel", metadata.get("channel", "")))
-    prepared["thread_key"] = str(prepared.get("thread_key", metadata.get("thread_key", "")))
     prepared["chat_name"] = str(prepared.get("chat_name", metadata.get("chat_name", "")))
     prepared["sender"] = str(prepared.get("sender", metadata.get("sender", "")))
     prepared["reason"] = compact_text(str(prepared.get("reason", "")), 220)
@@ -1800,6 +1858,15 @@ def prepare_callback_row(row: dict) -> dict:
     ).strip()
     prepared["source_archive_id"] = str(prepared.get("source_archive_id", ""))
     prepared["tags"] = normalize_tags(prepared.get("tags", []))
+    prepared["thread_key"] = _canonical_archive_thread_key(
+        prepared["channel"],
+        str(prepared.get("thread_key", metadata.get("thread_key", "")) or ""),
+        chat_name=prepared["chat_name"],
+        sender=prepared["sender"],
+        contact_display_name=str(metadata.get("contact_display_name", "") or ""),
+    )
+    if prepared["thread_key"]:
+        metadata["thread_key"] = prepared["thread_key"]
     prepared["metadata"] = metadata
     if not str(prepared.get("id", "")).strip():
         prepared["id"] = (
@@ -6597,13 +6664,19 @@ def backfill_archive_result(
         outbound_payload = safe_json_loads_dict(str(row["payload_json"] or "{}"))
         inbound_metadata = safe_json_metadata(inbound_payload.get("metadata", {}))
         outbound_metadata = safe_json_metadata(outbound_payload.get("metadata", {}))
-        canonical_thread_key = str(row["thread_key"] or "").strip()
+        channel = str(row["thread_channel"] or row["channel"] or "").strip().lower()
+        canonical_thread_key = _canonical_archive_thread_key(
+            channel,
+            str(row["thread_key"] or "").strip(),
+            chat_name=str(inbound["sender_name"] or row["contact_display_name"] or inbound["subject"] or ""),
+            sender=str(inbound["sender_email"] or ""),
+            contact_display_name=str(row["contact_display_name"] or ""),
+        )
         source_thread_key = (
             str(inbound_metadata.get("thread_key", "") or "").strip()
             or str(outbound_metadata.get("thread_key", "") or "").strip()
         )
         if not source_thread_key:
-            channel = str(row["thread_channel"] or row["channel"] or "").strip().lower()
             sender_email = str(inbound["sender_email"] or "").strip()
             recipient_email = str(row["recipient_email"] or "").strip()
             if channel == "wechat":
@@ -6613,10 +6686,18 @@ def backfill_archive_result(
                     source_thread_key = recipient_email
         if not source_thread_key:
             source_thread_key = canonical_thread_key
+        canonical_source_thread_key = _canonical_archive_thread_key(
+            channel,
+            source_thread_key,
+            chat_name=str(inbound["sender_name"] or row["contact_display_name"] or inbound["subject"] or ""),
+            sender=str(inbound["sender_email"] or ""),
+            contact_display_name=str(row["contact_display_name"] or ""),
+        )
         metadata = {
             "channel": str(row["thread_channel"] or row["channel"] or ""),
-            "thread_key": source_thread_key,
+            "thread_key": canonical_source_thread_key,
             "canonical_thread_key": canonical_thread_key,
+            "source_thread_key": source_thread_key,
             "message_id": str(inbound["message_id"] or ""),
             "outbound_message_id": str(row["message_id"] or ""),
             "sender": str(inbound["sender_name"] or inbound["sender_email"] or ""),

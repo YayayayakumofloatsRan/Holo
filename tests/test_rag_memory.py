@@ -767,7 +767,7 @@ class RagMemoryTests(unittest.TestCase):
 
             candidate_rows = rm.load_rows("candidate")
             self.assertTrue(candidate_rows)
-            self.assertTrue(any(row.get("thread_key") == "Nemoqi" for row in candidate_rows))
+            self.assertTrue(any(row.get("thread_key") == "wechat:Nemoqi" for row in candidate_rows))
             self.assertTrue(any(row.get("channel") == "wechat" for row in candidate_rows))
 
     def test_build_machine_state_exposes_consciousness_reflection_and_initiative(self) -> None:
@@ -1049,11 +1049,33 @@ class RagMemoryTests(unittest.TestCase):
                 archive_rows = rm.load_archive()
                 self.assertEqual(report["archive_added"], 1)
                 self.assertEqual(len(archive_rows), 1)
+                self.assertEqual(archive_rows[0]["thread_key"], "wechat:Nemoqi")
                 self.assertEqual(archive_rows[0]["metadata"]["thread_key"], "wechat:Nemoqi")
                 self.assertEqual(archive_rows[0]["user_text"], "我只是想找个陪伴的。")
                 self.assertEqual(archive_rows[0]["reply_text"], "咱会陪着你。")
             finally:
                 store.close()
+
+    def test_archive_rows_do_not_split_prefixed_and_bare_wechat_aliases(self) -> None:
+        with TempMemoryRepo():
+            rm.archive_turn(
+                "第一句",
+                "回一句",
+                source="unit.archive",
+                tags=["wechat"],
+                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
+            )
+            rm.archive_turn(
+                "第二句",
+                "再回一句",
+                source="unit.archive",
+                tags=["wechat"],
+                metadata={"channel": "wechat", "thread_key": "wechat:Nemoqi", "chat_name": "Nemoqi"},
+            )
+
+            archive_rows = rm.load_archive()
+            self.assertEqual(len(archive_rows), 2)
+            self.assertTrue(all(str(row["metadata"]["thread_key"]) == "wechat:Nemoqi" for row in archive_rows))
 
     def test_dream_cycle_creates_candidates_and_callbacks(self) -> None:
         with TempMemoryRepo():

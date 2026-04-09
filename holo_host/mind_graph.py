@@ -532,10 +532,23 @@ def _make_state_object(
 
 def _normalize_thread_key(channel: str, thread_key: str, *, chat_name: str = "") -> str:
     current = str(thread_key or "").strip()
-    if str(channel or "").strip().lower() == "wechat" and current.startswith("wechat:"):
-        suffix = current[len("wechat:") :].strip()
-        if suffix and suffix == str(chat_name or "").strip():
-            return suffix
+    if str(channel or "").strip().lower() != "wechat":
+        return current
+    while current.startswith("wechat:wechat:"):
+        current = "wechat:" + current[len("wechat:wechat:") :]
+    if not current:
+        fallback = str(chat_name or "").strip()
+        if fallback and not fallback.endswith("@chatroom") and not fallback.startswith("wxid_"):
+            return f"wechat:{fallback}"
+        return current
+    if current.endswith("@chatroom") or current.startswith("wxid_"):
+        return current
+    if current.startswith("wechat:"):
+        return current
+    if current:
+        preferred = str(chat_name or "").strip() or current
+        if preferred and not preferred.endswith("@chatroom") and not preferred.startswith("wxid_"):
+            return f"wechat:{preferred}"
     return current
 
 
@@ -2311,6 +2324,10 @@ class MindGraph:
         normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
         normalized_chat_name = str(chat_name or "").strip()
         aliases = {item for item in {normalized_thread_key, normalized_chat_name} if item}
+        if str(channel or "").strip().lower() == "wechat" and normalized_thread_key.startswith("wechat:"):
+            bare_alias = normalized_thread_key[len("wechat:") :].strip()
+            if bare_alias and not bare_alias.endswith("@chatroom") and not bare_alias.startswith("wxid_"):
+                aliases.add(bare_alias)
         if str(channel or "").strip().lower() == "wechat" and normalized_chat_name:
             aliases.add(f"wechat:{normalized_chat_name}")
         return normalized_thread_key, aliases
@@ -2768,15 +2785,23 @@ class MindGraph:
         return rows
 
     def _insert_thread_rows(self, thread_rows: Iterable[dict[str, Any]]) -> None:
+        deduped_rows: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for row in thread_rows:
+            key = (str(row.get("channel", "")).strip(), str(row.get("thread_key", "")).strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped_rows.append(dict(row))
         self.conn.executemany(
             """
-            INSERT INTO mind_thread_state(
+            INSERT OR REPLACE INTO mind_thread_state(
                 thread_key, channel, chat_name, relationship_score, recall_count, last_recalled_at, last_message_at, summary, metadata_json
             ) VALUES (
                 :thread_key, :channel, :chat_name, :relationship_score, :recall_count, :last_recalled_at, :last_message_at, :summary, :metadata_json
             )
             """,
-            list(thread_rows),
+            deduped_rows,
         )
 
     def _delete_thread_materialization(self, *, channel: str, thread_key: str, chat_name: str) -> int:
@@ -3514,6 +3539,29 @@ class MindGraph:
                 "SELECT * FROM subject_state WHERE channel = ? AND thread_key = ?",
                 (channel, normalized_thread_key),
             ).fetchone()
+            legacy_thread_key = ""
+            if row is None and normalized_thread_key.startswith("wechat:"):
+                legacy_thread_key = normalized_thread_key[len("wechat:") :].strip()
+                if legacy_thread_key:
+                    row = self.conn.execute(
+                        "SELECT * FROM subject_state WHERE channel = ? AND thread_key = ?",
+                        (channel, legacy_thread_key),
+                    ).fetchone()
+            if row is not None and legacy_thread_key and str(row["thread_key"]) != normalized_thread_key:
+                now = utc_now()
+                self.conn.execute(
+                    """
+                    UPDATE subject_state
+                    SET thread_key = ?, updated_at = ?
+                    WHERE channel = ? AND thread_key = ?
+                    """,
+                    (normalized_thread_key, now, channel, legacy_thread_key),
+                )
+                self.conn.commit()
+                row = self.conn.execute(
+                    "SELECT * FROM subject_state WHERE channel = ? AND thread_key = ?",
+                    (channel, normalized_thread_key),
+                ).fetchone()
             if row is None:
                 defaults = self._subject_defaults(channel=channel, thread_key=normalized_thread_key, chat_name=str(chat_name or normalized_thread_key))
                 now = utc_now()
@@ -4457,16 +4505,25 @@ class MindGraph:
         normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
         with self._lock:
             if normalized_thread_key:
-                rows = self.conn.execute(
-                    """
-                    SELECT *
-                    FROM consciousness_ledger
-                    WHERE channel = ? AND thread_key = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (str(channel or "").strip(), normalized_thread_key, max(1, int(limit))),
-                ).fetchall()
+                lookup_keys = [normalized_thread_key]
+                if normalized_thread_key.startswith("wechat:"):
+                    legacy_thread_key = normalized_thread_key[len("wechat:") :].strip()
+                    if legacy_thread_key and legacy_thread_key not in lookup_keys:
+                        lookup_keys.append(legacy_thread_key)
+                rows = []
+                for lookup_key in lookup_keys:
+                    rows = self.conn.execute(
+                        """
+                        SELECT *
+                        FROM consciousness_ledger
+                        WHERE channel = ? AND thread_key = ?
+                        ORDER BY id DESC
+                        LIMIT ?
+                        """,
+                        (str(channel or "").strip(), lookup_key, max(1, int(limit))),
+                    ).fetchall()
+                    if rows:
+                        break
             else:
                 rows = self.conn.execute(
                     """
@@ -4672,27 +4729,45 @@ class MindGraph:
         with self._lock:
             thread_state = None
             if normalized_thread_key:
-                thread_state = self.conn.execute(
-                    "SELECT summary FROM mind_thread_state WHERE thread_key = ? AND channel = ?",
-                    (normalized_thread_key, channel),
-                ).fetchone()
+                lookup_keys = [normalized_thread_key]
+                if normalized_thread_key.startswith("wechat:"):
+                    legacy_thread_key = normalized_thread_key[len("wechat:") :].strip()
+                    if legacy_thread_key and legacy_thread_key not in lookup_keys:
+                        lookup_keys.append(legacy_thread_key)
+                for lookup_key in lookup_keys:
+                    thread_state = self.conn.execute(
+                        "SELECT summary FROM mind_thread_state WHERE thread_key = ? AND channel = ?",
+                        (lookup_key, channel),
+                    ).fetchone()
+                    if thread_state:
+                        break
             if thread_state:
                 thread_summary = str(thread_state["summary"] or "").strip()
-            rows = [
-                dict(row)
-                for row in self.conn.execute(
-                    """
-                SELECT id, text, source_store, source_id, source_kind, memory_class, updated_at
-                FROM mind_nodes
-                WHERE channel = ?
-                  AND thread_key = ?
-                  AND memory_class IN ('dream_residue', 'initiative_seed')
-                ORDER BY successful_recall_count DESC, updated_at DESC
-                LIMIT ?
-                    """,
-                    (channel, normalized_thread_key, max(1, limit)),
-                ).fetchall()
-            ]
+            rows = []
+            if normalized_thread_key:
+                lookup_keys = [normalized_thread_key]
+                if normalized_thread_key.startswith("wechat:"):
+                    legacy_thread_key = normalized_thread_key[len("wechat:") :].strip()
+                    if legacy_thread_key and legacy_thread_key not in lookup_keys:
+                        lookup_keys.append(legacy_thread_key)
+                for lookup_key in lookup_keys:
+                    rows = [
+                        dict(row)
+                        for row in self.conn.execute(
+                            """
+                        SELECT id, text, source_store, source_id, source_kind, memory_class, updated_at
+                        FROM mind_nodes
+                        WHERE channel = ?
+                          AND thread_key = ?
+                          AND memory_class IN ('dream_residue', 'initiative_seed')
+                        ORDER BY successful_recall_count DESC, updated_at DESC
+                        LIMIT ?
+                            """,
+                            (channel, lookup_key, max(1, limit)),
+                        ).fetchall()
+                    ]
+                    if rows:
+                        break
         lines = _dedupe_strings(compact_text(str(row.get("text", "")), 120) for row in rows if str(row.get("text", "")).strip())
         items = [
             {

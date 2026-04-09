@@ -12,11 +12,13 @@ from holo_host.config import load_config
 from holo_host.codex_runner import CodexRunner
 from holo_host.daemon import HoloDaemon
 from holo_host.mail_gateway import MaildirGateway
+from holo_host.mind_graph import MindGraph
 from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, TurnContext
 from holo_host.policy import AutonomyPolicy
 from holo_host.reply_api import HoloReplyService, _coerce_helper_artifact_path, shape_wechat_reply
 from holo_host.processors import build_attention_state, build_reply_bubbles, build_turn_plan
 from holo_host.store import QueueStore
+import holo_memory_library.rag_memory as rm
 
 
 class FakeRunner:
@@ -81,6 +83,7 @@ class FakeMemory:
         self.visual_rows: list[dict] = []
         self.action_selections: list[dict] = []
         self.consciousness_entries: list[dict] = []
+        self.outcome_appraisals: list[dict] = []
         self.game_state_data = {
             "trust_score": 0.6,
             "teasing_tolerance": 0.55,
@@ -138,6 +141,40 @@ class FakeMemory:
 
     def clear_packet_cache(self) -> None:
         return None
+
+    def appraise_outcome(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        action_type: str,
+        action_ref: str,
+        was_rewarding: float,
+        was_ignored: float,
+        relational_delta: float,
+        identity_delta: float,
+        future_initiative_bias: float,
+        future_resistance_bias: float,
+        metadata: dict | None = None,
+    ) -> dict:
+        payload = {
+            "status": "ok",
+            "channel": channel,
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "action_type": action_type,
+            "action_ref": action_ref,
+            "was_rewarding": was_rewarding,
+            "was_ignored": was_ignored,
+            "relational_delta": relational_delta,
+            "identity_delta": identity_delta,
+            "future_initiative_bias": future_initiative_bias,
+            "future_resistance_bias": future_resistance_bias,
+            "metadata": dict(metadata or {}),
+        }
+        self.outcome_appraisals.append(payload)
+        return payload
 
     def _world_state_for(self, *, thread_key: str, chat_name: str, channel: str) -> dict:
         normalized_thread = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
@@ -457,7 +494,11 @@ class FakeMemory:
     def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
         self.sidecar_requests.append({"query": query, "context": dict(context or {})})
         context = dict(context or {})
-        thread_key = str(context.get("thread_key", "") or context.get("incoming_thread_key", "") or context.get("chat_name", "") or "Nemoqi")
+        thread_key = self._canonical_wechat_thread_key(
+            str(context.get("thread_key", "") or context.get("incoming_thread_key", "") or context.get("chat_name", "") or "Nemoqi"),
+            str(context.get("chat_name", "") or ""),
+            str(context.get("channel", "wechat") or "wechat"),
+        )
         chat_name = str(context.get("chat_name", "") or thread_key or "Nemoqi")
         channel = str(context.get("channel", "wechat") or "wechat")
         autobiographical_state = dict(self._autobiographical_state)
@@ -932,7 +973,7 @@ class FakeMemory:
         return completed
 
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
-        packet = self.sidecar_packet("", context={})
+        packet = self.sidecar_packet("", context={"thread_key": thread_key, "chat_name": chat_name, "channel": channel})
         return {
             "channel": channel,
             "thread_key": thread_key or "",
@@ -951,7 +992,13 @@ class FakeMemory:
         return payload
 
     def world_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
-        return self._world_state_for(thread_key=str(thread_key or chat_name or "Nemoqi"), chat_name=str(chat_name or thread_key or "Nemoqi"), channel=channel)
+        canonical_thread_key = self._canonical_wechat_thread_key(
+            str(thread_key or chat_name or "Nemoqi"),
+            str(chat_name or thread_key or "Nemoqi"),
+            channel,
+        )
+        canonical_chat_name = str(chat_name or thread_key or "Nemoqi")
+        return self._world_state_for(thread_key=canonical_thread_key, chat_name=canonical_chat_name, channel=channel)
 
     def trace_counterfactual(self, *, query: str, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 3) -> dict:
         packet = self.sidecar_packet(query, context={"thread_key": thread_key, "chat_name": chat_name, "channel": channel})
@@ -1001,7 +1048,7 @@ class FakeMemory:
         ][:limit]
 
     def visual_memory_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict:
-        normalized = str(thread_key or chat_name or "").strip()
+        normalized = self._canonical_wechat_thread_key(str(thread_key or chat_name or "").strip(), str(chat_name or thread_key or "").strip(), channel)
         items = [item for item in self.visual_rows if str(item.get("thread_key", "")).strip() == normalized]
         if not items:
             return {"items": [], "scene_summary": "", "objects": [], "text_ocr": "", "mood_imagery": "", "visual_anchors": []}
@@ -1046,6 +1093,24 @@ class FakeMemory:
                 {"loop_name": "continuity_audit"},
             ],
         }
+
+    @staticmethod
+    def _canonical_wechat_thread_key(thread_key: str, chat_name: str = "", channel: str = "wechat") -> str:
+        normalized_channel = str(channel or "").strip().lower()
+        current = str(thread_key or "").strip()
+        if normalized_channel != "wechat":
+            return current
+        if current.startswith("wechat:"):
+            suffix = current[len("wechat:") :].strip()
+            if suffix and not suffix.endswith("@chatroom") and not suffix.startswith("wxid_"):
+                return f"wechat:{suffix}"
+            return current
+        if current and not current.endswith("@chatroom") and not current.startswith("wxid_"):
+            return f"wechat:{current}"
+        fallback = str(chat_name or "").strip()
+        if fallback and not fallback.endswith("@chatroom") and not fallback.startswith("wxid_"):
+            return f"wechat:{fallback}"
+        return current
 
     def set_brain_mode(self, mode: str, *, note: str = "") -> dict:
         self.brain_mode = mode
@@ -1442,6 +1507,7 @@ class FakeMemory:
         selected_action: str = "",
         payload: dict | None = None,
     ) -> dict:
+        thread_key = self._canonical_wechat_thread_key(thread_key, chat_name, channel)
         entry = {
             "id": len(self.consciousness_entries) + 1,
             "channel": channel,
@@ -1457,7 +1523,7 @@ class FakeMemory:
         return {"status": "ok", **entry}
 
     def consciousness_ledger(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat", limit: int = 20) -> dict:
-        normalized_thread = str(thread_key or chat_name or "").strip()
+        normalized_thread = self._canonical_wechat_thread_key(str(thread_key or chat_name or "").strip(), str(chat_name or thread_key or "").strip(), channel)
         entries = [
             dict(item)
             for item in self.consciousness_entries
@@ -1489,7 +1555,10 @@ class FakeMemory:
         }
 
     def record_outcome_appraisal(self, *, thread_key: str, chat_name: str, channel: str = "wechat", **payload) -> dict:
-        return {"status": "ok", "thread_key": thread_key, "chat_name": chat_name, "channel": channel, **payload}
+        thread_key = self._canonical_wechat_thread_key(thread_key, chat_name, channel)
+        record = {"status": "ok", "thread_key": thread_key, "chat_name": chat_name, "channel": channel, **payload}
+        self.outcome_appraisals.append(record)
+        return record
 
     def latest_outcome_memory(self, *, thread_key: str, chat_name: str, channel: str = "wechat") -> dict:
         return dict(self.sidecar_packet("", context={}).get("outcome_memory", {}))
@@ -1655,26 +1724,71 @@ class QueueStoreTests(unittest.TestCase):
             conn.close()
 
             store = QueueStore(db_path)
-            store.initialize()
+            try:
+                store.initialize()
 
-            contact = store.find_contact("wechat:Nemoqi")
-            self.assertIsNotNone(contact)
-            contacts = store._fetchall("SELECT * FROM contacts WHERE email LIKE 'wechat:%'")
-            self.assertEqual(len(contacts), 1)
+                contact = store.find_contact("wechat:Nemoqi")
+                self.assertIsNotNone(contact)
+                contacts = store._fetchall("SELECT * FROM contacts WHERE email LIKE 'wechat:%'")
+                self.assertEqual(len(contacts), 1)
 
-            thread = store.find_thread(channel="wechat", thread_key="wechat:Nemoqi")
-            self.assertIsNotNone(thread)
-            self.assertEqual(thread["thread_key"], "Nemoqi")
-            self.assertEqual(thread["codex_session_id"], "legacy-session")
+                thread = store.find_thread(channel="wechat", thread_key="wechat:Nemoqi")
+                self.assertIsNotNone(thread)
+                self.assertEqual(thread["thread_key"], "wechat:Nemoqi")
+                legacy_lookup = store.find_thread(channel="wechat", thread_key="Nemoqi")
+                self.assertIsNotNone(legacy_lookup)
+                self.assertEqual(legacy_lookup["thread_key"], "wechat:Nemoqi")
+                self.assertEqual(thread["codex_session_id"], "legacy-session")
 
-            merged_message = store._fetchone("SELECT * FROM messages WHERE id = ?", (message_row_id,))
-            merged_job = store._fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
-            self.assertEqual(int(merged_message["thread_id"]), int(thread["id"]))
-            self.assertEqual(int(merged_job["thread_id"]), int(thread["id"]))
-            self.assertEqual(int(merged_message["contact_id"]), int(contact["id"]))
-            self.assertEqual(int(merged_job["contact_id"]), int(contact["id"]))
-            self.assertEqual(int(thread["id"]), int(canonical_thread_id))
-            store.close()
+                merged_message = store._fetchone("SELECT * FROM messages WHERE id = ?", (message_row_id,))
+                merged_job = store._fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+                self.assertEqual(int(merged_message["thread_id"]), int(thread["id"]))
+                self.assertEqual(int(merged_job["thread_id"]), int(thread["id"]))
+                self.assertEqual(int(merged_message["contact_id"]), int(contact["id"]))
+                self.assertEqual(int(merged_job["contact_id"]), int(contact["id"]))
+            finally:
+                store.close()
+
+    def test_record_outcome_appraisal_keeps_canonical_wechat_thread_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            graph = MindGraph(root, rag=rm, db_path=root / ".holo_runtime" / "mind_graph.sqlite3")
+            try:
+                report = graph.record_outcome_appraisal(
+                    channel="wechat",
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    action_type="reply_once",
+                    action_ref="turn-1",
+                    was_rewarding=0.72,
+                    was_ignored=0.04,
+                    relational_delta=0.18,
+                    identity_delta=0.11,
+                    future_initiative_bias=0.62,
+                    future_resistance_bias=0.12,
+                    metadata={
+                        "evidence_refs": ["unit:reply-1"],
+                        "usage_total_tokens": 18,
+                        "selected_prediction": {
+                            "predicted_relational_delta": 0.16,
+                            "predicted_identity_delta": 0.08,
+                            "predicted_response_quality": 0.71,
+                            "predicted_risk": 0.14,
+                        },
+                    },
+                )
+                subject = graph.subject_state(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
+                appraisal = graph.conn.execute(
+                    "SELECT thread_key, action_ref, metadata_json FROM outcome_appraisals ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+
+                self.assertEqual(report["status"], "ok")
+                self.assertEqual(subject["thread_key"], "wechat:Nemoqi")
+                self.assertEqual(str(appraisal["thread_key"]), "wechat:Nemoqi")
+                self.assertEqual(str(appraisal["action_ref"]), "turn-1")
+                self.assertIn("unit:reply-1", json.loads(str(appraisal["metadata_json"]))["evidence_refs"])
+            finally:
+                graph.close()
 
 
 class CodexRunnerTests(unittest.TestCase):
@@ -2368,7 +2482,7 @@ class ReplyServiceTests(unittest.TestCase):
                 self.assertEqual(second["action"], "reply")
                 self.assertEqual(runner.calls[1][1], "thread-123")
                 self.assertEqual(memory.sidecar_requests[-1]["context"]["chat_name"], "TestContact")
-                self.assertEqual(memory.sidecar_requests[-1]["context"]["thread_key"], "TestContact")
+                self.assertEqual(memory.sidecar_requests[-1]["context"]["thread_key"], "wechat:TestContact")
             finally:
                 close_service_handles(service)
     def test_reply_service_uses_shorter_wechat_prompt_style(self) -> None:
@@ -2526,15 +2640,15 @@ class ReplyServiceTests(unittest.TestCase):
                 self.assertEqual(record["metadata"]["chat_name"], "Nemoqi")
                 self.assertEqual(record["metadata"]["sender"], "Nemoqi")
                 self.assertEqual(record["metadata"]["channel"], "wechat")
-                self.assertEqual(record["metadata"]["thread_key"], "Nemoqi")
+                self.assertEqual(record["metadata"]["thread_key"], "wechat:Nemoqi")
                 self.assertEqual(record["metadata"]["message_id"], "wechat-msg-1")
                 self.assertEqual(record["metadata"]["source_ref"], "window:weixin")
                 self.assertEqual(record["metadata"]["capture_path"], "C:/capture.png")
                 self.assertTrue(record["metadata"]["mentioned"])
                 self.assertFalse(record["metadata"]["is_group"])
                 self.assertEqual(record["metadata"]["utterance_plan"]["beats"], ["receive", "pivot", "landing"])
-                self.assertEqual(memory.sidecar_requests[0]["context"]["thread_key"], "Nemoqi")
-                self.assertEqual(memory.sidecar_requests[0]["context"]["incoming_thread_key"], "Nemoqi")
+                self.assertEqual(memory.sidecar_requests[0]["context"]["thread_key"], "wechat:Nemoqi")
+                self.assertEqual(memory.sidecar_requests[0]["context"]["incoming_thread_key"], "wechat:Nemoqi")
             finally:
                 close_service_handles(service)
     def test_reply_service_refreshes_wechat_history_before_recall_reply(self) -> None:
@@ -2923,10 +3037,10 @@ wechat_helper_config_path = ""
                 self.assertTrue(runner.calls)
                 self.assertTrue(memory.action_selections)
                 self.assertTrue(any(item["selected_action"]["action_type"] == "external_lookup" for item in memory.action_selections))
-                events = store.recent_events(channel="wechat", thread_key="Nemoqi", limit=5)
+                events = store.recent_events(channel="wechat", thread_key="wechat:Nemoqi", limit=5)
                 self.assertTrue(events)
                 self.assertEqual(str(events[0]["status"]), "completed")
-                ledger = service.deliberation_ledger(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", limit=10)
+                ledger = service.deliberation_ledger(thread_key="wechat:Nemoqi", chat_name="Nemoqi", channel="wechat", limit=10)
                 entry_types = [str(item.get("entry_type", "")) for item in ledger.get("entries", [])]
                 self.assertIn("ingest_event", entry_types)
                 self.assertIn("subject_decide", entry_types)
@@ -2951,7 +3065,7 @@ wechat_helper_config_path = ""
                         "message_id": "stage6-ledger-1",
                     }
                 )
-                payload = service.deliberation_ledger(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", limit=10)
+                payload = service.deliberation_ledger(thread_key="wechat:Nemoqi", chat_name="Nemoqi", channel="wechat", limit=10)
                 self.assertTrue(payload["entries"])
                 self.assertTrue(all(str(item.get("entry_type", "")).strip() for item in payload["entries"]))
             finally:
@@ -3088,6 +3202,90 @@ wechat_helper_config_path = ""
                     memory.ingested[0][0],
                     "/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history_exports/demo.md",
                 )
+            finally:
+                close_service_handles(service)
+
+    def test_reply_service_preserves_canonical_wechat_thread_key_and_outcome_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("短一点说，先接着往下。")
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "thread_key": "Nemoqi",
+                        "text": "接着刚才那条线往下说。",
+                        "channel": "wechat",
+                        "message_id": "stage12-reply-1",
+                    }
+                )
+                thread_row = store.find_thread(channel="wechat", thread_key="wechat:Nemoqi")
+                bare_thread = store.conn.execute(
+                    "SELECT * FROM threads WHERE channel = 'wechat' AND thread_key = ?",
+                    ("Nemoqi",),
+                ).fetchone()
+
+                self.assertEqual(result["thread_key"], "wechat:Nemoqi")
+                self.assertIsNotNone(thread_row)
+                self.assertIsNone(bare_thread)
+                self.assertTrue(memory.outcome_appraisals)
+                appraisal = memory.outcome_appraisals[-1]
+                self.assertEqual(appraisal["thread_key"], "wechat:Nemoqi")
+                self.assertEqual(appraisal["action_type"], str(result["selected_action"]["action_type"]))
+                self.assertTrue(str(appraisal["action_ref"]))
+                self.assertEqual(appraisal["metadata"]["thread_key"], "wechat:Nemoqi")
+                self.assertEqual(appraisal["metadata"]["message_id"], "stage12-reply-1")
+                self.assertTrue(appraisal["metadata"]["usage_evidence_refs"])
+            finally:
+                close_service_handles(service)
+
+    def test_reply_service_appraises_defer_and_silence_with_distinct_action_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner("unused"), memory=memory)
+            try:
+                defer_result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "thread_key": "wechat:Nemoqi",
+                        "text": "later after lunch",
+                        "channel": "wechat",
+                        "message_id": "stage12-defer-1",
+                    }
+                )
+                silence_result = service.handle_reply(
+                    {
+                        "chat_name": "Nemoqi",
+                        "sender": "Nemoqi",
+                        "thread_key": "wechat:Nemoqi",
+                        "text": "ok",
+                        "channel": "wechat",
+                        "message_id": "stage12-silence-1",
+                    }
+                )
+
+                self.assertEqual(defer_result["action"], "defer_reply")
+                self.assertEqual(silence_result["action"], "silence")
+                appraisals = [
+                    record
+                    for record in memory.outcome_appraisals
+                    if str(record.get("metadata", {}).get("selected_action", "")).strip() in {"defer_reply", "silence"}
+                ]
+                self.assertGreaterEqual(len(appraisals), 2)
+                defer_appraisal = next(item for item in appraisals if str(item.get("metadata", {}).get("selected_action", "")) == "defer_reply")
+                silence_appraisal = next(item for item in appraisals if str(item.get("metadata", {}).get("selected_action", "")) == "silence")
+                self.assertNotEqual(str(defer_appraisal["action_ref"]), str(silence_appraisal["action_ref"]))
+                self.assertEqual(defer_appraisal["metadata"]["selected_action"], "defer_reply")
+                self.assertEqual(silence_appraisal["metadata"]["selected_action"], "silence")
             finally:
                 close_service_handles(service)
 
