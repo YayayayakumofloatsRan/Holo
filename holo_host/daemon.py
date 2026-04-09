@@ -185,7 +185,7 @@ class HoloDaemon:
         self.store = store or QueueStore(config.runtime.db_path)
         self.store.initialize()
         self.gateway = gateway or build_mail_gateway(config)
-        self.runner = runner or CodexRunner(config)
+        self.runner = runner or CodexRunner(config, usage_recorder=self.store.record_processor_usage)
         self.memory = memory or MemoryBridge(
             config.runtime.repo_root,
             top_k=config.memory.prompt_top_k,
@@ -1447,9 +1447,16 @@ class HoloDaemon:
         active_goals = [dict(item) for item in current.get("active_goals", []) if isinstance(item, dict)]
         subject = self.memory.graph.subject_state(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat")
         self_model = self.memory.self_model_state()
+        engineering_snapshot = dict(dict(self_model.get("metadata", {})).get("engineering_snapshot", {}))
         world_state = dict(subject.get("world_state", {}))
         expectations = dict(world_state.get("response_expectations", {}))
         deficits = {str(item).strip() for item in self_model.get("active_deficits", []) if str(item).strip()}
+        engineering_deficits = {str(item).strip() for item in engineering_snapshot.get("active_deficits", []) if str(item).strip()}
+        budget_pressure = float(engineering_snapshot.get("budget_pressure", 0.0) or 0.0)
+        engineering_confidence = float(engineering_snapshot.get("engineering_confidence", 0.0) or 0.0)
+        provider_state = dict(engineering_snapshot.get("provider_state", {}))
+        routing_state = dict(engineering_snapshot.get("routing_state", {}))
+        cache_state = dict(engineering_snapshot.get("cache_state", {}))
         seeded_builder = getattr(self.memory.graph, "_default_goal_state", None)
         if callable(seeded_builder):
             seeded_state = dict(seeded_builder())
@@ -1558,6 +1565,80 @@ class HoloDaemon:
             }
         if not active_goals:
             active_goals = [dict(item) for item in seeded_state.get("active_goals", []) if isinstance(item, dict)]
+        goal_by_id = {
+            str(goal.get("goal_id", "") or "").strip(): goal
+            for goal in active_goals
+            if isinstance(goal, dict) and str(goal.get("goal_id", "") or "").strip()
+        }
+
+        def _upsert_engineering_goal(
+            *,
+            goal_id: str,
+            goal_type: str,
+            summary: str,
+            priority: float,
+            progress: float,
+            evidence: list[str],
+            stalled_reason: str,
+        ) -> None:
+            payload = {
+                "goal_id": goal_id,
+                "goal_type": goal_type,
+                "summary": summary,
+                "priority": round(self.memory._clamp(priority, default=0.5), 4),
+                "progress": round(self.memory._clamp(progress, default=0.0), 4),
+                "target_thread": "",
+                "evidence": [str(item).strip() for item in evidence if str(item).strip()][:4],
+                "last_moved_at": utc_now(),
+                "stalled_reason": stalled_reason,
+            }
+            existing = goal_by_id.get(goal_id)
+            if existing is None:
+                active_goals.append(payload)
+                goal_by_id[goal_id] = payload
+                return
+            existing.update(payload)
+
+        if budget_pressure >= 0.24 or {"usage_visibility_cold", "operator_overplanning_risk"} & engineering_deficits:
+            _upsert_engineering_goal(
+                goal_id="cost_discipline",
+                goal_type="cost_discipline",
+                summary="keep token burn visible and bounded before adding more background planning",
+                priority=0.5 + budget_pressure * 0.22,
+                progress=max(0.0, 1.0 - budget_pressure),
+                evidence=sorted(engineering_deficits & {"usage_visibility_cold", "operator_overplanning_risk"}) or ["budget_pressure"],
+                stalled_reason="" if budget_pressure < 0.3 else "budget_pressure",
+            )
+        if not bool(provider_state.get("fallback_ready", False)) or list(routing_state.get("routing_gaps", [])):
+            _upsert_engineering_goal(
+                goal_id="routing_resilience",
+                goal_type="routing_resilience",
+                summary="keep provider fallback and task routing resilience explicit and bounded",
+                priority=0.52 + (0.12 if not bool(provider_state.get("fallback_ready", False)) else 0.0),
+                progress=0.34 if not bool(provider_state.get("fallback_ready", False)) else 0.58,
+                evidence=sorted(engineering_deficits & {"provider_fallback_unready"}) or list(routing_state.get("routing_gaps", []))[:3],
+                stalled_reason="provider_fallback_unready" if not bool(provider_state.get("fallback_ready", False)) else "",
+            )
+        if {"cache_reuse_weak", "cache_coldness"} & (engineering_deficits | deficits):
+            _upsert_engineering_goal(
+                goal_id="cache_warmth",
+                goal_type="cache_warmth",
+                summary="warm reuse before deeper planning or recall-heavy elaboration",
+                priority=0.54 + (0.08 if "cache_reuse_weak" in engineering_deficits else 0.0),
+                progress=float(cache_state.get("hit_ratio", 0.0) or 0.0),
+                evidence=sorted((engineering_deficits | deficits) & {"cache_reuse_weak", "cache_coldness"}) or ["cache_hit_ratio"],
+                stalled_reason="cache_reuse_weak" if "cache_reuse_weak" in engineering_deficits else "",
+            )
+        if {"expression_calibration_gap", "stiffness_drift"} & (engineering_deficits | deficits):
+            _upsert_engineering_goal(
+                goal_id="expression_calibration",
+                goal_type="expression_calibration",
+                summary="keep expression self-aware and lightweight without drifting into stiffness",
+                priority=0.5 + (0.08 if "expression_calibration_gap" in engineering_deficits else 0.0),
+                progress=max(0.0, engineering_confidence - 0.18),
+                evidence=sorted((engineering_deficits | deficits) & {"expression_calibration_gap", "stiffness_drift"}),
+                stalled_reason="expression_calibration_gap" if "expression_calibration_gap" in engineering_deficits else "",
+            )
         goal_commitments = [dict(item) for item in current.get("goal_commitments", []) if isinstance(item, dict)]
         if not goal_commitments:
             goal_commitments = [dict(item) for item in seeded_state.get("goal_commitments", []) if isinstance(item, dict)]
@@ -1571,6 +1652,10 @@ class HoloDaemon:
             "liveliness_balance": 0.66 + (0.06 if "stiffness_drift" in deficits else 0.0),
             "self_repair": 0.64 + (0.1 if deficits else 0.0),
             "contact_maintenance": 0.62 + float(expectations.get("initiative_receptivity", 0.0) or 0.0) * 0.1,
+            "cost_discipline": 0.48 + budget_pressure * 0.24,
+            "routing_resilience": 0.5 + (0.1 if not bool(provider_state.get("fallback_ready", False)) else 0.0),
+            "cache_warmth": 0.52 + (0.08 if "cache_reuse_weak" in engineering_deficits else 0.0),
+            "expression_calibration": 0.48 + (0.08 if "expression_calibration_gap" in engineering_deficits else 0.0),
         }
         refreshed: list[dict[str, Any]] = []
         goal_progress = dict(current.get("goal_progress", {}))
@@ -1586,6 +1671,14 @@ class HoloDaemon:
                 goal["stalled_reason"] = "" if float(expectations.get("reply_likelihood", 0.0) or 0.0) >= 0.2 else "low_reply_likelihood"
             if goal_type == "contact_maintenance":
                 goal["stalled_reason"] = "" if float(expectations.get("initiative_receptivity", 0.0) or 0.0) >= 0.18 else "initiative_window_cold"
+            if goal_type == "cost_discipline":
+                goal["stalled_reason"] = "" if budget_pressure < 0.3 else "budget_pressure"
+            if goal_type == "routing_resilience":
+                goal["stalled_reason"] = "" if bool(provider_state.get("fallback_ready", False)) and not list(routing_state.get("routing_gaps", [])) else "provider_fallback_unready"
+            if goal_type == "cache_warmth":
+                goal["stalled_reason"] = "" if float(cache_state.get("hit_ratio", 0.0) or 0.0) >= 0.22 else "cache_reuse_weak"
+            if goal_type == "expression_calibration":
+                goal["stalled_reason"] = "" if "expression_calibration_gap" not in engineering_deficits else "expression_calibration_gap"
             goal["last_moved_at"] = utc_now()
             goal_id = str(goal.get("goal_id", "") or "")
             if goal_id:
@@ -1597,7 +1690,7 @@ class HoloDaemon:
                 )
             refreshed.append(goal)
         seen_goal_windows = {str(item.get("goal_id", "") or "").strip() for item in next_goal_windows if isinstance(item, dict)}
-        for goal in refreshed[:6]:
+        for goal in refreshed[:10]:
             goal_id = str(goal.get("goal_id", "") or "").strip()
             if not goal_id or goal_id in seen_goal_windows:
                 continue
@@ -1619,9 +1712,13 @@ class HoloDaemon:
                     {
                         "summary": "keep continuity alive without sliding back into stiffness",
                         "goal_types": ["relationship_continuity", "liveliness_balance"],
-                    }
+                    },
+                    {
+                        "summary": "keep relationship continuity warm without letting background repair crowd out the reply path",
+                        "goal_types": ["relationship_continuity", "cost_discipline", "expression_calibration"],
+                    },
                 ],
-                "next_goal_windows": next_goal_windows[:8]
+                "next_goal_windows": next_goal_windows[:10]
                 + [
                     {
                         "goal_id": "relationship_continuity:Nemoqi",

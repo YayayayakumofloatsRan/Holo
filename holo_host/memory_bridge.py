@@ -690,10 +690,20 @@ class MemoryBridge:
                 boost = 0.1 + priority * 0.06
             elif goal_type == "contact_maintenance" and action_type in {"reply_once", "proactive_ping", "defer_reply"}:
                 boost = 0.08 + priority * 0.06
+            elif goal_type == "cost_discipline" and action_type in {"reply_once", "defer_reply", "operator_self_fix", "history_refresh"}:
+                boost = 0.06 + priority * 0.05
+            elif goal_type == "routing_resilience" and action_type in {"operator_self_fix", "defer_reply", "external_lookup"}:
+                boost = 0.05 + priority * 0.05
+            elif goal_type == "cache_warmth" and action_type in {"history_refresh", "reply_once", "defer_reply"}:
+                boost = 0.06 + priority * 0.05
+            elif goal_type == "expression_calibration" and action_type in {"reply_once", "defer_reply", "operator_self_fix", "continuity_defense"}:
+                boost = 0.05 + priority * 0.05
             if action_type == "silence" and goal_type in {"relationship_continuity", "contact_maintenance"}:
                 boost -= 0.14
             if action_type == "reply_multi" and str(intent_state.get("low_signal", False)).lower() in {"true", "1"}:
                 boost -= 0.16
+            if action_type == "reply_multi" and goal_type in {"cost_discipline", "cache_warmth", "expression_calibration"}:
+                boost -= 0.08
             if boost > 0.01:
                 goal_hits.append(goal_type)
             goal_alignment_score += boost
@@ -711,6 +721,10 @@ class MemoryBridge:
         if "stiffness_drift" in unresolved and action_type == "reply_multi":
             identity_consistency_score -= 0.08
         if "cache_coldness" in unresolved and action_type == "history_refresh":
+            identity_consistency_score += 0.05
+        if "expression_calibration_gap" in unresolved and action_type == "reply_multi":
+            identity_consistency_score -= 0.08
+        if "cache_reuse_weak" in unresolved and action_type == "history_refresh":
             identity_consistency_score += 0.05
         if str(intent_state.get("low_signal", False)).lower() in {"true", "1"} and action_type == "reply_multi":
             identity_consistency_score -= 0.14

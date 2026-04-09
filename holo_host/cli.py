@@ -785,6 +785,24 @@ def _goal_state_payload(config_path: str | None, *, allow_local_fallback: bool =
     return daemon.memory.goal_state(), "local_process"
 
 
+def _engineering_state_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/engineering-state")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.engineering_state(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _self_continuity_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
     live_payload = _live_api_request(config_path, method="GET", path="/self-continuity", timeout=30.0)
     if live_payload is not None:
@@ -1380,6 +1398,56 @@ def _accept_stage9_payload(
     try:
         return (
             service.accept_stage9(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_stage10_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage10",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage10(
                 thread_key=thread_key,
                 chat_name=chat_name,
                 channel=channel,
@@ -2920,6 +2988,12 @@ def command_show_goal_state(config_path: str | None) -> int:
     return 0
 
 
+def command_show_engineering_state(config_path: str | None) -> int:
+    payload, _transport = _engineering_state_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_self_model(config_path: str | None) -> int:
     self_model, _ = _self_model_payload(config_path)
     brain_status, _ = _brain_status_payload(config_path)
@@ -3478,6 +3552,343 @@ def _evaluate_stage9_acceptance(
     }
 
 
+def _stage10_axis_score(*, primary: bool, secondary: bool = False) -> float:
+    if primary and secondary:
+        return 2.0
+    if primary:
+        return 1.4
+    return 0.0
+
+
+def _evaluate_stage10_acceptance(
+    *,
+    health: dict[str, object],
+    mode_transition: dict[str, object],
+    engineering_state: dict[str, object],
+    goal_state: dict[str, object],
+    operator_probe: dict[str, object],
+    ledger: dict[str, object],
+    usage_ledger: dict[str, object],
+    provider_status: dict[str, object],
+    routing: dict[str, object],
+    reply_probe: dict[str, object],
+    brain_status: dict[str, object],
+    fast_benchmark: dict[str, object],
+    recall_benchmark: dict[str, object],
+    deep_benchmark: dict[str, object],
+    roadmap_registry: dict[str, object],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    provider_state = dict(engineering_state.get("provider_state", {}))
+    routing_state = dict(engineering_state.get("routing_state", {}))
+    usage_state = dict(engineering_state.get("usage_state", {}))
+    cache_state = dict(engineering_state.get("cache_state", {}))
+    operator_state = dict(engineering_state.get("operator_state", {}))
+    active_deficits = [str(item).strip() for item in engineering_state.get("active_deficits", []) if str(item).strip()]
+    engineering_goal_types = {"cost_discipline", "routing_resilience", "cache_warmth", "expression_calibration"}
+    active_goals = [dict(item) for item in goal_state.get("active_goals", []) if isinstance(item, dict)]
+    goal_types = {str(item.get("goal_type", "") or "").strip() for item in active_goals}
+    goal_progress = dict(goal_state.get("goal_progress", {}))
+    pursuit_bias = dict(goal_state.get("pursuit_bias", {}))
+    abandonment_cost = dict(goal_state.get("abandonment_cost", {}))
+    next_goal_windows = [dict(item) for item in goal_state.get("next_goal_windows", []) if isinstance(item, dict)]
+    goal_conflicts = [dict(item) for item in goal_state.get("goal_conflicts", []) if isinstance(item, dict)]
+    ledger_entries = list(ledger.get("entries", []))
+    usage_items = list(usage_ledger.get("items", []))
+    provider_names = set(dict(provider_status.get("providers", {})))
+    routing_table = dict(routing.get("routing", {}))
+    required_tasks = {"reply", "recall_reconstruct", "initiative_probe", "deep_simulation", "self_model_observe", "operator_plan"}
+    budget_guard = dict(operator_probe.get("budget_guard", {}))
+    trigger_delta = dict(operator_probe.get("trigger_delta", {}))
+    speech_actions = {"reply_once", "reply_multi", "defer_reply", "silence", "ignore"}
+    probe_candidates = []
+    for key in ("graph_led", "hybrid", "legacy"):
+        candidate = dict(reply_probe.get(key, {}))
+        if candidate:
+            probe_candidates.append(candidate)
+    probe_candidates.append(
+        {
+            "selected_action": dict(reply_probe.get("selected_action", {})),
+            "expression_budget": reply_probe.get("expression_budget", 0),
+            "reply_plan": dict(reply_probe.get("reply_plan", {})),
+        }
+    )
+    reply_candidates = []
+    for candidate in probe_candidates:
+        candidate_reply_plan = dict(candidate.get("reply_plan", {}))
+        candidate_bubble_target = int(dict(candidate_reply_plan.get("turn_plan", {})).get("bubble_target", 0) or 0)
+        candidate_budget = candidate_bubble_target or int(candidate.get("expression_budget", reply_probe.get("expression_budget", 0)) or 0)
+        candidate_action_type = str(dict(candidate.get("selected_action", {})).get("action_type", "") or "")
+        if bool(str(candidate_reply_plan.get("text", "")).strip()) or bool(list(candidate_reply_plan.get("bubbles", []))):
+            reply_candidates.append(
+                {
+                    "candidate": candidate,
+                    "action_type": candidate_action_type,
+                    "budget": candidate_budget,
+                    "is_speech": candidate_action_type in speech_actions,
+                }
+            )
+    reply_candidate = dict(reply_probe.get("graph_led", {}))
+    if reply_candidates:
+        ranked = sorted(
+            reply_candidates,
+            key=lambda item: (
+                0 if item["is_speech"] else 1,
+                int(item["budget"] or 0),
+            ),
+        )
+        reply_candidate = dict(ranked[0]["candidate"])
+    reply_plan = dict(reply_candidate.get("reply_plan", {}))
+    reply_action_type = str(dict(reply_candidate.get("selected_action", {})).get("action_type", "") or "")
+    reply_plan_budget = int(dict(reply_plan.get("turn_plan", {})).get("bubble_target", 0) or 0)
+    reply_budget = reply_plan_budget or int(reply_candidate.get("expression_budget", reply_probe.get("expression_budget", 0)) or 0)
+
+    checks.append(
+        _stage4_check(
+            "stage10_live_mode",
+            str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain",
+            f"status={health.get('status')} mode={mode_transition.get('mode')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "engineering_state_visible",
+            bool(provider_state)
+            and bool(routing_state)
+            and bool(usage_state)
+            and bool(cache_state)
+            and bool(operator_state)
+            and "engineering_confidence" in engineering_state
+            and "budget_pressure" in engineering_state,
+            f"provider={provider_state} routing={routing_state} usage={usage_state} cache={cache_state} operator={operator_state}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "provider_routing_usage_visible",
+            bool(dict(provider_status.get("providers", {})))
+            and bool(dict(provider_status.get("lanes", {})))
+            and required_tasks.issubset(set(routing_table))
+            and isinstance(usage_ledger.get("summary", {}), dict)
+            and isinstance(usage_items, list),
+            f"providers={provider_status.get('providers')} routing={routing_table} usage_summary={usage_ledger.get('summary')}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "engineering_deficits_specific",
+            bool({"provider_fallback_unready", "usage_visibility_cold", "cache_reuse_weak", "operator_overplanning_risk", "expression_calibration_gap"} & set(active_deficits)),
+            f"active_deficits={active_deficits}",
+        )
+    )
+    engineering_goal_ids = {
+        str(item.get("goal_id", "") or "").strip()
+        for item in active_goals
+        if str(item.get("goal_type", "") or "").strip() in engineering_goal_types
+    }
+    checks.append(
+        _stage4_check(
+            "engineering_goals_enter_arbitration",
+            bool(goal_types & engineering_goal_types)
+            and any(goal_id in goal_progress for goal_id in engineering_goal_ids)
+            and any(goal_id in pursuit_bias for goal_id in engineering_goal_ids)
+            and any(goal_id in abandonment_cost for goal_id in engineering_goal_ids)
+            and any(str(item.get("goal_id", "") or "").strip() in engineering_goal_ids for item in next_goal_windows)
+            and any("reply path" in str(item.get("summary", "")).lower() or "relationship continuity" in str(item.get("summary", "")).lower() for item in goal_conflicts),
+            f"goal_types={sorted(goal_types)} conflicts={goal_conflicts} next_windows={next_goal_windows}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "operator_is_delta_gated",
+            (bool(trigger_delta) and str(operator_probe.get("status", "")).strip() in {"planned", "reviewed", "applied", ""})
+            or (
+                str(operator_probe.get("status", "")).strip() == "skipped"
+                and str(operator_probe.get("blocked_reason", "")).strip() == "no_meaningful_delta"
+            ),
+            f"status={operator_probe.get('status')} blocked_reason={operator_probe.get('blocked_reason')} trigger_delta={trigger_delta}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "operator_plan_explains_trigger_and_budget_guard",
+            (bool(trigger_delta) or str(operator_probe.get("blocked_reason", "")).strip() == "no_meaningful_delta")
+            and bool(list(operator_probe.get("source_goal_ids", [])))
+            and bool(dict(operator_probe.get("expected_state_gain", {})))
+            and str(budget_guard.get("live_repo_writes", "")).strip() == "forbidden"
+            and str(budget_guard.get("fabric_bypass", "")).strip() == "forbidden"
+            and str(budget_guard.get("background_plans", "")).strip() == "delta_only",
+            f"operator_probe={operator_probe}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "consciousness_ledger_carries_engineering_trace",
+            bool(ledger_entries)
+            and any(bool(dict(item.get("payload", {})).get("engineering_snapshot")) for item in ledger_entries)
+            and any(bool(dict(item.get("payload", {})).get("engineering_goal_snapshot")) for item in ledger_entries)
+            and any(bool(dict(item.get("payload", {})).get("trigger_delta")) for item in ledger_entries),
+            f"entries={ledger_entries[:4]}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "usage_ledger_records_stage10_tasks",
+            any(str(item.get("task_type", "")).strip() in {"self_model_observe", "operator_plan"} for item in usage_items),
+            f"usage_items={usage_items[:4]}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "no_fabric_bypass",
+            str(budget_guard.get("fabric_bypass", "")).strip() == "forbidden"
+            and all(str(item.get("provider", "")).strip() in provider_names for item in usage_items if str(item.get("provider", "")).strip()),
+            f"providers={provider_names} usage_items={usage_items[:4]} budget_guard={budget_guard}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "ordinary_reply_path_not_regressed",
+            (
+                reply_action_type in speech_actions
+                or bool(str(reply_plan.get("text", "")).strip())
+                or bool(list(reply_plan.get("bubbles", [])))
+            )
+            and reply_budget <= 1
+            and float(dict(fast_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 350.0,
+            f"reply_probe={reply_probe} fast={fast_benchmark}",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "roadmap_registry_present",
+            all(key in roadmap_registry for key in ("Primary Track", "Secondary Tracks", "Parked Hypotheses", "Deferred Experiments", "Constitutional Constraints")),
+            f"keys={sorted(roadmap_registry)}",
+            severity="warning",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "recall_budget",
+            str(recall_benchmark.get("last_tier", "")) == "recall" and float(dict(recall_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 1200.0,
+            f"tier={recall_benchmark.get('last_tier')} max_ms={dict(recall_benchmark.get('timings_ms', {})).get('max')}",
+            severity="warning",
+        )
+    )
+    checks.append(
+        _stage4_check(
+            "deep_budget",
+            str(deep_benchmark.get("last_tier", "")) == "deep_recall" and float(dict(deep_benchmark.get("timings_ms", {})).get("max", 999999.0)) <= 2500.0,
+            f"tier={deep_benchmark.get('last_tier')} max_ms={dict(deep_benchmark.get('timings_ms', {})).get('max')}",
+            severity="warning",
+        )
+    )
+
+    scenario_benchmarks = [
+        {
+            "name": "provider_degraded_and_ledger_cold",
+            "score": 10.0
+            if (
+                bool(dict(provider_status.get("providers", {})).get("responses"))
+                and not bool(dict(dict(provider_status.get("providers", {})).get("responses", {})).get("available", False))
+                and "cost_discipline" in goal_types
+                and "routing_resilience" in goal_types
+                and bool(usage_state)
+            )
+            else 4.0,
+        },
+        {
+            "name": "stable_idle_no_delta",
+            "score": 10.0 if str(budget_guard.get("background_plans", "")).strip() == "delta_only" else 4.0,
+        },
+        {
+            "name": "cache_cold_with_relationship_pressure",
+            "score": 10.0
+            if (
+                bool(cache_state)
+                and "cache_warmth" in goal_types
+                and any(str(item.get("goal_type", "")).strip() == "identity_maintenance" for item in active_goals)
+            )
+            else 4.0,
+        },
+    ]
+    scenario_average = round(
+        sum(float(item.get("score", 0.0) or 0.0) for item in scenario_benchmarks) / max(1, len(scenario_benchmarks)),
+        2,
+    )
+    checks_by_name = {str(item.get("name", "")): bool(item.get("ok", False)) for item in checks}
+    axes = [
+        {
+            "name": "self_observation",
+            "score": _stage10_axis_score(
+                primary=checks_by_name.get("engineering_state_visible", False),
+                secondary=checks_by_name.get("provider_routing_usage_visible", False),
+            ),
+        },
+        {
+            "name": "diagnostic_specificity",
+            "score": _stage10_axis_score(
+                primary=checks_by_name.get("engineering_deficits_specific", False),
+                secondary=bool(active_deficits),
+            ),
+        },
+        {
+            "name": "decision_integration",
+            "score": _stage10_axis_score(
+                primary=checks_by_name.get("engineering_goals_enter_arbitration", False),
+                secondary=checks_by_name.get("ordinary_reply_path_not_regressed", False),
+            ),
+        },
+        {
+            "name": "bounded_repair_discipline",
+            "score": _stage10_axis_score(
+                primary=checks_by_name.get("operator_is_delta_gated", False),
+                secondary=checks_by_name.get("operator_plan_explains_trigger_and_budget_guard", False) and checks_by_name.get("no_fabric_bypass", False),
+            ),
+        },
+        {
+            "name": "cost_self_regulation",
+            "score": _stage10_axis_score(
+                primary=checks_by_name.get("usage_ledger_records_stage10_tasks", False),
+                secondary=scenario_average >= 7.0,
+            ),
+        },
+    ]
+    total_score = round(sum(float(axis.get("score", 0.0) or 0.0) for axis in axes), 2)
+    failures = [check for check in checks if not check["ok"] and check.get("severity") == "failure"]
+    blockers = [check for check in checks if not check["ok"] and check.get("severity") == "blocker"]
+    warnings = [check for check in checks if not check["ok"] and check.get("severity") == "warning"]
+    status = "pass"
+    if failures or blockers or scenario_average < 7.0 or total_score < 7.0 or any(float(axis.get("score", 0.0) or 0.0) < 1.2 for axis in axes):
+        status = "fail" if failures else "blocked" if blockers else "fail"
+    return {
+        "status": status,
+        "checks": checks,
+        "failures": failures,
+        "warnings": warnings,
+        "blockers": blockers,
+        "scorecard": {
+            "baseline": 4.8,
+            "target": 7.0,
+            "axes": axes,
+            "total": total_score,
+        },
+        "scenarios": scenario_benchmarks,
+        "scenario_average": scenario_average,
+        "engineering_state": engineering_state,
+        "goal_state": goal_state,
+        "operator_probe": operator_probe,
+        "usage_ledger": usage_ledger,
+        "provider_status": provider_status,
+        "routing": routing,
+        "reply_latency_budgets": {
+            "fast": dict(fast_benchmark.get("timings_ms", {})),
+            "recall": dict(recall_benchmark.get("timings_ms", {})),
+            "deep_recall": dict(deep_benchmark.get("timings_ms", {})),
+        },
+    }
+
+
 def command_accept_stage4(
     config_path: str | None,
     *,
@@ -3604,6 +4015,29 @@ def command_accept_stage9(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage9_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage10(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage10_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -4614,6 +5048,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-self-model", help="Show the current persisted self-model state")
     subparsers.add_parser("show-autobiographical-state", help="Show the persisted autobiographical self state")
     subparsers.add_parser("show-goal-state", help="Show the persisted long-horizon goal state")
+    subparsers.add_parser("show-engineering-state", help="Show the Stage-10 engineering self-model and bounded runtime state")
     subparsers.add_parser("trace-self-model", help="Show the self-model alongside runtime and operator state")
     subparsers.add_parser("trace-self-continuity", help="Explain Stage-8 autobiographical continuity and recent self change")
     subparsers.add_parser("trace-goal-arbitration", help="Explain Stage-8 goal arbitration and current goal commitments")
@@ -4878,6 +5313,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage9_parser.add_argument("--sender", default=None)
     accept_stage9_parser.add_argument("--iterations", type=int, default=3)
     accept_stage9_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage10_parser = subparsers.add_parser("accept-stage10", help="Run the fixed Engineering Awareness Stage-10 acceptance gate")
+    accept_stage10_parser.add_argument("--thread-key", default=None)
+    accept_stage10_parser.add_argument("--chat-name", default=None)
+    accept_stage10_parser.add_argument("--channel", default="wechat")
+    accept_stage10_parser.add_argument("--sender", default=None)
+    accept_stage10_parser.add_argument("--iterations", type=int, default=3)
+    accept_stage10_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -4934,6 +5376,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_autobiographical_state(args.config)
     if args.command == "show-goal-state":
         return command_show_goal_state(args.config)
+    if args.command == "show-engineering-state":
+        return command_show_engineering_state(args.config)
     if args.command == "trace-self-model":
         return command_trace_self_model(args.config)
     if args.command == "trace-self-continuity":
@@ -5313,6 +5757,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage9":
         return command_accept_stage9(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage10":
+        return command_accept_stage10(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

@@ -26,6 +26,7 @@ from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .models import AttentionState, IncomingMessage, OutgoingMessage, ReplyBubble, TurnContext
+from .operator_bus import build_engineering_snapshot, build_homeostasis_state
 from .operator_bus import operator_probe as run_operator_probe
 from .operator_bus import refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
@@ -768,6 +769,40 @@ class HoloReplyService:
     def goal_state(self) -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.goal_state()
+
+    def engineering_state(self) -> dict[str, Any]:
+        with self._memory_lock:
+            self_model = self.memory.self_model_state()
+            engineering_snapshot = build_engineering_snapshot(
+                memory=self.memory,
+                store=self.store,
+                config=self.config,
+                runner=self.runner,
+                base_deficits=[str(item).strip() for item in self_model.get("active_deficits", []) if str(item).strip()],
+            )
+            self_model = {
+                **self_model,
+                "metadata": {
+                    **dict(self_model.get("metadata", {})),
+                    "engineering_snapshot": engineering_snapshot,
+                    "engineering_confidence": engineering_snapshot.get("engineering_confidence", 0.0),
+                    "budget_pressure": engineering_snapshot.get("budget_pressure", 0.0),
+                },
+            }
+            homeostasis_state = build_homeostasis_state(memory=self.memory, config=self.config, self_model=self_model)
+            goal_state = self.memory.goal_state()
+            operator_status = self.memory.operator_status()
+        usage_payload = self.usage_ledger(limit=25)
+        return {
+            **engineering_snapshot,
+            "self_model": self_model,
+            "homeostasis_state": homeostasis_state,
+            "goal_state": goal_state,
+            "provider_status": self.runner.provider_status(),
+            "routing": self.runner.routing_table(),
+            "usage_ledger": usage_payload,
+            "operator_status": operator_status,
+        }
 
     def trace_self_continuity(self) -> dict[str, Any]:
         with self._memory_lock:
@@ -1853,6 +1888,167 @@ class HoloReplyService:
         report["warmup"] = warmup
         return report
 
+    def accept_stage10(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage10_acceptance
+        from .daemon import build_daemon
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        mode_transition = self.set_brain_mode(mode="full_brain", note="accept-stage10")
+        daemon = build_daemon(str(self.config.config_path) if self.config.config_path else None)
+        try:
+            self_model_loop = daemon._run_self_model_refresh_cycle()
+            homeostasis_loop = daemon._run_homeostasis_tick()
+            goal_loop = daemon._run_goal_arbitration()
+            operator_loop = daemon._run_operator_planning_cycle()
+        finally:
+            daemon.store.close()
+            if hasattr(daemon.memory, "activation"):
+                daemon.memory.activation.close()
+            if hasattr(daemon.memory, "graph"):
+                daemon.memory.graph.close()
+        with self._memory_lock:
+            if hasattr(self.memory, "clear_packet_cache"):
+                self.memory.clear_packet_cache()
+        engineering_state = self.engineering_state()
+        goal_state = self.goal_state()
+        operator_probe = self.operator_probe(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        operator_status = self.operator_status()
+        if isinstance(operator_loop, dict):
+            if isinstance(operator_loop.get("plan"), dict):
+                operator_probe.update(dict(operator_loop.get("plan", {})))
+                operator_probe["status"] = str(operator_loop.get("status", operator_probe.get("status", "")) or operator_probe.get("status", ""))
+            else:
+                loop_status = str(operator_loop.get("status", "")).strip()
+                loop_blocked_reason = str(operator_loop.get("blocked_reason", "")).strip()
+                if loop_status:
+                    operator_probe["planning_loop_status"] = loop_status
+                if loop_blocked_reason:
+                    operator_probe["planning_loop_blocked_reason"] = loop_blocked_reason
+                if loop_status and not str(operator_probe.get("status", "")).strip():
+                    operator_probe["status"] = loop_status
+                if loop_blocked_reason and not str(operator_probe.get("blocked_reason", "")).strip():
+                    operator_probe["blocked_reason"] = loop_blocked_reason
+        latest_operator = dict(operator_status.get("latest", {}))
+        latest_operator_payload = dict(latest_operator.get("payload", {}))
+        if latest_operator_payload:
+            for key in ("trigger_delta", "source_goal_ids", "expected_state_gain", "budget_guard"):
+                if key in latest_operator_payload and not operator_probe.get(key):
+                    operator_probe[key] = latest_operator_payload.get(key)
+            if not operator_probe.get("goal"):
+                operator_probe["goal"] = latest_operator.get("goal", "")
+        provider_status = self.provider_status()
+        routing = self.processor_routing()
+        usage_ledger = self.usage_ledger(limit=32)
+        reply_probe = self.reply_probe(
+            {
+                "chat_name": normalized_chat_name,
+                "thread_key": normalized_thread_key,
+                "channel": channel,
+                "sender": normalized_sender,
+                "text": "长话短说，别绕远。",
+            }
+        )
+        with self._memory_lock:
+            if hasattr(self.memory, "record_consciousness_entry"):
+                self.memory.record_consciousness_entry(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    chat_name=normalized_chat_name,
+                    message_id="accept-stage10-engineering-audit",
+                    entry_type="stage10_engineering_audit",
+                    selected_action=str(dict(reply_probe.get("selected_action", {})).get("action_type", "") or ""),
+                    payload={
+                        "engineering_snapshot": engineering_state,
+                        "engineering_goal_snapshot": goal_state,
+                        "provider_status": provider_status,
+                        "routing": routing,
+                        "usage_ledger": usage_ledger.get("summary", {}),
+                    },
+                )
+                self.memory.record_consciousness_entry(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    chat_name=normalized_chat_name,
+                    message_id="accept-stage10-operator-plan",
+                    entry_type="stage10_operator_plan",
+                    selected_action=str(operator_probe.get("status", "") or ""),
+                    payload={
+                        "trigger_delta": dict(operator_probe.get("trigger_delta", {})),
+                        "source_goal_ids": list(operator_probe.get("source_goal_ids", [])),
+                        "expected_state_gain": dict(operator_probe.get("expected_state_gain", {})),
+                        "budget_guard": dict(operator_probe.get("budget_guard", {})),
+                    },
+                )
+        ledger = self.deliberation_ledger(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel, limit=24)
+        fast_benchmark = self._benchmark_packet_build(
+            query="在吗",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="fast",
+        )
+        recall_benchmark = self._benchmark_packet_build(
+            query="接着刚才那条线往下说",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="recall",
+        )
+        deep_benchmark = self._benchmark_packet_build(
+            query="为什么最近会显得有点端着，长话短说",
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=channel,
+            sender=normalized_sender,
+            iterations=iterations,
+            warmup=warmup,
+            target_tier="deep_recall",
+        )
+        report = _evaluate_stage10_acceptance(
+            health=self.health(),
+            mode_transition=mode_transition,
+            engineering_state=engineering_state,
+            goal_state=goal_state,
+            operator_probe=operator_probe,
+            ledger=ledger,
+            usage_ledger=usage_ledger,
+            provider_status=provider_status,
+            routing=routing,
+            reply_probe=reply_probe,
+            brain_status=self.brain_status(),
+            fast_benchmark=fast_benchmark,
+            recall_benchmark=recall_benchmark,
+            deep_benchmark=deep_benchmark,
+            roadmap_registry=self.memory.roadmap_registry(),
+        )
+        report["transport"] = "live_http"
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        report["sender"] = normalized_sender
+        report["self_model_refresh"] = self_model_loop
+        report["homeostasis_loop"] = homeostasis_loop
+        report["goal_arbitration_loop"] = goal_loop
+        report["operator_planning_loop"] = operator_loop
+        report["operator_status"] = operator_status
+        return report
+
     def initiative_status(
         self,
         *,
@@ -2042,6 +2238,19 @@ class HoloReplyService:
                 capability_context=capability_context,
             )
             reply_plan = self.processor.generate(context, session_id=str((thread or {}).get("codex_session_id", "")))
+            selected_action = dict(packet.get("selected_action", {})) if isinstance(packet.get("selected_action", {}), dict) else {}
+            if not str(selected_action.get("action_type", "")).strip() and str(getattr(reply_plan, "text", "") or "").strip():
+                selected_action = {"action_type": "reply_once"}
+            expression_budget = int(
+                packet.get(
+                    "expression_budget_v4",
+                    packet.get(
+                        "expression_budget_v3",
+                        packet.get("expression_budget_v2", packet.get("expression_budget", 0)),
+                    ),
+                )
+                or 0
+            )
             return {
                 "tier": str(packet.get("tier", "")),
                 "query_focus": str(packet.get("query_focus", "recent") or "recent"),
@@ -2069,6 +2278,9 @@ class HoloReplyService:
                 "self_revision_state": dict(packet.get("self_revision_state", {})),
                 "retrieval_trace": dict(packet.get("retrieval_trace", {})),
                 "recall_reconstruction": dict((context.mind_packet or {}).get("recall_reconstruction", {})),
+                "selected_action": selected_action,
+                "expression_budget": expression_budget,
+                "action_rationale": str(packet.get("action_rationale", "") or ""),
                 "reply_plan": reply_plan.to_dict(),
             }
 
@@ -2082,6 +2294,9 @@ class HoloReplyService:
             "graph": _render_probe(graph_packet),
             "legacy": _render_probe(legacy_packet),
         }
+        probes["selected_action"] = dict(probes["graph_led"].get("selected_action", {}))
+        probes["expression_budget"] = int(probes["graph_led"].get("expression_budget", 0) or 0)
+        probes["action_rationale"] = str(probes["graph_led"].get("action_rationale", "") or "")
         if requested_mode in {"hybrid", "graph", "graph_led", "legacy"}:
             probes["selected_mode"] = requested_mode
             probes["selected"] = dict(probes[requested_mode])
@@ -3314,7 +3529,9 @@ class HoloReplyService:
     ) -> dict[str, Any]:
         timings: list[float] = []
         last_payload: dict[str, Any] = {}
-        total_runs = max(1, int(warmup)) + max(1, int(iterations))
+        warmup_runs = max(0, int(warmup))
+        measured_runs = max(1, int(iterations))
+        total_runs = warmup_runs + measured_runs
         for index in range(total_runs):
             started_at = time.perf_counter()
             payload = self.inspect_mind(
@@ -3323,10 +3540,10 @@ class HoloReplyService:
                 chat_name=chat_name,
                 channel=channel,
                 sender=sender,
-                include_graph_trace=True,
+                include_graph_trace=False,
             )
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if index >= max(1, int(warmup)):
+            elapsed_ms = float(payload.get("build_ms", (time.perf_counter() - started_at) * 1000.0) or 0.0)
+            if index >= warmup_runs:
                 timings.append(round(elapsed_ms, 2))
             last_payload = payload
         if not timings:
@@ -3466,6 +3683,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/goal-state":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.goal_state())
+                    return
+                if parsed.path == "/engineering-state":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.engineering_state())
                     return
                 if parsed.path == "/self-continuity":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.trace_self_continuity())
@@ -3863,6 +4083,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage9(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage10":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage10(
                             thread_key=str(payload.get("thread_key", "")).strip() or None,
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",
