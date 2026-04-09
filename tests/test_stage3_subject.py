@@ -137,7 +137,7 @@ class Stage3SubjectTests(unittest.TestCase):
                 source="unit.archive",
                 tags=["wechat", "chat_reply"],
                 turn_id="turn-stage3",
-                metadata={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
+                metadata={"channel": "wechat", "thread_key": "wechat:Nemoqi", "chat_name": "Nemoqi"},
             )
             config = load_config(repo_root=temp.repo_root)
             store = QueueStore(config.runtime.db_path)
@@ -177,7 +177,7 @@ class Stage3SubjectTests(unittest.TestCase):
                     memory=bridge,
                     store=store,
                     reason="unit-test",
-                    thread_key="Nemoqi",
+                    thread_key="wechat:Nemoqi",
                     chat_name="Nemoqi",
                     channel="wechat",
                 )
@@ -195,21 +195,21 @@ class Stage3SubjectTests(unittest.TestCase):
                         source="unit.visual",
                         tags=["stage3", "visual"],
                         channel="wechat",
-                        thread_key="Nemoqi",
+                        thread_key="wechat:Nemoqi",
                         chat_name="Nemoqi",
                         sync=True,
                     )
                 self.assertEqual(visual["status"], "ok")
                 trace = bridge.trace_visual_recall(
                     "苹果 酒 木桌",
-                    thread_key="Nemoqi",
+                    thread_key="wechat:Nemoqi",
                     chat_name="Nemoqi",
                     channel="wechat",
                     limit=4,
                 )
                 packet = bridge.sidecar_packet(
                     "你还记得那张苹果和酒的图吗",
-                    context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi"},
+                    context={"channel": "wechat", "thread_key": "wechat:Nemoqi", "chat_name": "Nemoqi"},
                 )
                 self.assertTrue(trace["hits"])
                 self.assertIn("visual_memory", packet)

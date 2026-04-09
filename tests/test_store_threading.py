@@ -30,6 +30,6 @@ class QueueStoreThreadingTests(unittest.TestCase):
                     record = future.result(timeout=5)
 
                 self.assertFalse(record["duplicate"])
-                self.assertEqual(record["thread"]["thread_key"], "Nemoqi")
+                self.assertEqual(record["thread"]["thread_key"], "wechat:Nemoqi")
             finally:
                 store.close()

@@ -42,9 +42,9 @@ class MindGraphTests(unittest.TestCase):
             self.assertEqual(report["status"], "ok")
             self.assertGreater(report["node_count"], 0)
             self.assertIn("relationship_memory", report["memory_class_counts"])
-            self.assertEqual(inspect["filters"]["thread_key"], "Nemoqi")
+            self.assertEqual(inspect["filters"]["thread_key"], "wechat:Nemoqi")
             self.assertGreaterEqual(inspect["thread_state"].get("relationship_score", 0.0), 1.0)
-            self.assertTrue(any(node["thread_key"] == "Nemoqi" for node in inspect["nodes"]))
+            self.assertTrue(any(node["thread_key"] == "wechat:Nemoqi" for node in inspect["nodes"]))
             graph.close()
 
     def test_trace_recall_prefers_current_thread(self) -> None:
@@ -69,9 +69,9 @@ class MindGraphTests(unittest.TestCase):
             graph.rebuild()
             trace = graph.trace_recall("remember before", thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", record=False)
 
-            self.assertEqual(trace["thread_key"], "Nemoqi")
+            self.assertEqual(trace["thread_key"], "wechat:Nemoqi")
             self.assertGreater(len(trace["trace"]), 0)
-            self.assertEqual(trace["trace"][0]["thread_key"], "Nemoqi")
+            self.assertEqual(trace["trace"][0]["thread_key"], "wechat:Nemoqi")
             self.assertIn(trace["tier"], {"recall", "deep_recall"})
             graph.close()
 

@@ -3066,7 +3066,7 @@ class MindGraph:
         args: list[Any] = []
         conditions = ["node_type NOT IN ('thread', 'contact')"]
         current_channel = str(channel or "").strip()
-        current_thread_key = str(thread_key or "").strip()
+        current_thread_key = _normalize_thread_key(current_channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
         current_chat_name = str(chat_name or "").strip()
         if current_channel:
             conditions.append("channel = ?")
@@ -5098,7 +5098,7 @@ class MindGraph:
 
         def _add_thread(channel: str, thread_key: str, chat_name: str, *, motif: str = "", unfinished: str = "") -> None:
             normalized_channel = str(channel or "").strip()
-            normalized_thread_key = str(thread_key or "").strip()
+            normalized_thread_key = _normalize_thread_key(normalized_channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
             if not normalized_channel or not normalized_thread_key:
                 return
             bucket = thread_hints.setdefault(
