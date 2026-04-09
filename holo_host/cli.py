@@ -4027,6 +4027,121 @@ def command_accept_stage9(
     return 0
 
 
+def _evaluate_stage12_acceptance(
+    *,
+    health: dict[str, Any],
+    thread_key: str,
+    chat_name: str,
+    reply_result: dict[str, Any],
+    defer_result: dict[str, Any],
+    silence_result: dict[str, Any],
+    thread_row: dict[str, Any],
+    appraisal_rows: list[dict[str, Any]],
+    usage_rows: list[dict[str, Any]],
+    subject_after_reload: dict[str, Any],
+    helper_contracts: dict[str, Any],
+    roadmap_registry: dict[str, Any],
+) -> dict[str, Any]:
+    latest_appraisal = dict(appraisal_rows[0]) if appraisal_rows else {}
+    latest_metadata = dict(latest_appraisal.get("metadata", {})) if isinstance(latest_appraisal.get("metadata", {}), dict) else {}
+    outcome_memory = dict(subject_after_reload.get("outcome_memory", {}))
+    last_calibration = dict(subject_after_reload.get("world_state", {}).get("last_post_outcome_calibration", {}))
+    reply_thread_key = str(reply_result.get("thread_key", "") or "").strip()
+    appraisal_thread_key = str(latest_metadata.get("thread_key", "") or "").strip()
+    checks = {
+        "health_ok": str(health.get("status", "")).strip() == "ok",
+        "canonical_wechat_identity": reply_thread_key.startswith("wechat:")
+        and appraisal_thread_key.startswith("wechat:")
+        and str(thread_key).startswith("wechat:"),
+        "ordinary_reply_appraised": bool(reply_result.get("outcome_appraisal")) and bool(appraisal_rows),
+        "defer_reply_appraised": bool(defer_result.get("outcome_appraisal")),
+        "silence_appraised": bool(silence_result.get("outcome_appraisal")),
+        "action_local_usage_visible": bool(latest_metadata.get("usage_evidence_refs"))
+        and all(str(ref).startswith("usage:") for ref in list(latest_metadata.get("usage_evidence_refs", []))),
+        "appraisal_provenance_visible": bool(latest_metadata.get("event_row_id"))
+        and bool(str(latest_metadata.get("message_id", "") or "").strip())
+        and bool(str(appraisal_thread_key).strip())
+        and bool(str(latest_appraisal.get("action_ref", "") or "").strip()),
+        "calibration_survives_reload": bool(outcome_memory.get("last_action_ref")) and bool(last_calibration.get("action_ref")),
+        "helper_artifact_path_contract": str(helper_contracts.get("artifact_path", "")).startswith("/mnt/d/"),
+        "wsl_fallback_contract": len(list(helper_contracts.get("wsl_fallback_candidates", []))) >= 2,
+        "action_market_first_preserved": str(reply_result.get("selected_action", {}).get("action_type", "") or "") in {
+            "reply_once",
+            "reply_multi",
+            "push_back",
+            "counter_offer",
+            "continuity_defense",
+        },
+    }
+    passed = sum(1 for value in checks.values() if value)
+    total = len(checks)
+    score = round((passed / max(1, total)) * 10.0, 2)
+    status = "pass" if passed == total else "fail"
+    return {
+        "status": status,
+        "stage": "outcome-closure-and-canonical-identity-stage12",
+        "score": score,
+        "checks": checks,
+        "latest_appraisal": latest_appraisal,
+        "usage_rows": usage_rows[:6],
+        "subject_after_reload": {
+            "outcome_memory": outcome_memory,
+            "last_post_outcome_calibration": last_calibration,
+        },
+        "roadmap_registry": roadmap_registry,
+    }
+
+
+def _accept_stage12_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage12",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "iterations": iterations,
+            "warmup": warmup,
+        },
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage12(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                iterations=iterations,
+                warmup=warmup,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -4038,6 +4153,29 @@ def command_accept_stage10(
     warmup: int,
 ) -> int:
     payload, _transport = _accept_stage10_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        iterations=iterations,
+        warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage12(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    iterations: int,
+    warmup: int,
+) -> int:
+    payload, _transport = _accept_stage12_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -5320,6 +5458,13 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage10_parser.add_argument("--sender", default=None)
     accept_stage10_parser.add_argument("--iterations", type=int, default=3)
     accept_stage10_parser.add_argument("--warmup", type=int, default=1)
+    accept_stage12_parser = subparsers.add_parser("accept-stage12", help="Run the fixed Outcome Closure and Canonical Identity Stage-12 acceptance gate")
+    accept_stage12_parser.add_argument("--thread-key", default=None)
+    accept_stage12_parser.add_argument("--chat-name", default=None)
+    accept_stage12_parser.add_argument("--channel", default="wechat")
+    accept_stage12_parser.add_argument("--sender", default=None)
+    accept_stage12_parser.add_argument("--iterations", type=int, default=1)
+    accept_stage12_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -5767,6 +5912,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage10":
         return command_accept_stage10(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+    if args.command == "accept-stage12":
+        return command_accept_stage12(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

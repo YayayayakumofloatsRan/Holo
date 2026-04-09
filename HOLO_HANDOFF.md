@@ -14,11 +14,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 9. `docs/ENGINEERING_HANDOFF_STAGE9.md`
 10. `docs/STAGE10_ENGINEERING_AWARENESS_AND_CODEX_COST.md`
 11. `docs/ENGINEERING_HANDOFF_STAGE10.md`
-12. `HOLO_SYSTEM.md`
-13. `HOLO_HOST.md`
-14. `OPERATIONS.md`
-15. `holo_memory_library/MEMORY_LIBRARY.md`
-16. `windows_helper/README.md`
+12. `docs/STAGE12_OUTCOME_CLOSURE_AND_CANONICAL_IDENTITY.md`
+13. `docs/ENGINEERING_HANDOFF_STAGE12.md`
+14. `HOLO_SYSTEM.md`
+15. `HOLO_HOST.md`
+16. `OPERATIONS.md`
+17. `holo_memory_library/MEMORY_LIBRARY.md`
+18. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -33,9 +35,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage9-adaptive-initiative-gate`.
+- The current milestone tag is `stage12-outcome-closure-and-canonical-identity`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Next stage focus is `stage10-engineering-awareness`, which should improve diagnosis, cost discipline, and delta-gated repair without adding a second brain layer.
+- Current focus is Stage12 outcome closure and canonical WeChat direct-message identity preservation.
+- Next stage focus is tighter evidence weighting after deferred/silent actions and continued reducer-style cleanup without adding a second brain layer.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -173,6 +176,9 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host initiative-probe --thread-key Nemoqi --chat-name Nemoqi`
 - `python3 -m holo_host show-initiative-status --thread-key Nemoqi --chat-name Nemoqi`
 - `python3 -m holo_host accept-stage9 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage12 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host show-processor-routing`
+- `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host accept-stage8 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
 ## Invariants

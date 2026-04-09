@@ -274,6 +274,8 @@ class HoloDaemon:
         recent_messages: list[dict[str, Any]],
         predicted_outcome: dict[str, Any] | None = None,
         usage_total_tokens: int = 0,
+        usage_rows: list[dict[str, Any]] | None = None,
+        usage_evidence_refs: list[str] | None = None,
     ) -> dict[str, Any]:
         sent_dt = cls._parse_timestamp(sent_at) or datetime.now(timezone.utc)
         inbound_after = [
@@ -303,11 +305,21 @@ class HoloDaemon:
         identity_delta = round(max(0.0, 1.0 - min(1.0, correction_count / max(1, len(inbound_after) or 1))) * 0.18, 4)
         future_initiative_bias = round(max(0.0, was_rewarding - was_ignored * 0.25), 4)
         future_resistance_bias = round(min(1.0, correction_count / 3.0), 4)
+        usage_rows = [dict(item) for item in list(usage_rows or [])]
+        if usage_rows:
+            derived_usage_total = sum(int(item.get("total_tokens", 0) or 0) for item in usage_rows)
+            usage_total_tokens = derived_usage_total if derived_usage_total > 0 else max(0, int(usage_total_tokens or 0))
         evidence_refs = [
             "messages:recent_thread",
             "messages:inbound_after_send" if inbound_after else "messages:no_inbound_after_send",
-            "usage:processor_usage_ledger" if usage_total_tokens else "usage:none",
         ]
+        if usage_rows:
+            usage_ref_items = [str(item).strip() for item in list(usage_evidence_refs or []) if str(item).strip()]
+            if not usage_ref_items:
+                usage_ref_items = [f"usage:processor_usage:{str(item.get('id', '')).strip()}" for item in usage_rows if str(item.get("id", "")).strip()]
+            evidence_refs.extend(usage_ref_items)
+        else:
+            evidence_refs.append("usage:processor_usage_ledger" if usage_total_tokens else "usage:none")
         if predicted_outcome:
             evidence_refs.append("prediction:selected_outcome")
         return {
@@ -321,6 +333,8 @@ class HoloDaemon:
             "initiative_success": initiative_success,
             "correction_count": correction_count,
             "usage_total_tokens": max(0, int(usage_total_tokens or 0)),
+            "usage_rows": usage_rows,
+            "usage_evidence_refs": evidence_refs,
             "predicted_outcome": dict(predicted_outcome or {}),
             "evidence_refs": evidence_refs,
             "message_counts": {
@@ -1419,11 +1433,37 @@ class HoloDaemon:
                 predicted_outcome = dict(dict(world_state.get("last_counterfactual_summary", {})).get("selected_prediction", {}))
             thread = self.store.find_thread(channel=channel, thread_key=thread_key)
             recent_messages = self.store.recent_thread_messages(int(thread["id"]), limit=12) if thread else []
+            usage_rows: list[dict[str, Any]] = []
+            usage_evidence_refs: list[str] = []
+            event_id = str(metadata.get("event_id", "") or "").strip()
+            if event_id:
+                usage_rows = self.store._fetchall(
+                    """
+                    SELECT * FROM processor_usage_ledger
+                    WHERE event_id = ?
+                    ORDER BY id DESC
+                    LIMIT 12
+                    """,
+                    (event_id,),
+                )
+                usage_evidence_refs = [f"usage:event_id:{event_id}"]
+            elif thread_key:
+                usage_rows = self.store._fetchall(
+                    """
+                    SELECT * FROM processor_usage_ledger
+                    WHERE thread_key = ?
+                    ORDER BY id DESC
+                    LIMIT 12
+                    """,
+                    (thread_key,),
+                )
+                usage_evidence_refs = [f"usage:thread_key:{thread_key}"]
             evidence_payload = self._derive_action_outcome_from_evidence(
                 sent_at=latest.get("updated_at") or latest.get("created_at"),
                 recent_messages=list(reversed(recent_messages)),
                 predicted_outcome=predicted_outcome,
-                usage_total_tokens=sum(int(item.get("total_tokens", 0) or 0) for item in self.store.list_processor_usage(limit=6)),
+                usage_rows=usage_rows,
+                usage_evidence_refs=usage_evidence_refs,
             )
             appraisal = self.memory.appraise_outcome(
                 channel=channel,

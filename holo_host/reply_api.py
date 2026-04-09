@@ -394,13 +394,18 @@ class ChatTurn:
         prefix = f"{self.channel}:"
         if self.channel == "wechat" and chat_name:
             if not explicit:
-                return chat_name
-            if explicit.startswith(prefix) and explicit[len(prefix):].strip() == chat_name:
-                return chat_name
+                return f"{prefix}{chat_name}"
+            if explicit.startswith(prefix):
+                return explicit
+            if explicit.endswith("@chatroom") or explicit.startswith("wxid_"):
+                return explicit
+            return f"{prefix}{explicit}"
         return explicit or f"{self.channel}:{self.chat_name}"
 
     @property
     def synthetic_contact(self) -> str:
+        if self.channel == "wechat":
+            return self.normalized_thread_key or f"wechat:{self.chat_name}"
         return f"{self.channel}:{self.normalized_thread_key or self.chat_name}"
 
     def to_incoming_message(self) -> IncomingMessage:
@@ -2049,6 +2054,105 @@ class HoloReplyService:
         report["operator_status"] = operator_status
         return report
 
+    def accept_stage12(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 1,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage12_acceptance
+
+        normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
+        if channel == "wechat" and normalized_thread_key and not normalized_thread_key.startswith("wechat:") and not normalized_thread_key.endswith("@chatroom") and not normalized_thread_key.startswith("wxid_"):
+            normalized_thread_key = f"wechat:{normalized_thread_key}"
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key.replace("wechat:", "", 1)).strip() or normalized_thread_key
+        normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
+        legacy_thread_key = normalized_thread_key.removeprefix("wechat:") if normalized_thread_key.startswith("wechat:") else normalized_thread_key
+
+        reply_result = self.handle_reply(
+            {
+                "chat_name": normalized_chat_name,
+                "thread_key": normalized_thread_key,
+                "channel": channel,
+                "sender": normalized_sender,
+                "text": "长话短说，先接着刚才那条线往下说。",
+                "message_id": "accept-stage12-reply",
+            }
+        )
+        defer_result = self.handle_reply(
+            {
+                "chat_name": normalized_chat_name,
+                "thread_key": normalized_thread_key,
+                "channel": channel,
+                "sender": normalized_sender,
+                "text": "这个不用现在回，晚点再说。",
+                "message_id": "accept-stage12-defer",
+            }
+        )
+        silence_result = self.handle_reply(
+            {
+                "chat_name": normalized_chat_name,
+                "thread_key": normalized_thread_key,
+                "channel": channel,
+                "sender": normalized_sender,
+                "text": "嗯",
+                "message_id": "accept-stage12-silence",
+            }
+        )
+        with self._memory_lock:
+            if hasattr(self.memory, "clear_packet_cache"):
+                self.memory.clear_packet_cache()
+        subject_after_reload = self.memory.subject_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=channel)
+        thread_row = self.store.find_thread(channel=channel, thread_key=normalized_thread_key) or {}
+        usage_rows = [row for row in self.store.list_processor_usage(limit=24) if str(row.get("thread_key", "")).strip() in {normalized_thread_key, legacy_thread_key}]
+        appraisal_rows = []
+        graph = getattr(self.memory, "graph", None)
+        if graph is not None and hasattr(graph, "conn"):
+            appraisal_rows = [
+                {
+                    **dict(row),
+                    "metadata": json.loads(str(row["metadata_json"] or "{}")) if str(row["metadata_json"] or "").strip() else {},
+                }
+                for row in graph.conn.execute(
+                    """
+                    SELECT * FROM outcome_appraisals
+                    WHERE channel = ? AND thread_key IN (?, ?)
+                    ORDER BY id DESC
+                    LIMIT 12
+                    """,
+                    (channel, normalized_thread_key, legacy_thread_key),
+                ).fetchall()
+            ]
+        report = _evaluate_stage12_acceptance(
+            health=self.health(),
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            reply_result=reply_result,
+            defer_result=defer_result,
+            silence_result=silence_result,
+            thread_row=thread_row,
+            appraisal_rows=appraisal_rows,
+            usage_rows=usage_rows,
+            subject_after_reload=subject_after_reload,
+            helper_contracts={
+                "artifact_path": _coerce_helper_artifact_path(r"D:\Holo\holo\.holo_runtime\wechat-helper\receipts\history.md"),
+                "wsl_fallback_candidates": ["http://127.0.0.1:8000", "http://172.28.44.15:8000"],
+            },
+            roadmap_registry=self.memory.roadmap_registry(),
+        )
+        report["transport"] = "live_http"
+        report["thread_key"] = normalized_thread_key
+        report["chat_name"] = normalized_chat_name
+        report["sender"] = normalized_sender
+        report["reply_result"] = reply_result
+        report["defer_result"] = defer_result
+        report["silence_result"] = silence_result
+        return report
+
     def initiative_status(
         self,
         *,
@@ -2771,6 +2875,285 @@ class HoloReplyService:
     def _speech_action(action_type: str) -> bool:
         return action_type in {"reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}
 
+    @staticmethod
+    def _appraisable_reply_action(action_type: str) -> bool:
+        return action_type in {"silence", "defer_reply", "reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}
+
+    def _action_local_usage_payload(
+        self,
+        *,
+        event_row_id: int | None,
+        thread_key: str,
+        action_ref: str,
+    ) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        evidence_refs: list[str] = []
+        if event_row_id:
+            rows = self.store.list_processor_usage(limit=16, event_id=str(event_row_id), thread_key=thread_key)
+            if rows:
+                evidence_refs.append(f"usage:event_id:{event_row_id}")
+        simplified_rows = [
+            {
+                "id": int(row.get("id", 0) or 0),
+                "task_type": str(row.get("task_type", "") or ""),
+                "lane": str(row.get("lane", "") or ""),
+                "provider": str(row.get("provider", "") or ""),
+                "model": str(row.get("model", "") or ""),
+                "total_tokens": int(row.get("total_tokens", 0) or 0),
+                "event_id": str(row.get("event_id", "") or ""),
+                "created_at": str(row.get("created_at", "") or ""),
+            }
+            for row in rows
+        ]
+        if not evidence_refs:
+            evidence_refs.append(f"usage:none_for_action_ref:{action_ref}")
+        return {
+            "usage_total_tokens": sum(int(row.get("total_tokens", 0) or 0) for row in rows),
+            "usage_rows": simplified_rows,
+            "usage_evidence_refs": evidence_refs,
+        }
+
+    def _appraise_reply_path_action(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        thread: dict[str, Any],
+        stored_message: dict[str, Any],
+        event_row_id: int | None,
+        sidecar: dict[str, Any],
+        action_type: str,
+        action_ref: str,
+        source: str,
+    ) -> dict[str, Any]:
+        def _metric(raw: Any, default: float = 0.0) -> float:
+            try:
+                if isinstance(raw, dict):
+                    raw = raw.get("value", default)
+                return max(0.0, min(1.0, float(raw)))
+            except (TypeError, ValueError):
+                return float(default)
+
+        if not hasattr(self.memory, "appraise_outcome"):
+            return {"status": "skipped", "reason": "memory_appraisal_unavailable"}
+        if not self._appraisable_reply_action(action_type):
+            return {"status": "skipped", "reason": "non_appraisable_action"}
+        normalized_action_ref = str(action_ref or "").strip()
+        if not normalized_action_ref:
+            return {"status": "skipped", "reason": "missing_action_ref"}
+        selected_prediction = dict(sidecar.get("selected_prediction", {}))
+        usage_payload = self._action_local_usage_payload(
+            event_row_id=event_row_id,
+            thread_key=incoming.thread_key,
+            action_ref=normalized_action_ref,
+        )
+        metadata = {
+            "event_row_id": int(event_row_id or 0),
+            "message_id": incoming.message_id,
+            "thread_key": incoming.thread_key,
+            "selected_action": action_type,
+            "selected_prediction": selected_prediction,
+            "source": source,
+            **usage_payload,
+        }
+        if action_type in {"silence", "defer_reply"}:
+            predicted_response_quality = _metric(selected_prediction.get("predicted_response_quality"), default=0.5)
+            predicted_risk = _metric(selected_prediction.get("predicted_risk"), default=0.5)
+            predicted_relational_delta = _metric(selected_prediction.get("predicted_relational_delta"), default=0.0)
+            predicted_identity_delta = _metric(selected_prediction.get("predicted_identity_delta"), default=0.0)
+            metadata["evidence_refs"] = list(usage_payload["usage_evidence_refs"]) + [
+                "messages:current_turn",
+                "prediction:selected_outcome",
+                f"action:{action_type}",
+            ]
+            return self.memory.appraise_outcome(
+                channel=turn.channel,
+                thread_key=incoming.thread_key,
+                chat_name=turn.chat_name,
+                action_type=action_type,
+                action_ref=normalized_action_ref,
+                was_rewarding=max(0.0, min(1.0, (predicted_response_quality + max(0.0, 1.0 - predicted_risk)) / 2.0)),
+                was_ignored=0.0,
+                relational_delta=predicted_relational_delta,
+                identity_delta=predicted_identity_delta,
+                future_initiative_bias=max(0.0, predicted_relational_delta - predicted_risk * 0.25),
+                future_resistance_bias=predicted_risk,
+                metadata=metadata,
+            )
+
+        from .daemon import HoloDaemon
+
+        recent_messages = list(reversed(self.store.recent_thread_messages(int(thread["id"]), limit=12)))
+        evidence_payload = HoloDaemon._derive_action_outcome_from_evidence(
+            sent_at=stored_message.get("created_at"),
+            recent_messages=recent_messages,
+            predicted_outcome=selected_prediction,
+            usage_rows=list(usage_payload.get("usage_rows", [])),
+            usage_evidence_refs=list(usage_payload.get("usage_evidence_refs", [])),
+        )
+        evidence_payload["evidence_refs"] = [str(item).strip() for item in list(evidence_payload.get("evidence_refs", [])) if str(item).strip()]
+        metadata.update(evidence_payload)
+        return self.memory.appraise_outcome(
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            action_type=action_type,
+            action_ref=normalized_action_ref,
+            was_rewarding=float(evidence_payload.get("was_rewarding", 0.0) or 0.0),
+            was_ignored=float(evidence_payload.get("was_ignored", 0.0) or 0.0),
+            relational_delta=float(evidence_payload.get("relational_delta", 0.0) or 0.0),
+            identity_delta=float(evidence_payload.get("identity_delta", 0.0) or 0.0),
+            future_initiative_bias=float(evidence_payload.get("future_initiative_bias", 0.0) or 0.0),
+            future_resistance_bias=float(evidence_payload.get("future_resistance_bias", 0.0) or 0.0),
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _appraisable_actions() -> set[str]:
+        return {
+            "reply_once",
+            "reply_multi",
+            "defer_reply",
+            "push_back",
+            "counter_offer",
+            "continuity_defense",
+            "silence",
+        }
+
+    @staticmethod
+    def _action_ref_for_outcome(*, selected_action_type: str, event_row_id: int, result: dict[str, Any]) -> str:
+        for key in ("outbound_message_id", "job_id", "action_ref"):
+            value = str(result.get(key, "") or "").strip()
+            if value:
+                return value
+        if event_row_id:
+            return f"event:{int(event_row_id)}"
+        return str(result.get("message_id", "") or "").strip() or "event:0"
+
+    def _action_usage_rows(
+        self,
+        *,
+        event_row_id: int,
+        thread_key: str,
+        action_ref: str,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        event_row = self.store.get_event(event_row_id) or {}
+        event_ids: list[str] = [
+            str(event_row_id or "").strip(),
+            str(action_ref or "").strip(),
+            str(event_row.get("message_id", "") or "").strip(),
+            str(event_row.get("result_json", "") or "").strip(),
+        ]
+        for event_id in event_ids:
+            if not event_id:
+                continue
+            rows = self.store._fetchall(
+                """
+                SELECT * FROM processor_usage_ledger
+                WHERE event_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (event_id, max(1, int(limit))),
+            )
+            if rows:
+                return list(reversed(rows))
+        created_at = str(event_row.get("executed_at") or event_row.get("updated_at") or event_row.get("created_at") or "").strip()
+        if thread_key:
+            clauses = ["thread_key = ?"]
+            args: list[Any] = [str(thread_key)]
+            if created_at:
+                clauses.append("created_at >= ?")
+                args.append(created_at)
+            args.append(max(1, int(limit)))
+            rows = self.store._fetchall(
+                f"""
+                SELECT * FROM processor_usage_ledger
+                WHERE {' AND '.join(clauses)}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(args),
+            )
+            if rows:
+                return list(reversed(rows))
+        return []
+
+    def _appraise_action_outcome(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        thread: dict[str, Any],
+        event_row_id: int,
+        selected_action: dict[str, Any],
+        selected_action_type: str,
+        sidecar: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        if selected_action_type not in type(self)._appraisable_actions():
+            return {}
+
+        from .daemon import HoloDaemon
+
+        event_row = self.store.get_event(event_row_id) or {}
+        action_ref = type(self)._action_ref_for_outcome(
+            selected_action_type=selected_action_type,
+            event_row_id=event_row_id,
+            result=result,
+        )
+        usage_rows = self._action_usage_rows(
+            event_row_id=event_row_id,
+            thread_key=incoming.thread_key,
+            action_ref=action_ref,
+        )
+        usage_total_tokens = sum(int(row.get("total_tokens", 0) or 0) for row in usage_rows)
+        usage_evidence_refs = [f"usage:processor_usage:{row.get('id', '')}" for row in usage_rows if str(row.get("id", "")).strip()]
+        if not usage_evidence_refs:
+            usage_evidence_refs = [f"usage:none_for_{action_ref}"]
+        recent_messages = list(reversed(self.store.recent_thread_messages(int(thread["id"]), self.config.memory.history_messages)))
+        evidence_payload = HoloDaemon._derive_action_outcome_from_evidence(
+            sent_at=event_row.get("executed_at") or event_row.get("updated_at") or event_row.get("created_at"),
+            recent_messages=recent_messages,
+            predicted_outcome=dict(sidecar.get("selected_prediction", {})),
+            usage_total_tokens=usage_total_tokens,
+            usage_rows=usage_rows,
+            usage_evidence_refs=usage_evidence_refs,
+        )
+        appraisal_metadata = {
+            "event_row_id": int(event_row_id),
+            "message_id": incoming.message_id,
+            "thread_key": incoming.thread_key,
+            "action_ref": action_ref,
+            "selected_action": dict(selected_action),
+            "selected_action_type": selected_action_type,
+            "selected_prediction": dict(sidecar.get("selected_prediction", {})),
+            "predicted_outcome": dict(sidecar.get("selected_prediction", {})),
+            "usage_total_tokens": usage_total_tokens,
+            "usage_rows": usage_rows,
+            "usage_evidence_refs": usage_evidence_refs,
+            "source": f"reply_api.{selected_action_type}",
+            **evidence_payload,
+        }
+        appraisal_metadata["usage_evidence_refs"] = usage_evidence_refs
+        appraisal_metadata["usage_rows"] = usage_rows
+        appraisal_metadata["usage_total_tokens"] = usage_total_tokens
+        return self.memory.appraise_outcome(
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            action_type=selected_action_type,
+            action_ref=action_ref,
+            was_rewarding=float(evidence_payload.get("was_rewarding", 0.0) or 0.0),
+            was_ignored=float(evidence_payload.get("was_ignored", 0.0) or 0.0),
+            relational_delta=float(evidence_payload.get("relational_delta", 0.0) or 0.0),
+            identity_delta=float(evidence_payload.get("identity_delta", 0.0) or 0.0),
+            future_initiative_bias=float(evidence_payload.get("future_initiative_bias", 0.0) or 0.0),
+            future_resistance_bias=float(evidence_payload.get("future_resistance_bias", 0.0) or 0.0),
+            metadata=appraisal_metadata,
+        )
+
     def handle_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
         turn = self._parse_turn(payload)
         if not turn.text.strip():
@@ -2810,6 +3193,9 @@ class HoloReplyService:
         capability_context = self._build_capability_context(turn, eager_network=False)
         mind_context["capability_context"] = capability_context
         mind_context["deliberation_trace_id"] = deliberation_trace_id
+        turn.metadata = dict(turn.metadata or {})
+        turn.metadata["event_id"] = str(event_row_id)
+        mind_context["event_id"] = str(event_row_id)
         with self._memory_lock:
             sidecar = self.memory.sidecar_packet(turn.text, context=mind_context)
         selected_action = self._normalize_selected_action(sidecar)
@@ -2865,6 +3251,17 @@ class HoloReplyService:
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
             }
+            result["outcome_appraisal"] = self._appraise_reply_path_action(
+                turn=turn,
+                incoming=incoming,
+                thread=record["thread"],
+                stored_message=record["message"],
+                event_row_id=event_row_id,
+                sidecar=sidecar,
+                action_type="silence",
+                action_ref=str(event_row_id or incoming.message_id),
+                source="reply_api.silence",
+            )
             self.store.update_event_result(event_row_id, status="completed", result=result)
             self._record_consciousness_entry(
                 turn=turn,
@@ -2874,6 +3271,18 @@ class HoloReplyService:
                 selected_action="silence",
                 payload=result,
             )
+            appraisal = self._appraise_action_outcome(
+                turn=turn,
+                incoming=incoming,
+                thread=record["thread"],
+                event_row_id=event_row_id,
+                selected_action=selected_action,
+                selected_action_type="silence",
+                sidecar=sidecar,
+                result=result,
+            )
+            if appraisal:
+                result["outcome_appraisal"] = appraisal
             return result
 
         if selected_action_type == "defer_reply":
@@ -2896,6 +3305,17 @@ class HoloReplyService:
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
             }
+            result["outcome_appraisal"] = self._appraise_reply_path_action(
+                turn=turn,
+                incoming=incoming,
+                thread=record["thread"],
+                stored_message=record["message"],
+                event_row_id=event_row_id,
+                sidecar=sidecar,
+                action_type="defer_reply",
+                action_ref=str(deferred_job_id or event_row_id or incoming.message_id),
+                source="reply_api.defer_reply",
+            )
             self.store.update_event_result(event_row_id, status="deferred", result=result)
             self._record_consciousness_entry(
                 turn=turn,
@@ -2905,6 +3325,18 @@ class HoloReplyService:
                 selected_action="defer_reply",
                 payload=result,
             )
+            appraisal = self._appraise_action_outcome(
+                turn=turn,
+                incoming=incoming,
+                thread=record["thread"],
+                event_row_id=event_row_id,
+                selected_action=selected_action,
+                selected_action_type="defer_reply",
+                sidecar=sidecar,
+                result=result,
+            )
+            if appraisal:
+                result["outcome_appraisal"] = appraisal
             return result
 
         if selected_action_type == "history_refresh" and self._should_refresh_wechat_history(turn, sidecar):
@@ -2991,6 +3423,7 @@ class HoloReplyService:
                     {"action_type": "reply_once"},
                 )
                 sidecar["selected_action"] = selected_action
+                selected_action_type = str(selected_action.get("action_type", selected_action_type) or selected_action_type)
 
         payload = dict(payload)
         payload["_stage6_event_row_id"] = event_row_id
@@ -3004,6 +3437,17 @@ class HoloReplyService:
             result["expression_budget"] = int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0)
             result["action_rationale"] = str(sidecar.get("action_rationale", "") or "")
             result["deliberation_trace_id"] = deliberation_trace_id
+            result["outcome_appraisal"] = self._appraise_reply_path_action(
+                turn=turn,
+                incoming=incoming,
+                thread=record["thread"],
+                stored_message=record["message"],
+                event_row_id=event_row_id,
+                sidecar=sidecar,
+                action_type=selected_action_type,
+                action_ref=str(result.get("remote_message_id", "") or result.get("outbound_message_id", "") or event_row_id or incoming.message_id),
+                source=f"reply_api.{selected_action_type}",
+            )
         self.store.update_event_result(event_row_id, status="completed", result=result)
         self._record_consciousness_entry(
             turn=turn,
@@ -3020,6 +3464,18 @@ class HoloReplyService:
                 "identity_consistency": dict(sidecar.get("identity_consistency", {})),
             },
         )
+        appraisal = self._appraise_action_outcome(
+            turn=turn,
+            incoming=incoming,
+            thread=record["thread"],
+            event_row_id=event_row_id,
+            selected_action=selected_action,
+            selected_action_type=str(selected_action.get("action_type", selected_action_type) or selected_action_type),
+            sidecar=sidecar,
+            result=result,
+        )
+        if appraisal:
+            result["outcome_appraisal"] = appraisal
         return result
 
     def _handle_reply_stage5_legacy(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3239,7 +3695,7 @@ class HoloReplyService:
             history=history,
             mind_packet=sidecar,
             utterance_plan=dict(sidecar.get("state", {}).get("rewrite_state", {}).get("utterance_plan", {})),
-            metadata=dict(turn.metadata or {}),
+            metadata={**dict(turn.metadata or {}), "event_id": str(payload.get("_stage6_event_row_id", "") or "")},
             capability_context=capability_context,
         )
         try:
@@ -3427,6 +3883,7 @@ class HoloReplyService:
             "cadence_ms": [bubble.delay_ms for bubble in bubbles],
             "thread_key": incoming.thread_key,
             "message_id": incoming.message_id,
+            "outbound_message_id": remote_message_id,
             "session_id": reply_plan.session_id,
             "reply_loop_outcome": repaired.get("outcome", ""),
             "priority": decision.priority,
@@ -4102,6 +4559,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",
                             sender=str(payload.get("sender", "")).strip() or None,
                             iterations=int(payload.get("iterations", 3) or 3),
+                            warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage12":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage12(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
+                            iterations=int(payload.get("iterations", 1) or 1),
                             warmup=int(payload.get("warmup", 1) or 1),
                         ),
                     )
