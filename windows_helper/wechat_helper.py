@@ -389,7 +389,7 @@ class AgentClient:
                 continue
         raise RuntimeError(f"agent unreachable: {last_error}") from last_error
 
-def _candidate_base_urls(self, parsed: parse.ParseResult) -> list[str]:
+    def _candidate_base_urls(self, parsed: parse.ParseResult) -> list[str]:
         bases = [self.base_url]
         if os.name != "nt" or parsed.hostname not in {"127.0.0.1", "localhost"}:
             return bases
