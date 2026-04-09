@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -1883,6 +1884,21 @@ class ReplyBubbleTests(unittest.TestCase):
         converted = _coerce_helper_artifact_path("/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history.md")
         self.assertTrue(converted.lower().startswith("d:\\"))
         self.assertIn(".holo_runtime\\wechat-helper\\receipts\\history.md".lower(), converted.lower())
+
+    def test_coerce_helper_artifact_path_repairs_malformed_windows_prefixed_mnt_path(self) -> None:
+        converted = _coerce_helper_artifact_path(
+            r"D:\mnt\d\Holo\holo\.holo_runtime\wechat-helper\receipts\history_exports\demo.md"
+        )
+        if os.name == "nt":
+            self.assertEqual(
+                converted.lower(),
+                r"d:\holo\holo\.holo_runtime\wechat-helper\receipts\history_exports\demo.md".lower(),
+            )
+        else:
+            self.assertEqual(
+                converted,
+                "/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history_exports/demo.md",
+            )
 
     def test_poll_inbox_skips_corrupt_json_mail(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

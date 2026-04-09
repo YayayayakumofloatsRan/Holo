@@ -300,6 +300,15 @@ def _coerce_helper_artifact_path(raw: str | None) -> str:
     text = str(raw or "").strip()
     if not text:
         return text
+    malformed_windows_mnt_match = re.match(r"^[A-Za-z]:[\\/]+mnt[\\/]+([a-zA-Z])(?:[\\/](.*))?$", text)
+    if malformed_windows_mnt_match:
+        drive = malformed_windows_mnt_match.group(1)
+        tail = str(malformed_windows_mnt_match.group(2) or "").strip("\\/")
+        if os.name == "nt":
+            normalized_tail = tail.replace("/", "\\")
+            return f"{drive.upper()}:\\" + normalized_tail if normalized_tail else f"{drive.upper()}:\\"
+        normalized_tail = tail.replace("\\", "/")
+        return f"/mnt/{drive.lower()}/{normalized_tail}" if normalized_tail else f"/mnt/{drive.lower()}"
     if os.name == "nt":
         mnt_match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", text)
         if mnt_match:
