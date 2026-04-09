@@ -31,6 +31,20 @@ from .operator_bus import operator_probe as run_operator_probe
 from .operator_bus import refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
 from .processors import build_attention_state, build_processor, build_reply_bubbles
+from .reply_service_parts.acceptance import (
+    accept_stage10 as _accept_stage10,
+    accept_stage12 as _accept_stage12,
+    accept_stage13 as _accept_stage13,
+    accept_stage14 as _accept_stage14,
+)
+from .reply_service_parts.diagnostics import (
+    replay_calibration_fixture as _replay_calibration_fixture,
+    replay_policy_regret as _replay_policy_regret,
+    show_action_calibration as _show_action_calibration,
+    trace_action_prediction_error as _trace_action_prediction_error,
+    trace_outcome_history as _trace_outcome_history,
+)
+from .reply_service_parts.endpoints import try_acceptance_endpoint
 from .store import QueueStore
 
 
@@ -909,15 +923,15 @@ class HoloReplyService:
         scenario_bucket: str | None = None,
         limit: int = 24,
     ) -> dict[str, Any]:
-        with self._memory_lock:
-            return self.memory.show_action_calibration(
-                thread_key=thread_key,
-                chat_name=chat_name,
-                channel=channel,
-                action_type=action_type,
-                scenario_bucket=scenario_bucket,
-                limit=limit,
-            )
+        return _show_action_calibration(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            action_type=action_type,
+            scenario_bucket=scenario_bucket,
+            limit=limit,
+        )
 
     def trace_outcome_history(
         self,
@@ -928,14 +942,14 @@ class HoloReplyService:
         action_type: str | None = None,
         limit: int = 8,
     ) -> dict[str, Any]:
-        with self._memory_lock:
-            return self.memory.trace_outcome_history(
-                thread_key=thread_key,
-                chat_name=chat_name,
-                channel=channel,
-                action_type=action_type,
-                limit=limit,
-            )
+        return _trace_outcome_history(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            action_type=action_type,
+            limit=limit,
+        )
 
     def trace_action_prediction_error(
         self,
@@ -946,14 +960,14 @@ class HoloReplyService:
         action_type: str | None = None,
         limit: int = 8,
     ) -> dict[str, Any]:
-        with self._memory_lock:
-            return self.memory.trace_action_prediction_error(
-                thread_key=thread_key,
-                chat_name=chat_name,
-                channel=channel,
-                action_type=action_type,
-                limit=limit,
-            )
+        return _trace_action_prediction_error(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            action_type=action_type,
+            limit=limit,
+        )
 
     def replay_calibration_fixture(
         self,
@@ -966,16 +980,16 @@ class HoloReplyService:
         limit: int = 8,
         artifact_dir: str | None = None,
     ) -> dict[str, Any]:
-        with self._memory_lock:
-            return self.memory.replay_calibration_fixture(
-                source_type=source_type,
-                fixture_path=fixture_path,
-                thread_key=thread_key,
-                chat_name=chat_name,
-                channel=channel,
-                limit=limit,
-                artifact_dir=artifact_dir,
-            )
+        return _replay_calibration_fixture(
+            self,
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            artifact_dir=artifact_dir,
+        )
 
     def replay_policy_regret(
         self,
@@ -988,16 +1002,16 @@ class HoloReplyService:
         limit: int = 8,
         artifact_dir: str | None = None,
     ) -> dict[str, Any]:
-        with self._memory_lock:
-            return self.memory.replay_policy_regret(
-                source_type=source_type,
-                fixture_path=fixture_path,
-                thread_key=thread_key,
-                chat_name=chat_name,
-                channel=channel,
-                limit=limit,
-                artifact_dir=artifact_dir,
-            )
+        return _replay_policy_regret(
+            self,
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            artifact_dir=artifact_dir,
+        )
 
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
@@ -2003,6 +2017,26 @@ class HoloReplyService:
         iterations: int = 3,
         warmup: int = 1,
     ) -> dict[str, Any]:
+        return _accept_stage10(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            iterations=iterations,
+            warmup=warmup,
+        )
+
+    def _accept_stage10_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 3,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
         from .cli import _evaluate_stage10_acceptance
         from .daemon import build_daemon
 
@@ -2164,6 +2198,26 @@ class HoloReplyService:
         iterations: int = 1,
         warmup: int = 1,
     ) -> dict[str, Any]:
+        return _accept_stage12(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            iterations=iterations,
+            warmup=warmup,
+        )
+
+    def _accept_stage12_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 1,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
         from .cli import _evaluate_stage12_acceptance
 
         normalized_thread_key = str(thread_key or chat_name or "Nemoqi").strip() or "Nemoqi"
@@ -2258,6 +2312,26 @@ class HoloReplyService:
         return report
 
     def accept_stage13(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        iterations: int = 1,
+        warmup: int = 1,
+    ) -> dict[str, Any]:
+        return _accept_stage13(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            iterations=iterations,
+            warmup=warmup,
+        )
+
+    def _accept_stage13_impl(
         self,
         *,
         thread_key: str | None = None,
@@ -2539,6 +2613,28 @@ class HoloReplyService:
         return report
 
     def accept_stage14(
+        self,
+        *,
+        source_type: str = "synthetic_fixture",
+        fixture_path: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage14(
+            self,
+            source_type=source_type,
+            fixture_path=fixture_path,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            artifact_dir=artifact_dir,
+        )
+
+    def _accept_stage14_impl(
         self,
         *,
         source_type: str = "synthetic_fixture",
@@ -5055,6 +5151,8 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             warmup=int(payload.get("warmup", 1) or 1),
                         ),
                     )
+                    return
+                if try_acceptance_endpoint(self, parsed, payload):
                     return
                 if parsed.path == "/accept-stage10":
                     self._write_json(

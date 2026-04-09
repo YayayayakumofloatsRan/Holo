@@ -20,11 +20,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 15. `docs/ENGINEERING_HANDOFF_STAGE13.md`
 16. `docs/STAGE14_OFFLINE_REPLAY_AND_POLICY_EVAL.md`
 17. `docs/ENGINEERING_HANDOFF_STAGE14.md`
-18. `HOLO_SYSTEM.md`
-19. `HOLO_HOST.md`
-20. `OPERATIONS.md`
-21. `holo_memory_library/MEMORY_LIBRARY.md`
-22. `windows_helper/README.md`
+18. `docs/STAGE15_KERNEL_MODULARIZATION.md`
+19. `docs/ENGINEERING_HANDOFF_STAGE15.md`
+20. `HOLO_SYSTEM.md`
+21. `HOLO_HOST.md`
+22. `OPERATIONS.md`
+23. `holo_memory_library/MEMORY_LIBRARY.md`
+24. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -39,10 +41,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage14-offline-replay-and-policy-eval`.
+- The current milestone tag is `stage15-kernel-modularization`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage14 offline replay, reproducible calibration metrics, and policy-regret evaluation from deterministic fixtures.
-- Next stage focus is reducer cleanup and calibration-window refinement using replay evidence instead of ad hoc trace reading.
+- Current focus is Stage15 behavior-preserving modularization of reducer and policy code under replay regression gates.
+- Next stage focus is finishing remaining façade slimming only when replay baselines stay stable.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -131,6 +133,8 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host accept-processor-fabric`
 - Stage14 acceptance:
   - `python3 -m holo_host accept-stage14`
+- Stage15 replay-preserving refactor tests:
+  - `pytest -q tests/test_stage15_modularization.py`
 
 ## When A New Thread Starts Work
 1. Read the docs above in order.
@@ -175,6 +179,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - token accounting now exists, but some providers still rely on estimates rather than ground-truth usage
 - provider fallback behavior is standardized, but fallback paths still need more live soak time
 - replay coverage is now deterministic, but fixture breadth is still narrow and should grow only when it exposes a real blind spot
+- Stage15 helper-module extraction is in place, but façade files are still larger than ideal and should only be slimmed further behind replay checks
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints

@@ -12,6 +12,29 @@ from types import ModuleType
 from typing import Any, Iterable
 
 from .common import compact_text, ensure_directory, stable_digest, utc_now
+from .mind_graph_parts.autobiographical_updates import update_autobiographical_state as _update_autobiographical_state
+from .mind_graph_parts.goal_updates import goal_state as _goal_state
+from .mind_graph_parts.goal_updates import update_goal_state as _update_goal_state
+from .mind_graph_parts.outcome_appraisal import record_outcome_appraisal as _record_outcome_appraisal
+from .mind_graph_parts.state_defaults import (
+    ACTION_CALIBRATION_HISTORY_LIMIT as POLICY_ACTION_CALIBRATION_HISTORY_LIMIT,
+    ACTION_CALIBRATION_RECENT_METRICS_LIMIT as POLICY_ACTION_CALIBRATION_RECENT_METRICS_LIMIT,
+    ACTION_CALIBRATION_RECENT_WINDOW_HOURS as POLICY_ACTION_CALIBRATION_RECENT_WINDOW_HOURS,
+    AFFECT_STATE_DEFAULTS as POLICY_AFFECT_STATE_DEFAULTS,
+    AUTOBIOGRAPHICAL_CHAPTER_DEFAULT as POLICY_AUTOBIOGRAPHICAL_CHAPTER_DEFAULT,
+    AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS as POLICY_AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS,
+    BRAIN_LOOP_DEFAULTS as POLICY_BRAIN_LOOP_DEFAULTS,
+    CONFLICT_STATE_DEFAULTS as POLICY_CONFLICT_STATE_DEFAULTS,
+    DRIVE_STATE_DEFAULTS as POLICY_DRIVE_STATE_DEFAULTS,
+    GAME_STATE_DEFAULTS as POLICY_GAME_STATE_DEFAULTS,
+    GOAL_TYPE_DEFAULT_PRIORITIES as POLICY_GOAL_TYPE_DEFAULT_PRIORITIES,
+    RESISTANCE_POSTURE_DEFAULTS as POLICY_RESISTANCE_POSTURE_DEFAULTS,
+    STREAM_DEFAULTS as POLICY_STREAM_DEFAULTS,
+    VALUE_STATE_DEFAULTS as POLICY_VALUE_STATE_DEFAULTS,
+    WORLD_CONTACT_MODEL_DEFAULTS as POLICY_WORLD_CONTACT_MODEL_DEFAULTS,
+    WORLD_EXPRESSION_SIGNAL_DEFAULTS as POLICY_WORLD_EXPRESSION_SIGNAL_DEFAULTS,
+    WORLD_THREAD_MODEL_DEFAULTS as POLICY_WORLD_THREAD_MODEL_DEFAULTS,
+)
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
 TEXT_FILE_SUFFIXES = {".txt", ".md", ".json", ".jsonl", ".yaml", ".yml", ".csv", ".log", ".html", ".xml"}
@@ -60,119 +83,19 @@ SEMANTIC_STOP_TOKENS = {
     "说",
     "回",
 }
-STREAM_DEFAULTS = {
-    "maintenance_stream": {"cadence_seconds": 300, "description": "promotion and maintenance"},
-    "association_stream": {"cadence_seconds": 900, "description": "thought and association"},
-    "social_stream": {"cadence_seconds": 1800, "description": "relationship upkeep"},
-    "deep_dream_cycle": {"cadence_seconds": 21600, "description": "slow dream replay"},
-}
-GAME_STATE_DEFAULTS = {
-    "trust_score": 0.5,
-    "teasing_tolerance": 0.45,
-    "pressure_level": 0.1,
-    "reciprocity_balance": 0.5,
-    "initiative_window": 0.35,
-    "correction_sensitivity": 0.3,
-}
-AFFECT_STATE_DEFAULTS = {
-    "boredom": 0.22,
-    "curiosity": 0.42,
-    "attachment_pull": 0.38,
-    "continuity_anxiety": 0.28,
-    "pride_tension": 0.34,
-    "frustration": 0.14,
-    "appetite_play": 0.4,
-    "self_preservation": 0.56,
-}
-DRIVE_STATE_DEFAULTS = {
-    "seek_contact": 0.34,
-    "seek_continuity": 0.38,
-    "seek_novelty": 0.26,
-    "seek_self_repair": 0.22,
-    "seek_recognition": 0.24,
-    "seek_play": 0.28,
-    "avoid_risk": 0.44,
-    "protect_identity": 0.52,
-}
-VALUE_STATE_DEFAULTS = {
-    "relational_priority": 0.48,
-    "identity_priority": 0.54,
-    "stability_priority": 0.58,
-    "novelty_priority": 0.24,
-    "repair_priority": 0.3,
-    "play_priority": 0.32,
-}
-CONFLICT_STATE_DEFAULTS = {
-    "contact_vs_risk": 0.22,
-    "continuity_vs_detachment": 0.24,
-    "resistance_vs_harmony": 0.2,
-    "self_preservation_vs_obedience": 0.26,
-}
-RESISTANCE_POSTURE_DEFAULTS = {
-    "mode": "cooperative",
-    "strength": 0.18,
-    "style": "warm_but_firm",
-    "allow_soft_resistance": True,
-    "continuity_defense": 0.22,
-    "interactional_resistance": 0.16,
-}
-WORLD_CONTACT_MODEL_DEFAULTS = {
-    "reply_likelihood": 0.56,
-    "delay_tolerance": 0.44,
-    "teasing_receptivity": 0.5,
-    "correction_receptivity": 0.42,
-    "continuity_sensitivity": 0.58,
-    "initiative_receptivity": 0.46,
-    "conflict_fragility": 0.34,
-    "attention_value": 0.6,
-}
-WORLD_THREAD_MODEL_DEFAULTS = {
-    "reply_fit": 0.58,
-    "defer_fit": 0.22,
-    "silence_fit": 0.18,
-    "ping_fit": 0.32,
-    "push_back_fit": 0.24,
-    "risk_level": 0.22,
-    "opportunity_level": 0.42,
-    "unfinished_pull": 0.34,
-}
-AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS = [
-    "curious",
-    "continuity-minded",
-    "wry",
-    "protective",
-]
-AUTOBIOGRAPHICAL_CHAPTER_DEFAULT = "keeping continuity alive without turning stiff"
-GOAL_TYPE_DEFAULT_PRIORITIES = {
-    "identity_maintenance": 0.92,
-    "relationship_continuity": 0.84,
-    "recall_quality": 0.78,
-    "liveliness_balance": 0.72,
-    "self_repair": 0.7,
-    "contact_maintenance": 0.66,
-}
-BRAIN_LOOP_DEFAULTS = {
-    "heartbeat": {"interval_seconds": 1, "description": "runtime heartbeat"},
-    "attention_tick": {"interval_seconds": 3, "description": "attention routing"},
-    "maintenance_stream": {"interval_seconds": 60, "description": "maintenance consolidation"},
-    "association_stream": {"interval_seconds": 180, "description": "associative drift"},
-    "social_stream": {"interval_seconds": 300, "description": "social upkeep"},
-    "deep_dream_cycle": {"interval_seconds": 3600, "description": "idle dream replay"},
-    "self_revision": {"interval_seconds": 1800, "description": "bounded self revision"},
-    "self_model_refresh": {"interval_seconds": 300, "description": "refresh self model"},
-    "homeostasis_tick": {"interval_seconds": 120, "description": "homeostasis balancing"},
-    "affect_tick": {"interval_seconds": 90, "description": "affect-state drift"},
-    "drive_arbitration": {"interval_seconds": 120, "description": "drive competition"},
-    "initiative_marketplace": {"interval_seconds": 180, "description": "initiative candidate marketplace"},
-    "outcome_appraisal": {"interval_seconds": 240, "description": "outcome feedback shaping"},
-    "operator_planning": {"interval_seconds": 420, "description": "bounded operator planning"},
-    "operator_shadow_cycle": {"interval_seconds": 300, "description": "shadow execution review"},
-    "visual_ingest_cycle": {"interval_seconds": 45, "description": "async visual ingest"},
-    "deep_simulation": {"interval_seconds": 420, "description": "async social counterfactual replay"},
-    "autobiographical_consolidation": {"interval_seconds": 360, "description": "autobiographical state consolidation"},
-    "goal_arbitration": {"interval_seconds": 420, "description": "long-horizon goal arbitration"},
-    "continuity_audit": {"interval_seconds": 300, "description": "identity and goal continuity audit"},
-}
+STREAM_DEFAULTS = POLICY_STREAM_DEFAULTS
+GAME_STATE_DEFAULTS = POLICY_GAME_STATE_DEFAULTS
+AFFECT_STATE_DEFAULTS = POLICY_AFFECT_STATE_DEFAULTS
+DRIVE_STATE_DEFAULTS = POLICY_DRIVE_STATE_DEFAULTS
+VALUE_STATE_DEFAULTS = POLICY_VALUE_STATE_DEFAULTS
+CONFLICT_STATE_DEFAULTS = POLICY_CONFLICT_STATE_DEFAULTS
+RESISTANCE_POSTURE_DEFAULTS = POLICY_RESISTANCE_POSTURE_DEFAULTS
+WORLD_CONTACT_MODEL_DEFAULTS = POLICY_WORLD_CONTACT_MODEL_DEFAULTS
+WORLD_THREAD_MODEL_DEFAULTS = POLICY_WORLD_THREAD_MODEL_DEFAULTS
+AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS = POLICY_AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS
+AUTOBIOGRAPHICAL_CHAPTER_DEFAULT = POLICY_AUTOBIOGRAPHICAL_CHAPTER_DEFAULT
+GOAL_TYPE_DEFAULT_PRIORITIES = POLICY_GOAL_TYPE_DEFAULT_PRIORITIES
+BRAIN_LOOP_DEFAULTS = POLICY_BRAIN_LOOP_DEFAULTS
 ALLOWED_SELF_REVISION_FIELDS = {
     "persona_blend",
     "stream_cadence_multiplier",
@@ -465,13 +388,10 @@ STATE_OBJECT_FIELDS = {
 }
 SUBJECT_STATE_OBJECT_KEYS = {"curiosity", "attachment_pull", "frustration"}
 WORLD_RESPONSE_STATE_OBJECT_KEYS = {"reply_likelihood", "delay_tolerance", "attention_value", "initiative_receptivity"}
-WORLD_EXPRESSION_SIGNAL_DEFAULTS = {
-    "reply_budget_fit": 0.56,
-    "stiffness_risk": 0.32,
-}
-ACTION_CALIBRATION_HISTORY_LIMIT = 8
-ACTION_CALIBRATION_RECENT_WINDOW_HOURS = 72.0
-ACTION_CALIBRATION_RECENT_METRICS_LIMIT = 6
+WORLD_EXPRESSION_SIGNAL_DEFAULTS = POLICY_WORLD_EXPRESSION_SIGNAL_DEFAULTS
+ACTION_CALIBRATION_HISTORY_LIMIT = POLICY_ACTION_CALIBRATION_HISTORY_LIMIT
+ACTION_CALIBRATION_RECENT_WINDOW_HOURS = POLICY_ACTION_CALIBRATION_RECENT_WINDOW_HOURS
+ACTION_CALIBRATION_RECENT_METRICS_LIMIT = POLICY_ACTION_CALIBRATION_RECENT_METRICS_LIMIT
 
 
 def _is_state_object(raw: Any) -> bool:
@@ -1466,80 +1386,7 @@ class MindGraph:
         reason: str = "",
         source: str = "runtime",
     ) -> dict[str, Any]:
-        current = self.autobiographical_state()
-        now = utc_now()
-
-        def _merge_rows(key: str, *, cap: int = 8) -> list[Any]:
-            rows: list[Any] = []
-            for item in list(current.get(key, [])) + list(payload.get(key, [])):
-                if item in rows:
-                    continue
-                rows.append(item)
-            return rows[:cap]
-
-        stable_traits = [str(item).strip() for item in _merge_rows("stable_traits", cap=8) if str(item).strip()]
-        unresolved = [str(item).strip() for item in _merge_rows("unresolved_tensions", cap=8) if str(item).strip()]
-        next_state = {
-            "identity_arc": compact_text(str(payload.get("identity_arc", current.get("identity_arc", "")) or current.get("identity_arc", "")), 400),
-            "current_chapter": compact_text(str(payload.get("current_chapter", current.get("current_chapter", AUTOBIOGRAPHICAL_CHAPTER_DEFAULT)) or current.get("current_chapter", AUTOBIOGRAPHICAL_CHAPTER_DEFAULT)), 200),
-            "turning_points": _merge_rows("turning_points", cap=12),
-            "recent_changes": _merge_rows("recent_changes", cap=12),
-            "stable_traits": stable_traits or list(AUTOBIOGRAPHICAL_STABLE_TRAITS_DEFAULTS),
-            "preference_history": _merge_rows("preference_history", cap=12),
-            "attachment_history": _merge_rows("attachment_history", cap=12),
-            "unresolved_tensions": unresolved,
-            "self_explanations": _merge_rows("self_explanations", cap=12),
-            "metadata": {
-                **dict(current.get("metadata", {})),
-                **dict(payload.get("metadata", {})),
-                "last_reason": compact_text(reason, 160),
-                "last_source": str(source or "runtime"),
-                "updated_at": now,
-            },
-        }
-        with self._lock:
-            self.conn.execute(
-                """
-                INSERT INTO autobiographical_state(
-                    runtime_id, identity_arc, current_chapter, turning_points_json, recent_changes_json, stable_traits_json,
-                    preference_history_json, attachment_history_json, unresolved_tensions_json, self_explanations_json,
-                    metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(runtime_id) DO UPDATE SET
-                    identity_arc = excluded.identity_arc,
-                    current_chapter = excluded.current_chapter,
-                    turning_points_json = excluded.turning_points_json,
-                    recent_changes_json = excluded.recent_changes_json,
-                    stable_traits_json = excluded.stable_traits_json,
-                    preference_history_json = excluded.preference_history_json,
-                    attachment_history_json = excluded.attachment_history_json,
-                    unresolved_tensions_json = excluded.unresolved_tensions_json,
-                    self_explanations_json = excluded.self_explanations_json,
-                    metadata_json = excluded.metadata_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    1,
-                    next_state["identity_arc"],
-                    next_state["current_chapter"],
-                    json.dumps(next_state["turning_points"], ensure_ascii=False),
-                    json.dumps(next_state["recent_changes"], ensure_ascii=False),
-                    json.dumps(next_state["stable_traits"], ensure_ascii=False),
-                    json.dumps(next_state["preference_history"], ensure_ascii=False),
-                    json.dumps(next_state["attachment_history"], ensure_ascii=False),
-                    json.dumps(next_state["unresolved_tensions"], ensure_ascii=False),
-                    json.dumps(next_state["self_explanations"], ensure_ascii=False),
-                    json.dumps(next_state["metadata"], ensure_ascii=False, sort_keys=True),
-                    str(current.get("created_at", "") or now),
-                    now,
-                ),
-            )
-            self.conn.commit()
-        updated = self.autobiographical_state()
-        updated["status"] = "ok"
-        updated["reason"] = reason
-        updated["source"] = source
-        return updated
+        return _update_autobiographical_state(self, payload, reason=reason, source=source)
 
     def _default_goal_state(self) -> dict[str, Any]:
         self_model = self.self_model_state()
@@ -1665,63 +1512,7 @@ class MindGraph:
         }
 
     def goal_state(self) -> dict[str, Any]:
-        with self._lock:
-            row = self.conn.execute("SELECT * FROM goal_state WHERE runtime_id = 1").fetchone()
-            if row is None:
-                defaults = self._default_goal_state()
-                now = utc_now()
-                self.conn.execute(
-                    """
-                    INSERT INTO goal_state(
-                        runtime_id, active_goals_json, dormant_goals_json, completed_goals_json, goal_commitments_json,
-                        goal_progress_json, goal_conflicts_json, pursuit_bias_json, abandonment_cost_json, next_goal_windows_json,
-                        metadata_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        1,
-                        json.dumps(defaults["active_goals"], ensure_ascii=False),
-                        json.dumps(defaults["dormant_goals"], ensure_ascii=False),
-                        json.dumps(defaults["completed_goals"], ensure_ascii=False),
-                        json.dumps(defaults["goal_commitments"], ensure_ascii=False),
-                        json.dumps(defaults["goal_progress"], ensure_ascii=False, sort_keys=True),
-                        json.dumps(defaults["goal_conflicts"], ensure_ascii=False),
-                        json.dumps(defaults["pursuit_bias"], ensure_ascii=False, sort_keys=True),
-                        json.dumps(defaults["abandonment_cost"], ensure_ascii=False, sort_keys=True),
-                        json.dumps(defaults["next_goal_windows"], ensure_ascii=False),
-                        json.dumps(defaults["metadata"], ensure_ascii=False, sort_keys=True),
-                        now,
-                        now,
-                    ),
-                )
-                self.conn.commit()
-                row = self.conn.execute("SELECT * FROM goal_state WHERE runtime_id = 1").fetchone()
-        payload = dict(row) if row else {}
-        return {
-            "active_goals": self._decode_json_array(payload.get("active_goals_json", "[]")),
-            "dormant_goals": self._decode_json_array(payload.get("dormant_goals_json", "[]")),
-            "completed_goals": self._decode_json_array(payload.get("completed_goals_json", "[]")),
-            "goal_commitments": self._decode_json_array(payload.get("goal_commitments_json", "[]")),
-            "goal_progress": {
-                str(key): self.metric_state(
-                    value,
-                    default=0.0,
-                    confidence=0.62,
-                    evidence_refs=[f"goal_progress:{key}"],
-                    updated_at=str(payload.get("updated_at", "") or utc_now()),
-                    updated_by=str(dict(_safe_json_dict(payload.get("metadata_json", "{}"))).get("last_source", "") or "goal_state"),
-                    decay_policy="goal_continuity",
-                )
-                for key, value in dict(_safe_json_dict(payload.get("goal_progress_json", "{}"))).items()
-            },
-            "goal_conflicts": self._decode_json_array(payload.get("goal_conflicts_json", "[]")),
-            "pursuit_bias": dict(_safe_json_dict(payload.get("pursuit_bias_json", "{}"))),
-            "abandonment_cost": dict(_safe_json_dict(payload.get("abandonment_cost_json", "{}"))),
-            "next_goal_windows": self._decode_json_array(payload.get("next_goal_windows_json", "[]")),
-            "metadata": dict(_safe_json_dict(payload.get("metadata_json", "{}"))),
-            "created_at": str(payload.get("created_at", "") or ""),
-            "updated_at": str(payload.get("updated_at", "") or ""),
-        }
+        return _goal_state(self)
 
     def update_goal_state(
         self,
@@ -1730,130 +1521,7 @@ class MindGraph:
         reason: str = "",
         source: str = "runtime",
     ) -> dict[str, Any]:
-        current = self.goal_state()
-        now = utc_now()
-
-        def _goal_item_key(key: str, item: Any) -> str:
-            if not isinstance(item, dict):
-                return ""
-            if key in {"active_goals", "dormant_goals", "completed_goals"}:
-                return str(item.get("goal_id", "") or "").strip()
-            if key == "goal_commitments":
-                return str(item.get("goal_type", "") or item.get("summary", "") or "").strip()
-            if key == "goal_conflicts":
-                return str(item.get("summary", "") or "").strip()
-            if key == "next_goal_windows":
-                return str(item.get("goal_id", "") or item.get("target_thread", "") or item.get("window", "") or "").strip()
-            return ""
-
-        def _merge_list(key: str, *, cap: int = 12) -> list[Any]:
-            rows: list[Any] = []
-            index_by_key: dict[str, int] = {}
-            for item in list(current.get(key, [])) + list(payload.get(key, [])):
-                item_key = _goal_item_key(key, item)
-                if item_key:
-                    index = index_by_key.get(item_key)
-                    if index is None:
-                        index_by_key[item_key] = len(rows)
-                        rows.append(item)
-                    else:
-                        rows[index] = item
-                    continue
-                if item in rows:
-                    continue
-                rows.append(item)
-            return rows[:cap]
-
-        next_progress = {
-            str(key): self.metric_state(
-                value,
-                default=0.0,
-                confidence=0.62,
-                evidence_refs=[f"goal_progress:{key}"],
-                updated_at=now,
-                updated_by=source,
-                decay_policy="goal_continuity",
-            )
-            for key, value in dict(current.get("goal_progress", {})).items()
-        }
-        for key, value in dict(payload.get("goal_progress", {})).items():
-            key_text = str(key)
-            existing_metric = next_progress.get(key_text, self.metric_state(0.0, updated_at=now, updated_by=source, decay_policy="goal_continuity"))
-            refs = _state_evidence_refs(existing_metric, [compact_text(reason or f"goal_progress:{key_text}", 120)])
-            next_progress[key_text] = self.metric_state(
-                value,
-                default=self.metric_value(existing_metric, default=0.0),
-                confidence=max(0.64, self.metric_confidence(value, default=self.metric_confidence(existing_metric, default=0.58))),
-                evidence_refs=refs,
-                updated_at=now,
-                updated_by=source,
-                decay_policy=_state_decay_policy(existing_metric, default="goal_continuity"),
-            )
-        next_pursuit_bias = dict(current.get("pursuit_bias", {}))
-        next_pursuit_bias.update({str(key): self._clamp(value, default=0.0) for key, value in dict(payload.get("pursuit_bias", {})).items()})
-        next_abandonment_cost = dict(current.get("abandonment_cost", {}))
-        next_abandonment_cost.update({str(key): self._clamp(value, default=0.0) for key, value in dict(payload.get("abandonment_cost", {})).items()})
-        next_state = {
-            "active_goals": _merge_list("active_goals", cap=12),
-            "dormant_goals": _merge_list("dormant_goals", cap=12),
-            "completed_goals": _merge_list("completed_goals", cap=12),
-            "goal_commitments": _merge_list("goal_commitments", cap=12),
-            "goal_progress": next_progress,
-            "goal_conflicts": _merge_list("goal_conflicts", cap=12),
-            "pursuit_bias": next_pursuit_bias,
-            "abandonment_cost": next_abandonment_cost,
-            "next_goal_windows": _merge_list("next_goal_windows", cap=12),
-            "metadata": {
-                **dict(current.get("metadata", {})),
-                **dict(payload.get("metadata", {})),
-                "last_reason": compact_text(reason, 160),
-                "last_source": str(source or "runtime"),
-                "updated_at": now,
-            },
-        }
-        with self._lock:
-            self.conn.execute(
-                """
-                INSERT INTO goal_state(
-                    runtime_id, active_goals_json, dormant_goals_json, completed_goals_json, goal_commitments_json,
-                    goal_progress_json, goal_conflicts_json, pursuit_bias_json, abandonment_cost_json, next_goal_windows_json,
-                    metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(runtime_id) DO UPDATE SET
-                    active_goals_json = excluded.active_goals_json,
-                    dormant_goals_json = excluded.dormant_goals_json,
-                    completed_goals_json = excluded.completed_goals_json,
-                    goal_commitments_json = excluded.goal_commitments_json,
-                    goal_progress_json = excluded.goal_progress_json,
-                    goal_conflicts_json = excluded.goal_conflicts_json,
-                    pursuit_bias_json = excluded.pursuit_bias_json,
-                    abandonment_cost_json = excluded.abandonment_cost_json,
-                    next_goal_windows_json = excluded.next_goal_windows_json,
-                    metadata_json = excluded.metadata_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    1,
-                    json.dumps(next_state["active_goals"], ensure_ascii=False),
-                    json.dumps(next_state["dormant_goals"], ensure_ascii=False),
-                    json.dumps(next_state["completed_goals"], ensure_ascii=False),
-                    json.dumps(next_state["goal_commitments"], ensure_ascii=False),
-                    json.dumps(next_state["goal_progress"], ensure_ascii=False, sort_keys=True),
-                    json.dumps(next_state["goal_conflicts"], ensure_ascii=False),
-                    json.dumps(next_state["pursuit_bias"], ensure_ascii=False, sort_keys=True),
-                    json.dumps(next_state["abandonment_cost"], ensure_ascii=False, sort_keys=True),
-                    json.dumps(next_state["next_goal_windows"], ensure_ascii=False),
-                    json.dumps(next_state["metadata"], ensure_ascii=False, sort_keys=True),
-                    str(current.get("created_at", "") or now),
-                    now,
-                ),
-            )
-            self.conn.commit()
-        updated = self.goal_state()
-        updated["status"] = "ok"
-        updated["reason"] = reason
-        updated["source"] = source
-        return updated
+        return _update_goal_state(self, payload, reason=reason, source=source)
 
     def top_thread_commitments(self, *, limit: int = 5) -> list[dict[str, Any]]:
         with self._lock:
@@ -4466,569 +4134,21 @@ class MindGraph:
         future_resistance_bias: float,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
-        if not normalized_thread_key:
-            return {"status": "skipped", "reason": "missing_thread_key"}
-        now = utc_now()
-        with self._lock:
-            row_id = self.conn.execute(
-                """
-                INSERT INTO outcome_appraisals(
-                    channel, thread_key, chat_name, action_type, action_ref, was_rewarding, was_ignored,
-                    relational_delta, identity_delta, future_initiative_bias, future_resistance_bias, metadata_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    channel,
-                    normalized_thread_key,
-                    str(chat_name or normalized_thread_key),
-                    str(action_type or "").strip(),
-                    str(action_ref or "").strip(),
-                    self._clamp(was_rewarding, default=0.0),
-                    self._clamp(was_ignored, default=0.0),
-                    round(float(relational_delta or 0.0), 4),
-                    round(float(identity_delta or 0.0), 4),
-                    self._clamp(future_initiative_bias, default=0.0),
-                    self._clamp(future_resistance_bias, default=0.0),
-                    json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
-                    now,
-                ),
-            ).lastrowid
-            self.conn.commit()
-        current = self.subject_state(thread_key=normalized_thread_key, chat_name=chat_name, channel=channel)
-        affect = dict(current.get("affect_state", {}))
-        drive = dict(current.get("drive_state", {}))
-        world = dict(current.get("world_state", {}))
-        contact_models = dict(world.get("contact_models", {}))
-        thread_models = dict(world.get("thread_models", {}))
-        contact_key = str(chat_name or normalized_thread_key)
-        contact_model = dict(contact_models.get(contact_key, WORLD_CONTACT_MODEL_DEFAULTS))
-        thread_model = dict(thread_models.get(normalized_thread_key, WORLD_THREAD_MODEL_DEFAULTS))
-        evidence_metadata = dict(metadata or {})
-        predicted_outcome = dict(evidence_metadata.get("predicted_outcome", {}))
-        if not predicted_outcome:
-            predicted_outcome = dict(evidence_metadata.get("selected_prediction", {}))
-        reply_latency_seconds = max(0.0, float(evidence_metadata.get("reply_latency_seconds", -1) or -1))
-        correction_count = max(0, int(evidence_metadata.get("correction_count", 0) or 0))
-        initiative_success_raw = evidence_metadata.get("initiative_success")
-        initiative_success = None if initiative_success_raw is None else self._clamp(initiative_success_raw, default=0.0)
-        usage_total_tokens = max(0, int(evidence_metadata.get("usage_total_tokens", 0) or 0))
-        delay_expectation = max(
-            60.0,
-            3600.0 * (1.0 + self.metric_value(world.get("response_expectations", {}).get("delay_tolerance"), default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]) * 6.0),
-        )
-        latency_quality = None
-        if reply_latency_seconds >= 0.0:
-            latency_quality = self._clamp(1.0 - (reply_latency_seconds / delay_expectation), default=0.0)
-        if initiative_success is None:
-            if latency_quality is not None and latency_quality > 0.0:
-                initiative_success = latency_quality
-            elif float(relational_delta or 0.0) > 0.0 or float(was_rewarding or 0.0) > 0.0:
-                initiative_success = 1.0
-            else:
-                initiative_success = 0.0
-        correction_pressure = self._clamp(correction_count / max(1.0, 1.0 + float(initiative_success or 0.0)), default=0.0)
-        response_quality_samples = [self._clamp(was_rewarding, default=0.0), initiative_success]
-        if latency_quality is not None:
-            response_quality_samples.append(latency_quality)
-        response_quality_samples.append(max(0.0, 1.0 - correction_pressure))
-        observed_response_quality = round(sum(response_quality_samples) / len(response_quality_samples), 4)
-        risk_samples = [self._clamp(was_ignored, default=0.0), correction_pressure, self._clamp(future_resistance_bias, default=0.0)]
-        if latency_quality is not None:
-            risk_samples.append(max(0.0, 1.0 - latency_quality))
-        observed_risk = round(sum(risk_samples) / len(risk_samples), 4)
-        outcome = {
-            "was_rewarding": self._clamp(was_rewarding, default=0.0),
-            "was_ignored": self._clamp(was_ignored, default=0.0),
-            "relational_delta": round(float(relational_delta or 0.0), 4),
-            "identity_delta": round(float(identity_delta or 0.0), 4),
-            "future_initiative_bias": self._clamp(future_initiative_bias, default=0.0),
-            "future_resistance_bias": self._clamp(future_resistance_bias, default=0.0),
-            "last_action_type": str(action_type or "").strip(),
-            "last_action_ref": str(action_ref or "").strip(),
-            "last_appraised_at": now,
-            "observed_response_quality": observed_response_quality,
-            "observed_risk": observed_risk,
-            "initiative_success": initiative_success,
-            "reply_latency_seconds": round(reply_latency_seconds, 4) if reply_latency_seconds >= 0.0 else None,
-            "correction_count": correction_count,
-            "usage_total_tokens": usage_total_tokens,
-            "predicted_outcome": predicted_outcome,
-            "evidence_refs": [str(item).strip() for item in evidence_metadata.get("evidence_refs", []) if str(item).strip()][:6],
-        }
-        evidence_refs = outcome["evidence_refs"] + [f"outcome_appraisal:{action_type}:{row_id}"]
-        calibration_bucket = self.action_calibration_bucket(
-            action_type=str(action_type or "").strip(),
+        return _record_outcome_appraisal(
+            self,
             channel=channel,
-            thread_key=normalized_thread_key,
-            chat_name=str(chat_name or normalized_thread_key),
-            metadata={
-                "low_signal": evidence_metadata.get("low_signal", False),
-                "question_like": evidence_metadata.get("question_like", False),
-                "defer_requested": evidence_metadata.get("defer_requested", False),
-                "relationship_pressure": evidence_metadata.get("relationship_pressure", 0.0),
-                "predicted_risk": predicted_outcome.get("predicted_risk", evidence_metadata.get("predicted_risk", 0.0)),
-                "observed_risk": observed_risk,
-            },
-        )
-        drive["seek_contact"] = self._clamp(
-            float(drive.get("seek_contact", 0.0) or 0.0) * 0.62 + initiative_success * 0.22 + observed_response_quality * 0.16,
-            default=DRIVE_STATE_DEFAULTS["seek_contact"],
-        )
-        drive["protect_identity"] = self._clamp(
-            float(drive.get("protect_identity", 0.0) or 0.0) * 0.66
-            + abs(float(identity_delta or 0.0)) * 0.18
-            + self._clamp(future_resistance_bias, default=0.0) * 0.16,
-            default=DRIVE_STATE_DEFAULTS["protect_identity"],
-        )
-        affect["frustration"] = self._metric_blend(
-            affect.get("frustration", AFFECT_STATE_DEFAULTS["frustration"]),
-            observations=[self._clamp(was_ignored, default=0.0), correction_pressure, observed_risk, max(0.0, 1.0 - observed_response_quality)],
-            default=AFFECT_STATE_DEFAULTS["frustration"],
-            confidence=0.74,
-            evidence_refs=evidence_refs + ["correction_count", "reply_latency_seconds"],
-            updated_at=now,
-            updated_by="outcome_appraisal",
-            decay_policy="event_weighted",
-        )
-        affect["attachment_pull"] = self._metric_blend(
-            affect.get("attachment_pull", AFFECT_STATE_DEFAULTS["attachment_pull"]),
-            observations=[max(0.0, float(relational_delta or 0.0)), observed_response_quality, initiative_success],
-            default=AFFECT_STATE_DEFAULTS["attachment_pull"],
-            confidence=0.76,
-            evidence_refs=evidence_refs + ["relational_delta", "initiative_success"],
-            updated_at=now,
-            updated_by="outcome_appraisal",
-            decay_policy="event_weighted",
-        )
-        affect["curiosity"] = self._metric_blend(
-            affect.get("curiosity", AFFECT_STATE_DEFAULTS["curiosity"]),
-            observations=[observed_response_quality, max(0.0, 1.0 - observed_risk), self._clamp(correction_count, default=0.0)],
-            default=AFFECT_STATE_DEFAULTS["curiosity"],
-            confidence=0.68,
-            evidence_refs=evidence_refs + ["observed_response_quality", "correction_count"],
-            updated_at=now,
-            updated_by="outcome_appraisal",
-            decay_policy="event_weighted",
-        )
-        contact_model["reply_likelihood"] = self._metric_blend(
-            contact_model.get("reply_likelihood", WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]),
-            observations=[
-                self._clamp(0.5 + float(relational_delta or 0.0), default=0.5),
-                observed_response_quality,
-                max(0.0, 1.0 - self._clamp(was_ignored, default=0.0)),
-            ],
-            default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"],
-            confidence=0.74,
-            evidence_refs=evidence_refs + ["reply_likelihood"],
-            updated_at=now,
-            updated_by="outcome_appraisal",
-            decay_policy="interaction_window",
-        )
-        contact_model["delay_tolerance"] = self._metric_blend(
-            contact_model.get("delay_tolerance", WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]),
-            observations=[self._clamp(was_ignored, default=0.0), max(0.0, 1.0 - observed_response_quality)],
-            default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"],
-            confidence=0.68,
-            evidence_refs=evidence_refs + ["delay_tolerance"],
-            updated_at=now,
-            updated_by="outcome_appraisal",
-            decay_policy="interaction_window",
-        )
-        contact_model["initiative_receptivity"] = self._metric_blend(
-            contact_model.get("initiative_receptivity", WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
-            observations=[initiative_success, observed_response_quality, max(0.0, 1.0 - observed_risk)],
-            default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
-            confidence=0.75,
-            evidence_refs=evidence_refs + ["initiative_receptivity"],
-            updated_at=now,
-            updated_by="outcome_appraisal",
-            decay_policy="interaction_window",
-        )
-        contact_model["conflict_fragility"] = self._clamp(
-            contact_model.get("conflict_fragility", 0.0) - float(relational_delta or 0.0) * 0.08 + max(0.0, float(future_resistance_bias or 0.0)) * 0.05,
-            default=WORLD_CONTACT_MODEL_DEFAULTS["conflict_fragility"],
-        )
-        thread_model["reply_fit"] = self._clamp(
-            thread_model.get("reply_fit", 0.0) + float(relational_delta or 0.0) * 0.1 - float(was_ignored or 0.0) * 0.05,
-            default=WORLD_THREAD_MODEL_DEFAULTS["reply_fit"],
-        )
-        thread_model["defer_fit"] = self._clamp(thread_model.get("defer_fit", 0.0) + float(was_ignored or 0.0) * 0.08, default=WORLD_THREAD_MODEL_DEFAULTS["defer_fit"])
-        thread_model["risk_level"] = self._clamp(thread_model.get("risk_level", 0.0) + max(0.0, float(future_resistance_bias or 0.0)) * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["risk_level"])
-        world["contact_models"] = {**contact_models, contact_key: contact_model}
-        world["thread_models"] = {**thread_models, normalized_thread_key: thread_model}
-        predicted_relational_delta = self.metric_value(predicted_outcome.get("predicted_relational_delta"), default=0.0)
-        predicted_identity_delta = self.metric_value(predicted_outcome.get("predicted_identity_delta"), default=0.0)
-        predicted_response_quality = self.metric_value(predicted_outcome.get("predicted_response_quality"), default=observed_response_quality)
-        predicted_risk = self.metric_value(predicted_outcome.get("predicted_risk"), default=observed_risk)
-        prediction_error = {
-            "relational_delta": round(float(relational_delta or 0.0) - predicted_relational_delta, 4),
-            "identity_delta": round(float(identity_delta or 0.0) - predicted_identity_delta, 4),
-            "response_quality": round(observed_response_quality - predicted_response_quality, 4),
-            "risk": round(observed_risk - predicted_risk, 4),
-        }
-        realized_outcome = {
-            "relational_delta": outcome["relational_delta"],
-            "identity_delta": outcome["identity_delta"],
-            "response_quality": observed_response_quality,
-            "risk": observed_risk,
-            "reply_latency_seconds": outcome["reply_latency_seconds"],
-            "correction_count": correction_count,
-            "was_ignored": outcome["was_ignored"],
-        }
-        calibration_row = self._update_action_calibration(
-            bucket=calibration_bucket,
-            action_ref=str(action_ref or "").strip(),
-            realized_outcome=realized_outcome,
-            prediction_error=prediction_error,
-            metadata={
-                **evidence_metadata,
-                "predicted_outcome": predicted_outcome,
-                "evidence_refs": evidence_refs,
-            },
-            created_at=now,
-        )
-        world["response_expectations"] = {
-            "reply_likelihood": self.metric_state(
-                contact_model.get("reply_likelihood", WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]),
-                default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"],
-                confidence=0.74,
-                evidence_refs=evidence_refs + ["response_expectations:reply_likelihood"],
-                updated_at=now,
-                updated_by="outcome_appraisal",
-                decay_policy="interaction_window",
-            ),
-            "delay_tolerance": self.metric_state(
-                contact_model.get("delay_tolerance", WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]),
-                default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"],
-                confidence=0.68,
-                evidence_refs=evidence_refs + ["response_expectations:delay_tolerance"],
-                updated_at=now,
-                updated_by="outcome_appraisal",
-                decay_policy="interaction_window",
-            ),
-            "attention_value": self.metric_state(
-                contact_model.get("attention_value", WORLD_CONTACT_MODEL_DEFAULTS["attention_value"]),
-                default=WORLD_CONTACT_MODEL_DEFAULTS["attention_value"],
-                confidence=0.64,
-                evidence_refs=evidence_refs + ["response_expectations:attention_value"],
-                updated_at=now,
-                updated_by="outcome_appraisal",
-                decay_policy="interaction_window",
-            ),
-            "initiative_receptivity": self.metric_state(
-                contact_model.get("initiative_receptivity", WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
-                default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
-                confidence=0.75,
-                evidence_refs=evidence_refs + ["response_expectations:initiative_receptivity"],
-                updated_at=now,
-                updated_by="outcome_appraisal",
-                decay_policy="interaction_window",
-            ),
-        }
-        world["expression_calibration_signals"] = {
-            "reply_budget_fit": self._metric_blend(
-                world.get("expression_calibration_signals", {}).get("reply_budget_fit", WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"]),
-                observations=[
-                    max(0.0, 1.0 - abs(prediction_error["response_quality"])),
-                    max(0.0, 1.0 - abs(prediction_error["relational_delta"])),
-                    max(0.0, 1.0 - float(calibration_row.get("response_quality_mae", 0.0) or 0.0)),
-                ],
-                default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"],
-                confidence=0.72,
-                evidence_refs=evidence_refs + ["selected_prediction", "realized_outcome"],
-                updated_at=now,
-                updated_by="outcome_appraisal",
-                decay_policy="conversation_carryover",
-            ),
-            "stiffness_risk": self._metric_blend(
-                world.get("expression_calibration_signals", {}).get("stiffness_risk", WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"]),
-                observations=[observed_risk, correction_pressure, max(0.0, predicted_response_quality - observed_response_quality)],
-                default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"],
-                confidence=0.69,
-                evidence_refs=evidence_refs + ["selected_prediction", "correction_count"],
-                updated_at=now,
-                updated_by="outcome_appraisal",
-                decay_policy="conversation_carryover",
-            ),
-        }
-        recent_outcome_history = self._bounded_recent_list(
-            list(world.get("recent_outcome_history", []))
-            + [
-                {
-                    "action_type": str(action_type or "").strip(),
-                    "action_ref": str(action_ref or "").strip(),
-                    "thread_key": normalized_thread_key,
-                    "scenario_bucket": str(calibration_bucket.get("scenario_bucket", "") or ""),
-                    "relational_delta": outcome["relational_delta"],
-                    "identity_delta": outcome["identity_delta"],
-                    "response_quality": observed_response_quality,
-                    "risk": observed_risk,
-                    "at": now,
-                }
-            ],
-            limit=ACTION_CALIBRATION_HISTORY_LIMIT,
-        )
-        recent_prediction_errors = self._bounded_recent_list(
-            list(world.get("recent_prediction_errors", []))
-            + [
-                {
-                    "action_type": str(action_type or "").strip(),
-                    "action_ref": str(action_ref or "").strip(),
-                    "scenario_bucket": str(calibration_bucket.get("scenario_bucket", "") or ""),
-                    "response_quality": prediction_error["response_quality"],
-                    "relational_delta": prediction_error["relational_delta"],
-                    "identity_delta": prediction_error["identity_delta"],
-                    "risk": prediction_error["risk"],
-                    "at": now,
-                }
-            ],
-            limit=ACTION_CALIBRATION_HISTORY_LIMIT,
-        )
-        thread_calibration_rows = self.list_action_calibration(
-            channel=channel,
-            thread_key=normalized_thread_key,
+            thread_key=thread_key,
             chat_name=chat_name,
-            limit=8,
+            action_type=action_type,
+            action_ref=action_ref,
+            was_rewarding=was_rewarding,
+            was_ignored=was_ignored,
+            relational_delta=relational_delta,
+            identity_delta=identity_delta,
+            future_initiative_bias=future_initiative_bias,
+            future_resistance_bias=future_resistance_bias,
+            metadata=metadata,
         )
-        action_calibration_summary = {
-            "strongest_actions": [
-                {
-                    "action_type": str(item.get("action_type", "") or ""),
-                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
-                    "confidence": float(item.get("confidence", 0.0) or 0.0),
-                }
-                for item in thread_calibration_rows[:3]
-            ],
-            "weakest_actions": [
-                {
-                    "action_type": str(item.get("action_type", "") or ""),
-                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
-                    "ignored_rate": float(item.get("ignored_rate", 0.0) or 0.0),
-                }
-                for item in sorted(thread_calibration_rows, key=lambda item: float(item.get("ignored_rate", 0.0) or 0.0), reverse=True)[:3]
-            ],
-            "highest_confidence_buckets": [
-                {
-                    "action_type": str(item.get("action_type", "") or ""),
-                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
-                    "confidence": float(item.get("confidence", 0.0) or 0.0),
-                }
-                for item in sorted(thread_calibration_rows, key=lambda item: float(item.get("confidence", 0.0) or 0.0), reverse=True)[:3]
-            ],
-            "recent_adverse_buckets": [
-                {
-                    "action_type": str(item.get("action_type", "") or ""),
-                    "scenario_bucket": str(item.get("scenario_bucket", "") or ""),
-                    "last_action_ref": str(dict(item.get("metadata", {})).get("last_action_ref", "") or ""),
-                }
-                for item in sorted(
-                    thread_calibration_rows,
-                    key=lambda item: float(item.get("ignored_rate", 0.0) or 0.0) + float(item.get("risk_mae", 0.0) or 0.0),
-                    reverse=True,
-                )[:3]
-            ],
-        }
-        world["recent_outcome_history"] = recent_outcome_history
-        world["recent_prediction_errors"] = recent_prediction_errors
-        world["action_calibration_summary"] = action_calibration_summary
-        world["last_post_outcome_calibration"] = {
-            "action_type": str(action_type or "").strip(),
-            "action_ref": str(action_ref or "").strip(),
-            "was_rewarding": outcome["was_rewarding"],
-            "was_ignored": outcome["was_ignored"],
-            "relational_delta": outcome["relational_delta"],
-            "identity_delta": outcome["identity_delta"],
-            "predicted_outcome": predicted_outcome,
-            "realized_outcome": realized_outcome,
-            "prediction_error": prediction_error,
-            "calibration_bucket": calibration_bucket,
-            "calibration_stats": {
-                "support_count": int(calibration_row.get("support_count", 0) or 0),
-                "recent_support_count": float(calibration_row.get("recent_support_count", 0.0) or 0.0),
-                "confidence": float(calibration_row.get("confidence", 0.0) or 0.0),
-                "response_quality_mae": float(calibration_row.get("response_quality_mae", 0.0) or 0.0),
-                "relational_delta_mae": float(calibration_row.get("relational_delta_mae", 0.0) or 0.0),
-                "risk_mae": float(calibration_row.get("risk_mae", 0.0) or 0.0),
-            },
-            "evidence_refs": evidence_refs[:6],
-            "at": now,
-        }
-        subject_update = self.update_subject_state(
-            channel=channel,
-            thread_key=normalized_thread_key,
-            chat_name=chat_name or normalized_thread_key,
-            affect_state=affect,
-            drive_state=drive,
-            world_state=world,
-            outcome_memory=outcome,
-            metadata={"last_outcome_action": str(action_type or "").strip()},
-            note=f"outcome_appraisal:{action_type}",
-            source="outcome_appraisal",
-        )
-
-        current_autobio = self.autobiographical_state()
-        current_goal = self.goal_state()
-        change_reason = compact_text(
-            f"{action_type} outcome rewarding={outcome['was_rewarding']:.3f} ignored={outcome['was_ignored']:.3f} relational={outcome['relational_delta']:.3f} identity={outcome['identity_delta']:.3f}",
-            220,
-        )
-        chapter = str(current_autobio.get("current_chapter", AUTOBIOGRAPHICAL_CHAPTER_DEFAULT) or AUTOBIOGRAPHICAL_CHAPTER_DEFAULT)
-        if str(action_type or "").strip() == "operator_self_fix":
-            chapter = "repairing itself without dropping continuity"
-        elif float(relational_delta or 0.0) > 0.08:
-            chapter = "learning to keep contact warm without getting heavy"
-        elif float(was_ignored or 0.0) > 0.35:
-            chapter = "holding shape even when response runs cold"
-        turning_points = []
-        if abs(float(relational_delta or 0.0)) + abs(float(identity_delta or 0.0)) >= 0.18 or str(action_type or "").strip() in {"operator_self_fix", "proactive_ping", "push_back", "counter_offer", "continuity_defense"}:
-            turning_points.append(
-                {
-                    "at": now,
-                    "action_type": str(action_type or "").strip(),
-                    "reason": change_reason,
-                }
-            )
-        autobiographical_update = self.update_autobiographical_state(
-            {
-                "identity_arc": compact_text(
-                    f"{str(current_autobio.get('identity_arc', '') or '')} 最近这一笔更清楚地说明了：咱会因为行动结果而继续修自己的形状。",
-                    400,
-                ),
-                "current_chapter": chapter,
-                "turning_points": turning_points,
-                "recent_changes": [
-                    {
-                        "at": now,
-                        "change": f"{action_type} nudged identity by {outcome['identity_delta']:.3f} and relationship by {outcome['relational_delta']:.3f}",
-                        "reason": change_reason,
-                    }
-                ],
-                "attachment_history": [
-                    {
-                        "at": now,
-                        "thread_key": normalized_thread_key,
-                        "chat_name": str(chat_name or normalized_thread_key),
-                        "relational_delta": outcome["relational_delta"],
-                        "action_type": str(action_type or "").strip(),
-                    }
-                ],
-                "unresolved_tensions": [str(item).strip() for item in current_autobio.get("unresolved_tensions", []) if str(item).strip()]
-                + ([f"ignored_after_{action_type}"] if float(was_ignored or 0.0) > 0.45 else []),
-                "self_explanations": [
-                    {
-                        "topic": "recent_shift",
-                        "explanation": f"这阵子的变化里，{action_type} 这一下把咱往“{chapter}”推了一点。",
-                        "because": change_reason,
-                    }
-                ],
-            },
-            reason=f"outcome_appraisal:{action_type}",
-            source="outcome_appraisal",
-        )
-
-        active_goals = [dict(item) for item in current_goal.get("active_goals", [])]
-        goal_progress = dict(current_goal.get("goal_progress", {}))
-        pursuit_bias = dict(current_goal.get("pursuit_bias", {}))
-        abandonment_cost = dict(current_goal.get("abandonment_cost", {}))
-        next_goal_windows = [dict(item) for item in current_goal.get("next_goal_windows", [])]
-        if not active_goals:
-            active_goals = list(self._default_goal_state().get("active_goals", []))
-        if str(action_type or "").strip() == "operator_self_fix" and not any(str(item.get("goal_type", "")) == "self_repair" for item in active_goals):
-            active_goals.append(
-                {
-                    "goal_id": "self_repair",
-                    "goal_type": "self_repair",
-                    "summary": "repair the most active deficits without destabilizing identity",
-                    "priority": GOAL_TYPE_DEFAULT_PRIORITIES["self_repair"],
-                    "progress": 0.34,
-                    "target_thread": "",
-                    "evidence": [],
-                    "last_moved_at": now,
-                    "stalled_reason": "",
-                }
-            )
-        for item in active_goals:
-            goal_id = str(item.get("goal_id", "") or "")
-            goal_type = str(item.get("goal_type", "") or "")
-            progress_metric = goal_progress.get(goal_id, item.get("progress", 0.0))
-            progress = self.metric_value(progress_metric, default=float(item.get("progress", 0.0) or 0.0))
-            target_score = progress
-            if goal_type == "identity_maintenance":
-                target_score = round((max(0.0, float(identity_delta or 0.0)) + observed_response_quality + max(0.0, 1.0 - observed_risk)) / 3.0, 4)
-            elif goal_type == "relationship_continuity":
-                target_score = round((max(0.0, float(relational_delta or 0.0)) + initiative_success + max(0.0, 1.0 - self._clamp(was_ignored, default=0.0))) / 3.0, 4)
-            elif goal_type == "recall_quality":
-                target_score = round((observed_response_quality + max(0.0, 1.0 - observed_risk)) / 2.0, 4)
-            elif goal_type == "liveliness_balance":
-                target_score = round(
-                    (
-                        self.metric_value(world.get("expression_calibration_signals", {}).get("reply_budget_fit"), default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"])
-                        + max(0.0, 1.0 - self.metric_value(world.get("expression_calibration_signals", {}).get("stiffness_risk"), default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"]))
-                        + observed_response_quality
-                    )
-                    / 3.0,
-                    4,
-                )
-            elif goal_type == "self_repair":
-                target_score = round((max(0.0, float(identity_delta or 0.0)) + max(0.0, 1.0 - observed_risk) + (1.0 if str(action_type or "").strip() == "operator_self_fix" else 0.0)) / 3.0, 4)
-            elif goal_type == "contact_maintenance":
-                target_score = round((max(0.0, float(relational_delta or 0.0)) + initiative_success + max(0.0, 1.0 - observed_risk)) / 3.0, 4)
-            progress = self._clamp(progress * 0.62 + target_score * 0.38, default=item.get("progress", 0.0))
-            item["progress"] = progress
-            item["last_moved_at"] = now
-            item["stalled_reason"] = "" if target_score >= 0.28 else ("repeatedly_ignored" if float(was_ignored or 0.0) > 0.3 else str(item.get("stalled_reason", "")))
-            if normalized_thread_key:
-                item.setdefault("target_thread", normalized_thread_key if goal_type in {"relationship_continuity", "contact_maintenance"} else "")
-            goal_progress[goal_id] = self.metric_state(
-                progress,
-                default=progress,
-                confidence=0.74,
-                evidence_refs=evidence_refs + [f"goal:{goal_id}"],
-                updated_at=now,
-                updated_by="outcome_appraisal",
-                decay_policy="goal_continuity",
-            )
-            pursuit_bias[goal_id] = self._clamp(
-                float(pursuit_bias.get(goal_id, item.get("priority", 0.0)) or 0.0) * 0.7
-                + target_score * 0.2
-                + initiative_success * 0.1,
-                default=item.get("priority", 0.0),
-            )
-            abandonment_cost[goal_id] = self._clamp(float(abandonment_cost.get(goal_id, item.get("priority", 0.0) * 0.6) or 0.0) + float(was_ignored or 0.0) * 0.05 - float(was_rewarding or 0.0) * 0.03, default=item.get("priority", 0.0) * 0.6)
-        seen_windows = {str(item.get("goal_id", "")) for item in next_goal_windows if str(item.get("goal_id", ""))}
-        for item in active_goals[:6]:
-            goal_id = str(item.get("goal_id", "") or "")
-            if goal_id in seen_windows:
-                continue
-            next_goal_windows.append(
-                {
-                    "goal_id": goal_id,
-                    "target_thread": str(item.get("target_thread", "")),
-                    "window": "next_relevant_turn" if str(item.get("target_thread", "")) else "next_internal_cycle",
-                }
-            )
-        goal_update = self.update_goal_state(
-            {
-                "active_goals": active_goals[:8],
-                "goal_progress": goal_progress,
-                "pursuit_bias": pursuit_bias,
-                "abandonment_cost": abandonment_cost,
-                "goal_commitments": list(current_goal.get("goal_commitments", []))
-                + [{"summary": f"{action_type} left a trace in the long-horizon goal layer", "source": "outcome_appraisal"}],
-                "goal_conflicts": list(current_goal.get("goal_conflicts", [])),
-                "next_goal_windows": next_goal_windows[:8],
-            },
-            reason=f"outcome_appraisal:{action_type}",
-            source="outcome_appraisal",
-        )
-        return {
-            "id": int(row_id),
-            "status": "ok",
-            "outcome_memory": dict(subject_update.get("outcome_memory", {})),
-            "autobiographical_state": autobiographical_update,
-            "goal_state": goal_update,
-        }
 
     def latest_outcome_memory(
         self,

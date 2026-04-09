@@ -42,6 +42,13 @@
 - Fix the smallest structural break that restores invariants; do not widen feature surface casually.
 - Prefer regression tests before or alongside behavior changes.
 - Keep changes narrowly scoped, reviewable, and processor-fabric-safe.
+
+## Module Layout
+
+- `holo_host/mind_graph.py`, `holo_host/memory_bridge.py`, and `holo_host/reply_api.py` are the stable façade entrypoints.
+- Reducer logic belongs under `holo_host/mind_graph_parts/`.
+- Policy and counterfactual logic belongs under `holo_host/policy_runtime/`.
+- Reply diagnostics, acceptance helpers, artifact helpers, and route helpers belong under `holo_host/reply_service_parts/`.
 # Holo Repo Agent Notes
 
 ## Canonical invariants

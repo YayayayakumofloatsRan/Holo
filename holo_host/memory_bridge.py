@@ -16,6 +16,11 @@ from .common import compact_text, utc_now
 from .mind_graph import MindGraph
 from .models import ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state
+from .policies import MEMORY_BRIDGE_POLICY
+from .policy_runtime.action_market import apply_simulation_overlay
+from .policy_runtime.action_simulation import simulate_action_candidate as _simulate_action_candidate_impl
+from .policy_runtime.counterfactuals import fast_counterfactual_set as _fast_counterfactual_set_impl
+from .policy_runtime.world_calibration_trace import expression_budget_summary
 from .vector_memory import VectorMemory
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
@@ -46,13 +51,8 @@ SEMANTIC_STOP_TOKENS = {
     "架构",
 }
 
-GRAPH_MEMORY_LANES = (
-    "relationship_state",
-    "episodic_recall",
-    "recent_dialogue_window",
-    "consciousness_stream",
-)
-GRAPH_REPLY_MIN_CONFIDENCE = 0.34
+GRAPH_MEMORY_LANES = MEMORY_BRIDGE_POLICY.graph_memory_lanes
+GRAPH_REPLY_MIN_CONFIDENCE = MEMORY_BRIDGE_POLICY.graph_reply_min_confidence
 LOOKUP_HINTS = (
     "search",
     "look up",
@@ -128,30 +128,8 @@ DEFAULT_EMOTION_LINES = [
     "先接住人，再判断这句该轻轻试探、打趣、还是认真接住；别一上来就板成说教。",
     "轻松话题里允许更活、更狡黠、更像旅路上的狼，不要只剩稳重。",
 ]
-DEFAULT_PERSONA_BLEND = {
-    "wisdom": 0.78,
-    "pride": 0.58,
-    "slyness": 0.63,
-    "playfulness": 0.61,
-    "companionship": 0.72,
-    "sensuality_appetite": 0.48,
-    "loneliness_sensitivity": 0.44,
-    "feral_restraint": 0.67,
-}
-STAGE6_ACTION_TYPES = (
-    "silence",
-    "defer_reply",
-    "reply_once",
-    "reply_multi",
-    "external_lookup",
-    "proactive_ping",
-    "history_refresh",
-    "visual_recall",
-    "push_back",
-    "counter_offer",
-    "continuity_defense",
-    "operator_self_fix",
-)
+DEFAULT_PERSONA_BLEND = dict(MEMORY_BRIDGE_POLICY.default_persona_blend)
+STAGE6_ACTION_TYPES = MEMORY_BRIDGE_POLICY.stage6_action_types
 ROADMAP_REGISTRY = {
     "Primary Track": [
         "autobiographical continuity",
@@ -815,134 +793,20 @@ class MemoryBridge:
         world_state: dict[str, Any],
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        action_type = str(action.get("action_type", "") or "")
-        channel = str(context.get("channel", "wechat") or "wechat")
-        thread_key = str(context.get("thread_key", "") or "")
-        chat_name = str(context.get("chat_name", "") or thread_key)
-        signal = self._query_signal(query)
-        contact_model = self._contact_world_model(world_state, chat_name=chat_name, thread_key=thread_key)
-        thread_model = self._thread_world_model(world_state, thread_key=thread_key)
-        reply_likelihood = self._clamp(contact_model.get("reply_likelihood", 0.56), default=0.56)
-        delay_tolerance = self._clamp(contact_model.get("delay_tolerance", 0.44), default=0.44)
-        initiative_receptivity = self._clamp(MindGraph.metric_value(contact_model.get("initiative_receptivity", 0.46), default=0.46), default=0.46)
-        conflict_fragility = self._clamp(contact_model.get("conflict_fragility", 0.34), default=0.34)
-        continuity_sensitivity = self._clamp(contact_model.get("continuity_sensitivity", 0.58), default=0.58)
-        risk_level = self._clamp(thread_model.get("risk_level", 0.22), default=0.22)
-        opportunity_level = self._clamp(thread_model.get("opportunity_level", 0.42), default=0.42)
-        unfinished_pull = self._clamp(thread_model.get("unfinished_pull", 0.34), default=0.34)
-        reply_pull = float(intent_state.get("reply_pull", 0.0) or 0.0)
-        resistance_pull = float(intent_state.get("resistance_pull", 0.0) or 0.0)
-        continuity_pull = float(intent_state.get("continuity_pull", 0.0) or 0.0)
-        internal_pressure = float(intent_state.get("internal_pressure", 0.0) or 0.0)
-
-        predicted_relational_delta = 0.0
-        predicted_identity_delta = 0.0
-        predicted_response_quality = 0.0
-        predicted_risk = 0.0
-        predicted_regret = 0.0
-        confidence = 0.58
-        recommended_bias = 0.0
-        rationale = ""
-
-        if action_type == "silence":
-            predicted_relational_delta = -0.12 if signal["question_like"] else -0.02 + delay_tolerance * 0.05
-            predicted_identity_delta = 0.05 + float(value_state.get("stability_priority", 0.0) or 0.0) * 0.04
-            predicted_response_quality = 0.08 if signal["low_signal"] else -0.08
-            predicted_risk = max(0.0, 0.12 + continuity_sensitivity * 0.08 - delay_tolerance * 0.06)
-            predicted_regret = max(0.0, reply_pull * 0.12 + continuity_pull * 0.08 - delay_tolerance * 0.04)
-            recommended_bias = -predicted_risk * 0.25 + (0.12 if signal["low_signal"] else -0.04)
-            rationale = "silence is safer only when the turn is low-signal and the social cost stays low"
-        elif action_type == "defer_reply":
-            predicted_relational_delta = -0.04 + delay_tolerance * 0.1
-            predicted_identity_delta = 0.08 + resistance_pull * 0.08
-            predicted_response_quality = 0.18 + delay_tolerance * 0.12
-            predicted_risk = max(0.0, 0.08 + continuity_sensitivity * 0.04)
-            predicted_regret = max(0.0, reply_pull * 0.08 - delay_tolerance * 0.05)
-            recommended_bias = 0.08 + delay_tolerance * 0.1 - continuity_sensitivity * 0.04
-            rationale = "defer helps when delay is socially tolerable and the subject wants a cleaner later reply"
-        elif action_type == "reply_once":
-            predicted_relational_delta = 0.12 + reply_likelihood * 0.16 + opportunity_level * 0.08
-            predicted_identity_delta = 0.05 + float(value_state.get("identity_priority", 0.0) or 0.0) * 0.04
-            predicted_response_quality = 0.28 + reply_likelihood * 0.18
-            predicted_risk = max(0.0, risk_level * 0.3 + conflict_fragility * 0.1)
-            predicted_regret = max(0.0, continuity_pull * 0.06 - predicted_relational_delta * 0.08)
-            recommended_bias = 0.12 + predicted_relational_delta * 0.2 - predicted_risk * 0.14
-            rationale = "a short reply is the default social move when contact matters but pressure stays low"
-        elif action_type == "reply_multi":
-            predicted_relational_delta = 0.14 + reply_likelihood * 0.18 + unfinished_pull * 0.08
-            predicted_identity_delta = 0.04 + float(value_state.get("play_priority", 0.0) or 0.0) * 0.04
-            predicted_response_quality = 0.22 + reply_likelihood * 0.12 + float(intent_state.get("expansion_pressure", 0.0) or 0.0) * 0.12
-            predicted_risk = max(0.0, risk_level * 0.34 + conflict_fragility * 0.16 + (0.14 if signal["low_signal"] else 0.0))
-            predicted_regret = max(0.0, predicted_risk * 0.5 + (0.14 if signal["low_signal"] else 0.0))
-            recommended_bias = predicted_relational_delta * 0.18 - predicted_risk * 0.28 - predicted_regret * 0.22
-            rationale = "longer unfolding only pays when the relationship need clearly outweighs the social risk"
-        elif action_type == "external_lookup":
-            predicted_relational_delta = 0.02
-            predicted_identity_delta = 0.08 + float(value_state.get("repair_priority", 0.0) or 0.0) * 0.02
-            predicted_response_quality = 0.26 + float(intent_state.get("factual_lookup", 0.0) or 0.0) * 0.18
-            predicted_risk = max(0.0, 0.06 + continuity_sensitivity * 0.02)
-            predicted_regret = max(0.0, 0.03 if signal["factual_lookup"] else 0.14)
-            recommended_bias = (0.18 if signal["factual_lookup"] else -0.08) + predicted_response_quality * 0.08
-            rationale = "looking outward helps only when factual uncertainty is real enough to justify the delay"
-        elif action_type == "history_refresh":
-            predicted_relational_delta = 0.06 + continuity_sensitivity * 0.12 + unfinished_pull * 0.08
-            predicted_identity_delta = 0.04 + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.04
-            predicted_response_quality = 0.22 + continuity_pull * 0.16
-            predicted_risk = max(0.0, 0.04 + risk_level * 0.12)
-            predicted_regret = max(0.0, 0.04 if intent_state.get("tier", "fast") in {"recall", "deep_recall"} else 0.16)
-            recommended_bias = 0.14 + continuity_pull * 0.12 - predicted_risk * 0.08
-            rationale = "refreshing local memory helps when continuity and old anchors matter more than immediate speech"
-        elif action_type == "proactive_ping":
-            predicted_relational_delta = 0.08 + initiative_receptivity * 0.14
-            predicted_identity_delta = 0.04 + internal_pressure * 0.06
-            predicted_response_quality = 0.18 + initiative_receptivity * 0.12
-            predicted_risk = max(0.0, risk_level * 0.24 + (1.0 - initiative_receptivity) * 0.12)
-            predicted_regret = max(0.0, predicted_risk * 0.42)
-            recommended_bias = predicted_relational_delta * 0.16 - predicted_risk * 0.18
-            rationale = "a ping is worth it only when the social window feels genuinely open"
-        elif action_type in {"push_back", "counter_offer", "continuity_defense"}:
-            predicted_relational_delta = -0.04 + continuity_sensitivity * 0.06 + float(value_state.get("identity_priority", 0.0) or 0.0) * 0.05
-            predicted_identity_delta = 0.1 + resistance_pull * 0.08
-            predicted_response_quality = 0.14 + float(conflict_state.get("resistance_vs_harmony", 0.0) or 0.0) * 0.12
-            predicted_risk = max(0.0, conflict_fragility * 0.26 + risk_level * 0.18)
-            predicted_regret = max(0.0, continuity_pull * 0.06 - predicted_identity_delta * 0.05)
-            recommended_bias = predicted_identity_delta * 0.14 - predicted_risk * 0.16
-            rationale = "soft resistance helps when identity protection matters and the relationship can carry a little friction"
-        else:
-            predicted_response_quality = 0.12
-            predicted_risk = risk_level * 0.2
-            predicted_regret = 0.08
-            confidence = 0.42
-            rationale = "fallback simulation for auxiliary action"
-
-        predicted_outcome = {
-            "predicted_relational_delta": round(predicted_relational_delta, 4),
-            "predicted_identity_delta": round(predicted_identity_delta, 4),
-            "predicted_response_quality": round(predicted_response_quality, 4),
-            "predicted_risk": round(predicted_risk, 4),
-            "predicted_regret": round(predicted_regret, 4),
-        }
-        empirical_calibration, calibration_bucket, empirical_overlay_delta = self._empirical_action_overlay(
-            action_type=action_type,
-            channel=channel,
-            thread_key=thread_key,
-            chat_name=chat_name,
-            signal=signal,
-            predicted_outcome=predicted_outcome,
+        return _simulate_action_candidate_impl(
+            self,
+            action=action,
+            query=query,
+            intent_state=intent_state,
+            relationship_state=relationship_state,
+            game_state=game_state,
+            affect_state=affect_state,
+            drive_state=drive_state,
+            value_state=value_state,
+            conflict_state=conflict_state,
+            world_state=world_state,
+            context=context,
         )
-        recommended_bias += empirical_overlay_delta
-
-        return {
-            "action_type": action_type,
-            **predicted_outcome,
-            "confidence": round(confidence, 4),
-            "recommended_bias": round(recommended_bias, 4),
-            "empirical_overlay_delta": round(empirical_overlay_delta, 4),
-            "empirical_calibration": empirical_calibration,
-            "calibration_bucket": calibration_bucket,
-            "calibration_confidence": round(float(empirical_calibration.get("confidence", 0.0) or 0.0), 4),
-            "simulation_rationale": compact_text(rationale, 220),
-        }
 
     def _fast_counterfactual_set(
         self,
@@ -959,23 +823,20 @@ class MemoryBridge:
         world_state: dict[str, Any],
         context: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        simulations: list[dict[str, Any]] = []
-        for candidate in list(action_market)[:3]:
-            simulation = self._simulate_action_candidate(
-                action=dict(candidate),
-                query=query,
-                intent_state=intent_state,
-                relationship_state=relationship_state,
-                game_state=game_state,
-                affect_state=affect_state,
-                drive_state=drive_state,
-                value_state=value_state,
-                conflict_state=conflict_state,
-                world_state=world_state,
-                context=context,
-            )
-            simulations.append(simulation)
-        return simulations
+        return _fast_counterfactual_set_impl(
+            self,
+            action_market=action_market,
+            query=query,
+            intent_state=intent_state,
+            relationship_state=relationship_state,
+            game_state=game_state,
+            affect_state=affect_state,
+            drive_state=drive_state,
+            value_state=value_state,
+            conflict_state=conflict_state,
+            world_state=world_state,
+            context=context,
+        )
 
     def _derive_intent_fields(
         self,
@@ -1281,23 +1142,12 @@ class MemoryBridge:
         )
         simulation_by_action = {str(item.get("action_type", "")): dict(item) for item in counterfactual_set}
         world_thread = self._thread_world_model(world_state, thread_key=str(context.get("thread_key", "") or ""))
-        for candidate in action_market:
-            action_type = str(candidate.get("action_type", "") or "")
-            simulation = dict(simulation_by_action.get(action_type, {}))
-            rerank_delta = float(simulation.get("recommended_bias", 0.0) or 0.0)
-            candidate["world_rationale"] = compact_text(
-                f"reply_fit={float(world_thread.get('reply_fit', 0.0) or 0.0):.3f} risk={float(world_thread.get('risk_level', 0.0) or 0.0):.3f} opportunity={float(world_thread.get('opportunity_level', 0.0) or 0.0):.3f}",
-                160,
-            )
-            candidate["simulation_rationale"] = str(simulation.get("simulation_rationale", "") or "")
-            candidate["predicted_outcome"] = simulation
-            candidate["rerank_delta"] = round(rerank_delta, 4)
-            candidate["empirical_overlay_delta"] = round(float(simulation.get("empirical_overlay_delta", 0.0) or 0.0), 4)
-            candidate["empirical_calibration"] = dict(simulation.get("empirical_calibration", {}))
-            candidate["calibration_bucket"] = dict(simulation.get("calibration_bucket", {}))
-            candidate["calibration_confidence"] = round(float(simulation.get("calibration_confidence", 0.0) or 0.0), 4)
-            candidate["score"] = round(float(candidate.get("score", 0.0) or 0.0) + rerank_delta, 4)
-        action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+        action_market = apply_simulation_overlay(
+            self,
+            action_market=action_market,
+            simulation_by_action=simulation_by_action,
+            world_thread=world_thread,
+        )
         selected = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
         if bool(intent_state.get("factual_lookup", False)) and lookup_ready and selected["action_type"] not in {"silence", "defer_reply"}:
             lookup_candidate = next((dict(item) for item in action_market if item.get("action_type") == "external_lookup"), None)
@@ -1326,9 +1176,7 @@ class MemoryBridge:
         if selected["action_type"] == "external_lookup" and not lookup_ready:
             selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
         selected_prediction = dict(simulation_by_action.get(str(selected.get("action_type", "")), {}))
-        expression_signals = dict(world_state.get("expression_calibration_signals", {}))
-        reply_budget_fit = self._clamp(MindGraph.metric_value(expression_signals.get("reply_budget_fit", 0.56), default=0.56), default=0.56)
-        stiffness_risk = self._clamp(MindGraph.metric_value(expression_signals.get("stiffness_risk", 0.32), default=0.32), default=0.32)
+        reply_budget_fit, stiffness_risk = expression_budget_summary(self, world_state=world_state)
 
         expression_budget = 1
         if selected["action_type"] == "silence":
