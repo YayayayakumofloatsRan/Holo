@@ -454,6 +454,82 @@ def _safe_json_dict(raw: Any) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
+STATE_OBJECT_FIELDS = {
+    "value",
+    "confidence",
+    "evidence_refs",
+    "updated_at",
+    "updated_by",
+    "decay_policy",
+}
+SUBJECT_STATE_OBJECT_KEYS = {"curiosity", "attachment_pull", "frustration"}
+WORLD_RESPONSE_STATE_OBJECT_KEYS = {"reply_likelihood", "delay_tolerance", "attention_value", "initiative_receptivity"}
+WORLD_EXPRESSION_SIGNAL_DEFAULTS = {
+    "reply_budget_fit": 0.56,
+    "stiffness_risk": 0.32,
+}
+
+
+def _is_state_object(raw: Any) -> bool:
+    return isinstance(raw, dict) and "value" in raw and bool(STATE_OBJECT_FIELDS & set(raw))
+
+
+def _state_value(raw: Any, default: float = 0.0) -> float:
+    payload = dict(raw) if isinstance(raw, dict) else {}
+    target = payload.get("value", raw)
+    try:
+        return round(float(target or 0.0), 4)
+    except (TypeError, ValueError):
+        return round(float(default or 0.0), 4)
+
+
+def _state_confidence(raw: Any, default: float = 0.58) -> float:
+    if isinstance(raw, dict):
+        try:
+            return max(0.0, min(1.0, float(raw.get("confidence", default) or default)))
+        except (TypeError, ValueError):
+            return max(0.0, min(1.0, float(default or 0.0)))
+    return max(0.0, min(1.0, float(default or 0.0)))
+
+
+def _state_evidence_refs(raw: Any, fallback: Iterable[str] | None = None) -> list[str]:
+    if isinstance(raw, dict):
+        refs = [str(item).strip() for item in raw.get("evidence_refs", []) if str(item).strip()]
+        if refs:
+            return refs[:6]
+    return [str(item).strip() for item in (fallback or []) if str(item).strip()][:6]
+
+
+def _state_decay_policy(raw: Any, default: str = "event_weighted") -> str:
+    if isinstance(raw, dict):
+        text = str(raw.get("decay_policy", "") or "").strip()
+        if text:
+            return text
+    return str(default or "event_weighted")
+
+
+def _make_state_object(
+    value: Any,
+    *,
+    default: float = 0.0,
+    confidence: float = 0.58,
+    evidence_refs: Iterable[str] | None = None,
+    updated_at: str = "",
+    updated_by: str = "",
+    decay_policy: str = "event_weighted",
+) -> dict[str, Any]:
+    payload = dict(value) if isinstance(value, dict) else {}
+    refs = [str(item).strip() for item in (payload.get("evidence_refs", evidence_refs) or []) if str(item).strip()][:6]
+    return {
+        "value": _state_value(payload or value, default=default),
+        "confidence": round(_state_confidence(payload or value, default=confidence), 4),
+        "evidence_refs": refs,
+        "updated_at": str(payload.get("updated_at", "") or updated_at or utc_now()),
+        "updated_by": str(payload.get("updated_by", "") or updated_by or "runtime"),
+        "decay_policy": _state_decay_policy(payload or value, default=decay_policy),
+    }
+
+
 def _normalize_thread_key(channel: str, thread_key: str, *, chat_name: str = "") -> str:
     current = str(thread_key or "").strip()
     if str(channel or "").strip().lower() == "wechat" and current.startswith("wechat:"):
@@ -505,6 +581,35 @@ class MindGraph:
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         return module
+
+    @staticmethod
+    def metric_value(raw: Any, default: float = 0.0) -> float:
+        return _state_value(raw, default=default)
+
+    @staticmethod
+    def metric_state(
+        raw: Any,
+        *,
+        default: float = 0.0,
+        confidence: float = 0.58,
+        evidence_refs: Iterable[str] | None = None,
+        updated_at: str = "",
+        updated_by: str = "",
+        decay_policy: str = "event_weighted",
+    ) -> dict[str, Any]:
+        return _make_state_object(
+            raw,
+            default=default,
+            confidence=confidence,
+            evidence_refs=evidence_refs,
+            updated_at=updated_at,
+            updated_by=updated_by,
+            decay_policy=decay_policy,
+        )
+
+    @staticmethod
+    def metric_confidence(raw: Any, default: float = 0.58) -> float:
+        return _state_confidence(raw, default=default)
 
     def initialize(self) -> None:
         with self._lock:
@@ -896,6 +1001,102 @@ class MindGraph:
         except (TypeError, ValueError):
             numeric = float(default)
         return round(max(lower, min(upper, numeric)), 4)
+
+    def _metric_blend(
+        self,
+        current: Any,
+        *,
+        observations: Iterable[Any],
+        default: float,
+        confidence: float = 0.62,
+        evidence_refs: Iterable[str] | None = None,
+        updated_at: str = "",
+        updated_by: str = "",
+        decay_policy: str = "event_weighted",
+        momentum: float = 0.6,
+    ) -> dict[str, Any]:
+        current_value = self.metric_value(current, default=default)
+        seen = [self._clamp(item, default=current_value) for item in observations if item is not None]
+        target = round(sum(seen) / len(seen), 4) if seen else current_value
+        blended = self._clamp(current_value * momentum + target * (1.0 - momentum), default=default)
+        refs = _state_evidence_refs(current, evidence_refs)
+        for item in evidence_refs or []:
+            text = str(item).strip()
+            if text and text not in refs:
+                refs.append(text)
+        return self.metric_state(
+            blended,
+            default=default,
+            confidence=max(confidence, self.metric_confidence(current, default=confidence)),
+            evidence_refs=refs[:6],
+            updated_at=updated_at,
+            updated_by=updated_by,
+            decay_policy=decay_policy,
+        )
+
+    def _hydrate_subject_state_metrics(self, state: dict[str, Any]) -> dict[str, Any]:
+        metadata = dict(state.get("metadata", {}))
+        updated_at = str(state.get("updated_at", "") or metadata.get("updated_at", "") or utc_now())
+        updated_by = str(metadata.get("last_subject_source", "") or "subject_state")
+        affect_state = dict(state.get("affect_state", {}))
+        for key in SUBJECT_STATE_OBJECT_KEYS:
+            affect_state[key] = self.metric_state(
+                affect_state.get(key, AFFECT_STATE_DEFAULTS[key]),
+                default=AFFECT_STATE_DEFAULTS[key],
+                confidence=0.62,
+                evidence_refs=[f"subject_state:{key}"],
+                updated_at=updated_at,
+                updated_by=updated_by,
+                decay_policy="event_weighted",
+            )
+        state["affect_state"] = affect_state
+
+        world_state = dict(state.get("world_state", {}))
+        response_expectations = dict(world_state.get("response_expectations", {}))
+        for key in WORLD_RESPONSE_STATE_OBJECT_KEYS:
+            default_value = WORLD_CONTACT_MODEL_DEFAULTS.get(key, 0.0)
+            response_expectations[key] = self.metric_state(
+                response_expectations.get(key, default_value),
+                default=default_value,
+                confidence=0.64,
+                evidence_refs=[f"world.response_expectations:{key}"],
+                updated_at=updated_at,
+                updated_by=updated_by,
+                decay_policy="interaction_window",
+            )
+        world_state["response_expectations"] = response_expectations
+
+        contact_models = {
+            str(key): dict(value)
+            for key, value in dict(world_state.get("contact_models", {})).items()
+            if isinstance(value, dict)
+        }
+        for key, contact_model in contact_models.items():
+            contact_model["initiative_receptivity"] = self.metric_state(
+                contact_model.get("initiative_receptivity", WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
+                default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
+                confidence=0.62,
+                evidence_refs=[f"contact_model:{key}:initiative_receptivity"],
+                updated_at=updated_at,
+                updated_by=updated_by,
+                decay_policy="interaction_window",
+            )
+        world_state["contact_models"] = contact_models
+
+        expression_signals = dict(world_state.get("expression_calibration_signals", {}))
+        for key, default_value in WORLD_EXPRESSION_SIGNAL_DEFAULTS.items():
+            expression_signals[key] = self.metric_state(
+                expression_signals.get(key, default_value),
+                default=default_value,
+                confidence=0.58,
+                evidence_refs=[f"expression_calibration:{key}"],
+                updated_at=updated_at,
+                updated_by=updated_by,
+                decay_policy="conversation_carryover",
+            )
+        world_state["expression_calibration_signals"] = expression_signals
+        state["world_state"] = world_state
+        return state
 
     def brain_state(self, *, default_mode: str = "full_brain") -> dict[str, Any]:
         with self._lock:
@@ -1294,7 +1495,18 @@ class MindGraph:
                     "stalled_reason": "",
                 }
             )
-        goal_progress = {str(item["goal_id"]): round(float(item["progress"]), 4) for item in active_goals}
+        goal_progress = {
+            str(item["goal_id"]): self.metric_state(
+                round(float(item["progress"]), 4),
+                default=0.0,
+                confidence=0.66,
+                evidence_refs=[f"default_goal:{item['goal_id']}"],
+                updated_at=now,
+                updated_by="default_goal_state",
+                decay_policy="goal_continuity",
+            )
+            for item in active_goals
+        }
         pursuit_bias = {str(item["goal_id"]): round(float(item["priority"]), 4) for item in active_goals}
         abandonment_cost = {str(item["goal_id"]): round(float(item["priority"]) * 0.6, 4) for item in active_goals}
         next_goal_windows = [
@@ -1363,7 +1575,18 @@ class MindGraph:
             "dormant_goals": self._decode_json_array(payload.get("dormant_goals_json", "[]")),
             "completed_goals": self._decode_json_array(payload.get("completed_goals_json", "[]")),
             "goal_commitments": self._decode_json_array(payload.get("goal_commitments_json", "[]")),
-            "goal_progress": dict(_safe_json_dict(payload.get("goal_progress_json", "{}"))),
+            "goal_progress": {
+                str(key): self.metric_state(
+                    value,
+                    default=0.0,
+                    confidence=0.62,
+                    evidence_refs=[f"goal_progress:{key}"],
+                    updated_at=str(payload.get("updated_at", "") or utc_now()),
+                    updated_by=str(dict(_safe_json_dict(payload.get("metadata_json", "{}"))).get("last_source", "") or "goal_state"),
+                    decay_policy="goal_continuity",
+                )
+                for key, value in dict(_safe_json_dict(payload.get("goal_progress_json", "{}"))).items()
+            },
             "goal_conflicts": self._decode_json_array(payload.get("goal_conflicts_json", "[]")),
             "pursuit_bias": dict(_safe_json_dict(payload.get("pursuit_bias_json", "{}"))),
             "abandonment_cost": dict(_safe_json_dict(payload.get("abandonment_cost_json", "{}"))),
@@ -1414,8 +1637,31 @@ class MindGraph:
                 rows.append(item)
             return rows[:cap]
 
-        next_progress = dict(current.get("goal_progress", {}))
-        next_progress.update({str(key): round(float(value or 0.0), 4) for key, value in dict(payload.get("goal_progress", {})).items()})
+        next_progress = {
+            str(key): self.metric_state(
+                value,
+                default=0.0,
+                confidence=0.62,
+                evidence_refs=[f"goal_progress:{key}"],
+                updated_at=now,
+                updated_by=source,
+                decay_policy="goal_continuity",
+            )
+            for key, value in dict(current.get("goal_progress", {})).items()
+        }
+        for key, value in dict(payload.get("goal_progress", {})).items():
+            key_text = str(key)
+            existing_metric = next_progress.get(key_text, self.metric_state(0.0, updated_at=now, updated_by=source, decay_policy="goal_continuity"))
+            refs = _state_evidence_refs(existing_metric, [compact_text(reason or f"goal_progress:{key_text}", 120)])
+            next_progress[key_text] = self.metric_state(
+                value,
+                default=self.metric_value(existing_metric, default=0.0),
+                confidence=max(0.64, self.metric_confidence(value, default=self.metric_confidence(existing_metric, default=0.58))),
+                evidence_refs=refs,
+                updated_at=now,
+                updated_by=source,
+                decay_policy=_state_decay_policy(existing_metric, default="goal_continuity"),
+            )
         next_pursuit_bias = dict(current.get("pursuit_bias", {}))
         next_pursuit_bias.update({str(key): self._clamp(value, default=0.0) for key, value in dict(payload.get("pursuit_bias", {})).items()})
         next_abandonment_cost = dict(current.get("abandonment_cost", {}))
@@ -3043,18 +3289,39 @@ class MindGraph:
         unfinished = [str(item).strip() for item in relationship.get("unfinished_threads", []) if str(item).strip()]
         affect = {
             "boredom": self._clamp(0.24 + max(0.0, 0.42 - pressure) * 0.18, default=AFFECT_STATE_DEFAULTS["boredom"]),
-            "curiosity": self._clamp(0.28 + continuity * 0.22 + float(bool(unfinished)) * 0.12, default=AFFECT_STATE_DEFAULTS["curiosity"]),
-            "attachment_pull": self._clamp(0.16 + closeness * 0.34 + trust * 0.16, default=AFFECT_STATE_DEFAULTS["attachment_pull"]),
+            "curiosity": self.metric_state(
+                self._clamp(0.28 + continuity * 0.22 + float(bool(unfinished)) * 0.12, default=AFFECT_STATE_DEFAULTS["curiosity"]),
+                default=AFFECT_STATE_DEFAULTS["curiosity"],
+                confidence=0.66,
+                evidence_refs=[f"relationship:{thread_key}", "game:initiative_window", "unfinished_threads" if unfinished else "relationship:continuity"],
+                updated_by="subject_defaults",
+                decay_policy="event_weighted",
+            ),
+            "attachment_pull": self.metric_state(
+                self._clamp(0.16 + closeness * 0.34 + trust * 0.16, default=AFFECT_STATE_DEFAULTS["attachment_pull"]),
+                default=AFFECT_STATE_DEFAULTS["attachment_pull"],
+                confidence=0.68,
+                evidence_refs=[f"relationship:{thread_key}", "game:trust_score"],
+                updated_by="subject_defaults",
+                decay_policy="event_weighted",
+            ),
             "continuity_anxiety": self._clamp(0.1 + continuity * 0.35 + float(bool(unfinished)) * 0.18, default=AFFECT_STATE_DEFAULTS["continuity_anxiety"]),
             "pride_tension": self._clamp(0.18 + float(bool(active_deficits)) * 0.22 + float(game.get("correction_sensitivity", 0.0) or 0.0) * 0.18, default=AFFECT_STATE_DEFAULTS["pride_tension"]),
-            "frustration": self._clamp(0.08 + pressure * 0.22, default=AFFECT_STATE_DEFAULTS["frustration"]),
+            "frustration": self.metric_state(
+                self._clamp(0.08 + pressure * 0.22, default=AFFECT_STATE_DEFAULTS["frustration"]),
+                default=AFFECT_STATE_DEFAULTS["frustration"],
+                confidence=0.61,
+                evidence_refs=[f"game:{thread_key}", "game:pressure_level"],
+                updated_by="subject_defaults",
+                decay_policy="event_weighted",
+            ),
             "appetite_play": self._clamp(0.18 + teasing * 0.28 + max(0.0, closeness - 0.4) * 0.18, default=AFFECT_STATE_DEFAULTS["appetite_play"]),
             "self_preservation": self._clamp(0.28 + pressure * 0.34 + (1.0 - float(self_model.get("identity_continuity", 0.6) or 0.6)) * 0.2, default=AFFECT_STATE_DEFAULTS["self_preservation"]),
         }
         drive = {
-            "seek_contact": self._clamp(0.18 + affect["attachment_pull"] * 0.38 + affect["boredom"] * 0.22 + initiative_window * 0.16, default=DRIVE_STATE_DEFAULTS["seek_contact"]),
+            "seek_contact": self._clamp(0.18 + self.metric_value(affect["attachment_pull"], default=AFFECT_STATE_DEFAULTS["attachment_pull"]) * 0.38 + affect["boredom"] * 0.22 + initiative_window * 0.16, default=DRIVE_STATE_DEFAULTS["seek_contact"]),
             "seek_continuity": self._clamp(0.14 + affect["continuity_anxiety"] * 0.54 + continuity * 0.18, default=DRIVE_STATE_DEFAULTS["seek_continuity"]),
-            "seek_novelty": self._clamp(0.12 + affect["curiosity"] * 0.44, default=DRIVE_STATE_DEFAULTS["seek_novelty"]),
+            "seek_novelty": self._clamp(0.12 + self.metric_value(affect["curiosity"], default=AFFECT_STATE_DEFAULTS["curiosity"]) * 0.44, default=DRIVE_STATE_DEFAULTS["seek_novelty"]),
             "seek_self_repair": self._clamp(0.08 + float(bool(active_deficits)) * 0.26 + affect["pride_tension"] * 0.2, default=DRIVE_STATE_DEFAULTS["seek_self_repair"]),
             "seek_recognition": self._clamp(0.1 + affect["pride_tension"] * 0.28 + closeness * 0.14, default=DRIVE_STATE_DEFAULTS["seek_recognition"]),
             "seek_play": self._clamp(0.12 + affect["appetite_play"] * 0.52, default=DRIVE_STATE_DEFAULTS["seek_play"]),
@@ -3062,7 +3329,7 @@ class MindGraph:
             "protect_identity": self._clamp(0.22 + affect["self_preservation"] * 0.34 + affect["pride_tension"] * 0.16, default=DRIVE_STATE_DEFAULTS["protect_identity"]),
         }
         value = {
-            "relational_priority": self._clamp(0.18 + affect["attachment_pull"] * 0.46 + continuity * 0.18, default=VALUE_STATE_DEFAULTS["relational_priority"]),
+            "relational_priority": self._clamp(0.18 + self.metric_value(affect["attachment_pull"], default=AFFECT_STATE_DEFAULTS["attachment_pull"]) * 0.46 + continuity * 0.18, default=VALUE_STATE_DEFAULTS["relational_priority"]),
             "identity_priority": self._clamp(0.24 + drive["protect_identity"] * 0.42, default=VALUE_STATE_DEFAULTS["identity_priority"]),
             "stability_priority": self._clamp(0.22 + drive["avoid_risk"] * 0.48, default=VALUE_STATE_DEFAULTS["stability_priority"]),
             "novelty_priority": self._clamp(0.08 + drive["seek_novelty"] * 0.54, default=VALUE_STATE_DEFAULTS["novelty_priority"]),
@@ -3126,7 +3393,14 @@ class MindGraph:
             "teasing_receptivity": self._clamp(0.18 + teasing * 0.42, default=WORLD_CONTACT_MODEL_DEFAULTS["teasing_receptivity"]),
             "correction_receptivity": self._clamp(0.14 + float(game.get("correction_sensitivity", 0.0) or 0.0) * 0.46, default=WORLD_CONTACT_MODEL_DEFAULTS["correction_receptivity"]),
             "continuity_sensitivity": self._clamp(0.22 + continuity * 0.44 + float(bool(unfinished)) * 0.08, default=WORLD_CONTACT_MODEL_DEFAULTS["continuity_sensitivity"]),
-            "initiative_receptivity": self._clamp(0.18 + initiative_window * 0.42 + trust * 0.08, default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
+            "initiative_receptivity": self.metric_state(
+                self._clamp(0.18 + initiative_window * 0.42 + trust * 0.08, default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
+                default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
+                confidence=0.67,
+                evidence_refs=[f"game:{thread_key}", "game:initiative_window", "game:trust_score"],
+                updated_by="subject_defaults",
+                decay_policy="interaction_window",
+            ),
             "conflict_fragility": self._clamp(0.12 + pressure * 0.34 + max(0.0, 0.6 - trust) * 0.18, default=WORLD_CONTACT_MODEL_DEFAULTS["conflict_fragility"]),
             "attention_value": self._clamp(0.24 + closeness * 0.34 + continuity * 0.18, default=WORLD_CONTACT_MODEL_DEFAULTS["attention_value"]),
         }
@@ -3134,7 +3408,7 @@ class MindGraph:
             "reply_fit": self._clamp(contact_model["reply_likelihood"] * 0.72 + initiative["pressure"] * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["reply_fit"]),
             "defer_fit": self._clamp(0.12 + pressure * 0.22 + drive["avoid_risk"] * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["defer_fit"]),
             "silence_fit": self._clamp(0.08 + drive["avoid_risk"] * 0.14, default=WORLD_THREAD_MODEL_DEFAULTS["silence_fit"]),
-            "ping_fit": self._clamp(0.1 + initiative["pressure"] * 0.28 + contact_model["initiative_receptivity"] * 0.16, default=WORLD_THREAD_MODEL_DEFAULTS["ping_fit"]),
+            "ping_fit": self._clamp(0.1 + initiative["pressure"] * 0.28 + self.metric_value(contact_model["initiative_receptivity"], default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]) * 0.16, default=WORLD_THREAD_MODEL_DEFAULTS["ping_fit"]),
             "push_back_fit": self._clamp(0.1 + resistance["interactional_resistance"] * 0.32, default=WORLD_THREAD_MODEL_DEFAULTS["push_back_fit"]),
             "risk_level": self._clamp(0.1 + pressure * 0.3 + contact_model["conflict_fragility"] * 0.18, default=WORLD_THREAD_MODEL_DEFAULTS["risk_level"]),
             "opportunity_level": self._clamp(0.14 + contact_model["reply_likelihood"] * 0.26 + contact_model["attention_value"] * 0.18, default=WORLD_THREAD_MODEL_DEFAULTS["opportunity_level"]),
@@ -3147,7 +3421,7 @@ class MindGraph:
             "opportunity_windows": [
                 {
                     "label": "initiative_window",
-                    "score": round(float(contact_model["initiative_receptivity"]), 4),
+                    "score": round(self.metric_value(contact_model["initiative_receptivity"], default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]), 4),
                 }
             ],
             "risk_windows": [
@@ -3157,9 +3431,56 @@ class MindGraph:
                 }
             ],
             "response_expectations": {
-                "reply_likelihood": round(float(contact_model["reply_likelihood"]), 4),
-                "delay_tolerance": round(float(contact_model["delay_tolerance"]), 4),
-                "attention_value": round(float(contact_model["attention_value"]), 4),
+                "reply_likelihood": self.metric_state(
+                    contact_model["reply_likelihood"],
+                    default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"],
+                    confidence=0.69,
+                    evidence_refs=[f"contact_model:{chat_name or thread_key}:reply_likelihood"],
+                    updated_by="subject_defaults",
+                    decay_policy="interaction_window",
+                ),
+                "delay_tolerance": self.metric_state(
+                    contact_model["delay_tolerance"],
+                    default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"],
+                    confidence=0.63,
+                    evidence_refs=[f"contact_model:{chat_name or thread_key}:delay_tolerance"],
+                    updated_by="subject_defaults",
+                    decay_policy="interaction_window",
+                ),
+                "attention_value": self.metric_state(
+                    contact_model["attention_value"],
+                    default=WORLD_CONTACT_MODEL_DEFAULTS["attention_value"],
+                    confidence=0.67,
+                    evidence_refs=[f"contact_model:{chat_name or thread_key}:attention_value"],
+                    updated_by="subject_defaults",
+                    decay_policy="interaction_window",
+                ),
+                "initiative_receptivity": self.metric_state(
+                    contact_model["initiative_receptivity"],
+                    default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
+                    confidence=0.67,
+                    evidence_refs=[f"contact_model:{chat_name or thread_key}:initiative_receptivity"],
+                    updated_by="subject_defaults",
+                    decay_policy="interaction_window",
+                ),
+            },
+            "expression_calibration_signals": {
+                "reply_budget_fit": self.metric_state(
+                    thread_model["reply_fit"],
+                    default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"],
+                    confidence=0.61,
+                    evidence_refs=[f"thread_model:{thread_key}:reply_fit"],
+                    updated_by="subject_defaults",
+                    decay_policy="conversation_carryover",
+                ),
+                "stiffness_risk": self.metric_state(
+                    self._clamp((float(self_model.get("identity_continuity", 0.6) or 0.6) - float(value["play_priority"] or 0.0)) * 0.5 + pressure * 0.2, default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"]),
+                    default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"],
+                    confidence=0.56,
+                    evidence_refs=["self_model:identity_continuity", "value_state:play_priority", "game:pressure_level"],
+                    updated_by="subject_defaults",
+                    decay_policy="conversation_carryover",
+                ),
             },
             "last_counterfactual_summary": {},
             "last_post_outcome_calibration": {},
@@ -3245,7 +3566,7 @@ class MindGraph:
         current_world = dict(state.get("world_state", {}))
         world_is_sparse = not current_world or not all(
             key in current_world
-            for key in ("contact_models", "thread_models", "response_expectations")
+            for key in ("contact_models", "thread_models", "response_expectations", "expression_calibration_signals")
         )
         if world_is_sparse:
             defaults = self._subject_defaults(
@@ -3261,6 +3582,8 @@ class MindGraph:
                 hydrated_world["thread_models"] = dict(default_world.get("thread_models", {}))
             if not hydrated_world.get("response_expectations"):
                 hydrated_world["response_expectations"] = dict(default_world.get("response_expectations", {}))
+            if not hydrated_world.get("expression_calibration_signals"):
+                hydrated_world["expression_calibration_signals"] = dict(default_world.get("expression_calibration_signals", {}))
             if not hydrated_world.get("active_commitments"):
                 hydrated_world["active_commitments"] = list(default_world.get("active_commitments", []))
             if not hydrated_world.get("opportunity_windows"):
@@ -3287,7 +3610,7 @@ class MindGraph:
                 )
                 self.conn.commit()
             state["world_state"] = hydrated_world
-        return state
+        return self._hydrate_subject_state_metrics(state)
 
     def update_subject_state(
         self,
@@ -3313,23 +3636,100 @@ class MindGraph:
         current = self.subject_state(thread_key=normalized_thread_key, chat_name=chat_name, channel=channel)
         now = utc_now()
 
-        def _merge_numeric(current_map: dict[str, Any], incoming: dict[str, Any] | None, defaults: dict[str, float]) -> dict[str, Any]:
+        def _merge_numeric(
+            current_map: dict[str, Any],
+            incoming: dict[str, Any] | None,
+            defaults: dict[str, float],
+            *,
+            stateful_keys: set[str] | None = None,
+            decay_policy: str = "event_weighted",
+        ) -> dict[str, Any]:
             merged = dict(current_map)
+            stateful_keys = set(stateful_keys or set())
             for key, default_value in defaults.items():
-                merged[key] = self._clamp(merged.get(key, default_value), default=default_value)
+                current_value = merged.get(key, default_value)
+                if key in stateful_keys or _is_state_object(current_value):
+                    merged[key] = self.metric_state(
+                        current_value,
+                        default=default_value,
+                        confidence=0.6,
+                        evidence_refs=[f"{source}:{key}"],
+                        updated_at=now,
+                        updated_by=source,
+                        decay_policy=decay_policy,
+                    )
+                else:
+                    merged[key] = self._clamp(current_value, default=default_value)
             for key, value in dict(incoming or {}).items():
                 if key in defaults:
-                    merged[key] = self._clamp(value, default=defaults[key])
+                    if key in stateful_keys or _is_state_object(value) or _is_state_object(merged.get(key)):
+                        merged[key] = self.metric_state(
+                            value,
+                            default=defaults[key],
+                            confidence=max(0.62, self.metric_confidence(value, default=0.58)),
+                            evidence_refs=[f"{source}:{note or key}"],
+                            updated_at=now,
+                            updated_by=source,
+                            decay_policy=decay_policy,
+                        )
+                    else:
+                        merged[key] = self._clamp(value, default=defaults[key])
                 else:
                     merged[key] = value
             return merged
 
-        next_affect = _merge_numeric(dict(current.get("affect_state", {})), affect_state, AFFECT_STATE_DEFAULTS)
+        next_affect = _merge_numeric(
+            dict(current.get("affect_state", {})),
+            affect_state,
+            AFFECT_STATE_DEFAULTS,
+            stateful_keys=SUBJECT_STATE_OBJECT_KEYS,
+            decay_policy="event_weighted",
+        )
         next_drive = _merge_numeric(dict(current.get("drive_state", {})), drive_state, DRIVE_STATE_DEFAULTS)
         next_value = _merge_numeric(dict(current.get("value_state", {})), value_state, VALUE_STATE_DEFAULTS)
         next_conflict = _merge_numeric(dict(current.get("conflict_state", {})), conflict_state, CONFLICT_STATE_DEFAULTS)
         next_world = dict(current.get("world_state", {}))
         next_world.update(dict(world_state or {}))
+        response_expectations = dict(next_world.get("response_expectations", {}))
+        for key in WORLD_RESPONSE_STATE_OBJECT_KEYS:
+            response_expectations[key] = self.metric_state(
+                response_expectations.get(key, WORLD_CONTACT_MODEL_DEFAULTS.get(key, 0.0)),
+                default=WORLD_CONTACT_MODEL_DEFAULTS.get(key, 0.0),
+                confidence=max(0.64, self.metric_confidence(response_expectations.get(key), default=0.58)),
+                evidence_refs=[f"{source}:response_expectations:{key}"],
+                updated_at=now,
+                updated_by=source,
+                decay_policy="interaction_window",
+            )
+        next_world["response_expectations"] = response_expectations
+        contact_models = {
+            str(key): dict(value)
+            for key, value in dict(next_world.get("contact_models", {})).items()
+            if isinstance(value, dict)
+        }
+        for key, contact_model in contact_models.items():
+            contact_model["initiative_receptivity"] = self.metric_state(
+                contact_model.get("initiative_receptivity", WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
+                default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
+                confidence=max(0.62, self.metric_confidence(contact_model.get("initiative_receptivity"), default=0.58)),
+                evidence_refs=[f"{source}:contact_model:{key}:initiative_receptivity"],
+                updated_at=now,
+                updated_by=source,
+                decay_policy="interaction_window",
+            )
+        next_world["contact_models"] = contact_models
+        expression_signals = dict(next_world.get("expression_calibration_signals", {}))
+        for key, default_value in WORLD_EXPRESSION_SIGNAL_DEFAULTS.items():
+            expression_signals[key] = self.metric_state(
+                expression_signals.get(key, default_value),
+                default=default_value,
+                confidence=max(0.58, self.metric_confidence(expression_signals.get(key), default=0.54)),
+                evidence_refs=[f"{source}:expression_calibration:{key}"],
+                updated_at=now,
+                updated_by=source,
+                decay_policy="conversation_carryover",
+            )
+        next_world["expression_calibration_signals"] = expression_signals
         next_resistance = dict(current.get("resistance_posture", {}))
         next_resistance.update(dict(resistance_posture or {}))
         next_resistance["strength"] = self._clamp(next_resistance.get("strength", RESISTANCE_POSTURE_DEFAULTS["strength"]), default=RESISTANCE_POSTURE_DEFAULTS["strength"])
@@ -3599,6 +3999,37 @@ class MindGraph:
         contact_key = str(chat_name or normalized_thread_key)
         contact_model = dict(contact_models.get(contact_key, WORLD_CONTACT_MODEL_DEFAULTS))
         thread_model = dict(thread_models.get(normalized_thread_key, WORLD_THREAD_MODEL_DEFAULTS))
+        evidence_metadata = dict(metadata or {})
+        predicted_outcome = dict(evidence_metadata.get("predicted_outcome", {}))
+        reply_latency_seconds = max(0.0, float(evidence_metadata.get("reply_latency_seconds", -1) or -1))
+        correction_count = max(0, int(evidence_metadata.get("correction_count", 0) or 0))
+        initiative_success_raw = evidence_metadata.get("initiative_success")
+        initiative_success = None if initiative_success_raw is None else self._clamp(initiative_success_raw, default=0.0)
+        usage_total_tokens = max(0, int(evidence_metadata.get("usage_total_tokens", 0) or 0))
+        delay_expectation = max(
+            60.0,
+            3600.0 * (1.0 + self.metric_value(world.get("response_expectations", {}).get("delay_tolerance"), default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]) * 6.0),
+        )
+        latency_quality = None
+        if reply_latency_seconds >= 0.0:
+            latency_quality = self._clamp(1.0 - (reply_latency_seconds / delay_expectation), default=0.0)
+        if initiative_success is None:
+            if latency_quality is not None and latency_quality > 0.0:
+                initiative_success = latency_quality
+            elif float(relational_delta or 0.0) > 0.0 or float(was_rewarding or 0.0) > 0.0:
+                initiative_success = 1.0
+            else:
+                initiative_success = 0.0
+        correction_pressure = self._clamp(correction_count / max(1.0, 1.0 + float(initiative_success or 0.0)), default=0.0)
+        response_quality_samples = [self._clamp(was_rewarding, default=0.0), initiative_success]
+        if latency_quality is not None:
+            response_quality_samples.append(latency_quality)
+        response_quality_samples.append(max(0.0, 1.0 - correction_pressure))
+        observed_response_quality = round(sum(response_quality_samples) / len(response_quality_samples), 4)
+        risk_samples = [self._clamp(was_ignored, default=0.0), correction_pressure, self._clamp(future_resistance_bias, default=0.0)]
+        if latency_quality is not None:
+            risk_samples.append(max(0.0, 1.0 - latency_quality))
+        observed_risk = round(sum(risk_samples) / len(risk_samples), 4)
         outcome = {
             "was_rewarding": self._clamp(was_rewarding, default=0.0),
             "was_ignored": self._clamp(was_ignored, default=0.0),
@@ -3609,24 +4040,161 @@ class MindGraph:
             "last_action_type": str(action_type or "").strip(),
             "last_action_ref": str(action_ref or "").strip(),
             "last_appraised_at": now,
+            "observed_response_quality": observed_response_quality,
+            "observed_risk": observed_risk,
+            "initiative_success": initiative_success,
+            "reply_latency_seconds": round(reply_latency_seconds, 4) if reply_latency_seconds >= 0.0 else None,
+            "correction_count": correction_count,
+            "usage_total_tokens": usage_total_tokens,
+            "predicted_outcome": predicted_outcome,
+            "evidence_refs": [str(item).strip() for item in evidence_metadata.get("evidence_refs", []) if str(item).strip()][:6],
         }
-        drive["seek_contact"] = self._clamp(drive.get("seek_contact", 0.0) + float(future_initiative_bias or 0.0) * 0.16 - float(was_ignored or 0.0) * 0.08, default=DRIVE_STATE_DEFAULTS["seek_contact"])
-        drive["protect_identity"] = self._clamp(drive.get("protect_identity", 0.0) + max(0.0, float(future_resistance_bias or 0.0)) * 0.12, default=DRIVE_STATE_DEFAULTS["protect_identity"])
-        affect["frustration"] = self._clamp(affect.get("frustration", 0.0) + float(was_ignored or 0.0) * 0.22 - float(was_rewarding or 0.0) * 0.14, default=AFFECT_STATE_DEFAULTS["frustration"])
-        affect["attachment_pull"] = self._clamp(affect.get("attachment_pull", 0.0) + max(0.0, float(relational_delta or 0.0)) * 0.18, default=AFFECT_STATE_DEFAULTS["attachment_pull"])
-        contact_model["reply_likelihood"] = self._clamp(contact_model.get("reply_likelihood", 0.0) + float(relational_delta or 0.0) * 0.12 - float(was_ignored or 0.0) * 0.08, default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"])
-        contact_model["delay_tolerance"] = self._clamp(contact_model.get("delay_tolerance", 0.0) + float(was_ignored or 0.0) * 0.06, default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"])
-        contact_model["initiative_receptivity"] = self._clamp(contact_model.get("initiative_receptivity", 0.0) + float(future_initiative_bias or 0.0) * 0.18 - float(was_ignored or 0.0) * 0.06, default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"])
+        evidence_refs = outcome["evidence_refs"] + [f"outcome_appraisal:{action_type}:{row_id}"]
+        drive["seek_contact"] = self._clamp(
+            float(drive.get("seek_contact", 0.0) or 0.0) * 0.62 + initiative_success * 0.22 + observed_response_quality * 0.16,
+            default=DRIVE_STATE_DEFAULTS["seek_contact"],
+        )
+        drive["protect_identity"] = self._clamp(
+            float(drive.get("protect_identity", 0.0) or 0.0) * 0.66
+            + max(0.0, float(identity_delta or 0.0)) * 0.18
+            + self._clamp(future_resistance_bias, default=0.0) * 0.16,
+            default=DRIVE_STATE_DEFAULTS["protect_identity"],
+        )
+        affect["frustration"] = self._metric_blend(
+            affect.get("frustration", AFFECT_STATE_DEFAULTS["frustration"]),
+            observations=[self._clamp(was_ignored, default=0.0), correction_pressure, observed_risk, max(0.0, 1.0 - observed_response_quality)],
+            default=AFFECT_STATE_DEFAULTS["frustration"],
+            confidence=0.74,
+            evidence_refs=evidence_refs + ["correction_count", "reply_latency_seconds"],
+            updated_at=now,
+            updated_by="outcome_appraisal",
+            decay_policy="event_weighted",
+        )
+        affect["attachment_pull"] = self._metric_blend(
+            affect.get("attachment_pull", AFFECT_STATE_DEFAULTS["attachment_pull"]),
+            observations=[max(0.0, float(relational_delta or 0.0)), observed_response_quality, initiative_success],
+            default=AFFECT_STATE_DEFAULTS["attachment_pull"],
+            confidence=0.76,
+            evidence_refs=evidence_refs + ["relational_delta", "initiative_success"],
+            updated_at=now,
+            updated_by="outcome_appraisal",
+            decay_policy="event_weighted",
+        )
+        affect["curiosity"] = self._metric_blend(
+            affect.get("curiosity", AFFECT_STATE_DEFAULTS["curiosity"]),
+            observations=[observed_response_quality, max(0.0, 1.0 - observed_risk), self._clamp(correction_count, default=0.0)],
+            default=AFFECT_STATE_DEFAULTS["curiosity"],
+            confidence=0.68,
+            evidence_refs=evidence_refs + ["observed_response_quality", "correction_count"],
+            updated_at=now,
+            updated_by="outcome_appraisal",
+            decay_policy="event_weighted",
+        )
+        contact_model["reply_likelihood"] = self._metric_blend(
+            contact_model.get("reply_likelihood", WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]),
+            observations=[max(0.0, float(relational_delta or 0.0)), observed_response_quality, max(0.0, 1.0 - self._clamp(was_ignored, default=0.0))],
+            default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"],
+            confidence=0.74,
+            evidence_refs=evidence_refs + ["reply_likelihood"],
+            updated_at=now,
+            updated_by="outcome_appraisal",
+            decay_policy="interaction_window",
+        )
+        contact_model["delay_tolerance"] = self._metric_blend(
+            contact_model.get("delay_tolerance", WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]),
+            observations=[self._clamp(was_ignored, default=0.0), max(0.0, 1.0 - observed_response_quality)],
+            default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"],
+            confidence=0.68,
+            evidence_refs=evidence_refs + ["delay_tolerance"],
+            updated_at=now,
+            updated_by="outcome_appraisal",
+            decay_policy="interaction_window",
+        )
+        contact_model["initiative_receptivity"] = self._metric_blend(
+            contact_model.get("initiative_receptivity", WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
+            observations=[initiative_success, observed_response_quality, max(0.0, 1.0 - observed_risk)],
+            default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
+            confidence=0.75,
+            evidence_refs=evidence_refs + ["initiative_receptivity"],
+            updated_at=now,
+            updated_by="outcome_appraisal",
+            decay_policy="interaction_window",
+        )
         contact_model["conflict_fragility"] = self._clamp(contact_model.get("conflict_fragility", 0.0) - max(0.0, float(relational_delta or 0.0)) * 0.08 + max(0.0, float(future_resistance_bias or 0.0)) * 0.05, default=WORLD_CONTACT_MODEL_DEFAULTS["conflict_fragility"])
         thread_model["reply_fit"] = self._clamp(thread_model.get("reply_fit", 0.0) + float(relational_delta or 0.0) * 0.1 - float(was_ignored or 0.0) * 0.05, default=WORLD_THREAD_MODEL_DEFAULTS["reply_fit"])
         thread_model["defer_fit"] = self._clamp(thread_model.get("defer_fit", 0.0) + float(was_ignored or 0.0) * 0.08, default=WORLD_THREAD_MODEL_DEFAULTS["defer_fit"])
         thread_model["risk_level"] = self._clamp(thread_model.get("risk_level", 0.0) + max(0.0, float(future_resistance_bias or 0.0)) * 0.12, default=WORLD_THREAD_MODEL_DEFAULTS["risk_level"])
         world["contact_models"] = {**contact_models, contact_key: contact_model}
         world["thread_models"] = {**thread_models, normalized_thread_key: thread_model}
+        predicted_relational_delta = self.metric_value(predicted_outcome.get("predicted_relational_delta"), default=0.0)
+        predicted_identity_delta = self.metric_value(predicted_outcome.get("predicted_identity_delta"), default=0.0)
+        predicted_response_quality = self.metric_value(predicted_outcome.get("predicted_response_quality"), default=observed_response_quality)
+        predicted_risk = self.metric_value(predicted_outcome.get("predicted_risk"), default=observed_risk)
+        prediction_error = {
+            "relational_delta": round(float(relational_delta or 0.0) - predicted_relational_delta, 4),
+            "identity_delta": round(float(identity_delta or 0.0) - predicted_identity_delta, 4),
+            "response_quality": round(observed_response_quality - predicted_response_quality, 4),
+            "risk": round(observed_risk - predicted_risk, 4),
+        }
         world["response_expectations"] = {
-            "reply_likelihood": round(float(contact_model.get("reply_likelihood", 0.0) or 0.0), 4),
-            "delay_tolerance": round(float(contact_model.get("delay_tolerance", 0.0) or 0.0), 4),
-            "attention_value": round(float(contact_model.get("attention_value", 0.0) or 0.0), 4),
+            "reply_likelihood": self.metric_state(
+                contact_model.get("reply_likelihood", WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]),
+                default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"],
+                confidence=0.74,
+                evidence_refs=evidence_refs + ["response_expectations:reply_likelihood"],
+                updated_at=now,
+                updated_by="outcome_appraisal",
+                decay_policy="interaction_window",
+            ),
+            "delay_tolerance": self.metric_state(
+                contact_model.get("delay_tolerance", WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]),
+                default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"],
+                confidence=0.68,
+                evidence_refs=evidence_refs + ["response_expectations:delay_tolerance"],
+                updated_at=now,
+                updated_by="outcome_appraisal",
+                decay_policy="interaction_window",
+            ),
+            "attention_value": self.metric_state(
+                contact_model.get("attention_value", WORLD_CONTACT_MODEL_DEFAULTS["attention_value"]),
+                default=WORLD_CONTACT_MODEL_DEFAULTS["attention_value"],
+                confidence=0.64,
+                evidence_refs=evidence_refs + ["response_expectations:attention_value"],
+                updated_at=now,
+                updated_by="outcome_appraisal",
+                decay_policy="interaction_window",
+            ),
+            "initiative_receptivity": self.metric_state(
+                contact_model.get("initiative_receptivity", WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"]),
+                default=WORLD_CONTACT_MODEL_DEFAULTS["initiative_receptivity"],
+                confidence=0.75,
+                evidence_refs=evidence_refs + ["response_expectations:initiative_receptivity"],
+                updated_at=now,
+                updated_by="outcome_appraisal",
+                decay_policy="interaction_window",
+            ),
+        }
+        world["expression_calibration_signals"] = {
+            "reply_budget_fit": self._metric_blend(
+                world.get("expression_calibration_signals", {}).get("reply_budget_fit", WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"]),
+                observations=[max(0.0, 1.0 - abs(prediction_error["response_quality"])), max(0.0, 1.0 - abs(prediction_error["relational_delta"]))],
+                default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"],
+                confidence=0.72,
+                evidence_refs=evidence_refs + ["selected_prediction", "realized_outcome"],
+                updated_at=now,
+                updated_by="outcome_appraisal",
+                decay_policy="conversation_carryover",
+            ),
+            "stiffness_risk": self._metric_blend(
+                world.get("expression_calibration_signals", {}).get("stiffness_risk", WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"]),
+                observations=[observed_risk, correction_pressure, max(0.0, predicted_response_quality - observed_response_quality)],
+                default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"],
+                confidence=0.69,
+                evidence_refs=evidence_refs + ["selected_prediction", "correction_count"],
+                updated_at=now,
+                updated_by="outcome_appraisal",
+                decay_policy="conversation_carryover",
+            ),
         }
         world["last_post_outcome_calibration"] = {
             "action_type": str(action_type or "").strip(),
@@ -3635,6 +4203,15 @@ class MindGraph:
             "was_ignored": outcome["was_ignored"],
             "relational_delta": outcome["relational_delta"],
             "identity_delta": outcome["identity_delta"],
+            "predicted_outcome": predicted_outcome,
+            "realized_outcome": {
+                "relational_delta": outcome["relational_delta"],
+                "identity_delta": outcome["identity_delta"],
+                "response_quality": observed_response_quality,
+                "risk": observed_risk,
+            },
+            "prediction_error": prediction_error,
+            "evidence_refs": evidence_refs[:6],
             "at": now,
         }
         subject_update = self.update_subject_state(
@@ -3734,28 +4311,50 @@ class MindGraph:
         for item in active_goals:
             goal_id = str(item.get("goal_id", "") or "")
             goal_type = str(item.get("goal_type", "") or "")
-            progress = float(goal_progress.get(goal_id, item.get("progress", 0.0)) or 0.0)
-            delta = 0.0
+            progress_metric = goal_progress.get(goal_id, item.get("progress", 0.0))
+            progress = self.metric_value(progress_metric, default=float(item.get("progress", 0.0) or 0.0))
+            target_score = progress
             if goal_type == "identity_maintenance":
-                delta = float(identity_delta or 0.0) * 0.22 + float(was_rewarding or 0.0) * 0.04 - float(was_ignored or 0.0) * 0.03
+                target_score = round((max(0.0, float(identity_delta or 0.0)) + observed_response_quality + max(0.0, 1.0 - observed_risk)) / 3.0, 4)
             elif goal_type == "relationship_continuity":
-                delta = float(relational_delta or 0.0) * 0.28 + float(future_initiative_bias or 0.0) * 0.08 - float(was_ignored or 0.0) * 0.05
+                target_score = round((max(0.0, float(relational_delta or 0.0)) + initiative_success + max(0.0, 1.0 - self._clamp(was_ignored, default=0.0))) / 3.0, 4)
             elif goal_type == "recall_quality":
-                delta = (0.08 if str(action_type or "").strip() in {"history_refresh", "reply_once", "reply_multi"} else 0.0) + float(was_rewarding or 0.0) * 0.04
+                target_score = round((observed_response_quality + max(0.0, 1.0 - observed_risk)) / 2.0, 4)
             elif goal_type == "liveliness_balance":
-                delta = float(was_rewarding or 0.0) * 0.06 - float(was_ignored or 0.0) * 0.02
+                target_score = round(
+                    (
+                        self.metric_value(world.get("expression_calibration_signals", {}).get("reply_budget_fit"), default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["reply_budget_fit"])
+                        + max(0.0, 1.0 - self.metric_value(world.get("expression_calibration_signals", {}).get("stiffness_risk"), default=WORLD_EXPRESSION_SIGNAL_DEFAULTS["stiffness_risk"]))
+                        + observed_response_quality
+                    )
+                    / 3.0,
+                    4,
+                )
             elif goal_type == "self_repair":
-                delta = (0.16 if str(action_type or "").strip() == "operator_self_fix" else 0.0) + max(0.0, float(identity_delta or 0.0)) * 0.08
+                target_score = round((max(0.0, float(identity_delta or 0.0)) + max(0.0, 1.0 - observed_risk) + (1.0 if str(action_type or "").strip() == "operator_self_fix" else 0.0)) / 3.0, 4)
             elif goal_type == "contact_maintenance":
-                delta = float(relational_delta or 0.0) * 0.2 + float(future_initiative_bias or 0.0) * 0.08 - float(was_ignored or 0.0) * 0.04
-            progress = self._clamp(progress + delta, default=item.get("progress", 0.0))
+                target_score = round((max(0.0, float(relational_delta or 0.0)) + initiative_success + max(0.0, 1.0 - observed_risk)) / 3.0, 4)
+            progress = self._clamp(progress * 0.62 + target_score * 0.38, default=item.get("progress", 0.0))
             item["progress"] = progress
             item["last_moved_at"] = now
-            item["stalled_reason"] = "" if delta > 0.01 else ("repeatedly_ignored" if float(was_ignored or 0.0) > 0.3 else str(item.get("stalled_reason", "")))
+            item["stalled_reason"] = "" if target_score >= 0.28 else ("repeatedly_ignored" if float(was_ignored or 0.0) > 0.3 else str(item.get("stalled_reason", "")))
             if normalized_thread_key:
                 item.setdefault("target_thread", normalized_thread_key if goal_type in {"relationship_continuity", "contact_maintenance"} else "")
-            goal_progress[goal_id] = progress
-            pursuit_bias[goal_id] = self._clamp(float(pursuit_bias.get(goal_id, item.get("priority", 0.0)) or 0.0) + delta * 0.4 + float(future_initiative_bias or 0.0) * 0.08 - float(was_ignored or 0.0) * 0.04, default=item.get("priority", 0.0))
+            goal_progress[goal_id] = self.metric_state(
+                progress,
+                default=progress,
+                confidence=0.74,
+                evidence_refs=evidence_refs + [f"goal:{goal_id}"],
+                updated_at=now,
+                updated_by="outcome_appraisal",
+                decay_policy="goal_continuity",
+            )
+            pursuit_bias[goal_id] = self._clamp(
+                float(pursuit_bias.get(goal_id, item.get("priority", 0.0)) or 0.0) * 0.7
+                + target_score * 0.2
+                + initiative_success * 0.1,
+                default=item.get("priority", 0.0),
+            )
             abandonment_cost[goal_id] = self._clamp(float(abandonment_cost.get(goal_id, item.get("priority", 0.0) * 0.6) or 0.0) + float(was_ignored or 0.0) * 0.05 - float(was_rewarding or 0.0) * 0.03, default=item.get("priority", 0.0) * 0.6)
         seen_windows = {str(item.get("goal_id", "")) for item in next_goal_windows if str(item.get("goal_id", ""))}
         for item in active_goals[:6]:
@@ -4570,12 +5169,12 @@ class MindGraph:
             value = dict(subject.get("value_state", {}))
             initiative = dict(subject.get("initiative_state", {}))
             if stream_name == "association_stream":
-                affect["curiosity"] = self._clamp(affect.get("curiosity", 0.0) + 0.06, default=AFFECT_STATE_DEFAULTS["curiosity"])
+                affect["curiosity"] = self._clamp(self.metric_value(affect.get("curiosity", 0.0), default=AFFECT_STATE_DEFAULTS["curiosity"]) + 0.06, default=AFFECT_STATE_DEFAULTS["curiosity"])
                 affect["appetite_play"] = self._clamp(affect.get("appetite_play", 0.0) + 0.05, default=AFFECT_STATE_DEFAULTS["appetite_play"])
                 drive["seek_novelty"] = self._clamp(drive.get("seek_novelty", 0.0) + 0.08, default=DRIVE_STATE_DEFAULTS["seek_novelty"])
                 value["play_priority"] = self._clamp(value.get("play_priority", 0.0) + 0.06, default=VALUE_STATE_DEFAULTS["play_priority"])
             elif stream_name == "social_stream":
-                affect["attachment_pull"] = self._clamp(affect.get("attachment_pull", 0.0) + 0.08, default=AFFECT_STATE_DEFAULTS["attachment_pull"])
+                affect["attachment_pull"] = self._clamp(self.metric_value(affect.get("attachment_pull", 0.0), default=AFFECT_STATE_DEFAULTS["attachment_pull"]) + 0.08, default=AFFECT_STATE_DEFAULTS["attachment_pull"])
                 drive["seek_contact"] = self._clamp(drive.get("seek_contact", 0.0) + 0.1, default=DRIVE_STATE_DEFAULTS["seek_contact"])
                 drive["seek_continuity"] = self._clamp(drive.get("seek_continuity", 0.0) + 0.05, default=DRIVE_STATE_DEFAULTS["seek_continuity"])
                 value["relational_priority"] = self._clamp(value.get("relational_priority", 0.0) + 0.08, default=VALUE_STATE_DEFAULTS["relational_priority"])

@@ -2279,6 +2279,7 @@ class HoloReplyService:
                 "retrieval_trace": dict(packet.get("retrieval_trace", {})),
                 "recall_reconstruction": dict((context.mind_packet or {}).get("recall_reconstruction", {})),
                 "selected_action": selected_action,
+                "selected_prediction": dict(packet.get("selected_prediction", {})),
                 "expression_budget": expression_budget,
                 "action_rationale": str(packet.get("action_rationale", "") or ""),
                 "reply_plan": reply_plan.to_dict(),

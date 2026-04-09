@@ -18,6 +18,7 @@ from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
 from .mail_gateway import MailGateway, build_mail_gateway
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
+from .mind_graph import MindGraph
 from .models import IncomingMessage, OutgoingMessage
 from .operator_bus import build_homeostasis_state, operator_probe as run_operator_probe
 from .operator_bus import plan_operator_cycle, refresh_self_model, run_operator_cycle
@@ -244,6 +245,89 @@ class HoloDaemon:
         subject_state = self.memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
         outcome_memory = dict(subject_state.get("outcome_memory", {}))
         return bool(outcome_memory.get("was_ignored")) or float(outcome_memory.get("future_initiative_bias", 0.5) or 0.5) < 0.35
+
+    @staticmethod
+    def _parse_timestamp(raw: Any) -> datetime | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _correction_count(messages: list[dict[str, Any]]) -> int:
+        markers = ("不要", "别", "不是", "错", "wrong", "don't", "do not", "stop")
+        count = 0
+        for item in messages:
+            body = str(item.get("body_text", "") or "").lower()
+            if any(marker in body for marker in markers):
+                count += 1
+        return count
+
+    @classmethod
+    def _derive_action_outcome_from_evidence(
+        cls,
+        *,
+        sent_at: Any,
+        recent_messages: list[dict[str, Any]],
+        predicted_outcome: dict[str, Any] | None = None,
+        usage_total_tokens: int = 0,
+    ) -> dict[str, Any]:
+        sent_dt = cls._parse_timestamp(sent_at) or datetime.now(timezone.utc)
+        inbound_after = [
+            dict(item)
+            for item in recent_messages
+            if str(item.get("direction", "")).strip() == "inbound"
+            and (cls._parse_timestamp(item.get("created_at")) or sent_dt) >= sent_dt
+        ]
+        outbound_after = [
+            dict(item)
+            for item in recent_messages
+            if str(item.get("direction", "")).strip() == "outbound"
+            and (cls._parse_timestamp(item.get("created_at")) or sent_dt) >= sent_dt
+        ]
+        first_inbound_at = cls._parse_timestamp(inbound_after[0].get("created_at")) if inbound_after else None
+        reply_latency_seconds = max(0.0, (first_inbound_at - sent_dt).total_seconds()) if first_inbound_at else -1.0
+        initiative_success = 1.0 if inbound_after else 0.0
+        was_ignored = 0.0 if inbound_after else 1.0
+        correction_count = cls._correction_count(inbound_after[:3])
+        rewarding_signals = [initiative_success]
+        if inbound_after:
+            rewarding_signals.append(min(1.0, len(inbound_after) / 3.0))
+        if correction_count:
+            rewarding_signals.append(max(0.0, 1.0 - min(1.0, correction_count / 3.0)))
+        was_rewarding = round(sum(rewarding_signals) / len(rewarding_signals), 4) if rewarding_signals else 0.0
+        relational_delta = round(max(0.0, was_rewarding - (correction_count * 0.12)), 4)
+        identity_delta = round(max(0.0, 1.0 - min(1.0, correction_count / max(1, len(inbound_after) or 1))) * 0.18, 4)
+        future_initiative_bias = round(max(0.0, was_rewarding - was_ignored * 0.25), 4)
+        future_resistance_bias = round(min(1.0, correction_count / 3.0), 4)
+        evidence_refs = [
+            "messages:recent_thread",
+            "messages:inbound_after_send" if inbound_after else "messages:no_inbound_after_send",
+            "usage:processor_usage_ledger" if usage_total_tokens else "usage:none",
+        ]
+        if predicted_outcome:
+            evidence_refs.append("prediction:selected_outcome")
+        return {
+            "was_rewarding": was_rewarding,
+            "was_ignored": was_ignored,
+            "relational_delta": relational_delta,
+            "identity_delta": identity_delta,
+            "future_initiative_bias": future_initiative_bias,
+            "future_resistance_bias": future_resistance_bias,
+            "reply_latency_seconds": round(reply_latency_seconds, 4) if reply_latency_seconds >= 0.0 else None,
+            "initiative_success": initiative_success,
+            "correction_count": correction_count,
+            "usage_total_tokens": max(0, int(usage_total_tokens or 0)),
+            "predicted_outcome": dict(predicted_outcome or {}),
+            "evidence_refs": evidence_refs,
+            "message_counts": {
+                "inbound_after": len(inbound_after),
+                "outbound_after": len(outbound_after),
+            },
+        }
 
     @staticmethod
     def _initiative_probe_block_reason(probe: dict[str, Any]) -> str:
@@ -1262,8 +1346,8 @@ class HoloDaemon:
             affect = dict(subject.get("affect_state", {}))
             drive = dict(subject.get("drive_state", {}))
             affect["boredom"] = self.memory._clamp(float(affect.get("boredom", 0.0) or 0.0) + 0.03, default=0.0)
-            affect["curiosity"] = self.memory._clamp(float(affect.get("curiosity", 0.0) or 0.0) + 0.02, default=0.0)
-            affect["attachment_pull"] = self.memory._clamp(float(affect.get("attachment_pull", 0.0) or 0.0) + 0.015, default=0.0)
+            affect["curiosity"] = self.memory._clamp(MindGraph.metric_value(affect.get("curiosity", 0.0), default=0.0) + 0.02, default=0.0)
+            affect["attachment_pull"] = self.memory._clamp(MindGraph.metric_value(affect.get("attachment_pull", 0.0), default=0.0) + 0.015, default=0.0)
             drive["seek_contact"] = self.memory._clamp(float(drive.get("seek_contact", 0.0) or 0.0) + 0.02, default=0.0)
             self.memory.graph.update_subject_state(
                 channel=channel,
@@ -1328,19 +1412,32 @@ class HoloDaemon:
             metadata = dict(latest.get("metadata", {}))
             if bool(metadata.get("outcome_appraised", False)):
                 continue
+            subject = self.memory.graph.subject_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+            world_state = dict(subject.get("world_state", {}))
+            predicted_outcome = dict(metadata.get("selected_prediction", {}))
+            if not predicted_outcome:
+                predicted_outcome = dict(dict(world_state.get("last_counterfactual_summary", {})).get("selected_prediction", {}))
+            thread = self.store.find_thread(channel=channel, thread_key=thread_key)
+            recent_messages = self.store.recent_thread_messages(int(thread["id"]), limit=12) if thread else []
+            evidence_payload = self._derive_action_outcome_from_evidence(
+                sent_at=latest.get("updated_at") or latest.get("created_at"),
+                recent_messages=list(reversed(recent_messages)),
+                predicted_outcome=predicted_outcome,
+                usage_total_tokens=sum(int(item.get("total_tokens", 0) or 0) for item in self.store.list_processor_usage(limit=6)),
+            )
             appraisal = self.memory.appraise_outcome(
                 channel=channel,
                 thread_key=thread_key,
                 chat_name=chat_name,
                 action_type="initiative_ping",
                 action_ref=str(latest.get("id", "")),
-                was_rewarding=0.42,
-                was_ignored=0.08,
-                relational_delta=0.06,
-                identity_delta=0.02,
-                future_initiative_bias=0.08,
-                future_resistance_bias=0.02,
-                metadata={"source_candidate": latest.get("candidate_type", "")},
+                was_rewarding=float(evidence_payload.get("was_rewarding", 0.0) or 0.0),
+                was_ignored=float(evidence_payload.get("was_ignored", 0.0) or 0.0),
+                relational_delta=float(evidence_payload.get("relational_delta", 0.0) or 0.0),
+                identity_delta=float(evidence_payload.get("identity_delta", 0.0) or 0.0),
+                future_initiative_bias=float(evidence_payload.get("future_initiative_bias", 0.0) or 0.0),
+                future_resistance_bias=float(evidence_payload.get("future_resistance_bias", 0.0) or 0.0),
+                metadata={"source_candidate": latest.get("candidate_type", ""), **evidence_payload},
             )
             self.memory.graph.update_initiative_candidate(
                 candidate_id=int(latest.get("id", 0) or 0),
@@ -1647,11 +1744,11 @@ class HoloDaemon:
             next_goal_windows = [dict(item) for item in seeded_state.get("next_goal_windows", []) if isinstance(item, dict)]
         priorities = {
             "identity_maintenance": 0.72 + (0.08 if deficits else 0.0),
-            "relationship_continuity": 0.76 + float(expectations.get("reply_likelihood", 0.0) or 0.0) * 0.12,
+            "relationship_continuity": 0.76 + MindGraph.metric_value(expectations.get("reply_likelihood", 0.0), default=0.0) * 0.12,
             "recall_quality": 0.68 + (0.06 if "cache_coldness" in deficits else 0.0),
             "liveliness_balance": 0.66 + (0.06 if "stiffness_drift" in deficits else 0.0),
             "self_repair": 0.64 + (0.1 if deficits else 0.0),
-            "contact_maintenance": 0.62 + float(expectations.get("initiative_receptivity", 0.0) or 0.0) * 0.1,
+            "contact_maintenance": 0.62 + MindGraph.metric_value(expectations.get("initiative_receptivity", 0.0), default=0.0) * 0.1,
             "cost_discipline": 0.48 + budget_pressure * 0.24,
             "routing_resilience": 0.5 + (0.1 if not bool(provider_state.get("fallback_ready", False)) else 0.0),
             "cache_warmth": 0.52 + (0.08 if "cache_reuse_weak" in engineering_deficits else 0.0),
@@ -1668,9 +1765,9 @@ class HoloDaemon:
             if goal_type == "identity_maintenance":
                 goal["stalled_reason"] = "" if "stiffness_drift" not in deficits else "stiffness_drift"
             if goal_type == "relationship_continuity":
-                goal["stalled_reason"] = "" if float(expectations.get("reply_likelihood", 0.0) or 0.0) >= 0.2 else "low_reply_likelihood"
+                goal["stalled_reason"] = "" if MindGraph.metric_value(expectations.get("reply_likelihood", 0.0), default=0.0) >= 0.2 else "low_reply_likelihood"
             if goal_type == "contact_maintenance":
-                goal["stalled_reason"] = "" if float(expectations.get("initiative_receptivity", 0.0) or 0.0) >= 0.18 else "initiative_window_cold"
+                goal["stalled_reason"] = "" if MindGraph.metric_value(expectations.get("initiative_receptivity", 0.0), default=0.0) >= 0.18 else "initiative_window_cold"
             if goal_type == "cost_discipline":
                 goal["stalled_reason"] = "" if budget_pressure < 0.3 else "budget_pressure"
             if goal_type == "routing_resilience":
@@ -1682,7 +1779,15 @@ class HoloDaemon:
             goal["last_moved_at"] = utc_now()
             goal_id = str(goal.get("goal_id", "") or "")
             if goal_id:
-                goal_progress[goal_id] = round(float(goal.get("progress", goal_progress.get(goal_id, 0.0)) or 0.0), 4)
+                goal_progress[goal_id] = MindGraph.metric_state(
+                    goal.get("progress", goal_progress.get(goal_id, 0.0)),
+                    default=MindGraph.metric_value(goal_progress.get(goal_id, 0.0), default=0.0),
+                    confidence=0.64,
+                    evidence_refs=[f"daemon:goal_arbitration:{goal_id}"],
+                    updated_at=utc_now(),
+                    updated_by="daemon.goal_arbitration",
+                    decay_policy="goal_continuity",
+                )
                 pursuit_bias[goal_id] = round(float(goal.get("priority", pursuit_bias.get(goal_id, 0.0)) or 0.0), 4)
                 abandonment_cost[goal_id] = round(
                     float(abandonment_cost.get(goal_id, float(goal.get("priority", 0.0) or 0.0) * 0.6) or 0.0),

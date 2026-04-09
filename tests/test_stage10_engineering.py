@@ -425,6 +425,39 @@ class Stage10EngineeringTests(unittest.TestCase):
         checks = {str(item.get("name", "")): bool(item.get("ok", False)) for item in report.get("checks", [])}
         self.assertTrue(checks.get("ordinary_reply_path_not_regressed", False))
 
+    def test_stage10_acceptance_allows_goal_progress_state_objects(self) -> None:
+        fixture = _base_stage10_fixture()
+        fixture["goal_state"]["goal_progress"] = {
+            "identity_maintenance": {
+                "value": 0.79,
+                "confidence": 0.82,
+                "evidence_refs": ["stage10:identity"],
+                "updated_at": "2026-04-09T00:00:00Z",
+                "updated_by": "stage10-test",
+                "decay_policy": "goal_continuity",
+            },
+            "cost_discipline": {
+                "value": 0.41,
+                "confidence": 0.77,
+                "evidence_refs": ["stage10:cost"],
+                "updated_at": "2026-04-09T00:00:00Z",
+                "updated_by": "stage10-test",
+                "decay_policy": "goal_continuity",
+            },
+            "cache_warmth": {
+                "value": 0.36,
+                "confidence": 0.75,
+                "evidence_refs": ["stage10:cache"],
+                "updated_at": "2026-04-09T00:00:00Z",
+                "updated_by": "stage10-test",
+                "decay_policy": "goal_continuity",
+            },
+        }
+
+        report = _call_stage10_evaluator(fixture)
+
+        self.assertEqual(report["status"], "pass")
+
 
 if __name__ == "__main__":
     unittest.main()

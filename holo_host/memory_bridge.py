@@ -538,7 +538,7 @@ class MemoryBridge:
             float(drive_state.get("seek_contact", 0.0) or 0.0) * 0.34
             + float(drive_state.get("seek_play", 0.0) or 0.0) * 0.16
             + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.22
-            + float(affect_state.get("attachment_pull", 0.0) or 0.0) * 0.12
+            + MindGraph.metric_value(affect_state.get("attachment_pull", 0.0), default=0.0) * 0.12
             + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.08
             - float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.2
             - float(conflict_state.get("contact_vs_risk", 0.0) or 0.0) * 0.06,
@@ -782,7 +782,7 @@ class MemoryBridge:
         thread_model = self._thread_world_model(world_state, thread_key=thread_key)
         reply_likelihood = self._clamp(contact_model.get("reply_likelihood", 0.56), default=0.56)
         delay_tolerance = self._clamp(contact_model.get("delay_tolerance", 0.44), default=0.44)
-        initiative_receptivity = self._clamp(contact_model.get("initiative_receptivity", 0.46), default=0.46)
+        initiative_receptivity = self._clamp(MindGraph.metric_value(contact_model.get("initiative_receptivity", 0.46), default=0.46), default=0.46)
         conflict_fragility = self._clamp(contact_model.get("conflict_fragility", 0.34), default=0.34)
         continuity_sensitivity = self._clamp(contact_model.get("continuity_sensitivity", 0.58), default=0.58)
         risk_level = self._clamp(thread_model.get("risk_level", 0.22), default=0.22)
@@ -967,8 +967,8 @@ class MemoryBridge:
         expansion_pressure = self._clamp(
             reply_pull * 0.38
             + float(value_state.get("play_priority", 0.0) or 0.0) * 0.12
-            + float(affect_state.get("curiosity", 0.0) or 0.0) * 0.12
-            + float(affect_state.get("attachment_pull", 0.0) or 0.0) * 0.12
+            + MindGraph.metric_value(affect_state.get("curiosity", 0.0), default=0.0) * 0.12
+            + MindGraph.metric_value(affect_state.get("attachment_pull", 0.0), default=0.0) * 0.12
             + (0.22 if tier == "deep_recall" else 0.12 if tier == "recall" else 0.0),
             default=0.18,
         )
@@ -1263,6 +1263,9 @@ class MemoryBridge:
         if selected["action_type"] == "external_lookup" and not lookup_ready:
             selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
         selected_prediction = dict(simulation_by_action.get(str(selected.get("action_type", "")), {}))
+        expression_signals = dict(world_state.get("expression_calibration_signals", {}))
+        reply_budget_fit = self._clamp(MindGraph.metric_value(expression_signals.get("reply_budget_fit", 0.56), default=0.56), default=0.56)
+        stiffness_risk = self._clamp(MindGraph.metric_value(expression_signals.get("stiffness_risk", 0.32), default=0.32), default=0.32)
 
         expression_budget = 1
         if selected["action_type"] == "silence":
@@ -1298,6 +1301,11 @@ class MemoryBridge:
             expression_budget = 1
         elif selected["action_type"] in {"push_back", "counter_offer", "continuity_defense"}:
             expression_budget = 1 if expansion_pressure < 0.68 else 2
+        if selected["action_type"] in {"reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}:
+            if stiffness_risk >= 0.58:
+                expression_budget = min(expression_budget, 1)
+            elif reply_budget_fit >= 0.72 and expansion_pressure >= 0.66:
+                expression_budget = min(3, expression_budget + 1)
 
         silence_reason = ""
         defer_reason = ""
@@ -1306,7 +1314,7 @@ class MemoryBridge:
         elif selected["action_type"] == "defer_reply":
             defer_reason = "subject_requests_more_time_before_reply"
         action_rationale = compact_text(
-            f"{selected.get('action_type', 'reply_once')} because {selected.get('why_now', '')}; sim={selected_prediction.get('simulation_rationale', '')}",
+            f"{selected.get('action_type', 'reply_once')} because {selected.get('why_now', '')}; sim={selected_prediction.get('simulation_rationale', '')}; expr_fit={reply_budget_fit:.2f} stiffness={stiffness_risk:.2f}",
             240,
         )
         selected["expression_budget"] = int(expression_budget)
