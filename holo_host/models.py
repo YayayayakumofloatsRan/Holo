@@ -57,8 +57,11 @@ class ProcessorTaskRequest:
     task_type: str
     prompt: str
     session_id: str = ""
+    lane: str = ""
+    provider_hint: str = ""
     model_override: str = ""
     reasoning_effort_override: str = ""
+    budget_tag: str = ""
     timeout_seconds: int | None = None
     output_schema: str = "plain_text"
     allowed_data_layers: tuple[str, ...] = ()
@@ -66,6 +69,7 @@ class ProcessorTaskRequest:
     image_paths: tuple[str, ...] = ()
     workspace_mode: str = "live_readonly"
     operator_scope: str = ""
+    max_output_tokens: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -73,8 +77,11 @@ class ProcessorTaskRequest:
             "task_type": self.task_type,
             "prompt": self.prompt,
             "session_id": self.session_id,
+            "lane": self.lane,
+            "provider_hint": self.provider_hint,
             "model_override": self.model_override,
             "reasoning_effort_override": self.reasoning_effort_override,
+            "budget_tag": self.budget_tag,
             "timeout_seconds": self.timeout_seconds,
             "output_schema": self.output_schema,
             "allowed_data_layers": list(self.allowed_data_layers),
@@ -82,6 +89,7 @@ class ProcessorTaskRequest:
             "image_paths": list(self.image_paths),
             "workspace_mode": self.workspace_mode,
             "operator_scope": self.operator_scope,
+            "max_output_tokens": self.max_output_tokens,
             "metadata": dict(self.metadata),
         }
 
@@ -119,6 +127,44 @@ class ProcessorTaskResult:
             "command": list(self.command),
             "output_schema": self.output_schema,
             "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(slots=True)
+class ProcessorUsageRecord:
+    task_type: str
+    lane: str
+    provider: str
+    model: str
+    reasoning_effort: str
+    thread_key: str = ""
+    event_id: str = ""
+    duration_ms: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    estimated: bool = True
+    status: str = "ok"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_type": self.task_type,
+            "lane": self.lane,
+            "provider": self.provider,
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "thread_key": self.thread_key,
+            "event_id": self.event_id,
+            "duration_ms": int(self.duration_ms),
+            "prompt_tokens": int(self.prompt_tokens),
+            "completion_tokens": int(self.completion_tokens),
+            "total_tokens": int(self.total_tokens),
+            "estimated": bool(self.estimated),
+            "status": self.status,
+            "metadata": dict(self.metadata),
+            "created_at": self.created_at,
         }
 
 

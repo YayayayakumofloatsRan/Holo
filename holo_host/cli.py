@@ -289,6 +289,91 @@ def _brain_status_payload(config_path: str | None, *, allow_local_fallback: bool
     return daemon.brain_status(), "local_process"
 
 
+def _processor_routing_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/processor-routing")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.processor_routing(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _provider_status_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/provider-status")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.provider_status(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _usage_ledger_payload(
+    config_path: str | None,
+    *,
+    limit: int = 50,
+    task_type: str | None = None,
+    lane: str | None = None,
+    provider: str | None = None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/usage-ledger",
+        params={"limit": limit, "task_type": task_type, "lane": lane, "provider": provider},
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.usage_ledger(limit=limit, task_type=task_type, lane=lane, provider=provider), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_processor_fabric_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="POST", path="/accept-processor-fabric", payload={}, timeout=30.0)
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.accept_processor_fabric(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _self_model_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
     live_payload = _live_api_request(config_path, method="GET", path="/self-model")
     if live_payload is not None:
@@ -3944,9 +4029,63 @@ def command_show_stream_status(config_path: str | None) -> int:
     return 0
 
 
+def command_show_processor_routing(config_path: str | None) -> int:
+    payload, _transport = _processor_routing_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_provider_status(config_path: str | None) -> int:
+    payload, _transport = _provider_status_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_usage_ledger(
+    config_path: str | None,
+    *,
+    limit: int,
+    task_type: str | None,
+    lane: str | None,
+    provider: str | None,
+) -> int:
+    payload, _transport = _usage_ledger_payload(
+        config_path,
+        limit=limit,
+        task_type=task_type,
+        lane=lane,
+        provider=provider,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_processor_mesh(config_path: str | None) -> int:
     daemon = build_daemon(config_path)
-    print(json.dumps({"tasks": daemon.runner.supported_tasks()}, ensure_ascii=False, indent=2))
+    try:
+        print(
+            json.dumps(
+                {
+                    "tasks": daemon.runner.supported_tasks(),
+                    "routing": daemon.runner.routing_table(),
+                    "providers": daemon.runner.provider_status(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    finally:
+        daemon.store.close()
+        if hasattr(daemon.memory, "activation"):
+            daemon.memory.activation.close()
+        if hasattr(daemon.memory, "graph"):
+            daemon.memory.graph.close()
+    return 0
+
+
+def command_accept_processor_fabric(config_path: str | None) -> int:
+    payload, _transport = _accept_processor_fabric_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -4260,20 +4399,35 @@ def command_run_processor_task(
     session_id: str | None,
     model: str | None,
     reasoning_effort: str | None,
+    lane: str | None,
+    provider_hint: str | None,
+    budget_tag: str | None,
+    max_output_tokens: int | None,
     json_output: bool,
 ) -> int:
     daemon = build_daemon(config_path)
-    result = daemon.runner.run_task(
-        ProcessorTaskRequest(
-            task_type=task_type,
-            prompt=prompt,
-            session_id=str(session_id or ""),
-            model_override=str(model or ""),
-            reasoning_effort_override=str(reasoning_effort or ""),
-            output_schema="json" if json_output else "plain_text",
+    try:
+        result = daemon.runner.run_task(
+            ProcessorTaskRequest(
+                task_type=task_type,
+                prompt=prompt,
+                session_id=str(session_id or ""),
+                lane=str(lane or ""),
+                provider_hint=str(provider_hint or ""),
+                model_override=str(model or ""),
+                reasoning_effort_override=str(reasoning_effort or ""),
+                budget_tag=str(budget_tag or ""),
+                max_output_tokens=max_output_tokens,
+                output_schema="json" if json_output else "plain_text",
+            )
         )
-    )
-    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    finally:
+        daemon.store.close()
+        if hasattr(daemon.memory, "activation"):
+            daemon.memory.activation.close()
+        if hasattr(daemon.memory, "graph"):
+            daemon.memory.graph.close()
     return 0
 
 
@@ -4632,6 +4786,13 @@ def main(argv: list[str] | None = None) -> int:
     refresh_wechat_parser.add_argument("--no-visible", action="store_true")
     refresh_wechat_parser.add_argument("--with-captures", action="store_true")
     subparsers.add_parser("show-stream-status", help="Show background Mind OS stream status and recent runs")
+    subparsers.add_parser("show-processor-routing", help="Show processor lane routing and task dispatch policy")
+    subparsers.add_parser("show-provider-status", help="Show processor provider availability and configured lane backends")
+    usage_ledger_parser = subparsers.add_parser("show-usage-ledger", help="Inspect processor token and timing usage records")
+    usage_ledger_parser.add_argument("--limit", type=int, default=50)
+    usage_ledger_parser.add_argument("--task-type", default=None)
+    usage_ledger_parser.add_argument("--lane", default=None)
+    usage_ledger_parser.add_argument("--provider", default=None)
     stream_tick_parser = subparsers.add_parser("stream-tick", help="Run one explicit background stream tick and record its influence")
     stream_tick_parser.add_argument("--stream-name", required=True, choices=("maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"))
     stream_tick_parser.add_argument("--dry-run", action="store_true")
@@ -4718,12 +4879,17 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage9_parser.add_argument("--iterations", type=int, default=3)
     accept_stage9_parser.add_argument("--warmup", type=int, default=1)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
+    subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
     processor_task_parser.add_argument("--task-type", required=True)
     processor_task_parser.add_argument("--prompt", required=True)
     processor_task_parser.add_argument("--session-id", default=None)
+    processor_task_parser.add_argument("--lane", default=None)
+    processor_task_parser.add_argument("--provider-hint", default=None)
     processor_task_parser.add_argument("--model", default=None)
     processor_task_parser.add_argument("--reasoning-effort", default=None)
+    processor_task_parser.add_argument("--budget-tag", default=None)
+    processor_task_parser.add_argument("--max-output-tokens", type=int, default=None)
     processor_task_parser.add_argument("--json", action="store_true")
     serve_parser = subparsers.add_parser("serve-api", help="Run a local Codex-direct HTTP reply service for external helpers")
     serve_parser.add_argument("--host", default=None)
@@ -4774,6 +4940,18 @@ def main(argv: list[str] | None = None) -> int:
         return command_trace_self_continuity(args.config)
     if args.command == "trace-goal-arbitration":
         return command_trace_goal_arbitration(args.config)
+    if args.command == "show-processor-routing":
+        return command_show_processor_routing(args.config)
+    if args.command == "show-provider-status":
+        return command_show_provider_status(args.config)
+    if args.command == "show-usage-ledger":
+        return command_show_usage_ledger(
+            args.config,
+            limit=args.limit,
+            task_type=args.task_type,
+            lane=args.lane,
+            provider=args.provider,
+        )
     if args.command == "show-affect-state":
         return command_show_affect_state(
             args.config,
@@ -5145,14 +5323,20 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "show-processor-mesh":
         return command_show_processor_mesh(args.config)
+    if args.command == "accept-processor-fabric":
+        return command_accept_processor_fabric(args.config)
     if args.command == "processor-task":
         return command_run_processor_task(
             args.config,
             task_type=args.task_type,
             prompt=args.prompt,
             session_id=args.session_id,
+            lane=args.lane,
+            provider_hint=args.provider_hint,
             model=args.model,
             reasoning_effort=args.reasoning_effort,
+            budget_tag=args.budget_tag,
+            max_output_tokens=args.max_output_tokens,
             json_output=args.json,
         )
     if args.command == "serve-api":

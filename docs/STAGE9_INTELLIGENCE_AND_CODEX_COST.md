@@ -209,16 +209,20 @@ What it has today:
 - model/task routing
 - timing measurements such as `processor_ms`
 
-What it does not have:
+What it now has:
 
+- `processor_usage_ledger`
+- per-call lane/provider/model/timing records
 - `prompt_tokens`
 - `completion_tokens`
 - `total_tokens`
-- per-task accumulated usage
-- per-loop token budgets
-- per-thread token budgets
+- `estimated=true|false` to separate exact and approximate accounting
 
-So current cost judgment is structural, not metered.
+What is still incomplete:
+
+- some providers still return estimated rather than ground-truth usage
+- per-loop and per-thread budget enforcement still need tightening
+- cost policy is now observable, but not yet fully self-regulating
 
 ## 7. Highest Spend Risks
 
@@ -238,15 +242,26 @@ These are the immediate guardrails the next thread should preserve or strengthen
 
 - normal low-pressure chat should ideally use:
   - one packet build
-  - one `reply`
+  - one `subject_main reply`
 - do not casually add more hot-path Codex calls
 
-### B. Keep `recall_reconstruct` narrow
+### B. Use the ledger before guessing
+
+- inspect `show-usage-ledger` before assuming where cost is going
+- inspect `show-processor-routing` before assuming a task used the wrong model
+- inspect `show-provider-status` before assuming fallback is broken
+
+### C. Keep `kernel_xhigh` rare and deliberate
+
+- reserve it for deep simulation, operator review/planning, self-revision review/planning, and rare high-conflict reply overrides
+- do not let background cadence alone upgrade work onto `kernel_xhigh`
+
+### D. Keep `recall_reconstruct` narrow
 
 - only run it for real recall/deep-recall cases
 - do not let ordinary chat trigger it
 
-### C. Gate background planning on state delta
+### E. Gate background planning on state delta
 
 `operator_plan` and `self_model_observe` should not run just because the timer fired.
 

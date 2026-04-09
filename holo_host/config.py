@@ -57,6 +57,38 @@ class RuntimeConfig:
 
 
 @dataclass(slots=True)
+class ProviderLaneConfig:
+    primary_provider: str = "codex_cli"
+    backup_provider: str = "responses"
+    model: str = ""
+    reasoning_effort: str = ""
+    max_output_tokens: int = 0
+
+
+@dataclass(slots=True)
+class TaskRoutingConfig:
+    lane: str = "subject_main"
+    fallback_lane: str = ""
+    budget_tag: str = ""
+    upgrade_to_lane: str = ""
+    uncertainty_threshold: float = 1.0
+    high_conflict_actions: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
+class ProcessorFabricConfig:
+    provider_backends: dict[str, ProviderLaneConfig] = field(default_factory=dict)
+    processor_routing: dict[str, TaskRoutingConfig] = field(default_factory=dict)
+    openai_compatible_base_url: str = ""
+    openai_compatible_api_key_env: str = "OPENAI_COMPATIBLE_API_KEY"
+    responses_api_key_env: str = "OPENAI_API_KEY"
+
+
+# Backward-compatible alias for earlier imports and type hints.
+ProcessorLaneConfig = ProviderLaneConfig
+
+
+@dataclass(slots=True)
 class MailConfig:
     transport: str = "maildir"
     mailbox: str = "INBOX"
@@ -175,6 +207,7 @@ class HostConfig:
     mail: MailConfig
     memory: MemoryConfig
     autonomy: AutonomyConfig
+    processor_fabric: ProcessorFabricConfig
     config_path: Path | None = None
 
 
@@ -192,6 +225,131 @@ def _resolve_path(repo_root: Path, state_dir: Path, raw: str | None, fallback: s
     if ".holo_runtime" not in str(path):
         path = state_dir / path.name if path.parent == Path(".") else path
     return path
+
+
+def _default_provider_backends(runtime: RuntimeConfig) -> dict[str, ProviderLaneConfig]:
+    preferred = (runtime.processor_backend or "codex_cli").strip().lower()
+    if preferred not in {"codex_cli", "responses", "openai_compatible"}:
+        preferred = "codex_cli"
+    if preferred == "codex_cli":
+        subject_backup = "responses"
+        kernel_backup = "responses"
+        micro_backup = "responses"
+    elif preferred == "responses":
+        subject_backup = "codex_cli"
+        kernel_backup = "codex_cli"
+        micro_backup = "codex_cli"
+    else:
+        subject_backup = "responses"
+        kernel_backup = "responses"
+        micro_backup = "responses"
+    return {
+        "kernel_xhigh": ProviderLaneConfig(
+            primary_provider=preferred,
+            backup_provider=kernel_backup,
+            model=str(runtime.codex_model or runtime.responses_model or "gpt-5.4"),
+            reasoning_effort="xhigh",
+            max_output_tokens=2400,
+        ),
+        "subject_main": ProviderLaneConfig(
+            primary_provider=preferred,
+            backup_provider=subject_backup,
+            model=str(runtime.codex_model or runtime.responses_model or "gpt-5.4"),
+            reasoning_effort="medium",
+            max_output_tokens=1800,
+        ),
+        "micro_fast": ProviderLaneConfig(
+            primary_provider=preferred,
+            backup_provider=micro_backup,
+            model=str(runtime.fast_model or runtime.responses_fast_model or "gpt-5.4-mini"),
+            reasoning_effort=str(runtime.fast_reasoning_effort or "low"),
+            max_output_tokens=900,
+        ),
+    }
+
+
+def _default_processor_routing() -> dict[str, TaskRoutingConfig]:
+    return {
+        "reply": TaskRoutingConfig(
+            lane="subject_main",
+            fallback_lane="micro_fast",
+            budget_tag="chat_reply",
+            upgrade_to_lane="kernel_xhigh",
+            uncertainty_threshold=0.72,
+            high_conflict_actions=("push_back", "counter_offer", "continuity_defense"),
+        ),
+        "recall_reconstruct": TaskRoutingConfig(lane="subject_main", fallback_lane="micro_fast", budget_tag="recall_reconstruct"),
+        "goal_arbitration": TaskRoutingConfig(lane="subject_main", fallback_lane="micro_fast", budget_tag="goal_arbitration"),
+        "autobiographical_consolidation": TaskRoutingConfig(lane="subject_main", fallback_lane="micro_fast", budget_tag="autobiographical_consolidation"),
+        "world_calibration": TaskRoutingConfig(lane="subject_main", fallback_lane="micro_fast", budget_tag="world_calibration"),
+        "image_understand": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="image_understand"),
+        "self_model_observe": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="self_model_observe"),
+        "initiative_probe": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="initiative_probe"),
+        "affect_reflect": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="affect_reflect"),
+        "drive_plan": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="drive_plan"),
+        "value_integrate": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="value_integrate"),
+        "conflict_arbitrate": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="conflict_arbitrate"),
+        "outcome_appraise": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="outcome_appraise"),
+        "deep_simulation": TaskRoutingConfig(lane="kernel_xhigh", fallback_lane="subject_main", budget_tag="deep_simulation"),
+        "operator_plan": TaskRoutingConfig(lane="kernel_xhigh", fallback_lane="subject_main", budget_tag="operator_plan"),
+        "operator_review": TaskRoutingConfig(lane="kernel_xhigh", fallback_lane="subject_main", budget_tag="operator_review"),
+        "self_revision_plan": TaskRoutingConfig(lane="kernel_xhigh", fallback_lane="subject_main", budget_tag="self_revision_plan"),
+        "self_revision_review": TaskRoutingConfig(lane="kernel_xhigh", fallback_lane="subject_main", budget_tag="self_revision_review"),
+    }
+
+
+def _load_provider_backends(raw: dict[str, Any], runtime: RuntimeConfig) -> dict[str, ProviderLaneConfig]:
+    defaults = _default_provider_backends(runtime)
+    if not isinstance(raw, dict):
+        return defaults
+    resolved: dict[str, ProviderLaneConfig] = {}
+    for lane_name, fallback in defaults.items():
+        payload = raw.get(lane_name, {})
+        if not isinstance(payload, dict):
+            payload = {}
+        resolved[lane_name] = ProviderLaneConfig(
+            primary_provider=str(payload.get("primary_provider", fallback.primary_provider)).strip() or fallback.primary_provider,
+            backup_provider=str(payload.get("backup_provider", fallback.backup_provider)).strip() or fallback.backup_provider,
+            model=str(payload.get("model", fallback.model)).strip() or fallback.model,
+            reasoning_effort=str(payload.get("reasoning_effort", fallback.reasoning_effort)).strip() or fallback.reasoning_effort,
+            max_output_tokens=int(payload.get("max_output_tokens", fallback.max_output_tokens or 0)),
+        )
+    return resolved
+
+
+def _load_processor_routing(raw: dict[str, Any]) -> dict[str, TaskRoutingConfig]:
+    defaults = _default_processor_routing()
+    if not isinstance(raw, dict):
+        return defaults
+    resolved: dict[str, TaskRoutingConfig] = {}
+    for task_name, fallback in defaults.items():
+        payload = raw.get(task_name, {})
+        if not isinstance(payload, dict):
+            payload = {}
+        resolved[task_name] = TaskRoutingConfig(
+            lane=str(payload.get("lane", fallback.lane)).strip() or fallback.lane,
+            fallback_lane=str(payload.get("fallback_lane", fallback.fallback_lane)).strip() or fallback.fallback_lane,
+            budget_tag=str(payload.get("budget_tag", fallback.budget_tag)).strip() or fallback.budget_tag,
+            upgrade_to_lane=str(payload.get("upgrade_to_lane", fallback.upgrade_to_lane)).strip() or fallback.upgrade_to_lane,
+            uncertainty_threshold=float(payload.get("uncertainty_threshold", fallback.uncertainty_threshold)),
+            high_conflict_actions=tuple(
+                str(item).strip()
+                for item in payload.get("high_conflict_actions", fallback.high_conflict_actions)
+                if str(item).strip()
+            ),
+        )
+    for task_name, payload in raw.items():
+        if task_name in resolved or not isinstance(payload, dict):
+            continue
+        resolved[task_name] = TaskRoutingConfig(
+            lane=str(payload.get("lane", "subject_main")).strip() or "subject_main",
+            fallback_lane=str(payload.get("fallback_lane", "")).strip(),
+            budget_tag=str(payload.get("budget_tag", task_name)).strip() or task_name,
+            upgrade_to_lane=str(payload.get("upgrade_to_lane", "")).strip(),
+            uncertainty_threshold=float(payload.get("uncertainty_threshold", 1.0)),
+            high_conflict_actions=tuple(str(item).strip() for item in payload.get("high_conflict_actions", []) if str(item).strip()),
+        )
+    return resolved
 
 
 def load_config(config_path: str | None = None, repo_root: str | Path | None = None) -> HostConfig:
@@ -352,13 +510,35 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         blocked_keywords=blocked_keywords,
     )
 
+    processor_fabric_data = data.get("processor_fabric", {})
+    processor_fabric = ProcessorFabricConfig(
+        provider_backends=_load_provider_backends(data.get("provider_backends", {}), runtime),
+        processor_routing=_load_processor_routing(data.get("processor_routing", {})),
+        openai_compatible_base_url=str(
+            processor_fabric_data.get("openai_compatible_base_url", os.environ.get("OPENAI_COMPATIBLE_BASE_URL", ""))
+        ).strip(),
+        openai_compatible_api_key_env=str(
+            processor_fabric_data.get("openai_compatible_api_key_env", "OPENAI_COMPATIBLE_API_KEY")
+        ).strip()
+        or "OPENAI_COMPATIBLE_API_KEY",
+        responses_api_key_env=str(processor_fabric_data.get("responses_api_key_env", "OPENAI_API_KEY")).strip()
+        or "OPENAI_API_KEY",
+    )
+
     ensure_directory(runtime.state_dir)
     ensure_directory(runtime.log_dir)
     ensure_directory(memory.mind_graph_db_path.parent)
     ensure_directory(mail.maildir_inbox)
     ensure_directory(mail.maildir_processed)
     ensure_directory(mail.maildir_outbox)
-    return HostConfig(runtime=runtime, mail=mail, memory=memory, autonomy=autonomy, config_path=chosen_path)
+    return HostConfig(
+        runtime=runtime,
+        mail=mail,
+        memory=memory,
+        autonomy=autonomy,
+        processor_fabric=processor_fabric,
+        config_path=chosen_path,
+    )
 
 
 def mail_password(config: HostConfig) -> str:

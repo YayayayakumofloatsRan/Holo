@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import json_dumps, utc_now
-from .models import IncomingMessage, OutgoingMessage
+from .models import IncomingMessage, OutgoingMessage, ProcessorUsageRecord
 
 
 def _synchronized(method):
@@ -132,6 +132,29 @@ class QueueStore:
 
             CREATE INDEX IF NOT EXISTS idx_event_bus_thread ON event_bus(channel, thread_key, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_event_bus_status ON event_bus(status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS processor_usage_ledger (
+                id INTEGER PRIMARY KEY,
+                task_type TEXT NOT NULL DEFAULT '',
+                lane TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                reasoning_effort TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                event_id TEXT NOT NULL DEFAULT '',
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                estimated INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_processor_usage_created ON processor_usage_ledger(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_processor_usage_task ON processor_usage_ledger(task_type, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_processor_usage_lane ON processor_usage_ledger(lane, created_at DESC);
             """
         )
         self._ensure_column("contacts", "last_initiative_at", "TEXT")
@@ -866,6 +889,70 @@ class QueueStore:
             LIMIT ?
             """,
             (str(channel or "").strip(), normalized_thread_key, max(1, int(limit))),
+        )
+
+    @_synchronized
+    def record_processor_usage(self, record: ProcessorUsageRecord | dict[str, Any]) -> dict[str, Any]:
+        payload = record.to_dict() if isinstance(record, ProcessorUsageRecord) else dict(record or {})
+        created_at = str(payload.get("created_at") or utc_now()).strip() or utc_now()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO processor_usage_ledger(
+                task_type, lane, provider, model, reasoning_effort, thread_key, event_id,
+                duration_ms, prompt_tokens, completion_tokens, total_tokens,
+                estimated, status, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(payload.get("task_type", "")).strip(),
+                str(payload.get("lane", "")).strip(),
+                str(payload.get("provider", "")).strip(),
+                str(payload.get("model", "")).strip(),
+                str(payload.get("reasoning_effort", "")).strip(),
+                str(payload.get("thread_key", "")).strip(),
+                str(payload.get("event_id", "")).strip(),
+                int(payload.get("duration_ms", 0) or 0),
+                int(payload.get("prompt_tokens", 0) or 0),
+                int(payload.get("completion_tokens", 0) or 0),
+                int(payload.get("total_tokens", 0) or 0),
+                1 if bool(payload.get("estimated", True)) else 0,
+                str(payload.get("status", "")).strip() or "ok",
+                json_dumps(payload.get("metadata", {})),
+                created_at,
+            ),
+        )
+        self.conn.commit()
+        return self._fetchone("SELECT * FROM processor_usage_ledger WHERE id = ?", (int(cursor.lastrowid),)) or {}
+
+    @_synchronized
+    def list_processor_usage(
+        self,
+        *,
+        limit: int = 50,
+        task_type: str | None = None,
+        lane: str | None = None,
+        provider: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["1=1"]
+        args: list[Any] = []
+        if str(task_type or "").strip():
+            clauses.append("task_type = ?")
+            args.append(str(task_type).strip())
+        if str(lane or "").strip():
+            clauses.append("lane = ?")
+            args.append(str(lane).strip())
+        if str(provider or "").strip():
+            clauses.append("provider = ?")
+            args.append(str(provider).strip())
+        args.append(max(1, int(limit)))
+        return self._fetchall(
+            f"""
+            SELECT * FROM processor_usage_ledger
+            WHERE {' AND '.join(clauses)}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(args),
         )
 
     @_synchronized

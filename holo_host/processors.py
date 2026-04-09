@@ -1000,22 +1000,50 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
 
 
 class CodexCliProcessor:
-    name = "codex_cli"
+    name = "processor_fabric"
 
     def __init__(self, config: HostConfig, runner: CodexRunner):
         self.config = config
         self.runner = runner
 
-    def _run_runner(self, prompt: str, *, session_id: str, model: str, effort: str):
+    def _run_runner(
+        self,
+        prompt: str,
+        *,
+        session_id: str,
+        lane: str = "",
+        provider_hint: str = "",
+        model: str = "",
+        effort: str = "",
+        budget_tag: str = "",
+        max_output_tokens: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
         try:
             return self.runner.run(
                 prompt,
                 session_id=session_id,
+                lane=lane,
+                provider_hint=provider_hint,
                 model_override=model,
                 reasoning_effort_override=effort,
+                budget_tag=budget_tag,
+                max_output_tokens=max_output_tokens,
+                metadata=metadata or {},
             )
         except TypeError as exc:
-            if "model_override" not in str(exc) and "reasoning_effort_override" not in str(exc):
+            if not any(
+                token in str(exc)
+                for token in (
+                    "model_override",
+                    "reasoning_effort_override",
+                    "lane",
+                    "provider_hint",
+                    "budget_tag",
+                    "max_output_tokens",
+                    "metadata",
+                )
+            ):
                 raise
             return self.runner.run(prompt, session_id=session_id)
 
@@ -1027,7 +1055,14 @@ class CodexCliProcessor:
             ProcessorTaskRequest(
                 task_type="recall_reconstruct",
                 prompt=prompt,
+                lane="subject_main",
                 output_schema="json",
+                budget_tag="recall_reconstruct",
+                metadata={
+                    "thread_key": context.thread_key,
+                    "chat_name": context.chat_name,
+                    "event_id": str(context.metadata.get("event_id", "") or ""),
+                },
             )
         )
         if result.returncode != 0:
@@ -1049,16 +1084,29 @@ class CodexCliProcessor:
                 context.sidecar = packet
         prompt = render_chat_prompt(context, turn_plan=turn_plan)
         started_at = time.perf_counter()
-        if turn_plan.fast_path:
-            model = self.config.runtime.fast_model or self.config.runtime.codex_model
-            effort = self.config.runtime.fast_reasoning_effort or self.config.runtime.codex_reasoning_effort
-        else:
-            model = self.config.runtime.codex_model
-            effort = self.config.runtime.codex_reasoning_effort
-        result = self._run_runner(prompt, session_id=session_id, model=model, effort=effort)
+        selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
+        lane = "subject_main"
+        if selected_action_type in {"push_back", "counter_offer", "continuity_defense"} or float(context.uncertainty_level or 0.0) >= 0.72:
+            lane = "kernel_xhigh"
+        result = self._run_runner(
+            prompt,
+            session_id=session_id,
+            lane=lane,
+            budget_tag="chat_reply",
+            max_output_tokens=1200,
+            metadata={
+                "thread_key": context.thread_key,
+                "chat_name": context.chat_name,
+                "event_id": str(context.metadata.get("event_id", "") or ""),
+                "selected_action_type": selected_action_type,
+                "uncertainty_level": float(context.uncertainty_level or 0.0),
+                "fast_path": bool(turn_plan.fast_path),
+            },
+        )
         processor_ms = int((time.perf_counter() - started_at) * 1000)
         if result.returncode != 0:
             raise RuntimeError(result.stderr or result.stdout or "codex processor failure")
+        result_metadata = dict(getattr(result, "metadata", {}) or {})
         text = result.reply_text.strip()
         bubbles = build_reply_bubbles(
             text,
@@ -1086,7 +1134,11 @@ class CodexCliProcessor:
             raw_text=text,
             timing_ms={"processor_ms": processor_ms, "recall_reconstruct_ms": recall_reconstruct_ms},
             debug={
-                "model": model,
+                "model": result_metadata.get("model", ""),
+                "provider": result_metadata.get("provider", ""),
+                "lane": result_metadata.get("lane", lane),
+                "reasoning_effort": result_metadata.get("reasoning_effort", ""),
+                "usage": dict(result_metadata.get("usage", {})),
                 "prompt_excerpt": compact_text(prompt, 240),
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
             },
@@ -1156,14 +1208,4 @@ class ResponsesProcessor:
 
 
 def build_processor(config: HostConfig, runner: CodexRunner) -> ReplyProcessor:
-    backend = (config.runtime.processor_backend or "auto").strip().lower()
-    if backend == "responses":
-        return ResponsesProcessor(config)
-    if backend == "codex_cli":
-        return CodexCliProcessor(config, runner)
-    if importlib.util.find_spec("openai") and os.environ.get("OPENAI_API_KEY"):
-        try:
-            return ResponsesProcessor(config)
-        except Exception:
-            return CodexCliProcessor(config, runner)
     return CodexCliProcessor(config, runner)

@@ -1,19 +1,29 @@
 # Holo Handoff
 
-This is the one-page entry for a new thread that needs to continue Holo work without hidden context.
+This is the single entrypoint for a new thread that needs to continue Holo work without hidden context.
 
 ## Read This First
 1. `HOLO_HANDOFF.md`
-2. `docs/ENGINEERING_HANDOFF_STAGE8.md`
-3. `docs/ENGINEERING_HANDOFF_STAGE9.md`
-4. `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
-5. `docs/STAGE9_INTELLIGENCE_AND_CODEX_COST.md`
-6. `HOLO_SYSTEM.md`
-7. `HOLO_DEVELOPMENT.md`
-8. `HOLO_HOST.md`
-9. `OPERATIONS.md`
-10. `holo_memory_library/MEMORY_LIBRARY.md`
-11. `windows_helper/README.md`
+2. `docs/HANDOFF_CHECKLIST.md`
+3. `docs/HOLO_ARCHITECTURE_MAP.md`
+4. `docs/WHEEL_CATALOG.md`
+5. `docs/PROCESSOR_ROUTING_AND_COST_POLICY.md`
+6. `docs/PROVIDER_COMPATIBILITY_CONTRACT.md`
+7. `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
+8. `docs/STAGE9_INTELLIGENCE_AND_CODEX_COST.md`
+9. `docs/ENGINEERING_HANDOFF_STAGE9.md`
+10. `HOLO_SYSTEM.md`
+11. `HOLO_HOST.md`
+12. `OPERATIONS.md`
+13. `holo_memory_library/MEMORY_LIBRARY.md`
+14. `windows_helper/README.md`
+
+## What This Document Must Cover
+- current live state
+- mandatory reading order
+- hard contracts and forbidden edits
+- processor routing and cost policy entrypoints
+- current next-step focus for the next thread
 
 ## What Holo Is
 - Holo is not one long Codex conversation.
@@ -22,6 +32,7 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
   - the processor is replaceable compute
   - transports are eyes and hands
 - The current milestone tag is `stage9-adaptive-initiative-gate`.
+- The current processor fabric milestone is `processor-fabric-standardized`.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -39,7 +50,11 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
   - `windows_helper/`
 
 ## Current Runtime Truth
-- Active processor: `codex_cli`
+- Primary provider path: `codex_cli`
+- Processor fabric is active with three lanes:
+  - `kernel_xhigh`
+  - `subject_main`
+  - `micro_fast`
 - Active WeChat online path on this machine: `pyweixin_dialog`
 - `wcferry` is diagnostic-only here because local `Weixin 4.1.x` is incompatible with installed `wcferry 39.x`
 - WSL is the authoritative kernel
@@ -53,6 +68,7 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
   - `consciousness_ledger`
 - Holo can generate proactive initiative candidates, but current gates are conservative and often block auto-send.
 - Stage-9 adaptive initiative gate is implemented in code; rollout should still start from `initiative_gate_mode=conservative` before switching default behavior to `adaptive`.
+- Processor routing, provider compatibility, and usage accounting are now first-class runtime surfaces; new threads should inspect them before changing any model call sites.
 
 ## Memory Pyramid
 - `canonical`: persona core and non-negotiable boundaries
@@ -91,15 +107,25 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `./scripts/holo-restart-all.sh`
 - Status:
   - `./scripts/holo-status.sh`
+- Processor routing:
+  - `python3 -m holo_host show-processor-routing`
+- Provider status:
+  - `python3 -m holo_host show-provider-status`
+- Usage ledger:
+  - `python3 -m holo_host show-usage-ledger --limit 50`
+- Processor fabric acceptance:
+  - `python3 -m holo_host accept-processor-fabric`
 
 ## When A New Thread Starts Work
 1. Read the docs above in order.
 2. Run `./scripts/holo-status.sh`.
-3. Check whether Holo is supposed to stay online before touching runtime files.
-4. Run targeted tests before editing.
-5. Make one focused change.
-6. Re-run relevant tests.
-7. Update docs if runtime behavior, memory semantics, or operator workflow changed.
+3. Run `python3 -m holo_host show-provider-status`.
+4. Run `python3 -m holo_host show-processor-routing`.
+5. Check whether Holo is supposed to stay online before touching runtime files.
+6. Run targeted tests before editing.
+7. Make one focused change.
+8. Re-run relevant tests.
+9. Update docs if runtime behavior, memory semantics, provider routing, or operator workflow changed.
 
 ## Where To Look First When Something Breaks
 - Kernel health:
@@ -116,6 +142,10 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `.holo_runtime/mind_graph.sqlite3`
 - Full archive:
   - `holo_memory_library/memories/conversation_archive.jsonl`
+- Processor routing and cost:
+  - `python3 -m holo_host show-processor-routing`
+  - `python3 -m holo_host show-provider-status`
+  - `python3 -m holo_host show-usage-ledger --limit 100`
 
 ## Current Weak Spots
 - `pyweixin_dialog` on `Weixin 4.1` is still the most fragile live layer
@@ -126,7 +156,8 @@ These files change while Holo is alive. Do not treat them like static docs.
 - proactive initiative exists but is often blocked by `initiative_probe_blocked`
 - retrieval and expression control still feel more engineered than natural
 - main-brain override and initiative gate calibration can create false negatives under cold `initiative_window` states
-- token usage is still not metered per task or per loop
+- token accounting now exists, but some providers still rely on estimates rather than ground-truth usage
+- provider fallback behavior is standardized, but fallback paths still need more live soak time
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -144,12 +175,15 @@ These files change while Holo is alive. Do not treat them like static docs.
 ## Invariants
 - Do not silently change online transport modes
 - Do not touch the watcher path without reading `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
+- Do not add new direct model call paths outside the processor provider abstraction
+- Do not bypass lane routing by hardcoding `codex exec` or raw HTTP calls in random modules
 - Do not let internal prompts, hook control text, or rewrite reasons enter durable memory
 - Do not let archive be the only place history lives, but also do not let runtime threads become the only continuity
 - Do not depend on one Codex thread to keep Holo alive
 - Do not forget to keep CLI archive hooks working when editing repo-local hook config
 - Do not treat `autobiographical_state`, `goal_state`, or `world_state` as display-only metadata; they are now part of subject deliberation
 - Do not publish live memory or runtime state to the public repo
+- Do not treat `show-processor-routing`, `show-provider-status`, or `show-usage-ledger` as optional maintenance extras; they are required observability for safe handoff
 
 ## Minimum Done For Any Holo Change
 - local behavior works
@@ -158,3 +192,4 @@ These files change while Holo is alive. Do not treat them like static docs.
 - docs are updated
 - another thread can continue from disk without hidden oral context
 - when `accept-stage9` is available, run it before and after any gate-mode transition
+- when model routing, provider fallback, or token policy changes, run `accept-processor-fabric`

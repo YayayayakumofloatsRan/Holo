@@ -25,6 +25,133 @@ dry_run = false
 api_bind_host = "127.0.0.1"
 api_port = 8000
 
+# Legacy runtime aliases kept for compatibility:
+# - codex_model
+# - codex_reasoning_effort
+# - fast_model
+# - fast_reasoning_effort
+# - responses_model
+# The authoritative processor fabric lives in the blocks below.
+
+[processor_fabric]
+openai_compatible_base_url = ""
+openai_compatible_api_key_env = "OPENAI_API_KEY"
+responses_api_key_env = "OPENAI_API_KEY"
+
+[provider_backends.kernel_xhigh]
+primary_provider = "codex_cli"
+backup_provider = "responses"
+model = "gpt-5.4"
+reasoning_effort = "xhigh"
+max_output_tokens = 2400
+
+[provider_backends.subject_main]
+primary_provider = "codex_cli"
+backup_provider = "responses"
+model = "gpt-5.4"
+reasoning_effort = "medium"
+max_output_tokens = 1600
+
+[provider_backends.micro_fast]
+primary_provider = "codex_cli"
+backup_provider = "responses"
+model = "gpt-5.4-mini"
+reasoning_effort = "low"
+max_output_tokens = 900
+
+[processor_routing.reply]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "chat_reply"
+upgrade_to_lane = "kernel_xhigh"
+uncertainty_threshold = 0.72
+high_conflict_actions = ["push_back", "counter_offer", "continuity_defense"]
+
+[processor_routing.recall_reconstruct]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "recall_reconstruct"
+
+[processor_routing.goal_arbitration]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "goal_arbitration"
+
+[processor_routing.autobiographical_consolidation]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "autobiographical_consolidation"
+
+[processor_routing.world_calibration]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "world_calibration"
+
+[processor_routing.image_understand]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "image_understand"
+
+[processor_routing.self_model_observe]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "self_model_observe"
+
+[processor_routing.initiative_probe]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "initiative_probe"
+
+[processor_routing.affect_reflect]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "affect_reflect"
+
+[processor_routing.drive_plan]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "drive_plan"
+
+[processor_routing.value_integrate]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "value_integrate"
+
+[processor_routing.conflict_arbitrate]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "conflict_arbitrate"
+
+[processor_routing.outcome_appraise]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "outcome_appraise"
+
+[processor_routing.deep_simulation]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "deep_simulation"
+
+[processor_routing.operator_plan]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "operator_plan"
+
+[processor_routing.operator_review]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "operator_review"
+
+[processor_routing.self_revision_plan]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "self_revision_plan"
+
+[processor_routing.self_revision_review]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "self_revision_review"
+
 [mail]
 transport = "maildir"
 poll_limit = 10

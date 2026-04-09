@@ -434,7 +434,7 @@ class HoloReplyService:
         self.config = config
         self.store = store or QueueStore(config.runtime.db_path)
         self.store.initialize()
-        self.runner = runner or CodexRunner(config)
+        self.runner = runner or CodexRunner(config, usage_recorder=self.store.record_processor_usage)
         self.processor = build_processor(config, self.runner)
         self.memory = memory or MemoryBridge(
             config.runtime.repo_root,
@@ -598,6 +598,8 @@ class HoloReplyService:
             "vector_health": self.memory.vector_health(),
             "activation_cache_enabled": self.config.memory.activation_cache_enabled,
             "processor_mesh_tasks": getattr(self.runner, "supported_tasks", lambda: [])(),
+            "processor_routing": getattr(self.runner, "routing_table", lambda: {})(),
+            "provider_status": getattr(self.runner, "provider_status", lambda: {})(),
             "brain_mode": str(brain_status.get("mode", self.config.memory.brain_mode_default)),
             "brain_status": brain_status,
             "self_model": self.memory.self_model_state(),
@@ -778,6 +780,68 @@ class HoloReplyService:
     def operator_status(self) -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.operator_status()
+
+    def processor_routing(self) -> dict[str, Any]:
+        return {
+            "routing": self.runner.routing_table(),
+            "tasks": self.runner.supported_tasks(),
+        }
+
+    def provider_status(self) -> dict[str, Any]:
+        return self.runner.provider_status()
+
+    def usage_ledger(
+        self,
+        *,
+        limit: int = 50,
+        task_type: str | None = None,
+        lane: str | None = None,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        rows = self.store.list_processor_usage(limit=limit, task_type=task_type, lane=lane, provider=provider)
+        summary = {
+            "count": len(rows),
+            "estimated_count": sum(1 for row in rows if bool(row.get("estimated", 0))),
+            "total_prompt_tokens": sum(int(row.get("prompt_tokens", 0) or 0) for row in rows),
+            "total_completion_tokens": sum(int(row.get("completion_tokens", 0) or 0) for row in rows),
+            "total_tokens": sum(int(row.get("total_tokens", 0) or 0) for row in rows),
+            "by_lane": {},
+            "by_provider": {},
+        }
+        for row in rows:
+            lane_name = str(row.get("lane", "") or "").strip() or "<unknown>"
+            provider_name = str(row.get("provider", "") or "").strip() or "<unknown>"
+            summary["by_lane"][lane_name] = summary["by_lane"].get(lane_name, 0) + int(row.get("total_tokens", 0) or 0)
+            summary["by_provider"][provider_name] = summary["by_provider"].get(provider_name, 0) + int(row.get("total_tokens", 0) or 0)
+        return {"summary": summary, "items": rows}
+
+    def accept_processor_fabric(self) -> dict[str, Any]:
+        required_docs = [
+            self.config.runtime.repo_root / "HOLO_HANDOFF.md",
+            self.config.runtime.repo_root / "docs" / "HOLO_ARCHITECTURE_MAP.md",
+            self.config.runtime.repo_root / "docs" / "WHEEL_CATALOG.md",
+            self.config.runtime.repo_root / "docs" / "PROCESSOR_ROUTING_AND_COST_POLICY.md",
+            self.config.runtime.repo_root / "docs" / "PROVIDER_COMPATIBILITY_CONTRACT.md",
+            self.config.runtime.repo_root / "docs" / "HANDOFF_CHECKLIST.md",
+        ]
+        routing = self.runner.routing_table()
+        provider_status = self.runner.provider_status()
+        usage_payload = self.usage_ledger(limit=25)
+        checks = [
+            {"name": "handoff_docs_present", "ok": all(path.exists() for path in required_docs), "detail": [str(path) for path in required_docs]},
+            {"name": "required_lanes_present", "ok": all(name in provider_status.get("lanes", {}) for name in ("kernel_xhigh", "subject_main", "micro_fast")), "detail": provider_status.get("lanes", {})},
+            {"name": "required_tasks_routed", "ok": all(name in routing for name in ("reply", "recall_reconstruct", "initiative_probe", "deep_simulation")), "detail": routing},
+            {"name": "usage_ledger_available", "ok": isinstance(usage_payload.get("items", []), list), "detail": usage_payload.get("summary", {})},
+            {"name": "provider_contract_visible", "ok": all(name in provider_status.get("providers", {}) for name in ("codex_cli", "responses", "openai_compatible")), "detail": provider_status.get("providers", {})},
+        ]
+        status = "pass" if all(bool(item["ok"]) for item in checks) else "fail"
+        return {
+            "status": status,
+            "checks": checks,
+            "routing": routing,
+            "provider_status": provider_status,
+            "usage_ledger": usage_payload,
+        }
 
     def visual_memory(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
@@ -3375,6 +3439,22 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/vector-health":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.vector_health())
                     return
+                if parsed.path == "/processor-routing":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.processor_routing())
+                    return
+                if parsed.path == "/provider-status":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.provider_status())
+                    return
+                if parsed.path == "/usage-ledger":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.usage_ledger(
+                        limit=int(params.get("limit", ["50"])[0]),
+                        task_type=params.get("task_type", [None])[0],
+                        lane=params.get("lane", [None])[0],
+                        provider=params.get("provider", [None])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/brain-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.brain_status())
                     return
@@ -3791,6 +3871,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             warmup=int(payload.get("warmup", 1) or 1),
                         ),
                     )
+                    return
+                if parsed.path == "/accept-processor-fabric":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.accept_processor_fabric())
                     return
             except ValueError as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(exc)})
