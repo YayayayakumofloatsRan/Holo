@@ -1,11 +1,12 @@
 $ErrorActionPreference = 'Stop'
 
-if ($env:HOLO_WSL_DISTRO) {
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'holo-wsl-common.ps1')
+
+if (-not (Test-HoloForceWindows) -and (Test-HoloWslReady -WindowsRepoRoot $root)) {
   & (Join-Path $PSScriptRoot 'holo-wsl-start-all.ps1')
   return
 }
-
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $configPath = if ($env:HOLO_HOST_CONFIG) { $env:HOLO_HOST_CONFIG } else { Join-Path $root '.holo_host.toml' }
 
 & (Join-Path $PSScriptRoot 'holo-online.ps1')

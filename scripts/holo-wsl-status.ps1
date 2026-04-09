@@ -1,33 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-
-function Convert-WindowsPathToWsl([string]$Path) {
-  if (-not $Path) {
-    return ''
-  }
-  if ($Path -match '^[A-Za-z]:\\') {
-    $full = [System.IO.Path]::GetFullPath($Path)
-    $drive = $full.Substring(0, 1).ToLowerInvariant()
-    $tail = $full.Substring(2).TrimStart('\').Replace('\', '/')
-    if (-not $tail) {
-      return "/mnt/$drive"
-    }
-    return "/mnt/$drive/$tail"
-  }
-  return $Path.Replace('\', '/')
-}
-
-function Get-HoloWslSettings {
-  $distro = if ($env:HOLO_WSL_DISTRO) { $env:HOLO_WSL_DISTRO } else { 'Ubuntu' }
-  $repo = if ($env:HOLO_WSL_REPO) { $env:HOLO_WSL_REPO } else { Convert-WindowsPathToWsl $root }
-  $distro = [string]$distro
-  $repo = [string]$repo
-  return [pscustomobject]@{
-    Distro = $distro.Trim()
-    Repo = $repo.Trim()
-  }
-}
+. (Join-Path $PSScriptRoot 'holo-wsl-common.ps1')
 
 function Invoke-HoloWsl([string]$Distro, [string]$Repo, [string]$Command) {
   & wsl.exe -d $Distro --cd $Repo -- bash -lc $Command
@@ -36,6 +10,6 @@ function Invoke-HoloWsl([string]$Distro, [string]$Repo, [string]$Command) {
   }
 }
 
-$settings = Get-HoloWslSettings
+$settings = Get-HoloWslSettings -WindowsRepoRoot $root
 Write-Output "checking Holo kernel in WSL distro '$($settings.Distro)' at $($settings.Repo)"
 Invoke-HoloWsl -Distro $settings.Distro -Repo $settings.Repo -Command "sed -i 's/\r$//' ./scripts/holo-status.sh && bash ./scripts/holo-status.sh"

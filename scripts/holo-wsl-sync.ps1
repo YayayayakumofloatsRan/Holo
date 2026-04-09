@@ -8,56 +8,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'holo-wsl-common.ps1')
 
-function Convert-WindowsPathToWsl([string]$Path) {
-  if (-not $Path) {
-    return ''
-  }
-  if ($Path -match '^[A-Za-z]:\\') {
-    $full = [System.IO.Path]::GetFullPath($Path)
-    $drive = $full.Substring(0, 1).ToLowerInvariant()
-    $tail = $full.Substring(2).TrimStart('\').Replace('\', '/')
-    if (-not $tail) {
-      return "/mnt/$drive"
-    }
-    return "/mnt/$drive/$tail"
-  }
-  return $Path.Replace('\', '/')
-}
-
-function Get-HoloWslSettings {
-  $distro = if ($Distro) {
-    $Distro
-  } elseif ($env:HOLO_WSL_DISTRO) {
-    $env:HOLO_WSL_DISTRO
-  } else {
-    'Ubuntu'
-  }
-  $repo = if ($DestinationRepo) {
-    $DestinationRepo
-  } elseif ($env:HOLO_WSL_REPO) {
-    $env:HOLO_WSL_REPO
-  } else {
-    ''
-  }
-  $distro = [string]$distro
-  $repo = [string]$repo
-  return [pscustomobject]@{
-    Distro = $distro.Trim()
-    Repo = $repo.Trim()
-  }
-}
-
-$settings = Get-HoloWslSettings
-$sourceRepo = Convert-WindowsPathToWsl $root
-
-if (-not $settings.Repo) {
-  throw 'HOLO_WSL_REPO is not set. Point it at the Linux-side repo, for example /home/holo/holo.'
-}
-
-if ($settings.Repo -eq $sourceRepo) {
-  throw "HOLO_WSL_REPO points back at the Windows mount ($sourceRepo). Set it to the Linux-side repo path instead."
-}
+$settings = Get-HoloWslSettings -Distro $Distro -Repo $DestinationRepo -WindowsRepoRoot $root
+$sourceRepo = [string]$settings.SourceRepo
 
 $deleteFlag = if ($SkipDelete) { '' } else { '--delete' }
 $dryRunFlag = if ($DryRun) { '--dry-run -v' } else { '' }
@@ -66,6 +20,7 @@ $excludeFlags = @(
   "--exclude='.holo_runtime/'",
   "--exclude='.tmp-tests/'",
   "--exclude='.tmp-smoke/'",
+  "--exclude='.pytest_cache/'",
   "--exclude='__pycache__/'",
   "--exclude='.vendor/'",
   "--exclude='.holo_host.toml'",
@@ -101,9 +56,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output 'memory merge complete'
 
+$memoryMirrorFlag = if ($DryRun) { '--dry-run -v' } else { '' }
 $memoryMirrorCommand = @(
   "mkdir -p `"$sourceRepo/holo_memory_library/memories`"",
-  "rsync -a `"$($settings.Repo)/holo_memory_library/memories/working_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/memory_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/candidate_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/conversation_archive.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/emotion_trace.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/callback_candidates.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/thought_stream.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/initiative_candidates.jsonl`" `"$sourceRepo/holo_memory_library/memories/`""
+  "rsync -a $memoryMirrorFlag `"$($settings.Repo)/holo_memory_library/memories/working_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/memory_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/candidate_store.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/conversation_archive.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/emotion_trace.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/callback_candidates.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/thought_stream.jsonl`" `"$($settings.Repo)/holo_memory_library/memories/initiative_candidates.jsonl`" `"$sourceRepo/holo_memory_library/memories/`""
 ) -join '; '
 
 Write-Output "mirroring merged memory back to Windows repo at $root"

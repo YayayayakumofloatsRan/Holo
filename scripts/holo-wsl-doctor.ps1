@@ -6,8 +6,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'holo-wsl-common.ps1')
+
 if (-not $Distro) {
-  $Distro = if ($env:HOLO_WSL_DISTRO) { $env:HOLO_WSL_DISTRO } else { 'Ubuntu' }
+  $Distro = Get-HoloPreferredWslDistro
+  if (-not $Distro) {
+    $Distro = $SuggestedName
+  }
 }
 
 Write-Output "WSL distro: $Distro"
@@ -47,4 +52,4 @@ Write-Output ("wsl.exe --install Ubuntu --name {0} --location {1}" -f $Suggested
 Write-Output ''
 Write-Output 'recommended_env_for_holo:'
 Write-Output ('$env:HOLO_WSL_DISTRO=''' + $SuggestedName + '''')
-Write-Output ('$env:HOLO_WSL_REPO=''~/holo''')
+Write-Output ('$env:HOLO_WSL_REPO=''/home/holo/holo''')

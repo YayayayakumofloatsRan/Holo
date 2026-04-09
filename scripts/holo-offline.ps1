@@ -1,11 +1,12 @@
 $ErrorActionPreference = 'Stop'
 
-if ($env:HOLO_WSL_DISTRO) {
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'holo-wsl-common.ps1')
+
+if (-not (Test-HoloForceWindows) -and (Test-HoloWslReady -WindowsRepoRoot $root)) {
   & (Join-Path $PSScriptRoot 'holo-wsl-offline.ps1')
   return
 }
-
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $runDir = Join-Path $root '.holo_runtime\run'
 
 function Stop-Pidfile([string]$Name) {

@@ -26,13 +26,13 @@ That is both the original intended shape of this repo and the faster one in prac
 3. Put the repo inside the Linux filesystem in that distro for best Codex performance.
 4. In the Windows shell that will launch Holo, set:
    - `$env:HOLO_WSL_DISTRO='HoloUbuntu'`
-   - `$env:HOLO_WSL_REPO='~/holo'`
+   - `$env:HOLO_WSL_REPO='/home/holo/holo'`
 5. Sync the repo-local Codex hooks so they point at the current path:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\sync-codex-hooks.ps1`
 6. Start host + WeChat watcher together:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\holo-start-all.ps1`
 
-With `HOLO_WSL_DISTRO` set, the existing PowerShell entrypoints automatically route to WSL:
+The existing PowerShell entrypoints now auto-prefer the live WSL kernel whenever they can resolve a Linux-side repo:
 
 - `scripts/holo-online.ps1`
 - `scripts/holo-offline.ps1`
@@ -55,6 +55,8 @@ Dedicated WSL bridge commands also exist:
 `scripts/holo-wsl-online.ps1` now runs `scripts/holo-wsl-sync.ps1` first, so the Linux-side runtime picks up the latest core code before it starts.
 The rsync step excludes runtime and host-local state such as `.holo_runtime/`, `.holo_host.toml`, `.codex/hooks.json`, `.vendor/`, and `holo_memory_library/memories/*.jsonl`.
 Immediately after that, `scripts/holo-wsl-sync.ps1` merges the Windows-side JSONL memory streams into the live WSL repo and mirrors the merged result back to the Windows checkout, which keeps archive and recall state from silently diverging across the two checkouts.
+They prefer `HoloUbuntu` first and resolve the runtime repo from `/home/holo/holo`, so a missing `HOLO_WSL_DISTRO` export no longer silently falls back to the Windows mount copy.
+Set `HOLO_FORCE_WINDOWS=1` only when you intentionally want the Windows-native emergency fallback.
 
 ## Windows-Native Bringup
 If you need to run directly from Windows anyway:

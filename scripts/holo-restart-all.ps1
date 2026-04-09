@@ -1,6 +1,9 @@
 $ErrorActionPreference = 'Stop'
 
-if ($env:HOLO_WSL_DISTRO) {
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'holo-wsl-common.ps1')
+
+if (-not (Test-HoloForceWindows) -and (Test-HoloWslReady -WindowsRepoRoot $root)) {
   & (Join-Path $PSScriptRoot 'holo-wsl-restart-all.ps1')
   return
 }

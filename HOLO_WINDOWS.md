@@ -97,7 +97,7 @@ The WSL reply API can now also actively pull older WeChat history on demand befo
 3. Inside that new distro, place the repo in the Linux filesystem for best Codex performance.
 4. On Windows, set:
    - `$env:HOLO_WSL_DISTRO='HoloUbuntu'`
-   - `$env:HOLO_WSL_REPO='~/holo'`
+   - `$env:HOLO_WSL_REPO='/home/holo/holo'`
 5. Sync repo-local Codex hooks after a path move:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\sync-codex-hooks.ps1`
 6. Start host plus WeChat watcher:
@@ -123,7 +123,9 @@ If you want to push code over without restarting the host, run:
 ## Notes
 
 - `python` must exist on `PATH`.
-- If `HOLO_WSL_DISTRO` is set, the Windows PowerShell launchers now route to the WSL scripts automatically.
+- The Windows PowerShell launchers now prefer the live WSL kernel automatically when they can resolve a Linux-side repo.
+- They prefer `HoloUbuntu` first and resolve the runtime repo from `/home/holo/holo` before considering any fallback.
+- Set `HOLO_FORCE_WINDOWS=1` only when you intentionally want the Windows-native emergency lane.
 - `wsl.exe --help` on this machine supports both `--install --location` and `--manage <Distro> --move <Location>`, so future distro placement does not need to live on the system drive.
 - The currently registered broken distro on this machine points at `F:\WSL\Ubuntu`, which matches the external-SSD failure mode that broke the old runtime.
 - `holo-online.ps1` still supports native Windows host mode with `pythonw` plus log redirection when WSL is unavailable.
