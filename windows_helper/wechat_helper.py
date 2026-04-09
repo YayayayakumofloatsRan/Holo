@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from queue import Empty
 from typing import Any
 from urllib import error, parse, request
@@ -130,11 +130,12 @@ class HelperConfig:
 
 def _to_path(value: str | None, fallback: Path) -> Path:
     raw = value or str(fallback)
-    if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", raw):
+    normalized = raw.replace("\\", "/")
+    if re.match(r"^[A-Za-z]:[\\/]", raw) and re.match(r"^[A-Za-z]:/wechat-helper(?:/|$)", normalized, re.IGNORECASE):
         drive = raw[0].lower()
         tail = raw[2:].lstrip("\\/")
         normalized_tail = tail.replace("\\", "/")
-        return Path("/mnt") / drive / normalized_tail
+        return PurePosixPath("/mnt") / drive / normalized_tail
     return Path(raw)
 
 
@@ -144,7 +145,7 @@ def _default_config_candidates() -> list[Path]:
     if env_path:
         candidates.append(Path(env_path).expanduser())
     for raw in ("C:/wechat-helper/wechat_helper.live.json", "C:/wechat-helper/wechat_helper.json"):
-        candidates.append(_to_path(raw, Path(raw)))
+        candidates.append(Path(raw))
     repo_root = Path(__file__).resolve().parent
     candidates.append(repo_root / "wechat_helper.live.json")
     candidates.append(repo_root / "wechat_helper.example.json")
@@ -522,7 +523,7 @@ def write_transport_state(
     }
     if extra:
         payload.update(extra)
-    atomic_write_text(config.transport_state_file, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    atomic_write_text(Path(config.transport_state_file), json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return payload
 
 
@@ -2143,14 +2144,14 @@ def render_history_markdown(chat_name: str, rows: list[dict[str, Any]]) -> str:
 
 
 def history_export_path(config: HelperConfig, chat_name: str) -> Path:
-    export_dir = config.receipt_dir / "history_exports"
+    export_dir = Path(config.receipt_dir) / "history_exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     return export_dir / f"{current_stamp()}_{safe_stem(chat_name)}_history.md"
 
 
 def export_history_markdown(config: HelperConfig, chat_name: str, rows: list[dict[str, Any]]) -> Path:
     digest = history_payload_digest(chat_name, rows)
-    export_dir = config.receipt_dir / "history_exports"
+    export_dir = Path(config.receipt_dir) / "history_exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     path = export_dir / f"{current_stamp()}_{safe_stem(chat_name)}_{digest}_history.md"
     atomic_write_text(path, render_history_markdown(chat_name, rows))
@@ -2325,7 +2326,7 @@ def passive_pyweixin_turns(
                 loaded,
                 chat_name=label,
                 unread_count=1,
-                capture_dir=str(capture_root / safe_stem(label)),
+                capture_dir=str(Path(capture_root) / safe_stem(label)),
             )
         except Exception:  # noqa: BLE001
             continue
@@ -2403,7 +2404,8 @@ def latest_pyweixin_dialog_turn(
 
 
 def queue_send_task(config: HelperConfig, *, chat_name: str, text: str, search: str | None = None, task_id: str = "") -> dict[str, Any]:
-    config.send_queue_dir.mkdir(parents=True, exist_ok=True)
+    send_queue_dir = Path(config.send_queue_dir)
+    send_queue_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "task_id": task_id or hashlib.sha1(f"{chat_name}\n{text}\n{time.time()}".encode("utf-8")).hexdigest()[:16],
         "chat_name": chat_name,
@@ -2412,13 +2414,13 @@ def queue_send_task(config: HelperConfig, *, chat_name: str, text: str, search: 
         "created_at": int(time.time()),
         "process_path": config.pywinauto_process_path,
     }
-    path = config.send_queue_dir / f"{payload['task_id']}.json"
+    path = send_queue_dir / f"{payload['task_id']}.json"
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return {"queued": True, "task": payload, "path": str(path)}
 
 
 def live_capture_dir(config: HelperConfig, chat_name: str) -> Path:
-    path = config.receipt_dir / "live_captures" / safe_stem(chat_name)
+    path = Path(config.receipt_dir) / "live_captures" / safe_stem(chat_name)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -2453,7 +2455,7 @@ def maybe_ingest_turn_artifact(
 
 
 def is_paused(config: HelperConfig) -> bool:
-    return config.pause_file.exists()
+    return Path(config.pause_file).exists()
 
 
 def whitelisted(config: HelperConfig, turn: ChatTurn) -> bool:
@@ -2865,7 +2867,7 @@ def command_watch_pyweixin(config_path: str | None, *, once: bool = False, max_m
                     passive = passive_pyweixin_turns(
                         loaded,
                         chat_names=list(config.whitelist),
-                        capture_root=config.receipt_dir / "live_captures",
+                        capture_root=Path(config.receipt_dir) / "live_captures",
                     )
                 except Exception as exc:  # noqa: BLE001
                     print_json(
@@ -3537,7 +3539,7 @@ def command_ingest_pyweixin_history(
     loaded = import_pyweixin(config.pyweixin_repo_path)
     resolved_capture_dir = capture_dir
     if include_captures and not resolved_capture_dir:
-        resolved_capture_dir = str((config.receipt_dir / "history_captures" / safe_stem(chat_name)).resolve())
+        resolved_capture_dir = str((Path(config.receipt_dir) / "history_captures" / safe_stem(chat_name)).resolve())
 
     rows: list[dict[str, Any]] = []
     if include_visible:

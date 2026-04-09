@@ -1005,13 +1005,26 @@ def read_text_if_exists(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _normalized_absolute_path(path: Path) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(str(path))))
+
+
 def repo_relative_path(path: Path) -> str:
-    return str(path.resolve().relative_to(REPO_ROOT))
+    target = Path(path)
+    repo_root = Path(REPO_ROOT)
+    target_abs = _normalized_absolute_path(target)
+    repo_abs = _normalized_absolute_path(repo_root)
+    common = os.path.commonpath([repo_abs, target_abs])
+    if common == repo_abs:
+        return os.path.relpath(target_abs, repo_abs).replace("\\", "/")
+    return str(target.resolve().relative_to(repo_root.resolve())).replace("\\", "/")
 
 
 def safe_repo_path(relative_path: str) -> Path:
     target = (REPO_ROOT / relative_path).resolve()
-    if REPO_ROOT not in target.parents and target != REPO_ROOT:
+    target_abs = _normalized_absolute_path(target)
+    repo_abs = _normalized_absolute_path(Path(REPO_ROOT))
+    if os.path.commonpath([repo_abs, target_abs]) != repo_abs:
         raise ValueError(f"Snapshot path escapes repo root: {relative_path}")
     return target
 
@@ -6582,9 +6595,28 @@ def backfill_archive_result(
         inbound = inbound_bucket.pop(0)
         inbound_payload = safe_json_loads_dict(str(inbound["payload_json"] or "{}"))
         outbound_payload = safe_json_loads_dict(str(row["payload_json"] or "{}"))
+        inbound_metadata = safe_json_metadata(inbound_payload.get("metadata", {}))
+        outbound_metadata = safe_json_metadata(outbound_payload.get("metadata", {}))
+        canonical_thread_key = str(row["thread_key"] or "").strip()
+        source_thread_key = (
+            str(inbound_metadata.get("thread_key", "") or "").strip()
+            or str(outbound_metadata.get("thread_key", "") or "").strip()
+        )
+        if not source_thread_key:
+            channel = str(row["thread_channel"] or row["channel"] or "").strip().lower()
+            sender_email = str(inbound["sender_email"] or "").strip()
+            recipient_email = str(row["recipient_email"] or "").strip()
+            if channel == "wechat":
+                if sender_email.startswith("wechat:"):
+                    source_thread_key = sender_email
+                elif recipient_email.startswith("wechat:"):
+                    source_thread_key = recipient_email
+        if not source_thread_key:
+            source_thread_key = canonical_thread_key
         metadata = {
             "channel": str(row["thread_channel"] or row["channel"] or ""),
-            "thread_key": str(row["thread_key"] or ""),
+            "thread_key": source_thread_key,
+            "canonical_thread_key": canonical_thread_key,
             "message_id": str(inbound["message_id"] or ""),
             "outbound_message_id": str(row["message_id"] or ""),
             "sender": str(inbound["sender_name"] or inbound["sender_email"] or ""),

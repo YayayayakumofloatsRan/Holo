@@ -31,6 +31,12 @@ class QueueStore:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001
+            return
+
     @_synchronized
     def close(self) -> None:
         self.conn.close()

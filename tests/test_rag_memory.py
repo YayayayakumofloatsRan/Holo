@@ -1018,39 +1018,42 @@ class RagMemoryTests(unittest.TestCase):
             db_path = env.repo_root / ".holo_runtime" / "holo_host.sqlite3"
             store = QueueStore(db_path)
             store.initialize()
-            inbound_record = store.record_inbound(
-                IncomingMessage(
-                    message_id="msg-1",
-                    thread_key="wechat:Nemoqi",
-                    subject="Nemoqi",
-                    sender_email="wechat:Nemoqi",
-                    sender_name="Nemoqi",
-                    body_text="我只是想找个陪伴的。",
-                    channel="wechat",
-                    source_ref="unit-test",
+            try:
+                inbound_record = store.record_inbound(
+                    IncomingMessage(
+                        message_id="msg-1",
+                        thread_key="wechat:Nemoqi",
+                        subject="Nemoqi",
+                        sender_email="wechat:Nemoqi",
+                        sender_name="Nemoqi",
+                        body_text="我只是想找个陪伴的。",
+                        channel="wechat",
+                        source_ref="unit-test",
+                    )
                 )
-            )
-            store.record_outbound(
-                thread_id=int(inbound_record["thread"]["id"]),
-                contact_id=int(inbound_record["contact"]["id"]),
-                remote_message_id="msg-2",
-                outgoing=OutgoingMessage(
-                    recipient_email="wechat:Nemoqi",
-                    recipient_name="Nemoqi",
-                    subject="Nemoqi",
-                    body_text="咱会陪着你。",
-                    thread_key="wechat:Nemoqi",
-                    channel="wechat",
-                ),
-            )
+                store.record_outbound(
+                    thread_id=int(inbound_record["thread"]["id"]),
+                    contact_id=int(inbound_record["contact"]["id"]),
+                    remote_message_id="msg-2",
+                    outgoing=OutgoingMessage(
+                        recipient_email="wechat:Nemoqi",
+                        recipient_name="Nemoqi",
+                        subject="Nemoqi",
+                        body_text="咱会陪着你。",
+                        thread_key="wechat:Nemoqi",
+                        channel="wechat",
+                    ),
+                )
 
-            report = rm.backfill_archive_result(db_path=str(db_path))
-            archive_rows = rm.load_archive()
-            self.assertEqual(report["archive_added"], 1)
-            self.assertEqual(len(archive_rows), 1)
-            self.assertEqual(archive_rows[0]["metadata"]["thread_key"], "wechat:Nemoqi")
-            self.assertEqual(archive_rows[0]["user_text"], "我只是想找个陪伴的。")
-            self.assertEqual(archive_rows[0]["reply_text"], "咱会陪着你。")
+                report = rm.backfill_archive_result(db_path=str(db_path))
+                archive_rows = rm.load_archive()
+                self.assertEqual(report["archive_added"], 1)
+                self.assertEqual(len(archive_rows), 1)
+                self.assertEqual(archive_rows[0]["metadata"]["thread_key"], "wechat:Nemoqi")
+                self.assertEqual(archive_rows[0]["user_text"], "我只是想找个陪伴的。")
+                self.assertEqual(archive_rows[0]["reply_text"], "咱会陪着你。")
+            finally:
+                store.close()
 
     def test_dream_cycle_creates_candidates_and_callbacks(self) -> None:
         with TempMemoryRepo():
