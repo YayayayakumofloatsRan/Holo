@@ -12,11 +12,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 7. `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
 8. `docs/STAGE9_INTELLIGENCE_AND_CODEX_COST.md`
 9. `docs/ENGINEERING_HANDOFF_STAGE9.md`
-10. `HOLO_SYSTEM.md`
-11. `HOLO_HOST.md`
-12. `OPERATIONS.md`
-13. `holo_memory_library/MEMORY_LIBRARY.md`
-14. `windows_helper/README.md`
+10. `docs/STAGE10_ENGINEERING_AWARENESS_AND_CODEX_COST.md`
+11. `docs/ENGINEERING_HANDOFF_STAGE10.md`
+12. `HOLO_SYSTEM.md`
+13. `HOLO_HOST.md`
+14. `OPERATIONS.md`
+15. `holo_memory_library/MEMORY_LIBRARY.md`
+16. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -33,6 +35,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - transports are eyes and hands
 - The current milestone tag is `stage9-adaptive-initiative-gate`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
+- Next stage focus is `stage10-engineering-awareness`, which should improve diagnosis, cost discipline, and delta-gated repair without adding a second brain layer.
 
 ## Source Of Truth
 - Persona and prompt bones:

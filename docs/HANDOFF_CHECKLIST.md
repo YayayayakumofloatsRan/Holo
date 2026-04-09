@@ -13,6 +13,10 @@ Use this checklist when a new thread takes over Holo work.
 7. current stage handoff doc
 8. current stage cost/intelligence doc
 
+If Stage-10 is the active work item, read:
+- `docs/ENGINEERING_HANDOFF_STAGE10.md`
+- `docs/STAGE10_ENGINEERING_AWARENESS_AND_CODEX_COST.md`
+
 ## 2. Baseline Commands
 
 - `./scripts/holo-status.sh`
