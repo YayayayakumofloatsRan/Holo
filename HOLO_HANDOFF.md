@@ -5,13 +5,15 @@ This is the one-page entry for a new thread that needs to continue Holo work wit
 ## Read This First
 1. `HOLO_HANDOFF.md`
 2. `docs/ENGINEERING_HANDOFF_STAGE8.md`
-3. `HOLO_SYSTEM.md`
-4. `HOLO_DEVELOPMENT.md`
-5. `docs/ENGINEERING_HANDOFF_STAGE9.md`
-6. `HOLO_HOST.md`
-7. `OPERATIONS.md`
-8. `holo_memory_library/MEMORY_LIBRARY.md`
-9. `windows_helper/README.md`
+3. `docs/ENGINEERING_HANDOFF_STAGE9.md`
+4. `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
+5. `docs/STAGE9_INTELLIGENCE_AND_CODEX_COST.md`
+6. `HOLO_SYSTEM.md`
+7. `HOLO_DEVELOPMENT.md`
+8. `HOLO_HOST.md`
+9. `OPERATIONS.md`
+10. `holo_memory_library/MEMORY_LIBRARY.md`
+11. `windows_helper/README.md`
 
 ## What Holo Is
 - Holo is not one long Codex conversation.
@@ -105,9 +107,9 @@ These files change while Holo is alive. Do not treat them like static docs.
 - WSL runtime logs:
   - `.holo_runtime/logs/`
 - Windows watcher log:
-  - `C:\\wechat-helper\\receipts\\pyweixin_watcher.log`
+  - `.holo_runtime/wechat-helper/receipts/pyweixin_watcher.log`
 - Transport heartbeat:
-  - `C:\\wechat-helper\\transport_state.live.json`
+  - `.holo_runtime/wechat-helper/transport_state.live.json`
 - Runtime message store:
   - `.holo_runtime/holo_host.sqlite3`
 - Mind Graph:
@@ -124,6 +126,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - proactive initiative exists but is often blocked by `initiative_probe_blocked`
 - retrieval and expression control still feel more engineered than natural
 - main-brain override and initiative gate calibration can create false negatives under cold `initiative_window` states
+- token usage is still not metered per task or per loop
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -140,6 +143,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 
 ## Invariants
 - Do not silently change online transport modes
+- Do not touch the watcher path without reading `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
 - Do not let internal prompts, hook control text, or rewrite reasons enter durable memory
 - Do not let archive be the only place history lives, but also do not let runtime threads become the only continuity
 - Do not depend on one Codex thread to keep Holo alive

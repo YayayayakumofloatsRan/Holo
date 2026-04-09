@@ -2,6 +2,10 @@
 
 This is the thin Windows-side shell for the Holo host.
 
+Before touching the live watcher path, read:
+
+- `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
+
 The rule is simple:
 - Windows does eyes and hands
 - the Holo host does memory, Codex, and reply generation
