@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 import holo_memory_library.rag_memory as rm
-from holo_host.brain_ops import filter_self_revision_patch
+from holo_host.brain_ops import effective_initiative_cooldown_hours, filter_self_revision_patch
 from holo_host.cli import _evaluate_stage2_acceptance
 from holo_host.mind_graph import MindGraph
 from tests.test_rag_memory import TempMemoryRepo
@@ -92,6 +92,26 @@ class Stage2BrainTests(unittest.TestCase):
             }
         )
         self.assertEqual(set(filtered), {"persona_blend", "prompt_composer_bias"})
+
+    def test_initiative_cooldown_accepts_stage11_state_objects(self) -> None:
+        class Autonomy:
+            initiative_cooldown_hours = 48
+
+        class Config:
+            autonomy = Autonomy()
+
+        cooldown = effective_initiative_cooldown_hours(
+            config=Config(),
+            game_state={
+                "trust_score": {"value": 0.74, "confidence": 0.8},
+                "initiative_window": {"value": 0.7, "confidence": 0.7},
+                "teasing_tolerance": {"value": 0.62, "confidence": 0.6},
+                "pressure_level": {"value": 0.2, "confidence": 0.7},
+            },
+            mode="companion",
+        )
+        self.assertGreaterEqual(cooldown, 2)
+        self.assertLessEqual(cooldown, 48)
 
     def test_mind_graph_brain_mode_revision_and_game_state_round_trip(self) -> None:
         with TempMemoryRepo() as temp:

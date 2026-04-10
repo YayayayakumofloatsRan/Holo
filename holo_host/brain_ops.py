@@ -233,11 +233,25 @@ def run_self_revision(
 
 
 def _initiative_unit(value: Any, *, default: float = 0.0) -> float:
+    value = _state_value(value, default=default)
     try:
         numeric = float(value if value is not None else default)
     except (TypeError, ValueError):
         numeric = float(default)
     return max(0.0, min(1.0, numeric))
+
+
+def _state_value(value: Any, *, default: Any = 0.0) -> Any:
+    if isinstance(value, dict) and "value" in value:
+        return value.get("value", default)
+    return value if value is not None else default
+
+
+def _state_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(_state_value(value, default=default) or default)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _initiative_gate_mode(config) -> str:
@@ -273,7 +287,7 @@ def _initiative_soft_gate_score(*, config, game_state: dict[str, Any], drive_pre
 
 
 def _recent_negative_initiative_feedback(outcome_memory: dict[str, Any]) -> bool:
-    return bool(outcome_memory.get("was_ignored")) or float(outcome_memory.get("future_initiative_bias", 0.5) or 0.5) < 0.35
+    return bool(outcome_memory.get("was_ignored")) or _state_float(outcome_memory.get("future_initiative_bias", 0.5), default=0.5) < 0.35
 
 
 def effective_initiative_cooldown_hours(
@@ -296,10 +310,10 @@ def effective_initiative_cooldown_hours(
         multiplier *= 1.15
     elif normalized_mode == "silent":
         multiplier *= 1.35
-    trust_score = float(state.get("trust_score", 0.0) or 0.0)
-    initiative_window = float(state.get("initiative_window", 0.0) or 0.0)
-    teasing_tolerance = float(state.get("teasing_tolerance", 0.0) or 0.0)
-    pressure_level = float(state.get("pressure_level", 0.0) or 0.0)
+    trust_score = _state_float(state.get("trust_score", 0.0))
+    initiative_window = _state_float(state.get("initiative_window", 0.0))
+    teasing_tolerance = _state_float(state.get("teasing_tolerance", 0.0))
+    pressure_level = _state_float(state.get("pressure_level", 0.0))
     if trust_score >= 0.72:
         multiplier *= 0.7
     if initiative_window >= 0.62:
@@ -367,18 +381,18 @@ def initiative_probe(
         channel=channel,
     )
     drive_pressure = (
-        float(drive_state.get("seek_contact", 0.0) or 0.0) * 0.34
-        + float(drive_state.get("seek_play", 0.0) or 0.0) * 0.16
-        + float(drive_state.get("seek_continuity", 0.0) or 0.0) * 0.2
-        + float(affect_state.get("attachment_pull", 0.0) or 0.0) * 0.12
-        + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.08
-        - float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.2
-        - float(conflict_state.get("contact_vs_risk", 0.0) or 0.0) * 0.06
+        _state_float(drive_state.get("seek_contact", 0.0)) * 0.34
+        + _state_float(drive_state.get("seek_play", 0.0)) * 0.16
+        + _state_float(drive_state.get("seek_continuity", 0.0)) * 0.2
+        + _state_float(affect_state.get("attachment_pull", 0.0)) * 0.12
+        + _state_float(value_state.get("relational_priority", 0.0)) * 0.08
+        - _state_float(drive_state.get("avoid_risk", 0.0)) * 0.2
+        - _state_float(conflict_state.get("contact_vs_risk", 0.0)) * 0.06
     )
     game_ok = (
-        float(game_state.get("trust_score", 0.0) or 0.0) >= 0.42
-        and float(game_state.get("initiative_window", 0.0) or 0.0) >= 0.36
-        and float(game_state.get("pressure_level", 0.0) or 0.0) <= 0.78
+        _state_float(game_state.get("trust_score", 0.0)) >= 0.42
+        and _state_float(game_state.get("initiative_window", 0.0)) >= 0.36
+        and _state_float(game_state.get("pressure_level", 0.0)) <= 0.78
     )
     drive_ok = float(drive_pressure or 0.0) >= 0.34
     soft_gate_score, soft_gate_components = _initiative_soft_gate_score(
@@ -454,18 +468,18 @@ def initiative_probe(
         "relationship_state": relationship,
         "outcome_memory": outcome_memory,
         "game_rationale": {
-            "trust_score": float(game_state.get("trust_score", 0.0) or 0.0),
-            "teasing_tolerance": float(game_state.get("teasing_tolerance", 0.0) or 0.0),
-            "initiative_window": float(game_state.get("initiative_window", 0.0) or 0.0),
-            "pressure_level": float(game_state.get("pressure_level", 0.0) or 0.0),
+            "trust_score": _state_float(game_state.get("trust_score", 0.0)),
+            "teasing_tolerance": _state_float(game_state.get("teasing_tolerance", 0.0)),
+            "initiative_window": _state_float(game_state.get("initiative_window", 0.0)),
+            "pressure_level": _state_float(game_state.get("pressure_level", 0.0)),
             "ok": game_ok if gate_mode == "conservative" else gate_level == "allowed",
         },
         "drive_rationale": {
             "pressure": round(float(drive_pressure or 0.0), 4),
-            "seek_contact": float(drive_state.get("seek_contact", 0.0) or 0.0),
-            "seek_continuity": float(drive_state.get("seek_continuity", 0.0) or 0.0),
-            "seek_play": float(drive_state.get("seek_play", 0.0) or 0.0),
-            "avoid_risk": float(drive_state.get("avoid_risk", 0.0) or 0.0),
+            "seek_contact": _state_float(drive_state.get("seek_contact", 0.0)),
+            "seek_continuity": _state_float(drive_state.get("seek_continuity", 0.0)),
+            "seek_play": _state_float(drive_state.get("seek_play", 0.0)),
+            "avoid_risk": _state_float(drive_state.get("avoid_risk", 0.0)),
             "ok": drive_ok if gate_mode == "conservative" else soft_gate_score >= allow_threshold,
         },
         "policy_rationale": {
