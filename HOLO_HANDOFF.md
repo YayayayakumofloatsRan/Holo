@@ -53,14 +53,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage19-bounded-background-continuity-and-attention-frontier`.
+- The current milestone tag is `stage20-temporal-commitments-and-interruption-recovery`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage19 bounded continuity: existing stream runs keep a small Mind Graph attention frontier warm so same-thread reentry can hydrate active state before heavier recall, while explicit memory/history/factual needs still escalate and action-market-first remains intact.
-- Next stage focus is the Stage18-21 continuous-subject arc:
+- Current focus is Stage20 temporal continuity: Mind Graph now persists open loops, commitments, deferred intentions, interruption markers, resume candidates, and due followup keys while `QueueStore` remains the timing surface.
+- Next stage focus is Stage21 policy sedimentation and negotiated will:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
-  - Stage20: temporal commitments and interruption recovery through queue + Mind Graph state
-  - Stage21: reversible policy sedimentation and negotiated will as action-market bias
+  - Stage20: temporal commitments and interruption recovery through queue + Mind Graph state is implemented
+  - Stage21: reversible policy sedimentation and negotiated will as action-market bias is next
 - This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
@@ -158,6 +158,10 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host show-attention-frontier --channel wechat`
   - `python3 -m holo_host trace-wake-reasons --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
   - `python3 -m holo_host show-thread-warmth --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Stage20 temporal diagnostics:
+  - `python3 -m holo_host show-open-loops --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+  - `python3 -m holo_host show-commitments --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+  - `python3 -m holo_host trace-resume-candidate --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -207,6 +211,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - Stage15 helper-module extraction is in place, but façade files are still larger than ideal and should only be slimmed further behind replay checks
 
 - Stage18 `micro_fast` routing is intentionally conservative; do not broaden it without proving explicit memory/history escalation and action-market-first still hold
+- Stage20 temporal state is intentionally bounded and inspectable; do not let it create direct sends, unbounded scheduling, or a second decision layer
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -237,8 +242,11 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host trace-wake-reasons --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-thread-warmth --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage20 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host show-open-loops --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host show-commitments --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host trace-resume-candidate --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage21 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
-- Stage20-21 commands are still target gates documented by the next handoff docs, not current runnable commands.
+- Stage21 commands are still target gates documented by the next handoff docs, not current runnable commands.
 
 ## Invariants
 - Do not silently change online transport modes

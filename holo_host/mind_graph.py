@@ -35,6 +35,13 @@ from .mind_graph_parts.state_defaults import (
     WORLD_EXPRESSION_SIGNAL_DEFAULTS as POLICY_WORLD_EXPRESSION_SIGNAL_DEFAULTS,
     WORLD_THREAD_MODEL_DEFAULTS as POLICY_WORLD_THREAD_MODEL_DEFAULTS,
 )
+from .mind_graph_parts.temporal_state import close_temporal_items as _close_temporal_items
+from .mind_graph_parts.temporal_state import show_commitments as _show_commitments
+from .mind_graph_parts.temporal_state import show_open_loops as _show_open_loops
+from .mind_graph_parts.temporal_state import temporal_state as _temporal_state
+from .mind_graph_parts.temporal_state import trace_resume_candidate as _trace_resume_candidate
+from .mind_graph_parts.temporal_state import update_temporal_item_status as _update_temporal_item_status
+from .mind_graph_parts.temporal_state import upsert_temporal_item as _upsert_temporal_item
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
 TEXT_FILE_SUFFIXES = {".txt", ".md", ".json", ".jsonl", ".yaml", ".yml", ".csv", ".log", ".html", ".xml"}
@@ -776,6 +783,32 @@ class MindGraph:
             );
             CREATE INDEX IF NOT EXISTS idx_attention_frontier_live
             ON attention_frontier(channel, stale_after, reentry_priority DESC, last_stream_touch_at DESC);
+            CREATE TABLE IF NOT EXISTS temporal_subject_state (
+                id INTEGER PRIMARY KEY,
+                type TEXT NOT NULL DEFAULT 'open_loop',
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0.0,
+                source_event_id TEXT NOT NULL DEFAULT '',
+                source_action_ref TEXT NOT NULL DEFAULT '',
+                source_action_type TEXT NOT NULL DEFAULT '',
+                due_at TEXT NOT NULL DEFAULT '',
+                revisit_after TEXT NOT NULL DEFAULT '',
+                revisit_before TEXT NOT NULL DEFAULT '',
+                resume_cue TEXT NOT NULL DEFAULT '',
+                dedupe_key TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                queue_job_id INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(channel, thread_key, dedupe_key, type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_temporal_subject_state_thread
+            ON temporal_subject_state(channel, thread_key, status, due_at, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_temporal_subject_state_due
+            ON temporal_subject_state(status, due_at, revisit_after, updated_at DESC);
             CREATE TABLE IF NOT EXISTS mind_runs (
                 id INTEGER PRIMARY KEY,
                 run_type TEXT NOT NULL,
@@ -1621,6 +1654,60 @@ class MindGraph:
                 """,
                 payload,
             )
+            lowered_text = str(text or "").strip().lower()
+            explicit_reentry = bool(
+                str(direction or "").strip() == "inbound"
+                and lowered_text
+                and any(
+                    hint in lowered_text
+                    for hint in (
+                        "we were talking",
+                        "we were discussing",
+                        "where were we",
+                        "pick up where",
+                        "back to what",
+                        "continue from",
+                        "resume that",
+                        "talking about",
+                    )
+                )
+            )
+            if explicit_reentry:
+                cue = compact_text(str(text or "").strip(), 220)
+                base_metadata = {
+                    "source": "active_thread_reentry",
+                    "evidence_refs": [f"event:{event_ref}" if event_ref else "active_thread:inbound_reentry"],
+                }
+                self.upsert_temporal_item(
+                    item_type="open_loop",
+                    channel=normalized_channel,
+                    thread_key=normalized_thread_key,
+                    chat_name=normalized_chat_name,
+                    confidence=0.7,
+                    source_event_id=event_ref,
+                    source_action_type="inbound_reentry",
+                    due_at=now,
+                    revisit_after=now,
+                    resume_cue=cue,
+                    dedupe_key=f"open_loop:{normalized_channel}:{normalized_thread_key}:{event_ref or stable_digest(cue)[:12]}",
+                    status="open",
+                    metadata=base_metadata,
+                )
+                self.upsert_temporal_item(
+                    item_type="resume_candidate",
+                    channel=normalized_channel,
+                    thread_key=normalized_thread_key,
+                    chat_name=normalized_chat_name,
+                    confidence=0.66,
+                    source_event_id=event_ref,
+                    source_action_type="inbound_reentry",
+                    due_at=now,
+                    revisit_after=now,
+                    resume_cue=cue,
+                    dedupe_key=f"resume:{normalized_channel}:{normalized_thread_key}:{event_ref or stable_digest(cue)[:12]}",
+                    status="open",
+                    metadata=base_metadata,
+                )
             self.conn.commit()
         state = self.active_thread_state(
             channel=normalized_channel,
@@ -2414,6 +2501,27 @@ class MindGraph:
     ) -> dict[str, Any]:
         return _update_goal_state(self, payload, reason=reason, source=source)
 
+    def upsert_temporal_item(self, **kwargs: Any) -> dict[str, Any]:
+        return _upsert_temporal_item(self, **kwargs)
+
+    def update_temporal_item_status(self, **kwargs: Any) -> dict[str, Any]:
+        return _update_temporal_item_status(self, **kwargs)
+
+    def close_temporal_items(self, **kwargs: Any) -> dict[str, Any]:
+        return _close_temporal_items(self, **kwargs)
+
+    def temporal_state(self, **kwargs: Any) -> dict[str, Any]:
+        return _temporal_state(self, **kwargs)
+
+    def show_open_loops(self, **kwargs: Any) -> dict[str, Any]:
+        return _show_open_loops(self, **kwargs)
+
+    def show_commitments(self, **kwargs: Any) -> dict[str, Any]:
+        return _show_commitments(self, **kwargs)
+
+    def trace_resume_candidate(self, **kwargs: Any) -> dict[str, Any]:
+        return _trace_resume_candidate(self, **kwargs)
+
     def top_thread_commitments(self, *, limit: int = 5) -> list[dict[str, Any]]:
         with self._lock:
             rows = [
@@ -2443,6 +2551,45 @@ class MindGraph:
                     "last_message_at": str(row.get("last_message_at", "")),
                 }
             )
+        seen_threads = {(str(item.get("channel", "")), str(item.get("thread_key", ""))) for item in commitments}
+        now = utc_now()
+        with self._lock:
+            temporal_rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    """
+                    SELECT channel, thread_key, chat_name, resume_cue, type, confidence, due_at, dedupe_key, updated_at
+                    FROM temporal_subject_state
+                    WHERE status IN ('open', 'scheduled', 'due')
+                      AND (due_at <> '' AND due_at <= ? OR revisit_after <> '' AND revisit_after <= ?)
+                      AND (revisit_before = '' OR revisit_before > ?)
+                    ORDER BY confidence DESC, due_at ASC, updated_at DESC
+                    LIMIT ?
+                    """,
+                    (now, now, now, max(1, int(limit))),
+                ).fetchall()
+            ]
+        for row in temporal_rows:
+            key = (str(row.get("channel", "")), str(row.get("thread_key", "")))
+            if key in seen_threads:
+                continue
+            seen_threads.add(key)
+            commitments.append(
+                {
+                    "channel": str(row.get("channel", "")),
+                    "thread_key": str(row.get("thread_key", "")),
+                    "chat_name": str(row.get("chat_name", "")),
+                    "relationship_score": round(0.18 + float(row.get("confidence", 0.0) or 0.0) * 0.22, 4),
+                    "summary": compact_text(str(row.get("resume_cue", "") or f"temporal {row.get('type', 'open_loop')} due"), 180),
+                    "recurring_motifs": ["temporal_commitment", str(row.get("type", "") or "open_loop")],
+                    "tone_tendency": "continuity_guard",
+                    "last_message_at": str(row.get("updated_at", "") or ""),
+                    "temporal_dedupe_key": str(row.get("dedupe_key", "") or ""),
+                    "temporal_due_at": str(row.get("due_at", "") or ""),
+                }
+            )
+            if len(commitments) >= max(1, int(limit)):
+                break
         return commitments
 
     def enqueue_operator_run(

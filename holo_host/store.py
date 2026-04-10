@@ -1015,6 +1015,34 @@ class QueueStore:
         return row is not None
 
     @_synchronized
+    def find_pending_job_by_dedupe_key(self, thread_id: int, *, dedupe_key: str, task_type: str | None = None) -> dict[str, Any] | None:
+        key = str(dedupe_key or "").strip()
+        if not key:
+            return None
+        clauses = ["thread_id = ?", "status IN ('pending', 'retry_wait', 'running')"]
+        args: list[Any] = [int(thread_id)]
+        if str(task_type or "").strip():
+            clauses.append("task_type = ?")
+            args.append(str(task_type).strip())
+        rows = self._fetchall(
+            f"""
+            SELECT * FROM jobs
+            WHERE {' AND '.join(clauses)}
+            ORDER BY priority DESC, available_at ASC, id ASC
+            LIMIT 32
+            """,
+            tuple(args),
+        )
+        for row in rows:
+            try:
+                payload = json.loads(str(row.get("payload_json") or "{}"))
+            except json.JSONDecodeError:
+                payload = {}
+            if str(dict(payload).get("dedupe_key", "") or "").strip() == key:
+                return row
+        return None
+
+    @_synchronized
     def schedule_due_followups(self, after_hours: int, limit: int = 10) -> list[int]:
         cutoff = (
             datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=after_hours)
@@ -1036,14 +1064,15 @@ class QueueStore:
         created: list[int] = []
         for row in rows:
             thread_id = int(row["id"])
-            if self.has_pending_proactive(thread_id):
+            dedupe_key = f"proactive_followup:{thread_id}:stale_inbound_thread:{int(after_hours)}"
+            if self.has_pending_proactive(thread_id) or self.find_pending_job_by_dedupe_key(thread_id, dedupe_key=dedupe_key, task_type="proactive_followup"):
                 continue
             job_id = self.enqueue_job(
                 task_type="proactive_followup",
                 priority=60,
                 thread_id=thread_id,
                 contact_id=int(row["contact_id"]),
-                payload={"reason": "stale_inbound_thread", "after_hours": after_hours},
+                payload={"reason": "stale_inbound_thread", "after_hours": after_hours, "dedupe_key": dedupe_key},
             )
             created.append(job_id)
         return created

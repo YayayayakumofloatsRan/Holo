@@ -294,4 +294,31 @@ def record_outcome_appraisal(
     if any(str(item.get("goal_type", "") or "") == "relationship_continuity" and str(item.get("target_thread", "") or "") == normalized_thread_key for item in current_goal.get("active_goals", [])):
         goal_progress[f"relationship_continuity:{normalized_thread_key}"] = self.metric_state(max(0.0, min(1.0, self.metric_value(goal_progress.get(f"relationship_continuity:{normalized_thread_key}"), default=0.4) + outcome["relational_delta"] * 0.24)), default=self.metric_value(goal_progress.get(f"relationship_continuity:{normalized_thread_key}"), default=0.4), confidence=0.68, evidence_refs=evidence_refs[:6], updated_at=now, updated_by="outcome_appraisal", decay_policy="goal_continuity")
     goal_update = self.update_goal_state({"goal_progress": goal_progress, "metadata": {"last_outcome_action": str(action_type or "").strip(), "last_outcome_bucket": calibration_bucket}}, reason=f"outcome_appraisal:{action_type}", source="outcome_appraisal")
-    return {"status": "ok", "outcome_appraisal_id": int(row_id or 0), "thread_key": normalized_thread_key, "chat_name": str(chat_name or normalized_thread_key), "channel": channel, "action_type": str(action_type or "").strip(), "action_ref": str(action_ref or "").strip(), "outcome": outcome, "calibration_bucket": calibration_bucket, "calibration_row": calibration_row, "subject_update": subject_update, "autobiographical_update": autobiographical_update, "goal_update": goal_update}
+    temporal_update: dict[str, Any] = {}
+    if str(action_type or "").strip() in {"reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"} and hasattr(self, "close_temporal_items"):
+        event_ref = str(evidence_metadata.get("event_row_id", "") or evidence_metadata.get("message_id", "") or "").strip()
+        updates: list[dict[str, Any]] = []
+        if event_ref:
+            updates.append(
+                self.close_temporal_items(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    chat_name=chat_name,
+                    source_event_id=event_ref,
+                    status="fulfilled",
+                    reason=f"fulfilled_by:{action_type}",
+                )
+            )
+        if str(action_ref or "").strip():
+            updates.append(
+                self.close_temporal_items(
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    chat_name=chat_name,
+                    source_action_ref=str(action_ref or "").strip(),
+                    status="fulfilled",
+                    reason=f"fulfilled_by:{action_type}",
+                )
+            )
+        temporal_update = {"status": "ok", "updates": updates, "updated": sum(int(item.get("updated", 0) or 0) for item in updates)}
+    return {"status": "ok", "outcome_appraisal_id": int(row_id or 0), "thread_key": normalized_thread_key, "chat_name": str(chat_name or normalized_thread_key), "channel": channel, "action_type": str(action_type or "").strip(), "action_ref": str(action_ref or "").strip(), "outcome": outcome, "calibration_bucket": calibration_bucket, "calibration_row": calibration_row, "subject_update": subject_update, "autobiographical_update": autobiographical_update, "goal_update": goal_update, "temporal_update": temporal_update}

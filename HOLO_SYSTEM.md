@@ -56,13 +56,15 @@ The real continuity lives in:
 9. Memory bridge writes archive + working/candidate observations
 10. Mind Graph incrementally re-syncs the active thread and predictive continuity after each real turn
 11. Existing bounded streams update the Stage19 attention frontier for same-thread continuity warmth
-12. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
+12. Stage20 temporal state hydrates same-thread open loops, commitments, deferred intentions, and resume candidates before heavier recall
+13. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
 
 ## Current Runtime Truth
 - Main processor: `codex_cli`
 - Processor lanes: `kernel_xhigh`, `subject_main`, and `micro_fast`
 - Stage18 dual-speed reflex is live: ordinary short active-thread speech can generate through existing `micro_fast`, while explicit memory/history/factual turns still escalate and high-risk actions still use `subject_main` or `kernel_xhigh`
 - Stage19 bounded continuity is live: `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle` can warm a bounded Mind Graph `attention_frontier`; ingress reads one same-thread row before heavier recall and exposes `mind_packet.stage19`
+- Stage20 temporal continuity is live: Mind Graph `temporal_subject_state` persists open loops, commitments, deferred intentions, interruption markers, resume candidates, and due followup keys; `QueueStore.jobs` remains the timing/job surface and recovery flows through action-market metadata
 - Live WeChat transport: `pyweixin_dialog`
 - `wcferry` is not the live path on this machine because local `Weixin 4.1.x` is incompatible with the installed `wcferry 39.x` line
 - WSL kernel should be treated as authoritative; Windows helper is only a transport shell
@@ -106,6 +108,7 @@ Current relationship-memory rule:
 - Do not let WeChat single chats split into `wechat:<name>` and `<name>` alias threads
 - Do not let Stage18 predictive continuity select actions or bypass explicit memory/history escalation
 - Do not let Stage19 attention frontier become a second brain, a new always-on loop, or a transport-side decision layer
+- Do not let Stage20 temporal state send directly, duplicate due jobs, override hard policy gates, or bypass explicit memory/history escalation
 - Do not publish live memory JSONL or runtime graph state to a public remote; memory sync belongs only on trusted local/private paths
 
 ## Current Weak Spots

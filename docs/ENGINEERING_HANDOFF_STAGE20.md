@@ -2,42 +2,74 @@
 
 ## Target Change
 
-Persist temporal commitments and route due recovery through the action market.
+Stage20 is implemented as a bounded temporal subject layer in Mind Graph. It persists open loops, commitments, deferred intentions, interruption markers, resume candidates, and due followup keys while leaving `QueueStore.jobs` as the timing surface.
 
-## Files To Touch First
+## Runtime Files Changed
 
-- `holo_host/store.py`
-  - keep queue timing authoritative
-  - expose enough job state for commitment linking
 - `holo_host/mind_graph.py`
-  - persist temporal commitment meaning and state transitions
-  - provide query helpers for due/open commitments
+  - creates `temporal_subject_state`
+  - exposes temporal state wrappers
+  - creates explicit reentry open-loop/resume rows from active-thread inbound reducers
+  - feeds due temporal commitment hints into initiative thread selection
+- `holo_host/mind_graph_parts/temporal_state.py`
+  - owns upsert, status update, close, prune, grouped read, and diagnostic helpers
+- `holo_host/mind_graph_parts/outcome_appraisal.py`
+  - closes matching live temporal rows for successful speech outcomes by event/action ref
 - `holo_host/memory_bridge.py`
-  - expose `mind_packet.stage20`
-  - add due commitments to packet/action-market context
+  - hydrates `mind_packet.stage20` after Stage19 frontier hydration and before heavier recall
+  - adds compact temporal continuity to active state metadata
+  - biases existing action-market candidates with bounded `temporal_context`
+- `holo_host/store.py`
+  - adds `find_pending_job_by_dedupe_key(...)`
+  - dedupes stale inbound proactive followup jobs by stable payload key
 - `holo_host/reply_api.py`
-  - create commitments for `defer_reply` and interrupted selected actions
-  - mark commitments fulfilled/superseded/canceled from outcomes
-  - add `accept_stage20`
+  - links `defer_reply` to one deduped queue job plus temporal `deferred_intention` and `commitment` rows
+  - exposes service/HTTP diagnostics and `accept_stage20`
 - `holo_host/cli.py`
-  - add `accept-stage20`
+  - adds `show-open-loops`, `show-commitments`, `trace-resume-candidate`, and `accept-stage20`
 - `holo_host/reply_service_parts/acceptance.py`
-  - add acceptance wrapper
+  - adds acceptance wrapper
+- `holo_host/reply_service_parts/endpoints.py`
+  - adds HTTP acceptance dispatch
 
-## Tests To Add
+## Temporal Table Contract
 
-- `tests/test_stage20_temporal_commitments.py`
+Table: `temporal_subject_state`
 
-Minimum cases:
+Unique key:
 
-- `defer_reply` creates a commitment and queue job
-- due commitment is visible in `mind_packet.stage20`
-- action market owns recovery selection
-- duplicate due job does not duplicate recovery
-- fulfilled commitment does not reappear
-- expired commitment is ignored
-- restart simulation recovers an interrupted event once
-- policy/manual-review blockers still win
+- `(channel, thread_key, dedupe_key, type)`
+
+Required fields:
+
+- `type`
+- `channel`
+- `thread_key`
+- `chat_name`
+- `confidence`
+- `source_event_id`
+- `source_action_ref`
+- `source_action_type`
+- `due_at`
+- `revisit_after`
+- `revisit_before`
+- `resume_cue`
+- `dedupe_key`
+- `status`
+- `queue_job_id`
+- `metadata_json`
+- `created_at`
+- `updated_at`
+
+Live statuses are `open`, `scheduled`, and `due`. Terminal statuses are `fulfilled`, `superseded`, `canceled`, and `expired`.
+
+## Diagnostics
+
+```bash
+python -m holo_host show-open-loops --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+python -m holo_host show-commitments --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+python -m holo_host trace-resume-candidate --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+```
 
 ## Acceptance Command
 
@@ -45,31 +77,34 @@ Minimum cases:
 python -m holo_host --config .holo_host.example.toml accept-stage20 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
 ```
 
-Expected supporting checks:
+The gate checks persistence, grouping, deferred-reply dedupe, due resume hydration, action-market metadata, interleaved thread isolation, expired-row ignoring, explicit memory escalation, fulfilled-resume suppression, canonical WeChat identity, and Stage19 compatibility.
+
+## Tests
 
 ```bash
-pytest -q tests/test_stage20_temporal_commitments.py
-pytest -q tests/test_stage19_attention_frontier.py tests/test_stage18_dual_speed_reflex.py
-python -m holo_host --config .holo_host.example.toml accept-stage20 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
-pytest -q
+pytest -q tests/test_stage20_temporal_commitments.py tests/test_stage19_attention_frontier.py tests/test_stage18_dual_speed_reflex.py tests/test_stage17_realtime_runtime.py tests/test_processor_fabric.py
+pytest -q tests/test_store_threading.py tests/test_stage14_replay.py tests/test_stage15_modularization.py tests/test_stage16_release.py
 ```
+
+`tests/test_stage20_temporal_commitments.py` covers:
+
+- interleaved multi-thread isolation by canonical `wechat:<name>` keys
+- `defer_reply` queue and temporal dedupe
+- restart-safe open loops, commitments, resume candidates, and due keys
+- day-gap followup dedupe
+- explicit "we were talking about..." reentry before heavy recall
+- terminal/expired rows being inspectable but ignored for resumption
+- explicit memory query escalation despite temporal state
 
 ## Contracts To Preserve
 
 - Queue timing is not subject identity by itself; Mind Graph stores the subject commitment.
-- Commitment recovery cannot send directly.
-- Owner shutdown, manual review, and hard policy constraints remain final.
-- Code/operator paths remain shadow-write only.
-- Commitment records must carry evidence refs and canonical thread keys.
-
-## Implementation Notes
-
-Treat commitment creation as part of action/outcome bookkeeping, not as a free-floating planner.
-
-Commitment state should be compact and inspectable. Store summaries and refs, not raw transcript windows.
-
-Restart recovery should look for incomplete event/action records and create at most one recovery commitment per source event.
+- Temporal state can bias action-market candidates but cannot send directly.
+- Explicit memory/history/factual/search/visual escalation still wins.
+- Stage18 `micro_fast` routing remains governed only by existing lane rules.
+- Owner shutdown, manual review, cooldown, and hard policy constraints remain final.
+- Temporal records must stay compact, evidence-linked, and canonical-thread keyed.
 
 ## Done State
 
-Stage20 is done when Holo can remember a bounded temporal obligation, survive interruption/restart, and recover through normal action-market deliberation.
+Stage20 is done when open loops and commitments survive restarts, interrupted lines can be recovered through ingress/action-market flow, due followups dedupe correctly, and acceptance plus replay/regression suites remain green.

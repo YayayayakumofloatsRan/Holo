@@ -26,9 +26,9 @@ Stage19: bounded background continuity and attention frontier
 - Bound entries by count, expiry, evidence refs, and canonical thread key; do not expand initiative sending rights.
 
 Stage20: temporal commitments and interruption recovery
-- Persist deferrals, promises, interrupted actions, and restart recovery as temporal commitments.
-- Keep `QueueStore` responsible for timing and Mind Graph responsible for subject meaning.
-- Route recovery through the action market.
+- Implemented as bounded Mind Graph `temporal_subject_state` plus `QueueStore.jobs` dedupe.
+- Persists deferrals, promises, interrupted actions, restart-safe resume candidates, and due followup keys by canonical thread key.
+- Routes recovery through action-market candidate metadata; temporal state never sends directly.
 
 Stage21: policy sedimentation and negotiated will
 - Turn repeated outcomes and explicit negotiation into reversible soft policy sediment.

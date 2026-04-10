@@ -347,6 +347,11 @@ class MemoryBridge:
             self._packet_cache.pop(key, None)
             self._packet_cache_misses += 1
             return None
+        stage20 = dict(packet.get("stage20", {})) if isinstance(packet.get("stage20", {}), dict) else {}
+        if bool(stage20.get("temporal_visible", False)):
+            self._packet_cache.pop(key, None)
+            self._packet_cache_misses += 1
+            return None
         self._packet_cache_hits += 1
         return copy.deepcopy(packet)
 
@@ -900,6 +905,12 @@ class MemoryBridge:
             + float(relationship_state.get("continuity_score", 0.0) or 0.0) * 0.2,
             default=0.28,
         )
+        stage20_temporal = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else {}
+        temporal_due = bool(stage20_temporal.get("commitment_due", False))
+        temporal_resume_cue = compact_text(str(stage20_temporal.get("resume_cue", "") or ""), 180)
+        temporal_pressure = self._clamp(stage20_temporal.get("temporal_pressure", 0.0), default=0.0)
+        if bool(stage20_temporal.get("temporal_visible", False)) and not signal["factual_lookup"] and not signal["search_requested"]:
+            continuity_pull = self._clamp(continuity_pull + temporal_pressure + (0.08 if temporal_due else 0.0), default=continuity_pull)
         expansion_pressure = self._clamp(
             reply_pull * 0.38
             + float(value_state.get("play_priority", 0.0) or 0.0) * 0.12
@@ -943,6 +954,11 @@ class MemoryBridge:
             "local_memory_requested": bool(signal["local_memory_requested"]),
             "factual_lookup": bool(signal["factual_lookup"]),
             "lookup_ready": bool(lookup_ready),
+            "temporal_resume": bool(stage20_temporal.get("temporal_visible", False)),
+            "temporal_due": bool(temporal_due),
+            "temporal_resume_cue": temporal_resume_cue,
+            "due_followup_keys": list(stage20_temporal.get("due_followup_keys", []))[:8],
+            "temporal_pressure": round(temporal_pressure, 4),
             "reply_pull": round(reply_pull, 4),
             "resistance_pull": round(resistance_pull, 4),
             "continuity_pull": round(continuity_pull, 4),
@@ -993,6 +1009,18 @@ class MemoryBridge:
         visual_recall_needed = bool(signal["visual_requested"] and (visual_memory.get("visual_anchors") or context.get("attachments")))
         relation_need = float(relationship_state.get("continuity_score", 0.0) or 0.0)
         game_pressure = float(game_state.get("pressure_level", 0.0) or 0.0)
+        stage20_temporal = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else dict(packet.get("stage20", {})) if isinstance(packet.get("stage20", {}), dict) else {}
+        temporal_due = bool(intent_state.get("temporal_due", False)) and not bool(intent_state.get("factual_lookup", False))
+        temporal_resume_cue = compact_text(str(intent_state.get("temporal_resume_cue", "") or stage20_temporal.get("resume_cue", "") or ""), 160)
+        temporal_pressure = self._clamp(intent_state.get("temporal_pressure", stage20_temporal.get("temporal_pressure", 0.0)), default=0.0)
+        temporal_source_action = str(dict(stage20_temporal.get("resume_candidate", {})).get("source_action_type", "") or "")
+        temporal_context = {
+            "stage": "stage20",
+            "due": bool(temporal_due),
+            "resume_cue": temporal_resume_cue,
+            "due_followup_keys": list(intent_state.get("due_followup_keys", stage20_temporal.get("due_followup_keys", [])))[:8],
+            "source_action_type": temporal_source_action,
+        }
 
         action_market: list[dict[str, Any]] = [
             {
@@ -1001,6 +1029,7 @@ class MemoryBridge:
                     (0.92 if signal["low_signal"] and not signal["question_like"] and not signal["defer_requested"] else 0.0)
                     + (0.18 if signal["affirmation_like"] and not signal["question_like"] and not signal["defer_requested"] else 0.0)
                     + float(drive_state.get("avoid_risk", 0.0) or 0.0) * 0.2
+                    + (0.04 if temporal_due and temporal_pressure < 0.12 else 0.0)
                     - reply_pull * 0.16,
                     4,
                 ),
@@ -1008,19 +1037,22 @@ class MemoryBridge:
                 "drive_source": "avoid_risk + low_signal",
                 "value_rationale": "stability can outrank contact for a low-signal turn",
                 "send_allowed": False,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "defer_reply",
                 "score": round(
                     (1.08 if signal["defer_requested"] else 0.0)
                     + max(0.0, resistance_pull - reply_pull) * 0.5
-                    + game_pressure * 0.08,
+                    + game_pressure * 0.08
+                    + (0.08 if temporal_due and temporal_pressure >= 0.18 else 0.0),
                     4,
                 ),
                 "why_now": "the subject wants to delay and re-evaluate instead of answering on the first edge",
                 "drive_source": "resistance_pull + avoid_risk",
                 "value_rationale": "identity and stability can ask for time before replying",
                 "send_allowed": False,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "reply_once",
@@ -1028,14 +1060,17 @@ class MemoryBridge:
                     reply_pull
                     + (0.08 if signal["question_like"] else 0.0)
                     + (0.02 if signal["affirmation_like"] else 0.0)
+                    + (0.18 if temporal_due else 0.0)
+                    + min(0.12, temporal_pressure * 0.4)
                     - (0.18 if signal["low_signal"] else 0.0)
                     - (0.24 if signal["defer_requested"] else 0.0),
                     4,
                 ),
-                "why_now": "the subject wants to answer, but lightly",
+                "why_now": temporal_resume_cue or "the subject wants to answer, but lightly",
                 "drive_source": "seek_contact + seek_continuity",
                 "value_rationale": "relational priority is ahead, but not enough to sprawl",
                 "send_allowed": True,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "reply_multi",
@@ -1043,6 +1078,7 @@ class MemoryBridge:
                     reply_pull
                     + expansion_pressure * 0.42
                     + (0.18 if tier == "deep_recall" else 0.1 if tier == "recall" else 0.0)
+                    + (0.06 if temporal_due and not signal["low_signal"] else 0.0)
                     + max(0.0, relation_need - 0.45) * 0.14
                     - (0.46 if bool(intent_state.get("factual_lookup", False)) else 0.0)
                     - (0.42 if signal["low_signal"] or signal["affirmation_like"] else 0.0)
@@ -1053,6 +1089,7 @@ class MemoryBridge:
                 "drive_source": "seek_contact + continuity_pull + expansion_pressure",
                 "value_rationale": "the subject judges this turn worth more than a quick touch",
                 "send_allowed": True,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "external_lookup",
@@ -1069,6 +1106,7 @@ class MemoryBridge:
                 "drive_source": "factual_lookup + curiosity",
                 "value_rationale": "factual uncertainty can justify looking outward before language",
                 "send_allowed": False,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "proactive_ping",
@@ -1080,14 +1118,16 @@ class MemoryBridge:
                     initiative_pressure + float(value_state.get("relational_priority", 0.0) or 0.0) * 0.1,
                     send_allowed=bool(initiative_pressure >= 0.28),
                 ),
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "history_refresh",
-                "score": round((0.66 if history_refresh_needed else 0.0) + continuity_pull * 0.16, 4),
-                "why_now": "memory depth is worth refreshing before the subject speaks",
+                "score": round((0.66 if history_refresh_needed else 0.0) + continuity_pull * 0.16 + (0.22 if temporal_due and temporal_source_action == "history_refresh" else 0.0), 4),
+                "why_now": temporal_resume_cue if temporal_source_action == "history_refresh" else "memory depth is worth refreshing before the subject speaks",
                 "drive_source": "seek_continuity + recall tier",
                 "value_rationale": "continuity can ask for more evidence before language",
                 "send_allowed": False,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "visual_recall",
@@ -1096,6 +1136,7 @@ class MemoryBridge:
                 "drive_source": "visual_requested + visual_memory",
                 "value_rationale": "visual anchors should stay inside the same subject state",
                 "send_allowed": False,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "operator_self_fix",
@@ -1104,6 +1145,7 @@ class MemoryBridge:
                 "drive_source": "seek_self_repair",
                 "value_rationale": "self-repair is part of the same kernel, but not the same speech act",
                 "send_allowed": False,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "push_back",
@@ -1116,6 +1158,7 @@ class MemoryBridge:
                 "drive_source": "resistance_pull + identity_priority",
                 "value_rationale": "subjectivity allows a small push back when harmony is not the only value",
                 "send_allowed": True,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "counter_offer",
@@ -1128,6 +1171,7 @@ class MemoryBridge:
                 "drive_source": "conflict + protect_identity",
                 "value_rationale": "continuing the relation can still allow a different proposal",
                 "send_allowed": True,
+                "temporal_context": temporal_context,
             },
             {
                 "action_type": "continuity_defense",
@@ -1140,6 +1184,7 @@ class MemoryBridge:
                 "drive_source": "continuity_defense + seek_continuity",
                 "value_rationale": "continuity can outrank short-term compliance",
                 "send_allowed": True,
+                "temporal_context": temporal_context,
             },
         ]
         action_market = sorted(action_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
@@ -1432,6 +1477,7 @@ class MemoryBridge:
         packet.setdefault("active_thread_state", dict(context.get("active_thread_state", {})) if isinstance(context.get("active_thread_state", {}), dict) else {})
         packet.setdefault("stage17", {})
         packet.setdefault("stage19", dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {})
+        packet.setdefault("stage20", dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else {})
         packet["action_market"] = action_market
         packet["selected_action"] = selected_action
         packet["selected_prediction"] = selected_prediction
@@ -1507,6 +1553,7 @@ class MemoryBridge:
         packet["state"]["active_thread_state"] = dict(packet.get("active_thread_state", {}))
         packet["state"]["stage17"] = dict(packet.get("stage17", {}))
         packet["state"]["stage19"] = dict(packet.get("stage19", {}))
+        packet["state"]["stage20"] = dict(packet.get("stage20", {}))
         packet["state"]["action_market"] = list(action_market)
         packet["state"]["selected_action"] = dict(selected_action)
         packet["state"]["selected_prediction"] = dict(selected_prediction)
@@ -1813,6 +1860,153 @@ class MemoryBridge:
             hydrated[key] = value
         return hydrated, stage19
 
+    @staticmethod
+    def _stage20_temporal_empty(*, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return {
+            "temporal_visible": False,
+            "temporal_used_for_thread": False,
+            "canonical_thread_key": str(thread_key or ""),
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "channel": str(channel or "wechat"),
+            "open_loops": [],
+            "commitments": [],
+            "deferred_intentions": [],
+            "interruption_markers": [],
+            "resume_candidates": [],
+            "due_followup_keys": [],
+            "resume_candidate": {},
+            "resume_cue": "",
+            "commitment_due": False,
+            "interruption_recovered": False,
+            "duplicate_recovery_blocked": False,
+            "temporal_pressure": 0.0,
+        }
+
+    def _stage20_temporal_payload(
+        self,
+        state: dict[str, Any],
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        used: bool,
+    ) -> dict[str, Any]:
+        if not isinstance(state, dict) or str(state.get("status", "") or "") != "ok":
+            return self._stage20_temporal_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        open_loops = [dict(item) for item in list(state.get("open_loops", [])) if isinstance(item, dict)]
+        commitments = [dict(item) for item in list(state.get("commitments", [])) if isinstance(item, dict)]
+        deferred = [dict(item) for item in list(state.get("deferred_intentions", [])) if isinstance(item, dict)]
+        interruptions = [dict(item) for item in list(state.get("interruption_markers", [])) if isinstance(item, dict)]
+        resumes = [dict(item) for item in list(state.get("resume_candidates", [])) if isinstance(item, dict)]
+        live_items = open_loops + commitments + deferred + interruptions + resumes
+        due_items = [item for item in live_items if bool(item.get("due", False))]
+        resume_candidate = (due_items or resumes or interruptions or open_loops or commitments or deferred or [{}])[0]
+        resume_cue = compact_text(str(resume_candidate.get("resume_cue", "") if resume_candidate else "") or "", 180)
+        due_keys = self._unique_strings(list(state.get("due_followup_keys", [])) + [str(item.get("dedupe_key", "")) for item in due_items])[:8]
+        pressure = min(0.42, len(due_items) * 0.12 + len(open_loops) * 0.04 + len(interruptions) * 0.06)
+        return {
+            "temporal_visible": bool(live_items),
+            "temporal_used_for_thread": bool(used and live_items),
+            "canonical_thread_key": str(state.get("thread_key", thread_key) or thread_key),
+            "thread_key": str(state.get("thread_key", thread_key) or thread_key),
+            "chat_name": str(state.get("chat_name", chat_name) or chat_name),
+            "channel": str(state.get("channel", channel) or channel),
+            "open_loops": open_loops[:6],
+            "commitments": commitments[:6],
+            "deferred_intentions": deferred[:6],
+            "interruption_markers": interruptions[:6],
+            "resume_candidates": resumes[:6],
+            "due_followup_keys": due_keys,
+            "resume_candidate": dict(resume_candidate or {}),
+            "resume_cue": resume_cue,
+            "commitment_due": bool(due_items),
+            "interruption_recovered": False,
+            "duplicate_recovery_blocked": bool(len(due_keys) < len(due_items)),
+            "temporal_pressure": round(pressure, 4),
+        }
+
+    def _hydrate_active_state_from_temporal_state(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or "")
+        if not hasattr(self.graph, "temporal_state"):
+            return active_state, self._stage20_temporal_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        state = self.graph.temporal_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        stage20 = self._stage20_temporal_payload(state, channel=channel, thread_key=thread_key, chat_name=chat_name, used=True)
+        if not bool(stage20.get("temporal_visible", False)):
+            return active_state, stage20
+
+        hydrated = dict(active_state)
+        metadata = dict(hydrated.get("metadata", {})) if isinstance(hydrated.get("metadata", {}), dict) else {}
+        metadata["stage20_temporal_state"] = {
+            "resume_cue": stage20["resume_cue"],
+            "due_followup_keys": list(stage20["due_followup_keys"])[:8],
+            "commitment_due": bool(stage20["commitment_due"]),
+            "temporal_pressure": float(stage20["temporal_pressure"]),
+        }
+        hydrated["metadata"] = metadata
+        hydrated["present"] = True
+        hydrated["channel"] = channel
+        hydrated["thread_key"] = str(stage20.get("thread_key", thread_key) or thread_key)
+        hydrated["chat_name"] = str(stage20.get("chat_name", chat_name) or chat_name)
+        if stage20["resume_cue"] and not str(hydrated.get("continuity_summary", "") or "").strip():
+            hydrated["continuity_summary"] = compact_text(f"temporal_resume: {stage20['resume_cue']}", 220)
+        if stage20["resume_cue"] and not str(hydrated.get("last_user_intent", "") or "").strip():
+            hydrated["last_user_intent"] = compact_text(stage20["resume_cue"], 140)
+        if not str(hydrated.get("attention_focus", "") or "").strip():
+            hydrated["attention_focus"] = "temporal_resume"
+        if not str(hydrated.get("active_affect_hint", "") or "").strip():
+            hydrated["active_affect_hint"] = "temporal_continuity"
+        hydrated["cache_warmth"] = str(hydrated.get("cache_warmth", "") or "temporal_warm")
+        if hydrated["cache_warmth"] in {"cold", "seeded"} and bool(stage20.get("commitment_due", False)):
+            hydrated["cache_warmth"] = "temporal_warm"
+
+        predictive = dict(hydrated.get("predictive_continuity", {})) if isinstance(hydrated.get("predictive_continuity", {}), dict) else {}
+        blockers = bool(
+            signal.get("local_memory_requested", False)
+            or signal.get("factual_lookup", False)
+            or signal.get("search_requested", False)
+            or signal.get("visual_requested", False)
+        )
+        meaningful = self._meaningful_char_count(query)
+        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        confidence = max(float(predictive.get("active_prediction_confidence", 0.0) or 0.0), 0.58 + float(stage20.get("temporal_pressure", 0.0) or 0.0) * 0.2)
+        if not reflex_eligible:
+            confidence = min(confidence, 0.54)
+        targets = self._unique_strings(
+            list(predictive.get("likely_reference_targets", []))
+            + [stage20["resume_cue"]]
+            + list(stage20.get("due_followup_keys", []))
+        )[:3]
+        predictive.update(
+            {
+                "predicted_next_user_act": str(predictive.get("predicted_next_user_act", "") or "resume_or_ack"),
+                "predicted_reply_pressure": min(0.48, float(predictive.get("predicted_reply_pressure", 0.2) or 0.2) + float(stage20.get("temporal_pressure", 0.0) or 0.0) * 0.2),
+                "likely_reference_targets": targets,
+                "expected_social_valence": str(predictive.get("expected_social_valence", "") or "neutral"),
+                "reflex_eligibility": bool(reflex_eligible),
+                "turn_rhythm": {
+                    **(dict(predictive.get("turn_rhythm", {})) if isinstance(predictive.get("turn_rhythm", {}), dict) else {}),
+                    "temporal_hydrated": True,
+                    "short_turn": meaningful <= 18,
+                },
+                "freshness_at": str(dict(stage20.get("resume_candidate", {})).get("updated_at", predictive.get("freshness_at", "")) or predictive.get("freshness_at", "")),
+                "active_prediction_confidence": self._clamp(confidence),
+            }
+        )
+        hydrated["predictive_continuity"] = predictive
+        for key, value in predictive.items():
+            hydrated[key] = value
+        return hydrated, stage20
+
     def _recall_escalation_reason(
         self,
         query: str,
@@ -1877,7 +2071,7 @@ class MemoryBridge:
             return False
         if bool(signal.get("low_signal", False)) or meaningful <= 18:
             return True
-        if bool(active_state.get("present", False)) and str(active_state.get("cache_warmth", "") or "") in {"warm", "seeded", "frontier_warm"}:
+        if bool(active_state.get("present", False)) and str(active_state.get("cache_warmth", "") or "") in {"warm", "seeded", "frontier_warm", "temporal_warm"}:
             return meaningful <= 36
         return meaningful <= 24 and not bool(signal.get("question_like", False))
 
@@ -1893,6 +2087,7 @@ class MemoryBridge:
         thread_key = str(context.get("thread_key", "") or "")
         chat_name = str(context.get("chat_name", "") or "")
         stage19_frontier = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else self._stage19_frontier_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        stage20_temporal = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else self._stage20_temporal_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         limits = self._mind_limits(context, fast=True)
         summary = str(active_state.get("continuity_summary", "") or "").strip()
         last_intent = str(active_state.get("last_user_intent", "") or "").strip()
@@ -1933,10 +2128,14 @@ class MemoryBridge:
                     [
                         str(active_state.get("attention_focus", "") or ""),
                         str(stage19_frontier.get("wake_reason", "") or ""),
+                        str(stage20_temporal.get("resume_cue", "") or ""),
                     ]
                 )[:4],
                 "recall_priors": {},
-                "contributor_counts": {"attention_frontier": 1} if bool(stage19_frontier.get("frontier_used_for_thread", False)) else {},
+                "contributor_counts": {
+                    **({"attention_frontier": 1} if bool(stage19_frontier.get("frontier_used_for_thread", False)) else {}),
+                    **({"temporal_state": 1} if bool(stage20_temporal.get("temporal_used_for_thread", False)) else {}),
+                },
                 "recent_events": [],
             },
             graph_confidence=0.0,
@@ -1976,8 +2175,10 @@ class MemoryBridge:
             "micro_fast_reason": "active_thread_reflex_candidate",
         }
         packet["stage19"] = dict(stage19_frontier)
+        packet["stage20"] = dict(stage20_temporal)
         packet.setdefault("retrieval_trace", {}).setdefault("stage18", dict(packet["stage18"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
         result = self._finalize_stage2_packet(packet, query=query, context=context)
         if hasattr(self.graph, "update_active_thread_state"):
             self.graph.update_active_thread_state(
@@ -2574,6 +2775,13 @@ class MemoryBridge:
             active_state=active_state,
             signal=signal,
         )
+        normalized_context["stage19_attention_frontier"] = dict(stage19_frontier)
+        active_state, stage20_temporal = self._hydrate_active_state_from_temporal_state(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+        )
         recall_escalation_reason = self._recall_escalation_reason(
             query,
             context=normalized_context,
@@ -2581,7 +2789,7 @@ class MemoryBridge:
             signal=signal,
         )
         normalized_context["active_thread_state"] = dict(active_state)
-        normalized_context["stage19_attention_frontier"] = dict(stage19_frontier)
+        normalized_context["stage20_temporal_state"] = dict(stage20_temporal)
         normalized_context["recall_escalation_reason"] = recall_escalation_reason
         if self._active_fast_lane_eligible(
             query,
@@ -2715,7 +2923,9 @@ class MemoryBridge:
             "micro_fast_reason": recall_escalation_reason or "not_active_thread_fast",
         }
         packet["stage19"] = dict(stage19_frontier)
+        packet["stage20"] = dict(stage20_temporal)
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
         return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def inspect_mind(
@@ -2754,6 +2964,7 @@ class MemoryBridge:
             "active_thread_state": dict(packet.get("active_thread_state", {})),
             "stage17": dict(packet.get("stage17", {})),
             "stage19": dict(packet.get("stage19", {})),
+            "stage20": dict(packet.get("stage20", {})),
             "mind_packet": packet,
         }
 
@@ -2851,6 +3062,7 @@ class MemoryBridge:
             "stage17": dict(packet.get("stage17", {})),
             "stage18": dict(packet.get("stage18", {})),
             "stage19": dict(packet.get("stage19", {})),
+            "stage20": dict(packet.get("stage20", {})),
             "predictive_continuity": dict(packet_active_state.get("predictive_continuity", {})),
         }
 
@@ -2888,6 +3100,56 @@ class MemoryBridge:
         if not hasattr(self.graph, "thread_warmth"):
             return {"status": "unavailable", "thread_key": str(thread_key or ""), "chat_name": str(chat_name or ""), "channel": channel, "thread_warmth": "cold"}
         return self.graph.thread_warmth(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def temporal_state(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "temporal_state"):
+            return {"status": "unavailable", "thread_key": str(thread_key or ""), "chat_name": str(chat_name or ""), "channel": channel}
+        return self.graph.temporal_state(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive)
+
+    def show_open_loops(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "show_open_loops"):
+            return {"status": "unavailable", "items": []}
+        return self.graph.show_open_loops(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive)
+
+    def show_commitments(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "show_commitments"):
+            return {"status": "unavailable", "items": []}
+        return self.graph.show_commitments(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive)
+
+    def trace_resume_candidate(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "trace_resume_candidate"):
+            return {"status": "unavailable", "resume_available": False}
+        payload = self.graph.trace_resume_candidate(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive)
+        payload["active_thread_state"] = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        return payload
 
     def record_recall(self, selected_ids: list[str], *, success: bool = True) -> dict[str, Any]:
         rag_result = self.rag.record_memory_recall(selected_ids, success=success)

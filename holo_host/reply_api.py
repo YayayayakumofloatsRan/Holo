@@ -41,6 +41,7 @@ from .reply_service_parts.acceptance import (
     accept_stage17 as _accept_stage17,
     accept_stage18 as _accept_stage18,
     accept_stage19 as _accept_stage19,
+    accept_stage20 as _accept_stage20,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -3263,6 +3264,36 @@ class HoloReplyService:
     ) -> dict[str, Any]:
         return self.memory.thread_warmth(thread_key=thread_key, chat_name=chat_name, channel=channel)
 
+    def show_open_loops(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        return self.memory.show_open_loops(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive)
+
+    def show_commitments(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        return self.memory.show_commitments(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive)
+
+    def trace_resume_candidate(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        return self.memory.trace_resume_candidate(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive)
+
     def accept_stage19(
         self,
         *,
@@ -3273,6 +3304,24 @@ class HoloReplyService:
         artifact_dir: str | None = None,
     ) -> dict[str, Any]:
         return _accept_stage19(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def accept_stage20(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage20(
             self,
             thread_key=thread_key,
             chat_name=chat_name,
@@ -3452,6 +3501,275 @@ class HoloReplyService:
                 "stage19": dict(decayed_packet.get("stage19", {})),
             },
             "stage18": {"status": stage18_report.get("status"), "checks": stage18_report.get("checks", {})},
+        }
+
+    def _accept_stage20_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_chat_name = str(chat_name or "Nemoqi").strip()
+        normalized_thread_key = str(thread_key or normalized_chat_name).strip()
+        if normalized_channel == "wechat" and normalized_thread_key and not (
+            normalized_thread_key.startswith("wechat:")
+            or normalized_thread_key.startswith("wxid_")
+            or normalized_thread_key.endswith("@chatroom")
+        ):
+            normalized_thread_key = f"wechat:{normalized_thread_key}"
+        run_id = stable_digest(normalized_thread_key, normalized_chat_name, utc_now())[:12]
+        defer_event_row_id = 200000 + (int(run_id[:6], 16) % 700000)
+        reentry_event_row_id = defer_event_row_id + 1
+        contact = self.store.ensure_contact(normalized_thread_key if normalized_channel == "wechat" else f"{normalized_channel}:{normalized_thread_key}", normalized_chat_name)
+        thread, _created = self.store.ensure_thread(
+            channel=normalized_channel,
+            contact_id=int(contact["id"]),
+            thread_key=normalized_thread_key,
+            subject=normalized_chat_name,
+        )
+        incoming = IncomingMessage(
+            message_id=f"accept-stage20-defer-{run_id}",
+            thread_key=normalized_thread_key,
+            subject=normalized_chat_name,
+            sender_email=normalized_thread_key,
+            sender_name=str(sender or normalized_chat_name),
+            body_text="please reply later",
+            channel=normalized_channel,
+        )
+        stored = self.store.record_inbound(incoming)["message"]
+        turn = ChatTurn(
+            chat_name=normalized_chat_name,
+            text="please reply later",
+            sender=str(sender or normalized_chat_name),
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            message_id=str(incoming.message_id),
+            metadata={},
+        )
+        selected_defer = {"action_type": "defer_reply", "score": 0.91, "why_now": "accept_stage20_defer"}
+        deferred_job_id = self._schedule_deferred_reply(
+            thread=thread,
+            contact=contact,
+            stored_message=stored,
+            turn=turn,
+            selected_action=selected_defer,
+            defer_reason="accept_stage20_deferred_reply",
+            event_row_id=defer_event_row_id,
+        )
+        duplicate_job_id = self._schedule_deferred_reply(
+            thread=thread,
+            contact=contact,
+            stored_message=stored,
+            turn=turn,
+            selected_action=selected_defer,
+            defer_reason="accept_stage20_deferred_reply",
+            event_row_id=defer_event_row_id,
+        )
+
+        due_resume = self.memory.graph.upsert_temporal_item(
+            item_type="resume_candidate",
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            confidence=0.76,
+            source_event_id="accept-stage20-resume",
+            source_action_ref=f"resume:{run_id}",
+            source_action_type="history_refresh",
+            due_at="2000-01-01T00:00:00Z",
+            revisit_after="2000-01-01T00:00:00Z",
+            resume_cue="we were talking about the postponed line",
+            dedupe_key=f"stage20-resume:{run_id}",
+            status="scheduled",
+            metadata={"source": "accept_stage20", "evidence_refs": [f"accept_stage20:{run_id}"]},
+        )
+        other_thread = self.memory.graph.upsert_temporal_item(
+            item_type="interruption_marker",
+            channel=normalized_channel,
+            thread_key=f"{normalized_thread_key}-other",
+            chat_name=f"{normalized_chat_name}-other",
+            confidence=0.77,
+            source_event_id="accept-stage20-other",
+            source_action_ref=f"other:{run_id}",
+            source_action_type="external_lookup",
+            due_at="2000-01-01T00:00:00Z",
+            revisit_after="2000-01-01T00:00:00Z",
+            resume_cue="other thread should stay isolated",
+            dedupe_key=f"stage20-other:{run_id}",
+            status="scheduled",
+            metadata={"source": "accept_stage20", "evidence_refs": [f"accept_stage20:{run_id}:other"]},
+        )
+        expired = self.memory.graph.upsert_temporal_item(
+            item_type="open_loop",
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            confidence=0.52,
+            source_event_id="accept-stage20-expired",
+            source_action_ref=f"expired:{run_id}",
+            source_action_type="reply_once",
+            due_at="1999-01-01T00:00:00Z",
+            revisit_after="1999-01-01T00:00:00Z",
+            revisit_before="2000-01-01T00:00:00Z",
+            resume_cue="expired line should not steer reply",
+            dedupe_key=f"stage20-expired:{run_id}",
+            status="open",
+            metadata={"source": "accept_stage20", "evidence_refs": [f"accept_stage20:{run_id}:expired"]},
+        )
+        self.memory.clear_packet_cache()
+
+        self.memory.update_active_thread_state(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            direction="inbound",
+            text="we were talking about the postponed line",
+            message_id=f"accept-stage20-reentry-{run_id}",
+            event_row_id=reentry_event_row_id,
+            metadata={"source": "accept_stage20"},
+        )
+        temporal = self.memory.temporal_state(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel, include_inactive=True)
+        open_loops = self.show_open_loops(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel)
+        commitments = self.show_commitments(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel)
+        resume_trace = self.trace_resume_candidate(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel)
+
+        packet = self.memory.sidecar_packet(
+            "we were talking about the postponed line",
+            context={
+                "channel": normalized_channel,
+                "thread_key": normalized_thread_key,
+                "chat_name": normalized_chat_name,
+                "sender": str(sender or normalized_chat_name),
+                "attachments": [],
+                "message_id": f"accept-stage20-packet-{run_id}",
+                "event_id": "2003",
+            },
+        )
+        explicit_packet = self.memory.sidecar_packet(
+            "remember previous history",
+            context={
+                "channel": normalized_channel,
+                "thread_key": normalized_thread_key,
+                "chat_name": normalized_chat_name,
+                "sender": str(sender or normalized_chat_name),
+                "attachments": [],
+                "message_id": f"accept-stage20-memory-{run_id}",
+                "event_id": "2004",
+            },
+        )
+        close_report = self.memory.graph.close_temporal_items(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            source_action_ref=f"resume:{run_id}",
+            status="fulfilled",
+            reason="accept_stage20_fulfilled",
+        )
+        self.memory.clear_packet_cache()
+        fulfilled_packet = self.memory.sidecar_packet(
+            "still here?",
+            context={
+                "channel": normalized_channel,
+                "thread_key": normalized_thread_key,
+                "chat_name": normalized_chat_name,
+                "sender": str(sender or normalized_chat_name),
+                "attachments": [],
+                "message_id": f"accept-stage20-fulfilled-{run_id}",
+                "event_id": "2005",
+            },
+        )
+        stage19_report = self.accept_stage19(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        cleanup_report: dict[str, Any] = {}
+        if deferred_job_id > 0:
+            self.store.block_job(deferred_job_id, "accept_stage20_probe_cleanup")
+            cleanup_report["deferred_job_id"] = deferred_job_id
+            cleanup_report["deferred_temporal"] = self.memory.graph.close_temporal_items(
+                channel=normalized_channel,
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                source_action_ref=str(deferred_job_id),
+                status="canceled",
+                reason="accept_stage20_probe_cleanup",
+            )
+        cleanup_report["reentry_temporal"] = self.memory.graph.close_temporal_items(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            source_event_id=str(reentry_event_row_id),
+            status="canceled",
+            reason="accept_stage20_probe_cleanup",
+        )
+        cleanup_report["other_thread_temporal"] = self.memory.graph.close_temporal_items(
+            channel=normalized_channel,
+            thread_key=f"{normalized_thread_key}-other",
+            chat_name=f"{normalized_chat_name}-other",
+            source_action_ref=f"other:{run_id}",
+            status="canceled",
+            reason="accept_stage20_probe_cleanup",
+        )
+        self.memory.clear_packet_cache()
+        commitment_items = list(commitments.get("commitments", [])) + list(commitments.get("deferred_intentions", []))
+        checks = {
+            "temporal_state_persisted_and_grouped": bool(temporal.get("open_loops") or temporal.get("resume_candidates") or temporal.get("deferred_intentions")),
+            "defer_reply_created_one_commitment_and_one_queue_job": deferred_job_id > 0
+            and duplicate_job_id == deferred_job_id
+            and any(int(item.get("queue_job_id", 0) or 0) == deferred_job_id for item in commitment_items),
+            "due_resume_enters_packet_before_heavy_recall": bool(dict(packet.get("stage20", {})).get("temporal_visible", False))
+            and bool(dict(packet.get("stage20", {})).get("commitment_due", False))
+            and str(packet.get("memory_route", "")) in {"active_thread", "graph", "hybrid"},
+            "action_market_owns_recovery": any(
+                bool(dict(item.get("temporal_context", {})).get("due", False))
+                for item in list(packet.get("action_market", []))
+            ),
+            "interleaved_threads_stay_isolated": str(other_thread.get("thread_key", "")) != normalized_thread_key
+            and all(str(item.get("thread_key", "")) == normalized_thread_key for item in list(temporal.get("items", []))),
+            "expired_items_ignored": not any(
+                str(item.get("dedupe_key", "")) == f"stage20-expired:{run_id}" and bool(item.get("present", False))
+                for item in list(temporal.get("items", []))
+            )
+            and bool(expired.get("expired", False) or expired.get("status") == "expired"),
+            "explicit_memory_query_still_escalates": str(explicit_packet.get("recall_reason", "")).startswith("stage17:")
+            and str(explicit_packet.get("tier", "")) in {"recall", "deep_recall"},
+            "fulfilled_resume_not_reused": not any(
+                str(item.get("dedupe_key", "")) == f"stage20-resume:{run_id}"
+                for item in list(dict(fulfilled_packet.get("stage20", {})).get("resume_candidates", []))
+            ),
+            "canonical_wechat_identity_preserved": normalized_thread_key.startswith("wechat:")
+            and str(packet.get("stage20", {}).get("thread_key", "")).startswith("wechat:"),
+            "stage19_acceptance_green": str(stage19_report.get("status", "")).strip() == "pass",
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "temporal-commitments-and-interruption-recovery-stage20",
+            "checks": checks,
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": normalized_channel,
+            "deferred_job_id": deferred_job_id,
+            "duplicate_job_id": duplicate_job_id,
+            "due_resume": due_resume,
+            "open_loops": open_loops,
+            "commitments": commitments,
+            "resume_trace": resume_trace,
+            "packet_stage20": dict(packet.get("stage20", {})),
+            "explicit_memory_probe": {
+                "tier": explicit_packet.get("tier"),
+                "recall_reason": explicit_packet.get("recall_reason"),
+                "memory_route": explicit_packet.get("memory_route"),
+            },
+            "close_report": close_report,
+            "cleanup_report": cleanup_report,
+            "fulfilled_stage20": dict(fulfilled_packet.get("stage20", {})),
+            "stage19": {"status": stage19_report.get("status"), "checks": stage19_report.get("checks", {})},
         }
 
     def initiative_status(
@@ -4064,12 +4382,18 @@ class HoloReplyService:
         turn: ChatTurn,
         selected_action: dict[str, Any],
         defer_reason: str,
+        event_row_id: int | None = None,
     ) -> int:
         available_at = (
             datetime.now(timezone.utc).replace(microsecond=0)
             + timedelta(seconds=max(90, int(self.config.memory.attention_tick_interval_seconds) * 20))
         ).isoformat().replace("+00:00", "Z")
-        return self.store.enqueue_job(
+        source_event_id = str(event_row_id or stored_message.get("id", "") or turn.message_id or "").strip()
+        dedupe_key = f"deferred_reply:{turn.channel}:{thread.get('thread_key') or turn.normalized_thread_key}:{stored_message.get('message_id') or turn.message_id or source_event_id}"
+        existing = self.store.find_pending_job_by_dedupe_key(int(thread["id"]), dedupe_key=dedupe_key, task_type="deferred_reply")
+        if existing:
+            return int(existing["id"])
+        job_id = self.store.enqueue_job(
             task_type="deferred_reply",
             priority=80,
             message_row_id=int(stored_message["id"]),
@@ -4083,9 +4407,57 @@ class HoloReplyService:
                 "channel": turn.channel,
                 "sender": turn.sender,
                 "defer_reason": defer_reason,
+                "dedupe_key": dedupe_key,
                 "selected_action": dict(selected_action),
             },
         )
+        if hasattr(self.memory.graph, "upsert_temporal_item"):
+            self.memory.graph.upsert_temporal_item(
+                item_type="deferred_intention",
+                channel=turn.channel,
+                thread_key=str(thread.get("thread_key") or turn.normalized_thread_key),
+                chat_name=turn.chat_name,
+                confidence=0.72,
+                source_event_id=source_event_id,
+                source_action_ref=str(job_id),
+                source_action_type="defer_reply",
+                due_at=available_at,
+                revisit_after=available_at,
+                resume_cue=defer_reason or turn.text,
+                dedupe_key=dedupe_key,
+                status="scheduled",
+                queue_job_id=job_id,
+                metadata={
+                    "source": "reply_api.defer_reply",
+                    "selected_action": dict(selected_action),
+                    "message_id": str(stored_message.get("message_id") or turn.message_id or ""),
+                    "evidence_refs": [f"event:{source_event_id}", f"job:{job_id}"],
+                },
+            )
+            self.memory.graph.upsert_temporal_item(
+                item_type="commitment",
+                channel=turn.channel,
+                thread_key=str(thread.get("thread_key") or turn.normalized_thread_key),
+                chat_name=turn.chat_name,
+                confidence=0.7,
+                source_event_id=source_event_id,
+                source_action_ref=str(job_id),
+                source_action_type="defer_reply",
+                due_at=available_at,
+                revisit_after=available_at,
+                resume_cue=defer_reason or turn.text,
+                dedupe_key=f"commitment:{dedupe_key}",
+                status="scheduled",
+                queue_job_id=job_id,
+                metadata={
+                    "source": "reply_api.defer_reply",
+                    "selected_action": dict(selected_action),
+                    "message_id": str(stored_message.get("message_id") or turn.message_id or ""),
+                    "evidence_refs": [f"event:{source_event_id}", f"job:{job_id}"],
+                },
+            )
+            self.memory.clear_packet_cache()
+        return job_id
 
     def _record_subject_action(
         self,
@@ -4723,6 +5095,7 @@ class HoloReplyService:
                 turn=turn,
                 selected_action=selected_action,
                 defer_reason=str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
+                event_row_id=event_row_id,
             )
             result = {
                 "action": "defer_reply",
@@ -5139,6 +5512,7 @@ class HoloReplyService:
                 turn=turn,
                 selected_action=selected_action,
                 defer_reason=str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
+                event_row_id=int(payload.get("_stage6_event_row_id", 0) or 0) or None,
             )
             self.logger.info(
                 "subject deferred reply for %s message=%s job=%s reason=%s",
@@ -5774,6 +6148,36 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         thread_key=params.get("thread_key", [None])[0],
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/open-loops":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_open_loops(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        include_inactive=str(params.get("include_inactive", ["false"])[0]).strip().lower() in {"1", "true", "yes"},
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/commitments":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_commitments(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        include_inactive=str(params.get("include_inactive", ["false"])[0]).strip().lower() in {"1", "true", "yes"},
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/resume-candidate":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_resume_candidate(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        include_inactive=str(params.get("include_inactive", ["false"])[0]).strip().lower() in {"1", "true", "yes"},
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return

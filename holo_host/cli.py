@@ -894,6 +894,99 @@ def _thread_warmth_payload(
             service.memory.graph.close()
 
 
+def _open_loops_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    include_inactive: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/open-loops",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "include_inactive": str(bool(include_inactive)).lower()},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_open_loops(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _commitments_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    include_inactive: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/commitments",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "include_inactive": str(bool(include_inactive)).lower()},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_commitments(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _resume_candidate_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    include_inactive: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/resume-candidate",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "include_inactive": str(bool(include_inactive)).lower()},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_resume_candidate(thread_key=thread_key, chat_name=chat_name, channel=channel, include_inactive=include_inactive), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _world_state_payload(
     config_path: str | None,
     *,
@@ -3795,6 +3888,63 @@ def command_show_thread_warmth(
     return 0
 
 
+def command_show_open_loops(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    include_inactive: bool,
+) -> int:
+    payload, _transport = _open_loops_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        include_inactive=include_inactive,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_commitments(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    include_inactive: bool,
+) -> int:
+    payload, _transport = _commitments_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        include_inactive=include_inactive,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_resume_candidate(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    include_inactive: bool,
+) -> int:
+    payload, _transport = _resume_candidate_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        include_inactive=include_inactive,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_world_state(
     config_path: str | None,
     *,
@@ -5199,6 +5349,53 @@ def _accept_stage19_payload(
             service.memory.graph.close()
 
 
+def _accept_stage20_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage20",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage20(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -5335,6 +5532,27 @@ def command_accept_stage19(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage19_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage20(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage20_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -6483,6 +6701,21 @@ def main(argv: list[str] | None = None) -> int:
     thread_warmth_parser.add_argument("--thread-key", default=None)
     thread_warmth_parser.add_argument("--chat-name", default=None)
     thread_warmth_parser.add_argument("--channel", default="wechat")
+    open_loops_parser = subparsers.add_parser("show-open-loops", help="Show Stage-20 open loops for one thread")
+    open_loops_parser.add_argument("--thread-key", default=None)
+    open_loops_parser.add_argument("--chat-name", default=None)
+    open_loops_parser.add_argument("--channel", default="wechat")
+    open_loops_parser.add_argument("--include-inactive", action="store_true")
+    commitments_parser = subparsers.add_parser("show-commitments", help="Show Stage-20 commitments for one thread")
+    commitments_parser.add_argument("--thread-key", default=None)
+    commitments_parser.add_argument("--chat-name", default=None)
+    commitments_parser.add_argument("--channel", default="wechat")
+    commitments_parser.add_argument("--include-inactive", action="store_true")
+    resume_candidate_parser = subparsers.add_parser("trace-resume-candidate", help="Trace Stage-20 resume candidates for one thread")
+    resume_candidate_parser.add_argument("--thread-key", default=None)
+    resume_candidate_parser.add_argument("--chat-name", default=None)
+    resume_candidate_parser.add_argument("--channel", default="wechat")
+    resume_candidate_parser.add_argument("--include-inactive", action="store_true")
     world_state_parser = subparsers.add_parser("show-world-state", help="Inspect the current social world-state for one thread")
     world_state_parser.add_argument("--thread-key", default=None)
     world_state_parser.add_argument("--chat-name", default=None)
@@ -6796,6 +7029,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage19_parser.add_argument("--channel", default="wechat")
     accept_stage19_parser.add_argument("--sender", default=None)
     accept_stage19_parser.add_argument("--artifact-dir", default=None)
+    accept_stage20_parser = subparsers.add_parser("accept-stage20", help="Run the Stage-20 temporal commitments and interruption recovery gate")
+    accept_stage20_parser.add_argument("--thread-key", default=None)
+    accept_stage20_parser.add_argument("--chat-name", default=None)
+    accept_stage20_parser.add_argument("--channel", default="wechat")
+    accept_stage20_parser.add_argument("--sender", default=None)
+    accept_stage20_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -6958,6 +7197,30 @@ def main(argv: list[str] | None = None) -> int:
             thread_key=args.thread_key,
             chat_name=args.chat_name,
             channel=args.channel,
+        )
+    if args.command == "show-open-loops":
+        return command_show_open_loops(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            include_inactive=args.include_inactive,
+        )
+    if args.command == "show-commitments":
+        return command_show_commitments(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            include_inactive=args.include_inactive,
+        )
+    if args.command == "trace-resume-candidate":
+        return command_trace_resume_candidate(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            include_inactive=args.include_inactive,
         )
     if args.command == "show-world-state":
         return command_show_world_state(
@@ -7401,6 +7664,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage19":
         return command_accept_stage19(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage20":
+        return command_accept_stage20(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,
