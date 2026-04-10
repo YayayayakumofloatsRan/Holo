@@ -804,6 +804,96 @@ def _predictive_continuity_payload(
             service.memory.graph.close()
 
 
+def _attention_frontier_payload(
+    config_path: str | None,
+    *,
+    channel: str | None,
+    limit: int,
+    include_stale: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/attention-frontier",
+        params={"channel": channel or "", "limit": limit, "include_stale": str(bool(include_stale)).lower()},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_attention_frontier(channel=channel, limit=limit, include_stale=include_stale), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _wake_reasons_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/wake-reasons",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_wake_reasons(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _thread_warmth_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/thread-warmth",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_thread_warmth(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _world_state_payload(
     config_path: str | None,
     *,
@@ -3654,6 +3744,57 @@ def command_show_predictive_continuity(
     return 0
 
 
+def command_show_attention_frontier(
+    config_path: str | None,
+    *,
+    channel: str | None,
+    limit: int,
+    include_stale: bool,
+) -> int:
+    payload, _transport = _attention_frontier_payload(
+        config_path,
+        channel=channel,
+        limit=limit,
+        include_stale=include_stale,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_wake_reasons(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _wake_reasons_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_thread_warmth(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _thread_warmth_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_world_state(
     config_path: str | None,
     *,
@@ -5011,6 +5152,53 @@ def _accept_stage18_payload(
             service.memory.graph.close()
 
 
+def _accept_stage19_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage19",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage19(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -5126,6 +5314,27 @@ def command_accept_stage18(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage18_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage19(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage19_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -6262,6 +6471,18 @@ def main(argv: list[str] | None = None) -> int:
     predictive_parser.add_argument("--thread-key", default=None)
     predictive_parser.add_argument("--chat-name", default=None)
     predictive_parser.add_argument("--channel", default="wechat")
+    attention_frontier_parser = subparsers.add_parser("show-attention-frontier", help="Show Stage-19 bounded attention frontier entries")
+    attention_frontier_parser.add_argument("--channel", default=None)
+    attention_frontier_parser.add_argument("--limit", type=int, default=8)
+    attention_frontier_parser.add_argument("--include-stale", action="store_true")
+    wake_reasons_parser = subparsers.add_parser("trace-wake-reasons", help="Show Stage-19 wake reasons for one thread")
+    wake_reasons_parser.add_argument("--thread-key", default=None)
+    wake_reasons_parser.add_argument("--chat-name", default=None)
+    wake_reasons_parser.add_argument("--channel", default="wechat")
+    thread_warmth_parser = subparsers.add_parser("show-thread-warmth", help="Show Stage-19 thread warmth for one thread")
+    thread_warmth_parser.add_argument("--thread-key", default=None)
+    thread_warmth_parser.add_argument("--chat-name", default=None)
+    thread_warmth_parser.add_argument("--channel", default="wechat")
     world_state_parser = subparsers.add_parser("show-world-state", help="Inspect the current social world-state for one thread")
     world_state_parser.add_argument("--thread-key", default=None)
     world_state_parser.add_argument("--chat-name", default=None)
@@ -6569,6 +6790,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage18_parser.add_argument("--channel", default="wechat")
     accept_stage18_parser.add_argument("--sender", default=None)
     accept_stage18_parser.add_argument("--artifact-dir", default=None)
+    accept_stage19_parser = subparsers.add_parser("accept-stage19", help="Run the Stage-19 bounded background continuity and attention frontier gate")
+    accept_stage19_parser.add_argument("--thread-key", default=None)
+    accept_stage19_parser.add_argument("--chat-name", default=None)
+    accept_stage19_parser.add_argument("--channel", default="wechat")
+    accept_stage19_parser.add_argument("--sender", default=None)
+    accept_stage19_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -6706,6 +6933,27 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "show-predictive-continuity":
         return command_show_predictive_continuity(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "show-attention-frontier":
+        return command_show_attention_frontier(
+            args.config,
+            channel=args.channel,
+            limit=args.limit,
+            include_stale=args.include_stale,
+        )
+    if args.command == "trace-wake-reasons":
+        return command_trace_wake_reasons(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "show-thread-warmth":
+        return command_show_thread_warmth(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,
@@ -7144,6 +7392,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage18":
         return command_accept_stage18(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage19":
+        return command_accept_stage19(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

@@ -340,8 +340,15 @@ class MemoryBridge:
             self._packet_cache.pop(key, None)
             self._packet_cache_misses += 1
             return None
+        packet = dict(cached.get("packet", {}))
+        stage19 = dict(packet.get("stage19", {})) if isinstance(packet.get("stage19", {}), dict) else {}
+        stale_after = str(stage19.get("stale_after", "") or "")
+        if bool(stage19.get("frontier_used_for_thread", False)) and stale_after and stale_after <= utc_now():
+            self._packet_cache.pop(key, None)
+            self._packet_cache_misses += 1
+            return None
         self._packet_cache_hits += 1
-        return copy.deepcopy(dict(cached.get("packet", {})))
+        return copy.deepcopy(packet)
 
     def _store_packet_cache(self, query: str, *, context: dict[str, Any], packet: dict[str, Any], ttl_seconds: float = 12.0) -> None:
         key = self._packet_cache_key(query, context=context)
@@ -1424,6 +1431,7 @@ class MemoryBridge:
         packet["intent_state"] = intent_state
         packet.setdefault("active_thread_state", dict(context.get("active_thread_state", {})) if isinstance(context.get("active_thread_state", {}), dict) else {})
         packet.setdefault("stage17", {})
+        packet.setdefault("stage19", dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {})
         packet["action_market"] = action_market
         packet["selected_action"] = selected_action
         packet["selected_prediction"] = selected_prediction
@@ -1498,6 +1506,7 @@ class MemoryBridge:
         packet["state"]["intent_state"] = dict(packet["intent_state_v4"])
         packet["state"]["active_thread_state"] = dict(packet.get("active_thread_state", {}))
         packet["state"]["stage17"] = dict(packet.get("stage17", {}))
+        packet["state"]["stage19"] = dict(packet.get("stage19", {}))
         packet["state"]["action_market"] = list(action_market)
         packet["state"]["selected_action"] = dict(selected_action)
         packet["state"]["selected_prediction"] = dict(selected_prediction)
@@ -1657,6 +1666,153 @@ class MemoryBridge:
         self.clear_packet_cache()
         return state
 
+    @staticmethod
+    def _stage19_frontier_empty(*, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return {
+            "frontier_visible": False,
+            "frontier_used_for_thread": False,
+            "canonical_thread_key": str(thread_key or ""),
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "channel": str(channel or "wechat"),
+            "thread_heat": 0.0,
+            "thread_warmth": "cold",
+            "wake_reason": "",
+            "anticipated_next_turn": "",
+            "pending_open_loop_count": 0,
+            "unresolved_thread_pull": False,
+            "reentry_priority": 0.0,
+            "stale_after": "",
+            "last_stream_touch_at": "",
+            "frontier_stale": True,
+            "evidence_refs": [],
+        }
+
+    def _stage19_frontier_payload(
+        self,
+        item: dict[str, Any],
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        used: bool,
+    ) -> dict[str, Any]:
+        if not item or not (item.get("canonical_thread_key") or item.get("thread_key")):
+            return self._stage19_frontier_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        pending = int(item.get("pending_open_loop_count", 0) or 0)
+        return {
+            "frontier_visible": bool(item.get("canonical_thread_key") or item.get("thread_key")),
+            "frontier_used_for_thread": bool(used),
+            "canonical_thread_key": str(item.get("canonical_thread_key", item.get("thread_key", thread_key)) or thread_key),
+            "thread_key": str(item.get("thread_key", item.get("canonical_thread_key", thread_key)) or thread_key),
+            "chat_name": str(item.get("chat_name", chat_name) or chat_name),
+            "channel": str(item.get("channel", channel) or channel),
+            "thread_heat": float(item.get("thread_heat", 0.0) or 0.0),
+            "thread_warmth": str(item.get("thread_warmth", "cold") or "cold"),
+            "wake_reason": str(item.get("wake_reason", "") or ""),
+            "anticipated_next_turn": str(item.get("anticipated_next_turn", "") or ""),
+            "pending_open_loop_count": pending,
+            "unresolved_thread_pull": bool(pending > 0),
+            "reentry_priority": float(item.get("reentry_priority", 0.0) or 0.0),
+            "stale_after": str(item.get("stale_after", "") or ""),
+            "last_stream_touch_at": str(item.get("last_stream_touch_at", "") or ""),
+            "frontier_stale": bool(item.get("stale", True)),
+            "evidence_refs": list(item.get("evidence_refs", []))[:3],
+        }
+
+    def _hydrate_active_state_from_frontier(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or "")
+        if not hasattr(self.graph, "attention_frontier_item"):
+            return active_state, self._stage19_frontier_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        item = self.graph.attention_frontier_item(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        if not bool(item.get("present", False)):
+            return active_state, self._stage19_frontier_payload(
+                item,
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                used=False,
+            )
+
+        hydrated = dict(active_state)
+        metadata = dict(hydrated.get("metadata", {})) if isinstance(hydrated.get("metadata", {}), dict) else {}
+        stage19 = self._stage19_frontier_payload(item, channel=channel, thread_key=thread_key, chat_name=chat_name, used=True)
+        metadata["stage19_attention_frontier"] = {
+            "wake_reason": stage19["wake_reason"],
+            "anticipated_next_turn": stage19["anticipated_next_turn"],
+            "thread_heat": stage19["thread_heat"],
+            "thread_warmth": stage19["thread_warmth"],
+            "pending_open_loop_count": stage19["pending_open_loop_count"],
+            "unresolved_thread_pull": stage19["unresolved_thread_pull"],
+            "last_stream_touch_at": stage19["last_stream_touch_at"],
+            "stale_after": stage19["stale_after"],
+        }
+        hydrated["metadata"] = metadata
+        hydrated["present"] = True
+        hydrated["channel"] = str(item.get("channel", channel) or channel)
+        hydrated["thread_key"] = str(item.get("canonical_thread_key", item.get("thread_key", thread_key)) or thread_key)
+        hydrated["chat_name"] = str(item.get("chat_name", chat_name) or chat_name)
+        if not str(hydrated.get("continuity_summary", "") or "").strip():
+            frontier_line = stage19["anticipated_next_turn"] or stage19["wake_reason"]
+            if frontier_line:
+                hydrated["continuity_summary"] = compact_text(f"attention_frontier: {frontier_line}", 180)
+        if not str(hydrated.get("last_user_intent", "") or "").strip() and stage19["wake_reason"]:
+            hydrated["last_user_intent"] = compact_text(stage19["wake_reason"], 120)
+        if not str(hydrated.get("attention_focus", "") or "").strip():
+            hydrated["attention_focus"] = "attention_frontier"
+        if not str(hydrated.get("active_affect_hint", "") or "").strip():
+            hydrated["active_affect_hint"] = "continuity_frontier"
+        if stage19["thread_heat"] >= 0.36:
+            hydrated["cache_warmth"] = "frontier_warm"
+        else:
+            hydrated["cache_warmth"] = str(hydrated.get("cache_warmth", "") or "seeded")
+
+        predictive = dict(hydrated.get("predictive_continuity", {})) if isinstance(hydrated.get("predictive_continuity", {}), dict) else {}
+        blockers = bool(
+            signal.get("local_memory_requested", False)
+            or signal.get("factual_lookup", False)
+            or signal.get("search_requested", False)
+            or signal.get("visual_requested", False)
+        )
+        meaningful = self._meaningful_char_count(query)
+        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        confidence = max(float(predictive.get("active_prediction_confidence", 0.0) or 0.0), min(0.84, 0.56 + stage19["thread_heat"] * 0.24))
+        if not reflex_eligible:
+            confidence = min(confidence, 0.54)
+        targets = self._unique_strings(
+            list(predictive.get("likely_reference_targets", []))
+            + [stage19["wake_reason"] or stage19["anticipated_next_turn"]]
+        )[:3]
+        predictive.update(
+            {
+                "predicted_next_user_act": str(predictive.get("predicted_next_user_act", "") or ("low_signal_ping_or_ack" if bool(signal.get("low_signal", False)) else "ordinary_continuation")),
+                "predicted_reply_pressure": min(0.42, float(predictive.get("predicted_reply_pressure", 0.18) or 0.18) + (0.04 if stage19["unresolved_thread_pull"] else 0.0)),
+                "likely_reference_targets": targets,
+                "expected_social_valence": str(predictive.get("expected_social_valence", "") or "neutral"),
+                "reflex_eligibility": bool(reflex_eligible),
+                "turn_rhythm": {
+                    **(dict(predictive.get("turn_rhythm", {})) if isinstance(predictive.get("turn_rhythm", {}), dict) else {}),
+                    "frontier_hydrated": True,
+                    "short_turn": meaningful <= 18,
+                },
+                "freshness_at": str(stage19["last_stream_touch_at"] or predictive.get("freshness_at", "")),
+                "active_prediction_confidence": self._clamp(confidence),
+            }
+        )
+        hydrated["predictive_continuity"] = predictive
+        for key, value in predictive.items():
+            hydrated[key] = value
+        return hydrated, stage19
+
     def _recall_escalation_reason(
         self,
         query: str,
@@ -1721,7 +1877,7 @@ class MemoryBridge:
             return False
         if bool(signal.get("low_signal", False)) or meaningful <= 18:
             return True
-        if bool(active_state.get("present", False)) and str(active_state.get("cache_warmth", "") or "") in {"warm", "seeded"}:
+        if bool(active_state.get("present", False)) and str(active_state.get("cache_warmth", "") or "") in {"warm", "seeded", "frontier_warm"}:
             return meaningful <= 36
         return meaningful <= 24 and not bool(signal.get("question_like", False))
 
@@ -1736,6 +1892,7 @@ class MemoryBridge:
         channel = str(context.get("channel", "wechat") or "wechat")
         thread_key = str(context.get("thread_key", "") or "")
         chat_name = str(context.get("chat_name", "") or "")
+        stage19_frontier = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else self._stage19_frontier_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         limits = self._mind_limits(context, fast=True)
         summary = str(active_state.get("continuity_summary", "") or "").strip()
         last_intent = str(active_state.get("last_user_intent", "") or "").strip()
@@ -1770,11 +1927,16 @@ class MemoryBridge:
             episodic_recall={"lines": [], "items": []},
             consciousness_stream={"thread_summary": summary, "lines": [], "items": []},
             activation_state={
-                "heat": 0.0,
+                "heat": float(stage19_frontier.get("thread_heat", 0.0) or 0.0),
                 "active_node_ids": [],
-                "motifs": [str(active_state.get("attention_focus", "") or "")] if str(active_state.get("attention_focus", "") or "").strip() else [],
+                "motifs": self._unique_strings(
+                    [
+                        str(active_state.get("attention_focus", "") or ""),
+                        str(stage19_frontier.get("wake_reason", "") or ""),
+                    ]
+                )[:4],
                 "recall_priors": {},
-                "contributor_counts": {},
+                "contributor_counts": {"attention_frontier": 1} if bool(stage19_frontier.get("frontier_used_for_thread", False)) else {},
                 "recent_events": [],
             },
             graph_confidence=0.0,
@@ -1813,7 +1975,9 @@ class MemoryBridge:
             "micro_fast_candidate": True,
             "micro_fast_reason": "active_thread_reflex_candidate",
         }
+        packet["stage19"] = dict(stage19_frontier)
         packet.setdefault("retrieval_trace", {}).setdefault("stage18", dict(packet["stage18"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         result = self._finalize_stage2_packet(packet, query=query, context=context)
         if hasattr(self.graph, "update_active_thread_state"):
             self.graph.update_active_thread_state(
@@ -2404,6 +2568,12 @@ class MemoryBridge:
         active_state = dict(normalized_context.get("active_thread_state", {})) if isinstance(normalized_context.get("active_thread_state", {}), dict) else {}
         if not active_state:
             active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        active_state, stage19_frontier = self._hydrate_active_state_from_frontier(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+        )
         recall_escalation_reason = self._recall_escalation_reason(
             query,
             context=normalized_context,
@@ -2411,6 +2581,7 @@ class MemoryBridge:
             signal=signal,
         )
         normalized_context["active_thread_state"] = dict(active_state)
+        normalized_context["stage19_attention_frontier"] = dict(stage19_frontier)
         normalized_context["recall_escalation_reason"] = recall_escalation_reason
         if self._active_fast_lane_eligible(
             query,
@@ -2543,6 +2714,8 @@ class MemoryBridge:
             "micro_fast_candidate": False,
             "micro_fast_reason": recall_escalation_reason or "not_active_thread_fast",
         }
+        packet["stage19"] = dict(stage19_frontier)
+        packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def inspect_mind(
@@ -2580,6 +2753,7 @@ class MemoryBridge:
             "visual_memory": dict(packet.get("visual_memory", {})),
             "active_thread_state": dict(packet.get("active_thread_state", {})),
             "stage17": dict(packet.get("stage17", {})),
+            "stage19": dict(packet.get("stage19", {})),
             "mind_packet": packet,
         }
 
@@ -2661,6 +2835,7 @@ class MemoryBridge:
             recall_escalation_reason=recall_reason,
         )
         packet = self.sidecar_packet(query, context={**context, "active_thread_state": active_state})
+        packet_active_state = dict(packet.get("active_thread_state", active_state))
         return {
             "query": query,
             "thread_key": active_state.get("thread_key", context["thread_key"]),
@@ -2675,8 +2850,44 @@ class MemoryBridge:
             "selected_action": dict(packet.get("selected_action", {})),
             "stage17": dict(packet.get("stage17", {})),
             "stage18": dict(packet.get("stage18", {})),
-            "predictive_continuity": dict(active_state.get("predictive_continuity", {})),
+            "stage19": dict(packet.get("stage19", {})),
+            "predictive_continuity": dict(packet_active_state.get("predictive_continuity", {})),
         }
+
+    def attention_frontier(
+        self,
+        *,
+        channel: str | None = None,
+        limit: int = 8,
+        include_stale: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "attention_frontier"):
+            return {"status": "unavailable", "entry_count": 0, "entries": []}
+        return self.graph.attention_frontier(channel=channel, limit=limit, include_stale=include_stale)
+
+    def trace_wake_reasons(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "trace_wake_reasons"):
+            return {"status": "unavailable", "thread_key": str(thread_key or ""), "chat_name": str(chat_name or ""), "channel": channel}
+        payload = self.graph.trace_wake_reasons(thread_key=thread_key, chat_name=chat_name, channel=channel)
+        payload["active_thread_state"] = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        return payload
+
+    def thread_warmth(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "thread_warmth"):
+            return {"status": "unavailable", "thread_key": str(thread_key or ""), "chat_name": str(chat_name or ""), "channel": channel, "thread_warmth": "cold"}
+        return self.graph.thread_warmth(thread_key=thread_key, chat_name=chat_name, channel=channel)
 
     def record_recall(self, selected_ids: list[str], *, success: bool = True) -> dict[str, Any]:
         rag_result = self.rag.record_memory_recall(selected_ids, success=success)
@@ -3691,6 +3902,7 @@ class MemoryBridge:
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
         report = self.graph.record_stream_run(stream_name, status=status, note=note, payload=payload)
+        self.clear_packet_cache()
         sampled_ids = [
             str(item).strip()
             for item in list((payload or {}).get("sampled_archive_ids", []))
@@ -3717,6 +3929,27 @@ class MemoryBridge:
                 motifs=motifs[:4],
                 payload=payload or {},
                 heat_delta=0.08,
+            )
+        for item in list(dict(report.get("influence", {})).get("frontier_updates", [])):
+            if not isinstance(item, dict):
+                continue
+            frontier_thread_key = str(item.get("canonical_thread_key", item.get("thread_key", "")) or "").strip()
+            frontier_channel = str(item.get("channel", "") or "").strip()
+            if not frontier_thread_key or not frontier_channel:
+                continue
+            self.activation.record(
+                channel=frontier_channel,
+                thread_key=frontier_thread_key,
+                chat_name=str(item.get("chat_name", "") or frontier_thread_key),
+                contributor=stream_name,
+                note=str(item.get("wake_reason", "") or note),
+                node_ids=[],
+                motifs=[
+                    str(item.get("wake_reason", "") or ""),
+                    str(item.get("anticipated_next_turn", "") or ""),
+                ],
+                payload={"stage19_attention_frontier": item},
+                heat_delta=min(0.18, 0.05 + float(item.get("thread_heat", 0.0) or 0.0) * 0.12),
             )
         return report
 

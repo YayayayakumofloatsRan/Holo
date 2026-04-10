@@ -40,6 +40,7 @@ from .reply_service_parts.acceptance import (
     accept_stage16 as _accept_stage16,
     accept_stage17 as _accept_stage17,
     accept_stage18 as _accept_stage18,
+    accept_stage19 as _accept_stage19,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -3235,6 +3236,224 @@ class HoloReplyService:
             "stage17": {"status": stage17_report.get("status"), "checks": stage17_report.get("checks", {})},
         }
 
+    def show_attention_frontier(
+        self,
+        *,
+        channel: str | None = None,
+        limit: int = 8,
+        include_stale: bool = False,
+    ) -> dict[str, Any]:
+        return self.memory.attention_frontier(channel=channel, limit=limit, include_stale=include_stale)
+
+    def trace_wake_reasons(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.trace_wake_reasons(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def show_thread_warmth(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.thread_warmth(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def accept_stage19(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage19(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def _accept_stage19_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_chat_name = str(chat_name or "Nemoqi").strip()
+        normalized_thread_key = str(thread_key or normalized_chat_name).strip()
+        if normalized_channel == "wechat" and normalized_thread_key and not (
+            normalized_thread_key.startswith("wechat:")
+            or normalized_thread_key.startswith("wxid_")
+            or normalized_thread_key.endswith("@chatroom")
+        ):
+            normalized_thread_key = f"wechat:{normalized_thread_key}"
+
+        self.memory.rag.archive_turn(
+            "stage19 warm frontier seed",
+            "stage19 keeps the unfinished line warm without copying history",
+            source="accept_stage19.frontier_seed",
+            tags=["wechat", "stage19"],
+            turn_id=f"accept-stage19-{stable_digest(normalized_thread_key, normalized_chat_name)[:10]}",
+            metadata={"channel": normalized_channel, "thread_key": normalized_thread_key, "chat_name": normalized_chat_name},
+        )
+        sync_report = self.memory.graph.sync_thread(channel=normalized_channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
+        inspect = self.memory.graph.inspect_graph(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel, limit=6)
+        archive_node = next((dict(node) for node in inspect.get("nodes", []) if str(node.get("source_store", "")) == "archive"), {})
+        stream_report = self.memory.record_stream_run(
+            "association_stream",
+            status="ok",
+            note="stage19_acceptance",
+            payload={
+                "thoughts": [
+                    {
+                        "channel": normalized_channel,
+                        "thread_key": normalized_thread_key,
+                        "chat_name": normalized_chat_name,
+                        "motif": "stage19_continuity",
+                        "source_archive_id": str(archive_node.get("source_id", archive_node.get("id", "")) or ""),
+                    }
+                ],
+                "selected_memory_ids": [str(archive_node.get("source_id", archive_node.get("id", "")) or "")],
+            },
+        )
+        frontier = self.show_attention_frontier(channel=normalized_channel, limit=8)
+        warmth = self.show_thread_warmth(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel)
+        wake_trace = self.trace_wake_reasons(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel)
+
+        warm_query = "still here?"
+        context = {
+            "channel": normalized_channel,
+            "thread_key": normalized_thread_key,
+            "incoming_thread_key": normalized_thread_key,
+            "message_id": "accept-stage19-warm-reentry",
+            "chat_name": normalized_chat_name,
+            "sender": str(sender or normalized_chat_name),
+            "attachments": [],
+            "event_id": "1901",
+        }
+        started_at = time.perf_counter()
+        warm_packet = self.memory.sidecar_packet(warm_query, context=context)
+        warm_build_ms = int((time.perf_counter() - started_at) * 1000)
+        warm_turn_context = TurnContext(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            sender=str(sender or normalized_chat_name),
+            user_text=warm_query,
+            sidecar=warm_packet,
+            mind_packet=warm_packet,
+            attention_state=build_attention_state(warm_query, channel=normalized_channel, metadata={}),
+            emotion_state=dict(warm_packet.get("state", {}).get("emotion_state", {})),
+            history=[{"direction": "inbound", "body_text": warm_query}],
+            metadata={"event_id": "1901"},
+            capability_context={},
+        )
+        warm_turn_plan = build_turn_plan(warm_turn_context, self.config)
+        generation_lane, lane_reason, reflex_candidate = _select_reply_lane(warm_turn_context, warm_turn_plan, self.config)
+
+        memory_query = "remember previous history"
+        recall_packet = self.memory.sidecar_packet(
+            memory_query,
+            context={**context, "message_id": "accept-stage19-memory-recall", "event_id": "1902"},
+        )
+
+        restore_stale_after = str(dict(warmth.get("frontier_item", {})).get("stale_after", "") or "")
+        stale_at = "2000-01-01T00:00:00Z"
+        with self.memory.graph._lock:
+            self.memory.graph.conn.execute(
+                "UPDATE attention_frontier SET stale_after = ? WHERE channel = ? AND canonical_thread_key = ?",
+                (stale_at, normalized_channel, normalized_thread_key),
+            )
+            self.memory.graph.conn.commit()
+        self.memory.clear_packet_cache()
+        decayed_warmth = self.show_thread_warmth(thread_key=normalized_thread_key, chat_name=normalized_chat_name, channel=normalized_channel)
+        decayed_packet = self.memory.sidecar_packet(
+            warm_query,
+            context={**context, "message_id": "accept-stage19-decayed", "event_id": "1903"},
+        )
+        if restore_stale_after and restore_stale_after != stale_at:
+            with self.memory.graph._lock:
+                self.memory.graph.conn.execute(
+                    "UPDATE attention_frontier SET stale_after = ? WHERE channel = ? AND canonical_thread_key = ?",
+                    (restore_stale_after, normalized_channel, normalized_thread_key),
+                )
+                self.memory.graph.conn.commit()
+            self.memory.clear_packet_cache()
+        stage18_report = self.accept_stage18(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        checks = {
+            "frontier_persisted_and_inspectable": any(
+                str(item.get("canonical_thread_key", "")) == normalized_thread_key
+                for item in frontier.get("entries", [])
+            ),
+            "frontier_influenced_by_allowed_stream": bool(stream_report.get("influence", {}).get("frontier_updates"))
+            and str(stream_report.get("stream_name", "")) in {"maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"},
+            "warm_reentry_uses_active_reflex_path": str(warm_packet.get("memory_route", "")) == "active_thread"
+            and bool(dict(warm_packet.get("stage19", {})).get("frontier_used_for_thread", False)),
+            "ordinary_short_turn_generation_can_stay_reflex": generation_lane in {"micro_fast", "subject_main"}
+            and str(warm_packet.get("memory_route", "")) == "active_thread",
+            "ordinary_turn_not_blocked_by_stream_work": warm_build_ms < 750
+            and str(warm_packet.get("retrieval_mode", "")) == "active-thread-fast",
+            "thread_warmth_decays_to_cold": str(decayed_warmth.get("thread_warmth", "")) == "cold"
+            and bool(decayed_warmth.get("stale", False))
+            and not bool(dict(decayed_packet.get("stage19", {})).get("frontier_used_for_thread", False)),
+            "explicit_memory_query_escalates": str(recall_packet.get("tier", "")).strip() in {"recall", "deep_recall"}
+            and str(recall_packet.get("recall_reason", "")).startswith("stage17:"),
+            "stage18_acceptance_green": str(stage18_report.get("status", "")).strip() == "pass",
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "bounded-background-continuity-and-attention-frontier-stage19",
+            "checks": checks,
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": normalized_channel,
+            "stream_report": stream_report,
+            "sync_report": sync_report,
+            "attention_frontier": frontier,
+            "thread_warmth": warmth,
+            "wake_trace": wake_trace,
+            "warm_reentry": {
+                "tier": warm_packet.get("tier"),
+                "memory_route": warm_packet.get("memory_route"),
+                "retrieval_mode": warm_packet.get("retrieval_mode"),
+                "stage19": dict(warm_packet.get("stage19", {})),
+                "generation_lane": generation_lane,
+                "generation_lane_reason": lane_reason,
+                "reflex_micro_fast_candidate": reflex_candidate,
+                "turn_plan": warm_turn_plan.to_dict(),
+                "build_ms": warm_build_ms,
+            },
+            "recall_probe": {
+                "query": memory_query,
+                "tier": recall_packet.get("tier"),
+                "recall_reason": recall_packet.get("recall_reason"),
+                "memory_route": recall_packet.get("memory_route"),
+            },
+            "decay_probe": {
+                "thread_warmth": decayed_warmth,
+                "stage19": dict(decayed_packet.get("stage19", {})),
+            },
+            "stage18": {"status": stage18_report.get("status"), "checks": stage18_report.get("checks", {})},
+        }
+
     def initiative_status(
         self,
         *,
@@ -5525,6 +5744,33 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/predictive-continuity":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.show_predictive_continuity(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/attention-frontier":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_attention_frontier(
+                        channel=params.get("channel", [None])[0],
+                        limit=int(params.get("limit", ["8"])[0]),
+                        include_stale=str(params.get("include_stale", ["false"])[0]).strip().lower() in {"1", "true", "yes"},
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/wake-reasons":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_wake_reasons(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/thread-warmth":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_thread_warmth(
                         thread_key=params.get("thread_key", [None])[0],
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],

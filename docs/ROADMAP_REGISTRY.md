@@ -21,9 +21,9 @@ Stage18: dual-speed reflex and predictive continuity
 - Keeps explicit memory/history/factual requests on recall escalation paths.
 
 Stage19: bounded background continuity and attention frontier
-- Reuse existing stream/runtime machinery to keep a small attention frontier warm.
-- Bound entries by count, expiry, and canonical thread key.
-- Do not expand initiative sending rights.
+- Implemented as a bounded Mind Graph `attention_frontier` fed only by `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`.
+- Ingress hydrates same-thread active state from one frontier row before heavier recall.
+- Bound entries by count, expiry, evidence refs, and canonical thread key; do not expand initiative sending rights.
 
 Stage20: temporal commitments and interruption recovery
 - Persist deferrals, promises, interrupted actions, and restart recovery as temporal commitments.

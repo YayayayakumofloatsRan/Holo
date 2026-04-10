@@ -6,7 +6,7 @@ import re
 import sqlite3
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Iterable
@@ -229,6 +229,20 @@ FAST_PING_HINTS = {
     "ok",
     "okay",
 }
+ATTENTION_FRONTIER_ALLOWED_STREAMS = {"maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"}
+ATTENTION_FRONTIER_MAX_ENTRIES = 8
+ATTENTION_FRONTIER_TTL_SECONDS = {
+    "maintenance_stream": 4 * 3600,
+    "association_stream": 6 * 3600,
+    "social_stream": 6 * 3600,
+    "deep_dream_cycle": 12 * 3600,
+}
+ATTENTION_FRONTIER_HEAT_DELTA = {
+    "maintenance_stream": 0.12,
+    "association_stream": 0.18,
+    "social_stream": 0.24,
+    "deep_dream_cycle": 0.2,
+}
 
 
 def _tokenize(text: str) -> list[str]:
@@ -315,6 +329,24 @@ def _origin_signal_score(text: str) -> int:
 
 def _meaningful_char_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9\u3400-\u9fff]", str(text or "")))
+
+
+def _parse_utc_iso(value: str | None) -> datetime | None:
+    current = str(value or "").strip()
+    if not current:
+        return None
+    try:
+        parsed = datetime.fromisoformat(current.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _utc_after_seconds(value: str, seconds: int) -> str:
+    base = _parse_utc_iso(value) or datetime.now(timezone.utc)
+    return (base + timedelta(seconds=int(seconds))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _archive_turn_fields(row: dict[str, Any]) -> dict[str, str]:
@@ -725,6 +757,25 @@ class MindGraph:
             );
             CREATE INDEX IF NOT EXISTS idx_active_thread_state_thread
             ON active_thread_state(channel, thread_key, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS attention_frontier (
+                id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                canonical_thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                thread_heat REAL NOT NULL DEFAULT 0.0,
+                wake_reason TEXT NOT NULL DEFAULT '',
+                anticipated_next_turn TEXT NOT NULL DEFAULT '',
+                pending_open_loop_count INTEGER NOT NULL DEFAULT 0,
+                reentry_priority REAL NOT NULL DEFAULT 0.0,
+                stale_after TEXT NOT NULL DEFAULT '',
+                last_stream_touch_at TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(channel, canonical_thread_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_attention_frontier_live
+            ON attention_frontier(channel, stale_after, reentry_priority DESC, last_stream_touch_at DESC);
             CREATE TABLE IF NOT EXISTS mind_runs (
                 id INTEGER PRIMARY KEY,
                 run_type TEXT NOT NULL,
@@ -1578,6 +1629,308 @@ class MindGraph:
         )
         state["status"] = "ok"
         return state
+
+    @staticmethod
+    def _frontier_warmth(thread_heat: float, *, stale: bool) -> str:
+        if stale or thread_heat <= 0.0:
+            return "cold"
+        if thread_heat >= 0.72:
+            return "hot"
+        if thread_heat >= 0.36:
+            return "warm"
+        return "cool"
+
+    def _attention_frontier_item_from_row(self, row: dict[str, Any] | None, *, now: str) -> dict[str, Any]:
+        if not row:
+            return {"present": False, "thread_warmth": "cold", "thread_heat": 0.0, "stale": True}
+        metadata = _safe_json_dict(row.get("metadata_json", "{}"))
+        stale_after = str(row.get("stale_after", "") or "")
+        stale = bool(stale_after and stale_after <= now)
+        stored_heat = self._clamp(row.get("thread_heat", 0.0), default=0.0)
+        effective_heat = 0.0 if stale else stored_heat
+        canonical_thread_key = str(row.get("canonical_thread_key", "") or "")
+        payload = {
+            "present": not stale,
+            "stale": stale,
+            "channel": str(row.get("channel", "") or ""),
+            "canonical_thread_key": canonical_thread_key,
+            "thread_key": canonical_thread_key,
+            "chat_name": str(row.get("chat_name", "") or ""),
+            "thread_heat": effective_heat,
+            "stored_thread_heat": stored_heat,
+            "wake_reason": str(row.get("wake_reason", "") or ""),
+            "anticipated_next_turn": str(row.get("anticipated_next_turn", "") or ""),
+            "pending_open_loop_count": int(row.get("pending_open_loop_count", 0) or 0),
+            "reentry_priority": 0.0 if stale else self._clamp(row.get("reentry_priority", 0.0), default=0.0),
+            "stale_after": stale_after,
+            "last_stream_touch_at": str(row.get("last_stream_touch_at", "") or ""),
+            "thread_warmth": self._frontier_warmth(effective_heat, stale=stale),
+            "metadata": metadata,
+            "evidence_refs": [
+                str(item).strip()
+                for item in list(metadata.get("evidence_refs", []))
+                if str(item).strip()
+            ][:3],
+            "created_at": str(row.get("created_at", "") or ""),
+            "updated_at": str(row.get("updated_at", "") or ""),
+        }
+        return payload
+
+    def _prune_attention_frontier_locked(self, *, now: str) -> None:
+        rows = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT id
+                FROM attention_frontier
+                ORDER BY
+                    CASE WHEN stale_after > ? OR stale_after = '' THEN 0 ELSE 1 END ASC,
+                    reentry_priority DESC,
+                    thread_heat DESC,
+                    last_stream_touch_at DESC,
+                    id DESC
+                """,
+                (now,),
+            ).fetchall()
+        ]
+        stale_cutoff = _utc_after_seconds(now, -24 * 3600)
+        keep_ids = {int(row["id"]) for row in rows[:ATTENTION_FRONTIER_MAX_ENTRIES]}
+        for row in rows[ATTENTION_FRONTIER_MAX_ENTRIES:]:
+            self.conn.execute("DELETE FROM attention_frontier WHERE id = ?", (int(row["id"]),))
+        self.conn.execute(
+            "DELETE FROM attention_frontier WHERE stale_after <> '' AND stale_after <= ? AND id NOT IN (%s)"
+            % ",".join("?" for _ in keep_ids)
+            if keep_ids
+            else "DELETE FROM attention_frontier WHERE stale_after <> '' AND stale_after <= ?",
+            ((stale_cutoff, *sorted(keep_ids)) if keep_ids else (stale_cutoff,)),
+        )
+
+    def _upsert_attention_frontier_locked(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        stream_name: str,
+        wake_reason: str,
+        anticipated_next_turn: str,
+        pending_open_loop_count: int,
+        evidence_refs: Iterable[str] | None,
+        motifs: Iterable[str] | None,
+        unfinished_threads: Iterable[str] | None,
+        now: str,
+    ) -> dict[str, Any]:
+        if stream_name not in ATTENTION_FRONTIER_ALLOWED_STREAMS:
+            return {"present": False, "reason": "unsupported_stream"}
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        canonical_thread_key = _normalize_thread_key(
+            normalized_channel,
+            str(thread_key or "").strip(),
+            chat_name=str(chat_name or "").strip(),
+        )
+        if not canonical_thread_key:
+            return {"present": False, "reason": "missing_thread_key"}
+        current = self.conn.execute(
+            "SELECT * FROM attention_frontier WHERE channel = ? AND canonical_thread_key = ?",
+            (normalized_channel, canonical_thread_key),
+        ).fetchone()
+        current_payload = self._attention_frontier_item_from_row(dict(current) if current else None, now=now)
+        current_heat = 0.0 if current_payload.get("stale") else float(current_payload.get("stored_thread_heat", 0.0) or 0.0)
+        clean_motifs = _dedupe_strings(compact_text(str(item).strip(), 64) for item in list(motifs or []) if str(item).strip())[:4]
+        clean_unfinished = _dedupe_strings(compact_text(str(item).strip(), 96) for item in list(unfinished_threads or []) if str(item).strip())[:4]
+        clean_refs = _dedupe_strings(
+            [f"stream:{stream_name}"]
+            + [compact_text(str(item).strip(), 96) for item in list(evidence_refs or []) if str(item).strip()]
+        )[:3]
+        reason = compact_text(str(wake_reason or "").strip(), 120)
+        if not reason:
+            reason = compact_text(clean_unfinished[0] if clean_unfinished else clean_motifs[0] if clean_motifs else stream_name, 120)
+        anticipated = compact_text(str(anticipated_next_turn or "").strip(), 120)
+        if not anticipated:
+            anticipated = compact_text(clean_unfinished[0] if clean_unfinished else reason, 120)
+        open_loops = max(0, min(8, int(pending_open_loop_count or len(clean_unfinished))))
+        heat_delta = float(ATTENTION_FRONTIER_HEAT_DELTA.get(stream_name, 0.12))
+        next_heat = self._clamp(current_heat + heat_delta + min(0.12, open_loops * 0.03), default=0.0)
+        stream_bias = {"social_stream": 0.08, "association_stream": 0.05, "deep_dream_cycle": 0.04, "maintenance_stream": 0.02}.get(stream_name, 0.0)
+        reentry_priority = self._clamp(next_heat + min(0.24, open_loops * 0.06) + stream_bias, default=0.0)
+        stale_after = _utc_after_seconds(now, ATTENTION_FRONTIER_TTL_SECONDS.get(stream_name, 4 * 3600))
+        metadata = dict(current_payload.get("metadata", {})) if isinstance(current_payload.get("metadata", {}), dict) else {}
+        metadata.update(
+            {
+                "source_stream": stream_name,
+                "wake_reasons": _dedupe_strings([reason] + list(metadata.get("wake_reasons", [])))[:4],
+                "motifs": _dedupe_strings(clean_motifs + list(metadata.get("motifs", [])))[:4],
+                "unfinished_threads": _dedupe_strings(clean_unfinished + list(metadata.get("unfinished_threads", [])))[:4],
+                "evidence_refs": _dedupe_strings(clean_refs + list(metadata.get("evidence_refs", [])))[:3],
+                "bounded": True,
+                "max_entries": ATTENTION_FRONTIER_MAX_ENTRIES,
+            }
+        )
+        created_at = str(current_payload.get("created_at", "") or now)
+        payload = {
+            "channel": normalized_channel,
+            "canonical_thread_key": canonical_thread_key,
+            "chat_name": str(chat_name or current_payload.get("chat_name", "") or canonical_thread_key).strip(),
+            "thread_heat": next_heat,
+            "wake_reason": reason,
+            "anticipated_next_turn": anticipated,
+            "pending_open_loop_count": open_loops,
+            "reentry_priority": reentry_priority,
+            "stale_after": stale_after,
+            "last_stream_touch_at": now,
+            "metadata_json": json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+            "created_at": created_at,
+            "updated_at": now,
+        }
+        self.conn.execute(
+            """
+            INSERT INTO attention_frontier(
+                channel, canonical_thread_key, chat_name, thread_heat, wake_reason, anticipated_next_turn,
+                pending_open_loop_count, reentry_priority, stale_after, last_stream_touch_at, metadata_json, created_at, updated_at
+            ) VALUES (
+                :channel, :canonical_thread_key, :chat_name, :thread_heat, :wake_reason, :anticipated_next_turn,
+                :pending_open_loop_count, :reentry_priority, :stale_after, :last_stream_touch_at, :metadata_json, :created_at, :updated_at
+            )
+            ON CONFLICT(channel, canonical_thread_key) DO UPDATE SET
+                chat_name = excluded.chat_name,
+                thread_heat = excluded.thread_heat,
+                wake_reason = excluded.wake_reason,
+                anticipated_next_turn = excluded.anticipated_next_turn,
+                pending_open_loop_count = excluded.pending_open_loop_count,
+                reentry_priority = excluded.reentry_priority,
+                stale_after = excluded.stale_after,
+                last_stream_touch_at = excluded.last_stream_touch_at,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at
+            """,
+            payload,
+        )
+        self._prune_attention_frontier_locked(now=now)
+        row = self.conn.execute(
+            "SELECT * FROM attention_frontier WHERE channel = ? AND canonical_thread_key = ?",
+            (normalized_channel, canonical_thread_key),
+        ).fetchone()
+        return self._attention_frontier_item_from_row(dict(row) if row else None, now=now)
+
+    def attention_frontier(
+        self,
+        *,
+        channel: str | None = None,
+        limit: int = ATTENTION_FRONTIER_MAX_ENTRIES,
+        include_stale: bool = False,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "").strip()
+        now = utc_now()
+        with self._lock:
+            if normalized_channel:
+                rows = [
+                    dict(row)
+                    for row in self.conn.execute(
+                        """
+                        SELECT * FROM attention_frontier
+                        WHERE channel = ?
+                        ORDER BY reentry_priority DESC, thread_heat DESC, last_stream_touch_at DESC
+                        LIMIT ?
+                        """,
+                        (normalized_channel, max(1, int(limit)) + ATTENTION_FRONTIER_MAX_ENTRIES),
+                    ).fetchall()
+                ]
+            else:
+                rows = [
+                    dict(row)
+                    for row in self.conn.execute(
+                        """
+                        SELECT * FROM attention_frontier
+                        ORDER BY reentry_priority DESC, thread_heat DESC, last_stream_touch_at DESC
+                        LIMIT ?
+                        """,
+                        (max(1, int(limit)) + ATTENTION_FRONTIER_MAX_ENTRIES,),
+                    ).fetchall()
+                ]
+        entries = [self._attention_frontier_item_from_row(row, now=now) for row in rows]
+        if not include_stale:
+            entries = [item for item in entries if bool(item.get("present", False))]
+        entries = entries[: max(1, int(limit))]
+        return {
+            "status": "ok",
+            "channel": normalized_channel or "all",
+            "entry_count": len(entries),
+            "max_entries": ATTENTION_FRONTIER_MAX_ENTRIES,
+            "include_stale": bool(include_stale),
+            "entries": entries,
+        }
+
+    def attention_frontier_item(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        canonical_thread_key = _normalize_thread_key(
+            normalized_channel,
+            str(thread_key or "").strip(),
+            chat_name=str(chat_name or "").strip(),
+        )
+        if not canonical_thread_key:
+            return {"present": False, "thread_warmth": "cold", "thread_heat": 0.0, "stale": True}
+        now = utc_now()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM attention_frontier WHERE channel = ? AND canonical_thread_key = ?",
+                (normalized_channel, canonical_thread_key),
+            ).fetchone()
+        return self._attention_frontier_item_from_row(dict(row) if row else None, now=now)
+
+    def trace_wake_reasons(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+    ) -> dict[str, Any]:
+        item = self.attention_frontier_item(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        metadata = dict(item.get("metadata", {})) if isinstance(item.get("metadata", {}), dict) else {}
+        reasons = _dedupe_strings([str(item.get("wake_reason", "") or "")] + list(metadata.get("wake_reasons", [])))[:4]
+        return {
+            "status": "ok",
+            "thread_key": item.get("canonical_thread_key", str(thread_key or chat_name or "")),
+            "chat_name": item.get("chat_name", str(chat_name or "")),
+            "channel": item.get("channel", channel),
+            "present": bool(item.get("present", False)),
+            "stale": bool(item.get("stale", True)),
+            "wake_reasons": reasons,
+            "anticipated_next_turn": str(item.get("anticipated_next_turn", "") or ""),
+            "pending_open_loop_count": int(item.get("pending_open_loop_count", 0) or 0),
+            "evidence_refs": list(item.get("evidence_refs", []))[:3],
+            "frontier_item": item,
+        }
+
+    def thread_warmth(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+    ) -> dict[str, Any]:
+        item = self.attention_frontier_item(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        return {
+            "status": "ok",
+            "thread_key": item.get("canonical_thread_key", str(thread_key or chat_name or "")),
+            "chat_name": item.get("chat_name", str(chat_name or "")),
+            "channel": item.get("channel", channel),
+            "thread_warmth": str(item.get("thread_warmth", "cold") or "cold"),
+            "thread_heat": float(item.get("thread_heat", 0.0) or 0.0),
+            "stored_thread_heat": float(item.get("stored_thread_heat", item.get("thread_heat", 0.0)) or 0.0),
+            "wake_reason": str(item.get("wake_reason", "") or ""),
+            "pending_open_loop_count": int(item.get("pending_open_loop_count", 0) or 0),
+            "reentry_priority": float(item.get("reentry_priority", 0.0) or 0.0),
+            "stale": bool(item.get("stale", True)),
+            "stale_after": str(item.get("stale_after", "") or ""),
+            "last_stream_touch_at": str(item.get("last_stream_touch_at", "") or ""),
+            "frontier_item": item,
+        }
 
     @staticmethod
     def _clamp(value: Any, *, lower: float = 0.0, upper: float = 1.0, default: float = 0.0) -> float:
@@ -5301,7 +5654,7 @@ class MindGraph:
         return {"updated": updated, "thread_updates": len(touched_threads), "last_recalled_at": recalled_at}
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        influence = {"updated_nodes": 0, "updated_threads": 0, "motifs": [], "unfinished_threads": []}
+        influence = {"updated_nodes": 0, "updated_threads": 0, "motifs": [], "unfinished_threads": [], "frontier_updates": []}
         with self._lock:
             row = self.conn.execute("SELECT * FROM mind_stream_state WHERE stream_name = ?", (stream_name,)).fetchone()
             cadence = int(row["cadence_seconds"]) if row else int(self.stream_cadences.get(stream_name, {}).get("cadence_seconds", 0))
@@ -5345,15 +5698,16 @@ class MindGraph:
         node_refs: set[str] = set()
         motifs: list[str] = []
         thread_hints: dict[tuple[str, str], dict[str, Any]] = {}
+        frontier_updates: list[dict[str, Any]] = []
 
-        def _add_thread(channel: str, thread_key: str, chat_name: str, *, motif: str = "", unfinished: str = "") -> None:
+        def _add_thread(channel: str, thread_key: str, chat_name: str, *, motif: str = "", unfinished: str = "", evidence_ref: str = "") -> None:
             normalized_channel = str(channel or "").strip()
             normalized_thread_key = _normalize_thread_key(normalized_channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
             if not normalized_channel or not normalized_thread_key:
                 return
             bucket = thread_hints.setdefault(
                 (normalized_channel, normalized_thread_key),
-                {"chat_name": str(chat_name or "").strip(), "motifs": [], "unfinished": []},
+                {"chat_name": str(chat_name or "").strip(), "motifs": [], "unfinished": [], "evidence_refs": []},
             )
             if str(chat_name or "").strip() and not bucket["chat_name"]:
                 bucket["chat_name"] = str(chat_name or "").strip()
@@ -5362,6 +5716,8 @@ class MindGraph:
                 motifs.append(str(motif).strip())
             if str(unfinished).strip():
                 bucket["unfinished"].append(compact_text(str(unfinished).strip(), 120))
+            if str(evidence_ref).strip():
+                bucket["evidence_refs"].append(str(evidence_ref).strip())
 
         for value in list(payload.get("sampled_archive_ids", [])) + list(payload.get("selected_memory_ids", [])):
             text = str(value or "").strip()
@@ -5389,6 +5745,7 @@ class MindGraph:
                     str(item.get("chat_name", "")),
                     motif=str(item.get("motif", "")),
                     unfinished=str(item.get("reason", "") or item.get("prompt", "") or item.get("text", "")),
+                    evidence_ref=source_archive_id,
                 )
 
         resolved_node_ids: list[str] = []
@@ -5408,6 +5765,7 @@ class MindGraph:
                     str(row["chat_name"] or ""),
                     motif="",
                     unfinished="",
+                    evidence_ref=ref,
                 )
 
         unique_node_ids = _dedupe_strings(resolved_node_ids)
@@ -5485,6 +5843,30 @@ class MindGraph:
                     thread_key,
                 ),
             )
+            if stream_name in ATTENTION_FRONTIER_ALLOWED_STREAMS:
+                unfinished_for_thread = list(info.get("unfinished", []))
+                wake_reason = (
+                    unfinished_for_thread[:1]
+                    or list(info.get("motifs", []))[:1]
+                    or recurring_motifs[:1]
+                    or motifs[:1]
+                    or [note or stream_name]
+                )[0]
+                frontier_item = self._upsert_attention_frontier_locked(
+                    channel=channel,
+                    thread_key=thread_key,
+                    chat_name=str(info.get("chat_name", "") or thread_key),
+                    stream_name=stream_name,
+                    wake_reason=str(wake_reason),
+                    anticipated_next_turn=str(unfinished_for_thread[0] if unfinished_for_thread else wake_reason),
+                    pending_open_loop_count=len(unfinished_threads),
+                    evidence_refs=list(info.get("evidence_refs", [])),
+                    motifs=recurring_motifs,
+                    unfinished_threads=unfinished_threads,
+                    now=now,
+                )
+                if bool(frontier_item.get("present", False)):
+                    frontier_updates.append(frontier_item)
 
         for channel, thread_key in touched_threads:
             info = thread_hints.get((channel, thread_key), {"chat_name": "", "motifs": [], "unfinished": []})
@@ -5534,6 +5916,7 @@ class MindGraph:
                 for info in thread_hints.values()
                 for hint in info.get("unfinished", [])
             )[:6],
+            "frontier_updates": frontier_updates[:ATTENTION_FRONTIER_MAX_ENTRIES],
         }
 
     def stream_status(self) -> dict[str, Any]:
@@ -5547,6 +5930,7 @@ class MindGraph:
                         "SELECT run_type, status, note, stats_json, created_at, completed_at FROM mind_runs WHERE run_type LIKE 'stream:%' ORDER BY id DESC LIMIT 12"
                     ).fetchall()
                 ],
+                "attention_frontier": self.attention_frontier(limit=ATTENTION_FRONTIER_MAX_ENTRIES),
             }
 
     def latest_stream_influence(

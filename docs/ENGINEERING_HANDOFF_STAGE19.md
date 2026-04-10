@@ -2,41 +2,48 @@
 
 ## Target Change
 
-Add a bounded attention frontier that is maintained by existing stream/runtime ticks and read by packet assembly for same-thread continuity.
+Stage19 is implemented as a bounded Mind Graph attention frontier.
 
-## Files To Touch First
+It keeps same-thread continuity warm between turns by reusing existing stream writes only:
 
-- `holo_host/daemon.py`
-  - reuse `attention_tick` and `continuity_audit`
-  - do not add a new always-on loop name unless an existing loop is insufficient and the docs are updated first
+- `maintenance_stream`
+- `association_stream`
+- `social_stream`
+- `deep_dream_cycle`
+
+No new always-on loop, second brain, transport-side decision path, or proactive send right is introduced.
+
+## Runtime Contracts
+
+- `attention_frontier` is keyed by `(channel, canonical_thread_key)`.
+- Entries carry compact continuity metadata only: heat, wake reason, anticipated next turn, open-loop count, reentry priority, stale time, and last stream touch.
+- Entries are bounded to 8 and expose at most 3 evidence refs.
+- Expired entries are visible to diagnostics but ignored by ingress hydration.
+- Hydration happens in `MemoryBridge.sidecar_packet()` before heavy recall paths.
+- Hydration may keep a short same-thread turn on the active/reflex path.
+- Explicit memory/history/factual/search/visual turns still escalate.
+- Stage18 `_select_reply_lane()` remains the only place `micro_fast` can be chosen for generation.
+
+## Touched Surfaces
+
 - `holo_host/mind_graph.py`
-  - persist and expire bounded frontier entries
-  - expose diagnostic state
+  - persistent `attention_frontier` table
+  - frontier upsert from stream influence
+  - `attention_frontier`, `attention_frontier_item`, `trace_wake_reasons`, `thread_warmth`
 - `holo_host/memory_bridge.py`
-  - add `mind_packet.stage19`
-  - apply same-thread frontier hints to recall ordering or active-state warmth
+  - one-row frontier hydration on ingress
+  - `mind_packet.stage19`
+  - per-thread activation warmth from frontier stream updates
 - `holo_host/reply_api.py`
-  - add `accept_stage19`
-  - expose `/accept-stage19`
+  - `show_attention_frontier`
+  - `trace_wake_reasons`
+  - `show_thread_warmth`
+  - `accept_stage19`
 - `holo_host/cli.py`
-  - add `accept-stage19`
-- `holo_host/reply_service_parts/acceptance.py`
-  - add acceptance wrapper
-
-## Tests To Add
-
-- `tests/test_stage19_attention_frontier.py`
-
-Minimum cases:
-
-- frontier entry is created from existing loop tick input
-- max entry count is enforced
-- expired entries are discarded
-- frontier is thread-scoped and canonicalized
-- packet sees same-thread frontier state
-- packet does not see another thread's frontier state
-- initiative queue is unchanged by frontier refresh
-- Stage18 prediction still works without frontier
+  - `show-attention-frontier`
+  - `trace-wake-reasons`
+  - `show-thread-warmth`
+  - `accept-stage19`
 
 ## Acceptance Command
 
@@ -47,34 +54,20 @@ python -m holo_host --config .holo_host.example.toml accept-stage19 --thread-key
 Expected supporting checks:
 
 ```bash
-pytest -q tests/test_stage19_attention_frontier.py
-pytest -q tests/test_stage18_dual_speed_reflex.py tests/test_stage17_realtime_runtime.py
-python -m holo_host --config .holo_host.example.toml show-stream-status
-pytest -q
+pytest -q tests/test_stage19_attention_frontier.py tests/test_stage18_dual_speed_reflex.py tests/test_stage17_realtime_runtime.py tests/test_processor_fabric.py
+pytest -q tests/test_stage14_replay.py tests/test_stage15_modularization.py tests/test_stage16_release.py
+python -m holo_host --config .holo_host.example.toml accept-stage18 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
 ```
 
-## Contracts To Preserve
+## Regression Risks
 
-- The frontier is not a second brain.
-- The frontier does not create send jobs.
-- The frontier stores compact refs and one open line, not raw chat history.
-- The frontier is bounded by count and expiry.
-- Watcher/transport remains eyes and hands only.
-- Action-market-first deliberation remains the only decision path.
-
-## Implementation Notes
-
-Prefer extending `MindGraph.record_stream_run()` influence or the existing continuity audit path so the frontier is causally tied to existing stream runs.
-
-Expose enough diagnostics to answer:
-
-- how many entries are live
-- which loop last updated the frontier
-- which evidence refs made a thread warm
-- whether a packet used or ignored the frontier
-
-Do not make frontier warmth equivalent to initiative permission. Initiative remains governed by existing whitelist, cooldown, policy, and adaptive gate logic.
+- Do not route frontier through watcher logic.
+- Do not let frontier warmth skip action-market selection.
+- Do not let stale frontier rows keep a thread warm.
+- Do not let stream influence schedule initiative directly.
+- Do not add new processor lane names.
+- Do not add raw recent-history blocks to fast/reflex prompts.
 
 ## Done State
 
-Stage19 is done when Holo can keep a bounded, expiring continuity frontier warm across idle gaps and use it only as same-thread packet context.
+Stage19 is done when Holo has an inspectable bounded attention frontier, warm same-thread reentry remains lightweight, explicit memory queries still escalate, Stage18 remains green, and `accept-stage19` passes.

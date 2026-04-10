@@ -2,94 +2,111 @@
 
 ## Goal
 
-Stage19 makes continuity survive short idle gaps by keeping a bounded attention frontier warm with existing runtime machinery.
+Stage19 turns Stage18 thread-resident subject state into bounded between-turn continuity.
 
-The frontier answers a narrow question: which current threads or unfinished lines deserve light continuity awareness if a turn arrives soon?
+The runtime now keeps an inspectable attention frontier for warm same-thread reentry. It is a compact Mind Graph index, not a second brain and not a sender.
 
-## Boundary
+## Scope Boundary
 
 - No second brain layer.
 - No new unbounded always-on loop.
 - No new proactive send rights.
-- No transport-side policy, recall, or reply selection.
+- No watcher or transport-side policy.
 - No raw full-history cache in the frontier.
+- No learned opaque weights.
 - Preserve action-market-first deliberation.
-- Reuse existing daemon loops and stream machinery where possible.
 
-## Runtime Shape
+Stage19 frontier influence is fed only by existing bounded streams:
 
-Stage19 should reuse existing loops:
-
-- `attention_tick`
-- `continuity_audit`
+- `maintenance_stream`
 - `association_stream`
 - `social_stream`
-- `deep_dream_cycle` only when already enabled by mode and idle rules
+- `deep_dream_cycle`
 
-The new object is an attention frontier, not a second runtime. It is bounded, inspectable, and expires entries.
+`attention_tick`, `continuity_audit`, and other loop families are not Stage19 frontier writers.
 
-The frontier should be refreshed by existing loop ticks and by normal turn ingestion. It should not run its own infinite scan.
+## Runtime Surfaces
 
-## Data Contract
-
-The frontier can be implemented as a Mind Graph table or as a bounded state object under runtime state, but it must be surfaced consistently through diagnostics.
-
-Minimum `attention_frontier` entry fields:
+Persistent Mind Graph table:
 
 ```json
 {
   "channel": "wechat",
-  "thread_key": "wechat:Nemoqi",
-  "chat_name": "Nemoqi",
-  "attention_score": 0.0,
-  "frontier_reason": "",
-  "open_line": "",
-  "suggested_preheat": [],
-  "last_event_at": "",
-  "expires_at": "",
-  "source_loop": "attention_tick",
-  "evidence_refs": []
+  "canonical_thread_key": "wechat:Nemoqi",
+  "thread_heat": 0.0,
+  "wake_reason": "",
+  "anticipated_next_turn": "",
+  "pending_open_loop_count": 0,
+  "reentry_priority": 0.0,
+  "stale_after": "",
+  "last_stream_touch_at": ""
 }
 ```
+
+Supporting fields may include `chat_name`, `metadata_json`, `created_at`, and `updated_at`.
 
 Bounded defaults:
 
 - max frontier entries: `8`
-- max open lines per thread: `1`
-- max suggested preheat refs per thread: `3`
-- expired entries are ignored before packet assembly
+- max evidence refs per entry: `3`
+- max motifs/open lines surfaced per entry: `4`
+- expired entries are readable for diagnostics but ignored by ingress hydration
 
-`mind_packet.stage19` should include:
+`mind_packet.stage19` exposes:
 
 ```json
 {
-  "frontier_visible": false,
-  "frontier_used_for_thread": false,
-  "frontier_reason": "",
-  "frontier_score": 0.0,
-  "frontier_expired": false,
-  "frontier_entry_count": 0
+  "frontier_visible": true,
+  "frontier_used_for_thread": true,
+  "canonical_thread_key": "wechat:Nemoqi",
+  "thread_heat": 0.18,
+  "thread_warmth": "cool",
+  "wake_reason": "continuity",
+  "anticipated_next_turn": "continuity",
+  "pending_open_loop_count": 0,
+  "unresolved_thread_pull": false,
+  "reentry_priority": 0.23,
+  "stale_after": "",
+  "last_stream_touch_at": "",
+  "frontier_stale": false,
+  "evidence_refs": ["stream:association_stream"]
 }
 ```
 
-## Action Market Contract
+## Ingress Contract
 
-The frontier may influence:
+On ingress, `MemoryBridge.sidecar_packet()` performs a same-thread `attention_frontier` row lookup before heavier recall paths.
 
-- recall ordering
-- active-state warmth
-- continuity pull
-- whether a same-thread short turn starts with `active_thread` or graph recall
+This hydration may:
 
-The frontier may not:
+- mark active state as `frontier_warm`
+- fill a compact continuity summary when active state is otherwise cold
+- expose wake reason, anticipated next turn, thread warmth/coldness, and unresolved pull
+- refresh deterministic predictive continuity for low-risk short turns
 
-- send messages
-- create initiative jobs
-- bypass cooldowns or whitelist policy
-- select actions without the action market
-- refresh WeChat history by itself
+This hydration may not:
 
-## Acceptance Checklist
+- perform graph/vector recall
+- run stream work
+- select an action
+- bypass explicit memory/history/factual escalation
+- broaden Stage18 `micro_fast` lane rules
+
+## Diagnostics
+
+```bash
+python -m holo_host --config .holo_host.example.toml show-attention-frontier --channel wechat
+python -m holo_host --config .holo_host.example.toml trace-wake-reasons --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+python -m holo_host --config .holo_host.example.toml show-thread-warmth --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+```
+
+HTTP surfaces:
+
+- `GET /attention-frontier`
+- `GET /wake-reasons`
+- `GET /thread-warmth`
+
+## Acceptance
 
 Closure command:
 
@@ -97,36 +114,35 @@ Closure command:
 python -m holo_host --config .holo_host.example.toml accept-stage19 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
 ```
 
-The acceptance gate should verify:
+The acceptance gate verifies:
 
-- Stage18 remains green.
-- Existing loop names are reused; no Stage19-only always-on loop is required.
-- A bounded frontier entry is produced from a continuity-relevant thread.
-- Frontier entries include evidence refs and expiry.
-- Expired frontier entries are ignored.
-- A same-thread packet can see a valid frontier entry.
-- A different thread cannot receive the same frontier entry.
-- Initiative sending behavior is unchanged.
-- Stream status or a dedicated diagnostic exposes frontier count and latest update.
+- frontier state is persisted and inspectable
+- frontier updates are caused by one of the four allowed streams
+- warm short same-thread reentry can use the active/reflex path
+- ordinary short ingress does not run stream work
+- stale frontier entries decay to cold and are ignored by hydration
+- explicit memory/history queries still escalate
+- Stage18 acceptance remains green
 
-Recommended regression commands:
+Regression commands:
 
 ```bash
-pytest -q tests/test_stage19_attention_frontier.py
-pytest -q tests/test_stage18_dual_speed_reflex.py tests/test_stage17_realtime_runtime.py
+pytest -q tests/test_stage19_attention_frontier.py tests/test_stage18_dual_speed_reflex.py tests/test_stage17_realtime_runtime.py tests/test_processor_fabric.py
+pytest -q tests/test_stage14_replay.py tests/test_stage15_modularization.py tests/test_stage16_release.py
+python -m holo_host --config .holo_host.example.toml accept-stage18 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
 python -m holo_host --config .holo_host.example.toml accept-stage19 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
-pytest -q
 ```
 
 ## Regression Risks
 
 - A new background loop duplicates daemon responsibility.
 - Frontier refresh scans unbounded history.
-- Frontier entries leak across thread aliases.
-- Social stream influence accidentally schedules initiative.
-- Frontier state becomes another memory layer instead of an index over existing memory.
-- Idle stream ticks increase latency on ordinary live turns.
+- Frontier entries leak across WeChat aliases.
+- Social stream influence schedules initiative directly.
+- Frontier state becomes another memory store instead of a bounded index over existing memory.
+- Idle stream ticks increase ordinary live-turn latency.
+- Warmth accidentally bypasses explicit recall escalation.
 
 ## Rollback
 
-Stage19 should degrade by returning an empty frontier. Stage18 predictive continuity and Stage17 active-thread fast lane must still work when frontier state is missing.
+Stage19 degrades by returning an empty or stale frontier. Stage18 predictive continuity and Stage17 active-thread fast lane must still work when frontier state is absent.
