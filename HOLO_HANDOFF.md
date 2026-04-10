@@ -24,11 +24,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 19. `docs/ENGINEERING_HANDOFF_STAGE15.md`
 20. `docs/STAGE16_RELEASE_HARDENING_AND_ONLINE_SHADOW_LAUNCH.md`
 21. `docs/ENGINEERING_HANDOFF_STAGE16.md`
-22. `HOLO_SYSTEM.md`
-23. `HOLO_HOST.md`
-24. `OPERATIONS.md`
-25. `holo_memory_library/MEMORY_LIBRARY.md`
-26. `windows_helper/README.md`
+22. `docs/STAGE17_THREAD_RESIDENT_REALTIME_RUNTIME.md`
+23. `docs/ENGINEERING_HANDOFF_STAGE17.md`
+24. `HOLO_SYSTEM.md`
+25. `HOLO_HOST.md`
+26. `OPERATIONS.md`
+27. `holo_memory_library/MEMORY_LIBRARY.md`
+28. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -43,10 +45,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage16-online-shadow-release-hardening`.
+- The current milestone tag is `stage17-thread-resident-realtime-runtime`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage16 release hardening for online shadow testing: deterministic path contracts, localhost-to-WSL fallback, replay metric rounding, offline acceptance, and UTF-8 self-narrative integrity.
-- Next stage focus is shadow-launch observation only after `accept-stage16` and replay artifacts are green.
+- Current focus is Stage17 real-time subject runtime: ordinary short WeChat turns should use thread-resident active state, keep fast-lane prompts history-light, and only escalate recall when concrete evidence requires it.
+- Next stage focus is online shadow observation of latency, prompt history line counts, fast-lane hit rate, and recall escalation rate after `accept-stage17` is green.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -197,6 +199,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host accept-stage12 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage13 --thread-key wechat:Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage14`
+- `python3 -m holo_host accept-stage17 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host accept-stage8 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`

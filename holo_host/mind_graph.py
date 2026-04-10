@@ -378,6 +378,19 @@ def _safe_json_dict(raw: Any) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
+def _safe_json_list(raw: Any) -> list[Any]:
+    if isinstance(raw, list):
+        return list(raw)
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return list(payload) if isinstance(payload, list) else []
+
+
 STATE_OBJECT_FIELDS = {
     "value",
     "confidence",
@@ -688,6 +701,29 @@ class MindGraph:
                 summary TEXT NOT NULL DEFAULT '',
                 metadata_json TEXT NOT NULL DEFAULT '{}'
             );
+            CREATE TABLE IF NOT EXISTS active_thread_state (
+                id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                continuity_summary TEXT NOT NULL DEFAULT '',
+                last_user_intent TEXT NOT NULL DEFAULT '',
+                last_outbound_action_json TEXT NOT NULL DEFAULT '{}',
+                unresolved_references_json TEXT NOT NULL DEFAULT '[]',
+                active_affect_hint TEXT NOT NULL DEFAULT '',
+                relationship_tension REAL NOT NULL DEFAULT 0.0,
+                tempo_state_json TEXT NOT NULL DEFAULT '{}',
+                attention_focus TEXT NOT NULL DEFAULT '',
+                cache_warmth TEXT NOT NULL DEFAULT 'cold',
+                recent_turn_ids_json TEXT NOT NULL DEFAULT '[]',
+                metrics_json TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(channel, thread_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_active_thread_state_thread
+            ON active_thread_state(channel, thread_key, updated_at DESC);
             CREATE TABLE IF NOT EXISTS mind_runs (
                 id INTEGER PRIMARY KEY,
                 run_type TEXT NOT NULL,
@@ -1040,6 +1076,285 @@ class MindGraph:
     def close(self) -> None:
         with self._lock:
             self.conn.close()
+
+    @staticmethod
+    def _bounded_recent_turn_ids(existing: Iterable[Any], new_id: str = "", *, limit: int = 10) -> list[str]:
+        ordered: list[str] = []
+        for raw in list(existing) + ([new_id] if str(new_id or "").strip() else []):
+            item = str(raw or "").strip()
+            if not item:
+                continue
+            if item in ordered:
+                ordered.remove(item)
+            ordered.append(item)
+        return ordered[-max(1, int(limit)) :]
+
+    def _active_thread_state_from_row(
+        self,
+        row: dict[str, Any] | None,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+    ) -> dict[str, Any]:
+        if not row:
+            return {
+                "channel": channel,
+                "thread_key": thread_key,
+                "chat_name": chat_name,
+                "continuity_summary": "",
+                "last_user_intent": "",
+                "last_outbound_action": {},
+                "unresolved_references": [],
+                "active_affect_hint": "",
+                "relationship_tension": 0.0,
+                "tempo_state": {},
+                "attention_focus": "",
+                "cache_warmth": "cold",
+                "recent_turn_ids": [],
+                "metrics": {},
+                "metadata": {},
+                "created_at": "",
+                "updated_at": "",
+                "present": False,
+            }
+        return {
+            "channel": str(row.get("channel", channel) or channel),
+            "thread_key": str(row.get("thread_key", thread_key) or thread_key),
+            "chat_name": str(row.get("chat_name", chat_name) or chat_name),
+            "continuity_summary": str(row.get("continuity_summary", "") or ""),
+            "last_user_intent": str(row.get("last_user_intent", "") or ""),
+            "last_outbound_action": _safe_json_dict(row.get("last_outbound_action_json", "{}")),
+            "unresolved_references": [
+                str(item).strip()
+                for item in _safe_json_list(row.get("unresolved_references_json", "[]"))
+                if str(item).strip()
+            ],
+            "active_affect_hint": str(row.get("active_affect_hint", "") or ""),
+            "relationship_tension": self._clamp(row.get("relationship_tension", 0.0), default=0.0),
+            "tempo_state": _safe_json_dict(row.get("tempo_state_json", "{}")),
+            "attention_focus": str(row.get("attention_focus", "") or ""),
+            "cache_warmth": str(row.get("cache_warmth", "") or "cold"),
+            "recent_turn_ids": [
+                str(item).strip()
+                for item in _safe_json_list(row.get("recent_turn_ids_json", "[]"))
+                if str(item).strip()
+            ],
+            "metrics": _safe_json_dict(row.get("metrics_json", "{}")),
+            "metadata": _safe_json_dict(row.get("metadata_json", "{}")),
+            "created_at": str(row.get("created_at", "") or ""),
+            "updated_at": str(row.get("updated_at", "") or ""),
+            "present": True,
+        }
+
+    def active_thread_state(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_thread_key = _normalize_thread_key(
+            normalized_channel,
+            str(thread_key or "").strip(),
+            chat_name=str(chat_name or "").strip(),
+        )
+        normalized_chat_name = str(chat_name or normalized_thread_key or "").strip()
+        if not normalized_thread_key:
+            return self._active_thread_state_from_row(
+                None,
+                channel=normalized_channel,
+                thread_key="",
+                chat_name=normalized_chat_name,
+            )
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM active_thread_state WHERE channel = ? AND thread_key = ?",
+                (normalized_channel, normalized_thread_key),
+            ).fetchone()
+            payload = self._active_thread_state_from_row(
+                dict(row) if row else None,
+                channel=normalized_channel,
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+            )
+            if not row:
+                thread_row = self.conn.execute(
+                    "SELECT summary, metadata_json, last_message_at FROM mind_thread_state WHERE channel = ? AND thread_key = ?",
+                    (normalized_channel, normalized_thread_key),
+                ).fetchone()
+                if thread_row:
+                    metadata = _safe_json_dict(thread_row["metadata_json"])
+                    payload["continuity_summary"] = str(thread_row["summary"] or "").strip()
+                    payload["active_affect_hint"] = str(metadata.get("tone_tendency", "") or "")
+                    payload["relationship_tension"] = self._clamp(metadata.get("pressure_level", 0.0), default=0.0)
+                    payload["tempo_state"] = {"last_event_at": str(thread_row["last_message_at"] or "")}
+                    payload["cache_warmth"] = "seeded" if payload["continuity_summary"] else "cold"
+        return payload
+
+    def update_active_thread_state(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        direction: str,
+        text: str = "",
+        message_id: str = "",
+        event_row_id: int | None = None,
+        action_type: str = "",
+        selected_action: dict[str, Any] | None = None,
+        intent_state: dict[str, Any] | None = None,
+        attention_focus: str = "",
+        active_affect_hint: str = "",
+        relationship_tension: float | None = None,
+        unresolved_references: Iterable[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_thread_key = _normalize_thread_key(
+            normalized_channel,
+            str(thread_key or "").strip(),
+            chat_name=str(chat_name or "").strip(),
+        )
+        normalized_chat_name = str(chat_name or normalized_thread_key or "").strip()
+        if not normalized_thread_key:
+            return {"status": "skipped", "reason": "missing_thread_key"}
+        now = utc_now()
+        event_ref = str(event_row_id or "").strip() or str(message_id or "").strip()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM active_thread_state WHERE channel = ? AND thread_key = ?",
+                (normalized_channel, normalized_thread_key),
+            ).fetchone()
+            current = self._active_thread_state_from_row(
+                dict(row) if row else None,
+                channel=normalized_channel,
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+            )
+            meta = dict(current.get("metadata", {}))
+            meta.update(dict(metadata or {}))
+            tempo = dict(current.get("tempo_state", {}))
+            tempo["last_direction"] = str(direction or "").strip() or "event"
+            tempo["last_event_at"] = now
+            tempo["turn_count"] = int(tempo.get("turn_count", 0) or 0) + 1
+            recent_turn_ids = self._bounded_recent_turn_ids(current.get("recent_turn_ids", []), event_ref, limit=10)
+            if str(message_id or "").strip() and str(message_id or "").strip() != event_ref:
+                recent_turn_ids = self._bounded_recent_turn_ids(recent_turn_ids, str(message_id or "").strip(), limit=10)
+            selected = dict(selected_action or current.get("last_outbound_action", {}))
+            normalized_action_type = str(action_type or selected.get("action_type", "") or "").strip()
+            if normalized_action_type:
+                selected["action_type"] = normalized_action_type
+                selected["updated_at"] = now
+            intent = dict(intent_state or {})
+            last_user_intent = str(current.get("last_user_intent", "") or "")
+            if intent:
+                last_user_intent = compact_text(
+                    " | ".join(
+                        str(item)
+                        for item in (
+                            intent.get("need", ""),
+                            intent.get("query_focus", ""),
+                            intent.get("tier", ""),
+                            intent.get("why_now", ""),
+                        )
+                        if str(item).strip()
+                    ),
+                    180,
+                )
+            if not last_user_intent and str(text or "").strip():
+                last_user_intent = compact_text(str(text or ""), 120)
+            refs = [
+                str(item).strip()
+                for item in (unresolved_references if unresolved_references is not None else current.get("unresolved_references", []))
+                if str(item).strip()
+            ][:5]
+            if str(direction or "").strip() == "outbound" and normalized_action_type in {"reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}:
+                refs = []
+            continuity = str(current.get("continuity_summary", "") or "").strip()
+            if str(text or "").strip():
+                prefix = "user" if str(direction or "").strip() == "inbound" else "holo"
+                continuity = compact_text(
+                    " | ".join(item for item in (continuity, f"{prefix}: {compact_text(text, 96)}") if item),
+                    260,
+                )
+            warmth = "warm" if len(recent_turn_ids) >= 2 else "seeded"
+            metrics = dict(current.get("metrics", {}))
+            if bool(meta.pop("_stage17_fast_lane_hit", False)):
+                metrics["fast_lane_hits"] = int(metrics.get("fast_lane_hits", 0) or 0) + 1
+            if bool(meta.pop("_stage17_recall_escalated", False)):
+                metrics["recall_escalations"] = int(metrics.get("recall_escalations", 0) or 0) + 1
+            if bool(meta.pop("_stage17_active_history_refresh", False)):
+                metrics["active_history_refreshes"] = int(metrics.get("active_history_refreshes", 0) or 0) + 1
+            if "_stage17_history_lines_in_prompt" in meta:
+                samples = [
+                    int(item)
+                    for item in list(metrics.get("history_lines_in_prompt_samples", []))
+                    if str(item).strip().lstrip("-").isdigit()
+                ]
+                try:
+                    samples.append(int(meta.pop("_stage17_history_lines_in_prompt")))
+                except (TypeError, ValueError):
+                    pass
+                metrics["history_lines_in_prompt_samples"] = samples[-20:]
+            payload = {
+                "channel": normalized_channel,
+                "thread_key": normalized_thread_key,
+                "chat_name": normalized_chat_name,
+                "continuity_summary": continuity,
+                "last_user_intent": last_user_intent,
+                "last_outbound_action_json": json.dumps(selected if str(direction or "").strip() == "outbound" or selected else {}, ensure_ascii=False, sort_keys=True),
+                "unresolved_references_json": json.dumps(refs, ensure_ascii=False, sort_keys=True),
+                "active_affect_hint": str(active_affect_hint or current.get("active_affect_hint", "") or "").strip(),
+                "relationship_tension": self._clamp(relationship_tension if relationship_tension is not None else current.get("relationship_tension", 0.0), default=0.0),
+                "tempo_state_json": json.dumps(tempo, ensure_ascii=False, sort_keys=True),
+                "attention_focus": str(attention_focus or current.get("attention_focus", "") or "").strip(),
+                "cache_warmth": warmth,
+                "recent_turn_ids_json": json.dumps(recent_turn_ids, ensure_ascii=False, sort_keys=True),
+                "metrics_json": json.dumps(metrics, ensure_ascii=False, sort_keys=True),
+                "metadata_json": json.dumps(meta, ensure_ascii=False, sort_keys=True),
+                "created_at": str(current.get("created_at", "") or now),
+                "updated_at": now,
+            }
+            self.conn.execute(
+                """
+                INSERT INTO active_thread_state(
+                    channel, thread_key, chat_name, continuity_summary, last_user_intent, last_outbound_action_json,
+                    unresolved_references_json, active_affect_hint, relationship_tension, tempo_state_json,
+                    attention_focus, cache_warmth, recent_turn_ids_json, metrics_json, metadata_json, created_at, updated_at
+                ) VALUES (
+                    :channel, :thread_key, :chat_name, :continuity_summary, :last_user_intent, :last_outbound_action_json,
+                    :unresolved_references_json, :active_affect_hint, :relationship_tension, :tempo_state_json,
+                    :attention_focus, :cache_warmth, :recent_turn_ids_json, :metrics_json, :metadata_json, :created_at, :updated_at
+                )
+                ON CONFLICT(channel, thread_key) DO UPDATE SET
+                    chat_name = excluded.chat_name,
+                    continuity_summary = excluded.continuity_summary,
+                    last_user_intent = excluded.last_user_intent,
+                    last_outbound_action_json = excluded.last_outbound_action_json,
+                    unresolved_references_json = excluded.unresolved_references_json,
+                    active_affect_hint = excluded.active_affect_hint,
+                    relationship_tension = excluded.relationship_tension,
+                    tempo_state_json = excluded.tempo_state_json,
+                    attention_focus = excluded.attention_focus,
+                    cache_warmth = excluded.cache_warmth,
+                    recent_turn_ids_json = excluded.recent_turn_ids_json,
+                    metrics_json = excluded.metrics_json,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                payload,
+            )
+            self.conn.commit()
+        state = self.active_thread_state(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+        )
+        state["status"] = "ok"
+        return state
 
     @staticmethod
     def _clamp(value: Any, *, lower: float = 0.0, upper: float = 1.0, default: float = 0.0) -> float:

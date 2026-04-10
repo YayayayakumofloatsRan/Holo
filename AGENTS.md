@@ -27,6 +27,7 @@
   - `python -m holo_host --config .holo_host.example.toml accept-stage13`
   - `python -m holo_host --config .holo_host.example.toml accept-stage14`
   - `python -m holo_host --config .holo_host.example.toml accept-stage16`
+  - `python -m holo_host --config .holo_host.example.toml accept-stage17 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
   - `python -m holo_host --config .holo_host.example.toml replay-calibration-fixture --fixture-path tests/fixtures/stage14`
   - `python -m holo_host --config .holo_host.example.toml replay-policy-regret --fixture-path tests/fixtures/stage14`
 
@@ -58,6 +59,13 @@
 - Stage12 acceptance must stay deterministic in local/offline mode and may use only acceptance-scoped stub evidence.
 - Stage14 replay metrics must expose raw values and deterministic display rounding.
 - Persona/default and autobiographical update text must remain UTF-8 clean; do not reintroduce mojibake into policy defaults.
+
+## Stage17 Realtime Runtime
+
+- Ordinary short WeChat turns should prefer `ActiveThreadState` and the `active-thread-fast` memory route.
+- Fast-lane prompts must not default to a multi-line verbatim recent-history block; use continuity summary and last outbound action first.
+- Low confidence alone must not trigger `deep_recall`; explicit memory need, unresolved references, factual recall need, high-risk ambiguity, or cold active state are the escalation reasons.
+- Active WeChat history refresh must not block ordinary short turns; keep it explicit/on-demand unless the turn is a hard continuity or history request.
 # Holo Repo Agent Notes
 
 ## Canonical invariants

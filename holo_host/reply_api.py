@@ -31,12 +31,14 @@ from .operator_bus import operator_probe as run_operator_probe
 from .operator_bus import refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
 from .processors import build_attention_state, build_processor, build_reply_bubbles
+from .processors import build_turn_plan, render_chat_prompt
 from .reply_service_parts.acceptance import (
     accept_stage10 as _accept_stage10,
     accept_stage12 as _accept_stage12,
     accept_stage13 as _accept_stage13,
     accept_stage14 as _accept_stage14,
     accept_stage16 as _accept_stage16,
+    accept_stage17 as _accept_stage17,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -2809,6 +2811,182 @@ class HoloReplyService:
             stage14_report=stage14_report,
         )
 
+    def accept_stage17(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage17(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def _accept_stage17_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_chat_name = str(chat_name or "Nemoqi").strip()
+        normalized_thread_key = str(thread_key or normalized_chat_name).strip()
+        if normalized_channel == "wechat" and normalized_thread_key and not (
+            normalized_thread_key.startswith("wechat:")
+            or normalized_thread_key.startswith("wxid_")
+            or normalized_thread_key.endswith("@chatroom")
+        ):
+            normalized_thread_key = f"wechat:{normalized_thread_key}"
+        probe_turn = ChatTurn(
+            chat_name=normalized_chat_name,
+            text="在吗",
+            sender=str(sender or normalized_chat_name),
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            message_id="accept-stage17-fast",
+            metadata={},
+        )
+        incoming = probe_turn.to_incoming_message()
+        active_state = self._update_active_thread_state(
+            turn=probe_turn,
+            incoming=incoming,
+            direction="inbound",
+            event_row_id=1701,
+            text=probe_turn.text,
+            metadata={"source": "accept-stage17"},
+        )
+        context = {
+            "channel": normalized_channel,
+            "thread_key": normalized_thread_key,
+            "incoming_thread_key": normalized_thread_key,
+            "message_id": incoming.message_id,
+            "chat_name": normalized_chat_name,
+            "sender": str(sender or normalized_chat_name),
+            "recent_history": [
+                {"direction": "inbound", "body_text": "line one"},
+                {"direction": "outbound", "body_text": "line two"},
+                {"direction": "inbound", "body_text": "line three"},
+                {"direction": "outbound", "body_text": "line four"},
+            ],
+            "attachments": [],
+            "recall_trigger_mode": self.config.memory.recall_trigger_mode,
+            "mind_budget": {
+                "fast_history_messages": self.config.memory.fast_history_messages,
+                "recall_history_messages": self.config.memory.recall_history_messages,
+                "fast_episodic_k": self.config.memory.fast_episodic_k,
+                "recall_episodic_k": self.config.memory.recall_episodic_k,
+                "fast_consciousness_k": self.config.memory.fast_consciousness_k,
+                "recall_consciousness_k": self.config.memory.recall_consciousness_k,
+            },
+            "active_thread_state": active_state,
+            "event_id": "1701",
+        }
+        fast_started_at = time.perf_counter()
+        fast_packet = self.memory.sidecar_packet(probe_turn.text, context=context)
+        fast_build_ms = int((time.perf_counter() - fast_started_at) * 1000)
+        fast_turn_context = TurnContext(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            sender=str(sender or normalized_chat_name),
+            user_text=probe_turn.text,
+            sidecar=fast_packet,
+            mind_packet=fast_packet,
+            attention_state=build_attention_state(probe_turn.text, channel=normalized_channel, metadata={}),
+            emotion_state=dict(fast_packet.get("state", {}).get("emotion_state", {})),
+            history=list(context["recent_history"]),
+            metadata={"event_id": "1701"},
+            capability_context={},
+        )
+        fast_turn_plan = build_turn_plan(fast_turn_context, self.config)
+        fast_prompt = render_chat_prompt(fast_turn_context, turn_plan=fast_turn_plan)
+        memory_query = "remember before our launch thread"
+        recall_started_at = time.perf_counter()
+        recall_packet = self.memory.sidecar_packet(
+            memory_query,
+            context={**context, "message_id": "accept-stage17-recall", "active_thread_state": active_state, "event_id": "1702"},
+        )
+        recall_build_ms = int((time.perf_counter() - recall_started_at) * 1000)
+        refresh_allowed_ordinary = self._should_refresh_wechat_history(probe_turn, fast_packet)
+        refresh_allowed_memory = self._should_refresh_wechat_history(
+            ChatTurn(
+                chat_name=normalized_chat_name,
+                text="history log please",
+                sender=str(sender or normalized_chat_name),
+                channel=normalized_channel,
+                thread_key=normalized_thread_key,
+                message_id="accept-stage17-history",
+                metadata={},
+            ),
+            recall_packet,
+        )
+        stage14_report = self.accept_stage14(limit=4, artifact_dir=artifact_dir)
+        checks = {
+            "active_thread_state_visible": bool(active_state.get("status") == "ok" and active_state.get("thread_key") == normalized_thread_key),
+            "ordinary_short_turn_uses_fast_lane": str(fast_packet.get("memory_route", "")) == "active_thread"
+            and bool(dict(fast_packet.get("stage17", {})).get("fast_lane")),
+            "fast_lane_prompt_has_no_multiline_history": int(fast_turn_context.metadata.get("history_lines_in_prompt", 0) or 0) <= 1,
+            "explicit_memory_query_escalates": str(recall_packet.get("tier", "")).strip() in {"recall", "deep_recall"}
+            and str(recall_packet.get("recall_reason", "")).startswith("stage17:"),
+            "active_history_refresh_demoted_for_ordinary_turn": not refresh_allowed_ordinary,
+            "explicit_history_refresh_still_allowed": bool(refresh_allowed_memory),
+            "action_market_first_preserved": bool(fast_packet.get("selected_action")) and bool(fast_packet.get("action_market")),
+            "stage14_replay_green": str(stage14_report.get("status", "")).strip() == "pass",
+        }
+        metrics = dict(active_state.get("metrics", {}))
+        samples = [int(item) for item in list(metrics.get("history_lines_in_prompt_samples", [])) if str(item).strip().lstrip("-").isdigit()]
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "thread-resident-realtime-runtime-stage17",
+            "checks": checks,
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": normalized_channel,
+            "fast_lane": {
+                "tier": fast_packet.get("tier"),
+                "memory_route": fast_packet.get("memory_route"),
+                "retrieval_mode": fast_packet.get("retrieval_mode"),
+                "history_lines_in_prompt": int(fast_turn_context.metadata.get("history_lines_in_prompt", 0) or 0),
+                "turn_plan": fast_turn_plan.to_dict(),
+                "prompt_excerpt": compact_text(fast_prompt, 360),
+            },
+            "recall_probe": {
+                "query": memory_query,
+                "tier": recall_packet.get("tier"),
+                "recall_reason": recall_packet.get("recall_reason"),
+                "memory_route": recall_packet.get("memory_route"),
+            },
+            "refresh_policy": {
+                "ordinary_turn_blocking_refresh": refresh_allowed_ordinary,
+                "explicit_history_blocking_refresh": refresh_allowed_memory,
+            },
+            "metrics": {
+                "fast_lane_hit_rate": 1.0 if checks["ordinary_short_turn_uses_fast_lane"] else 0.0,
+                "recall_escalation_rate": 1.0 if checks["explicit_memory_query_escalates"] else 0.0,
+                "active_history_refresh_rate": 0.0 if not refresh_allowed_ordinary else 1.0,
+                "avg_history_lines_in_prompt": (
+                    round(sum(samples) / len(samples), 4)
+                    if samples
+                    else float(fast_turn_context.metadata.get("history_lines_in_prompt", 0) or 0)
+                ),
+                "thread_active_state_cache_hit_ratio": 1.0 if active_state.get("cache_warmth") in {"warm", "seeded"} else 0.0,
+                "p50_inspect_build_latency_ms": min(fast_build_ms, recall_build_ms),
+                "p95_inspect_build_latency_ms": max(fast_build_ms, recall_build_ms),
+            },
+            "active_thread_state": active_state,
+            "stage14": {"status": stage14_report.get("status"), "checks": stage14_report.get("checks", {})},
+        }
+
     def initiative_status(
         self,
         *,
@@ -3180,9 +3358,42 @@ class HoloReplyService:
         if not self.config.memory.active_wechat_history_enabled:
             return False
         query = turn.text.lower()
-        if str(sidecar.get("tier", "")).strip().lower() in {"recall", "deep_recall"}:
+        explicit_request = any(marker in query for marker in WECHAT_HISTORY_EXPLICIT_HINTS)
+        recall_reason = str(sidecar.get("recall_reason", "") or str(dict(sidecar.get("stage17", {})).get("recall_escalation_reason", ""))).strip()
+        if recall_reason in {"stage17:explicit_memory_query", "explicit_memory_query", "stage17:high_risk_continuity_ambiguity", "high_risk_continuity_ambiguity"}:
             return True
-        return any(marker in query for marker in WECHAT_HISTORY_EXPLICIT_HINTS)
+        if str(sidecar.get("query_focus", "") or "") == "origin" and str(sidecar.get("tier", "")).strip().lower() in {"recall", "deep_recall"}:
+            return True
+        return explicit_request
+
+    @staticmethod
+    def _demote_nonblocking_history_refresh(sidecar: dict[str, Any], *, reason: str = "explicit_on_demand") -> tuple[dict[str, Any], str, dict[str, Any]]:
+        selected = dict(sidecar.get("selected_action", {}))
+        selected_type = str(selected.get("action_type", "reply_once") or "reply_once")
+        report = {}
+        if selected_type != "history_refresh":
+            return selected, selected_type, report
+        replacement = next(
+            (
+                dict(item)
+                for item in list(sidecar.get("action_market", []))
+                if str(item.get("action_type", "")).strip() in {"reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}
+            ),
+            {"action_type": "reply_once", "why_now": "history refresh was demoted off the live path", "score": 0.0, "send_allowed": True},
+        )
+        sidecar["selected_action"] = replacement
+        selected_type = str(replacement.get("action_type", "reply_once") or "reply_once")
+        stage17 = dict(sidecar.get("stage17", {}))
+        stage17["refresh_demoted"] = reason
+        stage17["active_history_refresh_blocking"] = False
+        sidecar["stage17"] = stage17
+        report = {
+            "status": "demoted",
+            "reason": reason,
+            "selected_action_before": "history_refresh",
+            "selected_action_after": selected_type,
+        }
+        return replacement, selected_type, report
 
     def refresh_wechat_history(self, payload: dict[str, Any]) -> dict[str, Any]:
         chat_name = str(payload.get("chat_name", "")).strip()
@@ -3454,6 +3665,76 @@ class HoloReplyService:
                 selected_action=selected_action,
                 payload=payload or {},
             )
+
+    @staticmethod
+    def _stage17_unresolved_references(text: str) -> list[str]:
+        lowered = str(text or "").lower()
+        hints = (
+            "that",
+            "this",
+            "it",
+            "above",
+            "earlier",
+            "刚才",
+            "刚刚",
+            "那个",
+            "这个",
+            "那件事",
+            "这件事",
+            "上面",
+            "前面",
+        )
+        return [hint for hint in hints if hint in lowered][:5]
+
+    @staticmethod
+    def _stage17_affect_hint(text: str, *, attention_focus: str = "") -> str:
+        lowered = str(text or "").lower()
+        if any(token in lowered for token in ("累", "压力", "难受", "anxious", "tired", "stress")):
+            return "pressure"
+        if any(token in lowered for token in ("想你", "陪", "在吗", "still there")):
+            return "companionship"
+        if any(token in lowered for token in ("?", "？", "怎么", "为什么", "how", "why", "what")):
+            return "curiosity"
+        return attention_focus or "ordinary"
+
+    def _update_active_thread_state(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        direction: str,
+        event_row_id: int | None = None,
+        text: str = "",
+        action_type: str = "",
+        selected_action: dict[str, Any] | None = None,
+        intent_state: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not hasattr(self.memory, "update_active_thread_state"):
+            return {"status": "skipped", "reason": "active_thread_state_unavailable"}
+        attention = build_attention_state(text or turn.text, channel=turn.channel, metadata=turn.metadata)
+        try:
+            with self._memory_lock:
+                return self.memory.update_active_thread_state(
+                    channel=turn.channel,
+                    thread_key=incoming.thread_key,
+                    chat_name=turn.chat_name,
+                    direction=direction,
+                    text=text or turn.text,
+                    message_id=incoming.message_id,
+                    event_row_id=event_row_id,
+                    action_type=action_type,
+                    selected_action=selected_action,
+                    intent_state=intent_state,
+                    attention_focus=attention.primary_focus,
+                    active_affect_hint=self._stage17_affect_hint(text or turn.text, attention_focus=attention.primary_focus),
+                    relationship_tension=0.0 if attention.pressure_level != "high" else 0.72,
+                    unresolved_references=self._stage17_unresolved_references(text or turn.text),
+                    metadata=metadata or {},
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug("active thread state update skipped for %s: %s", turn.chat_name, exc)
+            return {"status": "skipped", "reason": "active_thread_state_error", "detail": str(exc)}
 
     def _ingest_event(
         self,
@@ -3839,6 +4120,14 @@ class HoloReplyService:
         event_info = self._ingest_event(payload=payload, turn=turn, incoming=incoming, history=history)
         event_row_id = int(event_info["event_row_id"])
         deliberation_trace_id = str(event_info["deliberation_trace_id"])
+        active_thread_state = self._update_active_thread_state(
+            turn=turn,
+            incoming=incoming,
+            direction="inbound",
+            event_row_id=event_row_id,
+            text=turn.text,
+            metadata={"source": "reply_api.ingress"},
+        )
         mind_context = self._mind_context(
             turn=turn,
             incoming=incoming,
@@ -3846,6 +4135,7 @@ class HoloReplyService:
             contact=record["contact"],
             history=history,
         )
+        mind_context["active_thread_state"] = active_thread_state
         capability_context = self._build_capability_context(turn, eager_network=False)
         mind_context["capability_context"] = capability_context
         mind_context["deliberation_trace_id"] = deliberation_trace_id
@@ -3857,6 +4147,9 @@ class HoloReplyService:
         selected_action = self._normalize_selected_action(sidecar)
         sidecar["selected_action"] = selected_action
         selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
+        demoted_history_refresh_report: dict[str, Any] = {}
+        if selected_action_type == "history_refresh" and not self._should_refresh_wechat_history(turn, sidecar):
+            selected_action, selected_action_type, demoted_history_refresh_report = self._demote_nonblocking_history_refresh(sidecar)
         self._record_subject_action(turn=turn, incoming=incoming, sidecar=sidecar)
         self.store.update_event_decision(
             event_row_id,
@@ -3939,6 +4232,20 @@ class HoloReplyService:
             )
             if appraisal:
                 result["outcome_appraisal"] = appraisal
+            result["active_thread_state"] = self._update_active_thread_state(
+                turn=turn,
+                incoming=incoming,
+                direction="outbound",
+                event_row_id=event_row_id,
+                text="",
+                action_type="silence",
+                selected_action=selected_action,
+                intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state", {}))),
+                metadata={
+                    "source": "reply_api.silence",
+                    "_stage17_history_lines_in_prompt": 0,
+                },
+            )
             return result
 
         if selected_action_type == "defer_reply":
@@ -3993,6 +4300,20 @@ class HoloReplyService:
             )
             if appraisal:
                 result["outcome_appraisal"] = appraisal
+            result["active_thread_state"] = self._update_active_thread_state(
+                turn=turn,
+                incoming=incoming,
+                direction="outbound",
+                event_row_id=event_row_id,
+                text="",
+                action_type="defer_reply",
+                selected_action=selected_action,
+                intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state", {}))),
+                metadata={
+                    "source": "reply_api.defer_reply",
+                    "_stage17_history_lines_in_prompt": 0,
+                },
+            )
             return result
 
         if selected_action_type == "history_refresh" and self._should_refresh_wechat_history(turn, sidecar):
@@ -4034,6 +4355,15 @@ class HoloReplyService:
                         "selected_prediction": dict(sidecar.get("selected_prediction", {})),
                     },
                 )
+        elif demoted_history_refresh_report:
+            self._record_consciousness_entry(
+                turn=turn,
+                incoming=incoming,
+                event_row_id=event_row_id,
+                entry_type="history_refresh_demoted",
+                selected_action=selected_action_type,
+                payload=demoted_history_refresh_report,
+            )
 
         if selected_action_type == "external_lookup":
             executed_lookup = self.capabilities.execute_external_lookup(turn.text)
@@ -4179,6 +4509,19 @@ class HoloReplyService:
             contact=contact,
             history=history,
         )
+        active_thread_state = {}
+        if isinstance(payload.get("_stage6_prebuilt_sidecar"), dict):
+            active_thread_state = dict(payload.get("_stage6_prebuilt_sidecar", {}).get("active_thread_state", {}))
+        if not active_thread_state:
+            active_thread_state = self._update_active_thread_state(
+                turn=turn,
+                incoming=incoming,
+                direction="inbound",
+                event_row_id=int(payload.get("_stage6_event_row_id", 0) or 0) or None,
+                text=turn.text,
+                metadata={"source": "reply_api.stage5_ingress"},
+            )
+        mind_context["active_thread_state"] = active_thread_state
         prebuilt_sidecar = dict(payload.get("_stage6_prebuilt_sidecar", {})) if isinstance(payload.get("_stage6_prebuilt_sidecar"), dict) else {}
         prebuilt_capability_context = dict(payload.get("_stage6_capability_context", {})) if isinstance(payload.get("_stage6_capability_context"), dict) else {}
         preselected_action = dict(payload.get("_stage6_selected_action", {})) if isinstance(payload.get("_stage6_selected_action"), dict) else {}
@@ -4250,6 +4593,7 @@ class HoloReplyService:
         sidecar_ms = int((time.perf_counter() - sidecar_started_at) * 1000)
         selected_action = dict(preselected_action or sidecar.get("selected_action", {}))
         selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
+        demoted_history_refresh_report: dict[str, Any] = {}
         if selected_action_type not in {"silence", "defer_reply", "reply_once", "reply_multi", "external_lookup", "history_refresh", "visual_recall", "push_back", "counter_offer", "continuity_defense"}:
             for candidate in list(sidecar.get("action_market", [])):
                 candidate_type = str(candidate.get("action_type", "")).strip()
@@ -4257,6 +4601,8 @@ class HoloReplyService:
                     selected_action = dict(candidate)
                     selected_action_type = candidate_type
                     break
+        if selected_action_type == "history_refresh" and not self._should_refresh_wechat_history(turn, sidecar):
+            selected_action, selected_action_type, demoted_history_refresh_report = self._demote_nonblocking_history_refresh(sidecar)
         last_action_selection = dict(sidecar.get("last_action_selection", {})) if isinstance(sidecar.get("last_action_selection", {}), dict) else {}
         if record.get("duplicate") and record.get("awaiting_reply"):
             if str(last_action_selection.get("message_id", "") or "") == incoming.message_id and selected_action_type in {"silence", "defer_reply"}:
@@ -4294,7 +4640,7 @@ class HoloReplyService:
                 incoming.message_id,
                 sidecar.get("silence_reason", ""),
             )
-            return {
+            result = {
                 "action": "silence",
                 "reason": str(sidecar.get("silence_reason", "") or "silence_selected"),
                 "thread_key": incoming.thread_key,
@@ -4302,9 +4648,21 @@ class HoloReplyService:
                 "selected_action": selected_action,
                 "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
-                "active_memory_refresh": active_history_report or {},
+                "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
             }
+            result["active_thread_state"] = self._update_active_thread_state(
+                turn=turn,
+                incoming=incoming,
+                direction="outbound",
+                event_row_id=int(payload.get("_stage6_event_row_id", 0) or 0) or None,
+                text="",
+                action_type="silence",
+                selected_action=selected_action,
+                intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state", {}))),
+                metadata={"source": "reply_api.stage5_silence", "_stage17_history_lines_in_prompt": 0},
+            )
+            return result
 
         if selected_action_type == "defer_reply":
             deferred_job_id = self._schedule_deferred_reply(
@@ -4322,7 +4680,7 @@ class HoloReplyService:
                 deferred_job_id,
                 sidecar.get("defer_reason", ""),
             )
-            return {
+            result = {
                 "action": "defer_reply",
                 "reason": str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
                 "thread_key": incoming.thread_key,
@@ -4331,9 +4689,21 @@ class HoloReplyService:
                 "selected_action": selected_action,
                 "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
-                "active_memory_refresh": active_history_report or {},
+                "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
             }
+            result["active_thread_state"] = self._update_active_thread_state(
+                turn=turn,
+                incoming=incoming,
+                direction="outbound",
+                event_row_id=int(payload.get("_stage6_event_row_id", 0) or 0) or None,
+                text="",
+                action_type="defer_reply",
+                selected_action=selected_action,
+                intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state", {}))),
+                metadata={"source": "reply_api.stage5_defer", "_stage17_history_lines_in_prompt": 0},
+            )
+            return result
 
         capability_started_at = time.perf_counter()
         capability_context = prebuilt_capability_context or self.capabilities.summarize_turn(turn.text, turn.metadata)
@@ -4425,7 +4795,7 @@ class HoloReplyService:
                     "processor_ms": processor_ms,
                     "repair_ms": repair_ms,
                 },
-                "active_memory_refresh": active_history_report or {},
+                "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
             },
         )
@@ -4476,7 +4846,7 @@ class HoloReplyService:
                 "repair_ms": repair_ms,
                 "total_ms": int((time.perf_counter() - started_at) * 1000),
             },
-            "active_memory_refresh": active_history_report or {},
+            "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
             "visual_ingest": visual_report or {},
             **(turn.metadata or {}),
         }
@@ -4532,7 +4902,7 @@ class HoloReplyService:
             total_ms,
             turn.chat_name,
         )
-        return {
+        result = {
             "action": "reply",
             "text": final_reply,
             "bubbles": [bubble.text for bubble in bubbles],
@@ -4557,12 +4927,27 @@ class HoloReplyService:
             "recall_reconstruction": dict(sidecar.get("recall_reconstruction", {})),
             "mind_graph_sync": mind_graph_sync,
             "timing_ms": timing_ms,
-            "active_memory_refresh": active_history_report or {},
+            "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
             "visual_ingest": visual_report or {},
             "selected_action": dict(sidecar.get("selected_action", {})),
             "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
             "action_rationale": str(sidecar.get("action_rationale", "") or ""),
         }
+        result["active_thread_state"] = self._update_active_thread_state(
+            turn=turn,
+            incoming=incoming,
+            direction="outbound",
+            event_row_id=int(payload.get("_stage6_event_row_id", 0) or 0) or None,
+            text=final_reply,
+            action_type=selected_action_type,
+            selected_action=selected_action,
+            intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state", {}))),
+            metadata={
+                "source": f"reply_api.stage5_{selected_action_type}",
+                "_stage17_history_lines_in_prompt": int(turn_context.metadata.get("history_lines_in_prompt", 0) or 0),
+            },
+        )
+        return result
 
     def _parse_turn(self, payload: dict[str, Any]) -> ChatTurn:
         chat_name = str(payload.get("chat_name", "")).strip()
@@ -5328,6 +5713,18 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         HTTPStatus.OK,
                         self.server.reply_service.accept_stage16(
                             run_pytest=bool(payload.get("run_pytest", False)),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage17":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage17(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
+                            sender=str(payload.get("sender", "")).strip() or None,
                             artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
                         ),
                     )

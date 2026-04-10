@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Iterable
 
 from .activation_state import ActivationStateStore
 from .common import compact_text, utc_now
@@ -91,6 +91,35 @@ LOCAL_MEMORY_HINTS = (
     "系统",
 )
 FAST_PING_HINTS = {"在吗", "你在吗", "嗯", "好", "收到", "说吧", "继续", "接着说", "ok", "okay"}
+
+UNRESOLVED_REFERENCE_HINTS = (
+    "that",
+    "this",
+    "it",
+    "above",
+    "earlier",
+    "刚才",
+    "刚刚",
+    "那个",
+    "这个",
+    "那件事",
+    "这件事",
+    "上面",
+    "前面",
+)
+EXPLICIT_MEMORY_HINTS = (
+    "remember",
+    "history",
+    "before",
+    "earlier",
+    "previous",
+    "你还记得",
+    "还记得",
+    "聊天记录",
+    "之前",
+    "前面",
+    "刚才",
+)
 
 DEFAULT_IDENTITY_CORE_LINES = list(MEMORY_BRIDGE_POLICY.default_identity_core_lines)
 DEFAULT_REPLY_CONSTRAINT_LINES = list(MEMORY_BRIDGE_POLICY.default_reply_constraint_lines)
@@ -411,6 +440,16 @@ class MemoryBridge:
             return False
         meaningful = sum(1 for ch in current if ch.isalnum() or "\u3400" <= ch <= "\u9fff")
         return meaningful <= 4
+
+    @staticmethod
+    def _query_has_unresolved_reference(query: str | None) -> bool:
+        text = " ".join(str(query or "").strip().split())
+        lowered = text.lower()
+        return any(str(hint).lower() in lowered for hint in UNRESOLVED_REFERENCE_HINTS)
+
+    @staticmethod
+    def _meaningful_char_count(query: str | None) -> int:
+        return sum(1 for ch in str(query or "") if ch.isalnum() or "\u3400" <= ch <= "\u9fff")
 
     def _activation_state(self, *, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
         normalized_thread_key = str(thread_key or chat_name or "").strip()
@@ -1383,6 +1422,8 @@ class MemoryBridge:
         packet["resistance_posture"] = resistance_posture
         packet["outcome_memory"] = outcome_memory
         packet["intent_state"] = intent_state
+        packet.setdefault("active_thread_state", dict(context.get("active_thread_state", {})) if isinstance(context.get("active_thread_state", {}), dict) else {})
+        packet.setdefault("stage17", {})
         packet["action_market"] = action_market
         packet["selected_action"] = selected_action
         packet["selected_prediction"] = selected_prediction
@@ -1455,6 +1496,8 @@ class MemoryBridge:
         packet["state"]["resistance_posture"] = dict(resistance_posture)
         packet["state"]["outcome_memory"] = dict(outcome_memory)
         packet["state"]["intent_state"] = dict(packet["intent_state_v4"])
+        packet["state"]["active_thread_state"] = dict(packet.get("active_thread_state", {}))
+        packet["state"]["stage17"] = dict(packet.get("stage17", {}))
         packet["state"]["action_market"] = list(action_market)
         packet["state"]["selected_action"] = dict(selected_action)
         packet["state"]["selected_prediction"] = dict(selected_prediction)
@@ -1561,6 +1604,205 @@ class MemoryBridge:
             "retrieval_mode": "graph-led",
             "addendum": "",
         }
+
+    def active_thread_state(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "active_thread_state"):
+            return {"present": False, "channel": channel, "thread_key": str(thread_key or ""), "chat_name": str(chat_name or "")}
+        return self.graph.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+
+    def update_active_thread_state(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        direction: str,
+        text: str = "",
+        message_id: str = "",
+        event_row_id: int | None = None,
+        action_type: str = "",
+        selected_action: dict[str, Any] | None = None,
+        intent_state: dict[str, Any] | None = None,
+        attention_focus: str = "",
+        active_affect_hint: str = "",
+        relationship_tension: float | None = None,
+        unresolved_references: Iterable[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "update_active_thread_state"):
+            return {"status": "skipped", "reason": "active_thread_state_unavailable"}
+        state = self.graph.update_active_thread_state(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            direction=direction,
+            text=text,
+            message_id=message_id,
+            event_row_id=event_row_id,
+            action_type=action_type,
+            selected_action=selected_action,
+            intent_state=intent_state,
+            attention_focus=attention_focus,
+            active_affect_hint=active_affect_hint,
+            relationship_tension=relationship_tension,
+            unresolved_references=unresolved_references,
+            metadata=metadata,
+        )
+        self.clear_packet_cache()
+        return state
+
+    def _recall_escalation_reason(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> str:
+        lowered = str(query or "").lower()
+        if bool(signal.get("local_memory_requested", False)) or any(str(hint).lower() in lowered for hint in EXPLICIT_MEMORY_HINTS):
+            return "explicit_memory_query"
+        if bool(signal.get("factual_lookup", False)):
+            return "factual_lookup_need"
+        has_reference = self._query_has_unresolved_reference(query)
+        has_active_summary = bool(str(active_state.get("continuity_summary", "") or "").strip())
+        has_last_outbound = bool(dict(active_state.get("last_outbound_action", {})).get("action_type"))
+        if has_reference and not (has_active_summary or has_last_outbound):
+            return "unresolved_reference"
+        if has_reference and float(active_state.get("relationship_tension", 0.0) or 0.0) >= 0.58:
+            return "high_risk_continuity_ambiguity"
+        if not bool(active_state.get("present", False)) and bool(signal.get("question_like", False)) and self._meaningful_char_count(query) > 18:
+            return "cold_thread_insufficient_active_state"
+        return ""
+
+    def _active_fast_lane_eligible(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+        recall_escalation_reason: str,
+    ) -> bool:
+        if str(context.get("channel", "wechat") or "wechat") != "wechat":
+            return False
+        if list(context.get("attachments", [])):
+            return False
+        if recall_escalation_reason:
+            return False
+        if bool(signal.get("search_requested", False)) or bool(signal.get("visual_requested", False)):
+            return False
+        active_ready = bool(active_state.get("present", False)) and (
+            bool(str(active_state.get("continuity_summary", "") or "").strip())
+            or bool(str(active_state.get("last_user_intent", "") or "").strip())
+            or bool(dict(active_state.get("last_outbound_action", {})).get("action_type"))
+            or bool(list(active_state.get("recent_turn_ids", [])))
+        )
+        if not active_ready:
+            return False
+        meaningful = self._meaningful_char_count(query)
+        if meaningful > 54:
+            return False
+        if bool(signal.get("low_signal", False)) or meaningful <= 18:
+            return True
+        if bool(active_state.get("present", False)) and str(active_state.get("cache_warmth", "") or "") in {"warm", "seeded"}:
+            return meaningful <= 36
+        return meaningful <= 24 and not bool(signal.get("question_like", False))
+
+    def _active_thread_fast_packet(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> dict[str, Any]:
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or "")
+        limits = self._mind_limits(context, fast=True)
+        summary = str(active_state.get("continuity_summary", "") or "").strip()
+        last_intent = str(active_state.get("last_user_intent", "") or "").strip()
+        active_lines = self._unique_strings(
+            [
+                compact_text(summary, 160) if summary else "",
+                f"last_intent={compact_text(last_intent, 120)}" if last_intent else "",
+                f"last_outbound={dict(active_state.get('last_outbound_action', {})).get('action_type', '')}" if dict(active_state.get("last_outbound_action", {})).get("action_type") else "",
+                f"affect={active_state.get('active_affect_hint', '')}" if str(active_state.get("active_affect_hint", "") or "").strip() else "",
+            ]
+        )[:2]
+        packet = self._packet_scaffold(
+            query=query,
+            tier="fast",
+            query_focus="active_thread",
+            limits={**limits, "history_messages": 1},
+            relationship_state={
+                "summary": summary,
+                "lines": active_lines[:1],
+                "items": [],
+                "relationship_score": 0.0,
+                "last_message_at": str(dict(active_state.get("tempo_state", {})).get("last_event_at", "") or ""),
+                "recurring_motifs": [],
+                "unfinished_threads": list(active_state.get("unresolved_references", []))[:3],
+                "anchor_lines": active_lines[:2],
+                "tone_tendency": str(active_state.get("active_affect_hint", "") or ""),
+                "trust_score": 0.0,
+                "closeness_score": 0.0,
+                "continuity_score": 0.42 if summary else 0.0,
+            },
+            recent_dialogue_window={"lines": [], "messages": [], "window_size": 0, "source": "active_thread_state"},
+            episodic_recall={"lines": [], "items": []},
+            consciousness_stream={"thread_summary": summary, "lines": [], "items": []},
+            activation_state={
+                "heat": 0.0,
+                "active_node_ids": [],
+                "motifs": [str(active_state.get("attention_focus", "") or "")] if str(active_state.get("attention_focus", "") or "").strip() else [],
+                "recall_priors": {},
+                "contributor_counts": {},
+                "recent_events": [],
+            },
+            graph_confidence=0.0,
+            graph_trace_summary=summary,
+            activation_trace_ids=[],
+            selected_memory_ids=[],
+            graph_hits=[],
+            vector_hits=[],
+            retrieval_trace={
+                "route": "active_thread",
+                "stage17": {
+                    "fast_lane": True,
+                    "signal": dict(signal),
+                    "cache_warmth": str(active_state.get("cache_warmth", "") or "cold"),
+                },
+            },
+            memory_route="active_thread",
+            recall_confidence=0.0,
+        )
+        packet["retrieval_mode"] = "active-thread-fast"
+        packet["active_thread_state"] = dict(active_state)
+        packet["stage17"] = {
+            "fast_lane": True,
+            "recall_escalation_reason": "",
+            "history_policy": "continuity_summary_first",
+            "max_fast_history_lines": 1,
+        }
+        result = self._finalize_stage2_packet(packet, query=query, context=context)
+        if hasattr(self.graph, "update_active_thread_state"):
+            self.graph.update_active_thread_state(
+                channel=channel,
+                thread_key=thread_key or chat_name,
+                chat_name=chat_name or thread_key,
+                direction="inspect",
+                text="",
+                metadata={"_stage17_fast_lane_hit": True},
+            )
+        return result
 
     def _fast_graph_packet(self, query: str, *, context: dict[str, Any]) -> dict[str, Any]:
         channel = str(context.get("channel", "wechat") or "wechat")
@@ -2133,12 +2375,38 @@ class MemoryBridge:
         if not self.graph_led_reply:
             return self.legacy_sidecar_packet(query, context=normalized_context)
 
-        if self._is_fast_ping_query(query):
-            return self._fast_graph_packet(query, context=normalized_context)
-
         channel = str(normalized_context.get("channel", "wechat") or "wechat")
         thread_key = str(normalized_context.get("thread_key", "") or "")
         chat_name = str(normalized_context.get("chat_name", "") or "")
+        signal = self._query_signal(query)
+        active_state = dict(normalized_context.get("active_thread_state", {})) if isinstance(normalized_context.get("active_thread_state", {}), dict) else {}
+        if not active_state:
+            active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        recall_escalation_reason = self._recall_escalation_reason(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+        )
+        normalized_context["active_thread_state"] = dict(active_state)
+        normalized_context["recall_escalation_reason"] = recall_escalation_reason
+        if self._active_fast_lane_eligible(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+            recall_escalation_reason=recall_escalation_reason,
+        ):
+            return self._active_thread_fast_packet(
+                query,
+                context=normalized_context,
+                active_state=active_state,
+                signal=signal,
+            )
+
+        if self._is_fast_ping_query(query):
+            return self._fast_graph_packet(query, context=normalized_context)
+
         legacy_packet = self.legacy_sidecar_packet(query, context=normalized_context)
         graph_packet = self.graph_sidecar_packet(query, context=normalized_context)
         packet = dict(graph_packet)
@@ -2210,6 +2478,18 @@ class MemoryBridge:
             packet["tier"] = str(packet.get("tier", "fast"))
             if packet["tier"] == "deep_recall":
                 packet["recall_reason"] = "hybrid_deep_recall"
+        if recall_escalation_reason:
+            packet["tier"] = "deep_recall" if recall_escalation_reason == "explicit_memory_query" else "recall"
+            packet["recall_reason"] = f"stage17:{recall_escalation_reason}"
+            if hasattr(self.graph, "update_active_thread_state"):
+                self.graph.update_active_thread_state(
+                    channel=channel,
+                    thread_key=thread_key or chat_name,
+                    chat_name=chat_name or thread_key,
+                    direction="inspect",
+                    text="",
+                    metadata={"_stage17_recall_escalated": True, "recall_escalation_reason": recall_escalation_reason},
+                )
 
         if fallback_lanes and self.graph_fallback:
             if len(fallback_lanes) == len(GRAPH_MEMORY_LANES):
@@ -2223,6 +2503,13 @@ class MemoryBridge:
         packet["selected_memory_ids"] = self._unique_strings(list(packet.get("selected_memory_ids", [])) + list(legacy_packet.get("selected_memory_ids", [])))
         if not packet.get("thread_recall_lines"):
             packet["thread_recall_lines"] = list(packet.get("episodic_recall", {}).get("lines", []))[:3]
+        packet["active_thread_state"] = dict(active_state)
+        packet["stage17"] = {
+            "fast_lane": False,
+            "recall_escalation_reason": recall_escalation_reason,
+            "history_policy": "recall_window" if packet.get("tier") in {"recall", "deep_recall"} else "standard_window",
+            "max_fast_history_lines": 1,
+        }
         return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def inspect_mind(
@@ -2258,6 +2545,8 @@ class MemoryBridge:
             "homeostasis_state": dict(packet.get("homeostasis_state", {})),
             "operator_state": dict(packet.get("operator_state", {})),
             "visual_memory": dict(packet.get("visual_memory", {})),
+            "active_thread_state": dict(packet.get("active_thread_state", {})),
+            "stage17": dict(packet.get("stage17", {})),
             "mind_packet": packet,
         }
 

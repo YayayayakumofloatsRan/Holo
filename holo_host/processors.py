@@ -107,7 +107,8 @@ def build_turn_plan(context: TurnContext, config: HostConfig) -> TurnPlan:
         history_window = config.memory.recall_history_messages
         latency_tier = "recall"
     else:
-        history_window = config.memory.fast_history_messages if fast_path else config.memory.recall_history_messages
+        active_fast = str(context.mind_packet.get("memory_route", "") or "") == "active_thread"
+        history_window = 1 if fast_path and active_fast else config.memory.fast_history_messages if fast_path else config.memory.recall_history_messages
         latency_tier = "fast" if fast_path else "normal"
     return TurnPlan(
         route=route,
@@ -375,15 +376,39 @@ def _render_section(title: str, lines: list[str]) -> str:
 
 
 def _history_block(context: TurnContext, turn_plan: TurnPlan) -> str:
+    if turn_plan.fast_path and str(context.mind_packet.get("memory_route", "") or "") == "active_thread":
+        active_state = dict(context.mind_packet.get("active_thread_state", {}))
+        lines: list[str] = []
+        summary = compact_text(str(active_state.get("continuity_summary", "") or ""), 140)
+        if summary:
+            lines.append(f"continuity_summary: {summary}")
+        last_action = dict(active_state.get("last_outbound_action", {}))
+        action_type = str(last_action.get("action_type", "") or "").strip()
+        if action_type:
+            lines.append(f"last_outbound_action: {action_type}")
+        unresolved = [str(item).strip() for item in active_state.get("unresolved_references", []) if str(item).strip()]
+        packet_window = dict(context.mind_packet.get("recent_dialogue_window", {}))
+        packet_lines = [str(line).strip() for line in packet_window.get("lines", []) if str(line).strip()]
+        if unresolved and packet_lines:
+            lines.append(f"last_exchange: {compact_text(packet_lines[-1], 120)}")
+        selected = lines[: max(1, int(turn_plan.history_window or 1))]
+        context.metadata["history_lines_in_prompt"] = len(selected)
+        if selected:
+            return "\n".join(f"- {line}" for line in selected)
+        context.metadata["history_lines_in_prompt"] = 0
+        return "- active thread state is warm; no verbatim recent history needed."
     packet_window = dict(context.mind_packet.get("recent_dialogue_window", {}))
     packet_lines = [str(line).strip() for line in packet_window.get("lines", []) if str(line).strip()]
     if packet_lines:
-        return "\n".join(f"- {line}" for line in packet_lines[: max(1, turn_plan.history_window)])
+        selected = packet_lines[: max(1, turn_plan.history_window)]
+        context.metadata["history_lines_in_prompt"] = len(selected)
+        return "\n".join(f"- {line}" for line in selected)
     history_lines: list[str] = []
     for item in context.history[-max(1, turn_plan.history_window):]:
         direction = "对方" if item.get("direction") == "inbound" else "咱"
         body = compact_text(str(item.get("body_text", "")), 90)
         history_lines.append(f"- {direction}: {body}")
+    context.metadata["history_lines_in_prompt"] = len(history_lines)
     return "\n".join(history_lines) if history_lines else "- 这是这一段聊天里的第一句。"
 
 
@@ -1149,6 +1174,7 @@ class CodexCliProcessor:
                 "usage": dict(result_metadata.get("usage", {})),
                 "prompt_excerpt": compact_text(prompt, 240),
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
+                "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
             },
         )
 
@@ -1211,7 +1237,7 @@ class ResponsesProcessor:
             session_id=session_id,
             raw_text=text,
             timing_ms={"processor_ms": processor_ms},
-            debug={"model": model},
+            debug={"model": model, "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0)},
         )
 
 
