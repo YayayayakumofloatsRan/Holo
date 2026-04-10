@@ -744,6 +744,66 @@ def _action_market_payload(
     return daemon.memory.action_market(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query, limit=limit), "local_process"
 
 
+def _fast_path_metrics_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/fast-path-metrics",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_fast_path_metrics(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _predictive_continuity_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/predictive-continuity",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_predictive_continuity(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _world_state_payload(
     config_path: str | None,
     *,
@@ -1138,6 +1198,37 @@ def _trace_action_selection_payload(
         return {"status": "live_http_unavailable"}, "live_http_unavailable"
     daemon = build_daemon(config_path)
     return daemon.memory.trace_action_selection(query=query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+
+
+def _trace_reflex_routing_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/trace-reflex-routing",
+        payload={"thread_key": thread_key or "", "chat_name": chat_name or "", "channel": channel, "query": query},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_reflex_routing(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
 
 
 def _initiative_run_payload(
@@ -3529,6 +3620,40 @@ def command_show_action_market(
     return 0
 
 
+def command_show_fast_path_metrics(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _fast_path_metrics_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_predictive_continuity(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _predictive_continuity_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_world_state(
     config_path: str | None,
     *,
@@ -3562,6 +3687,25 @@ def command_trace_action_selection(
         channel=channel,
         query=query,
         limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_reflex_routing(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+) -> int:
+    payload, _transport = _trace_reflex_routing_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -4820,6 +4964,53 @@ def _accept_stage17_payload(
             service.memory.graph.close()
 
 
+def _accept_stage18_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage18",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage18(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -4914,6 +5105,27 @@ def command_accept_stage17(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage17_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage18(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage18_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -6042,6 +6254,14 @@ def main(argv: list[str] | None = None) -> int:
     action_market_parser.add_argument("--channel", default="wechat")
     action_market_parser.add_argument("--query", default="")
     action_market_parser.add_argument("--limit", type=int, default=8)
+    fast_metrics_parser = subparsers.add_parser("show-fast-path-metrics", help="Show Stage-18 active fast-path counters and reflex state")
+    fast_metrics_parser.add_argument("--thread-key", default=None)
+    fast_metrics_parser.add_argument("--chat-name", default=None)
+    fast_metrics_parser.add_argument("--channel", default="wechat")
+    predictive_parser = subparsers.add_parser("show-predictive-continuity", help="Show Stage-18 predictive continuity for one active thread")
+    predictive_parser.add_argument("--thread-key", default=None)
+    predictive_parser.add_argument("--chat-name", default=None)
+    predictive_parser.add_argument("--channel", default="wechat")
     world_state_parser = subparsers.add_parser("show-world-state", help="Inspect the current social world-state for one thread")
     world_state_parser.add_argument("--thread-key", default=None)
     world_state_parser.add_argument("--chat-name", default=None)
@@ -6090,6 +6310,11 @@ def main(argv: list[str] | None = None) -> int:
     action_trace_parser.add_argument("--channel", default="wechat")
     action_trace_parser.add_argument("--query", required=True)
     action_trace_parser.add_argument("--limit", type=int, default=8)
+    reflex_trace_parser = subparsers.add_parser("trace-reflex-routing", help="Explain Stage-18 active/reflex routing for one thread/query")
+    reflex_trace_parser.add_argument("--thread-key", default=None)
+    reflex_trace_parser.add_argument("--chat-name", default=None)
+    reflex_trace_parser.add_argument("--channel", default="wechat")
+    reflex_trace_parser.add_argument("--query", required=True)
     counterfactual_parser = subparsers.add_parser("trace-counterfactual", help="Explain the Stage-7 fast simulation set for one thread/query")
     counterfactual_parser.add_argument("--thread-key", default=None)
     counterfactual_parser.add_argument("--chat-name", default=None)
@@ -6338,6 +6563,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage17_parser.add_argument("--channel", default="wechat")
     accept_stage17_parser.add_argument("--sender", default=None)
     accept_stage17_parser.add_argument("--artifact-dir", default=None)
+    accept_stage18_parser = subparsers.add_parser("accept-stage18", help="Run the Stage-18 dual-speed reflex and predictive continuity gate")
+    accept_stage18_parser.add_argument("--thread-key", default=None)
+    accept_stage18_parser.add_argument("--chat-name", default=None)
+    accept_stage18_parser.add_argument("--channel", default="wechat")
+    accept_stage18_parser.add_argument("--sender", default=None)
+    accept_stage18_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -6466,6 +6697,20 @@ def main(argv: list[str] | None = None) -> int:
             query=args.query,
             limit=args.limit,
         )
+    if args.command == "show-fast-path-metrics":
+        return command_show_fast_path_metrics(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "show-predictive-continuity":
+        return command_show_predictive_continuity(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
     if args.command == "show-world-state":
         return command_show_world_state(
             args.config,
@@ -6546,6 +6791,14 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             query=args.query,
             limit=args.limit,
+        )
+    if args.command == "trace-reflex-routing":
+        return command_trace_reflex_routing(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
         )
     if args.command == "trace-counterfactual":
         return command_trace_counterfactual(
@@ -6882,6 +7135,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage17":
         return command_accept_stage17(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage18":
+        return command_accept_stage18(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

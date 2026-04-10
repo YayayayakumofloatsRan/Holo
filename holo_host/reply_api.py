@@ -30,7 +30,7 @@ from .operator_bus import build_engineering_snapshot, build_homeostasis_state
 from .operator_bus import operator_probe as run_operator_probe
 from .operator_bus import refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
-from .processors import build_attention_state, build_processor, build_reply_bubbles
+from .processors import _select_reply_lane, build_attention_state, build_processor, build_reply_bubbles
 from .processors import build_turn_plan, render_chat_prompt
 from .reply_service_parts.acceptance import (
     accept_stage10 as _accept_stage10,
@@ -39,6 +39,7 @@ from .reply_service_parts.acceptance import (
     accept_stage14 as _accept_stage14,
     accept_stage16 as _accept_stage16,
     accept_stage17 as _accept_stage17,
+    accept_stage18 as _accept_stage18,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -2987,6 +2988,253 @@ class HoloReplyService:
             "stage14": {"status": stage14_report.get("status"), "checks": stage14_report.get("checks", {})},
         }
 
+    def show_fast_path_metrics(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.fast_path_metrics(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def show_predictive_continuity(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.predictive_continuity(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def trace_reflex_routing(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+    ) -> dict[str, Any]:
+        trace = self.memory.trace_reflex_routing(
+            query=query,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+        )
+        packet = {
+            "tier": trace.get("tier", ""),
+            "memory_route": trace.get("memory_route", ""),
+            "active_thread_state": {
+                "predictive_continuity": dict(trace.get("predictive_continuity", {})),
+            },
+            "stage18": dict(trace.get("stage18", {})),
+            "selected_action": dict(trace.get("selected_action", {})),
+        }
+        turn_context = TurnContext(
+            channel=channel,
+            thread_key=str(trace.get("thread_key", thread_key or "") or ""),
+            chat_name=str(trace.get("chat_name", chat_name or thread_key or "") or ""),
+            sender=str(chat_name or thread_key or ""),
+            user_text=query,
+            sidecar=packet,
+            mind_packet=packet,
+            attention_state=build_attention_state(query, channel=channel, metadata={}),
+            emotion_state={},
+            history=[],
+            metadata={},
+            capability_context={},
+        )
+        turn_plan = build_turn_plan(turn_context, self.config)
+        lane, lane_reason, reflex_candidate = _select_reply_lane(turn_context, turn_plan, self.config)
+        trace["generation_lane"] = lane
+        trace["generation_lane_reason"] = lane_reason
+        trace["reflex_micro_fast_candidate"] = reflex_candidate
+        trace["turn_plan"] = turn_plan.to_dict()
+        return trace
+
+    def accept_stage18(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage18(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def _accept_stage18_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_chat_name = str(chat_name or "Nemoqi").strip()
+        normalized_thread_key = str(thread_key or normalized_chat_name).strip()
+        if normalized_channel == "wechat" and normalized_thread_key and not (
+            normalized_thread_key.startswith("wechat:")
+            or normalized_thread_key.startswith("wxid_")
+            or normalized_thread_key.endswith("@chatroom")
+        ):
+            normalized_thread_key = f"wechat:{normalized_thread_key}"
+        probe_text = "still here?"
+        probe_turn = ChatTurn(
+            chat_name=normalized_chat_name,
+            text=probe_text,
+            sender=str(sender or normalized_chat_name),
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            message_id="accept-stage18-reflex",
+            metadata={},
+        )
+        incoming = probe_turn.to_incoming_message()
+        active_state = self._update_active_thread_state(
+            turn=probe_turn,
+            incoming=incoming,
+            direction="inbound",
+            event_row_id=1801,
+            text=probe_turn.text,
+            metadata={"source": "accept-stage18"},
+        )
+        context = {
+            "channel": normalized_channel,
+            "thread_key": normalized_thread_key,
+            "incoming_thread_key": normalized_thread_key,
+            "message_id": incoming.message_id,
+            "chat_name": normalized_chat_name,
+            "sender": str(sender or normalized_chat_name),
+            "recent_history": [
+                {"direction": "inbound", "body_text": "old line one"},
+                {"direction": "outbound", "body_text": "old line two"},
+                {"direction": "inbound", "body_text": "old line three"},
+            ],
+            "attachments": [],
+            "active_thread_state": active_state,
+            "event_id": "1801",
+        }
+        fast_packet = self.memory.sidecar_packet(probe_text, context=context)
+        fast_turn_context = TurnContext(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            sender=str(sender or normalized_chat_name),
+            user_text=probe_text,
+            sidecar=fast_packet,
+            mind_packet=fast_packet,
+            attention_state=build_attention_state(probe_text, channel=normalized_channel, metadata={}),
+            emotion_state=dict(fast_packet.get("state", {}).get("emotion_state", {})),
+            history=list(context["recent_history"]),
+            metadata={"event_id": "1801"},
+            capability_context={},
+        )
+        fast_turn_plan = build_turn_plan(fast_turn_context, self.config)
+        fast_prompt = render_chat_prompt(fast_turn_context, turn_plan=fast_turn_plan)
+        generation_lane, lane_reason, reflex_candidate = _select_reply_lane(fast_turn_context, fast_turn_plan, self.config)
+
+        memory_query = "remember previous history"
+        recall_packet = self.memory.sidecar_packet(
+            memory_query,
+            context={**context, "message_id": "accept-stage18-recall", "active_thread_state": active_state, "event_id": "1802"},
+        )
+        low_conf_state = dict(active_state)
+        low_conf_predictive = dict(low_conf_state.get("predictive_continuity", {}))
+        low_conf_predictive["active_prediction_confidence"] = 0.1
+        low_conf_predictive["reflex_eligibility"] = False
+        low_conf_state["predictive_continuity"] = low_conf_predictive
+        low_conf_packet = self.memory.sidecar_packet(
+            probe_text,
+            context={**context, "message_id": "accept-stage18-low-confidence", "active_thread_state": low_conf_state, "event_id": "1803"},
+        )
+        reloaded_state = self.memory.active_thread_state(
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+        )
+        stage17_report = self.accept_stage17(
+            thread_key=normalized_thread_key,
+            chat_name=normalized_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        predictive = dict(reloaded_state.get("predictive_continuity", {}))
+        checks = {
+            "predictive_fields_visible": all(
+                key in predictive
+                for key in (
+                    "predicted_next_user_act",
+                    "predicted_reply_pressure",
+                    "likely_reference_targets",
+                    "expected_social_valence",
+                    "reflex_eligibility",
+                    "turn_rhythm",
+                    "freshness_at",
+                    "active_prediction_confidence",
+                )
+            ),
+            "ordinary_short_turn_routes_generation_micro_fast": generation_lane == "micro_fast"
+            and bool(reflex_candidate)
+            and str(fast_packet.get("memory_route", "")) == "active_thread",
+            "explicit_memory_query_escalates": str(recall_packet.get("tier", "")).strip() in {"recall", "deep_recall"}
+            and str(recall_packet.get("recall_reason", "")).startswith("stage17:"),
+            "low_confidence_alone_does_not_deep_recall": str(low_conf_packet.get("tier", "")).strip() != "deep_recall",
+            "predictive_continuity_persisted": bool(predictive.get("freshness_at"))
+            and "active_prediction_confidence" in reloaded_state,
+            "fast_prompt_uses_predictive_before_history": "predictive_continuity" in fast_prompt
+            and "old line two" not in fast_prompt
+            and int(fast_turn_context.metadata.get("history_lines_in_prompt", 0) or 0) <= 1,
+            "action_market_first_preserved": bool(fast_packet.get("selected_action")) and bool(fast_packet.get("action_market")),
+            "stage17_acceptance_green": str(stage17_report.get("status", "")).strip() == "pass",
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "dual-speed-reflex-and-predictive-continuity-stage18",
+            "checks": checks,
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": normalized_channel,
+            "generation_lane": {
+                "lane": generation_lane,
+                "reason": lane_reason,
+                "reflex_micro_fast_candidate": reflex_candidate,
+                "turn_plan": fast_turn_plan.to_dict(),
+            },
+            "fast_packet": {
+                "tier": fast_packet.get("tier"),
+                "memory_route": fast_packet.get("memory_route"),
+                "retrieval_mode": fast_packet.get("retrieval_mode"),
+                "stage18": dict(fast_packet.get("stage18", {})),
+                "selected_action": dict(fast_packet.get("selected_action", {})),
+                "history_lines_in_prompt": int(fast_turn_context.metadata.get("history_lines_in_prompt", 0) or 0),
+                "predictive_lines_in_prompt": int(fast_turn_context.metadata.get("predictive_lines_in_prompt", 0) or 0),
+                "prompt_excerpt": compact_text(fast_prompt, 360),
+            },
+            "recall_probe": {
+                "query": memory_query,
+                "tier": recall_packet.get("tier"),
+                "recall_reason": recall_packet.get("recall_reason"),
+                "memory_route": recall_packet.get("memory_route"),
+            },
+            "low_confidence_probe": {
+                "tier": low_conf_packet.get("tier"),
+                "recall_reason": low_conf_packet.get("recall_reason"),
+                "memory_route": low_conf_packet.get("memory_route"),
+            },
+            "predictive_continuity": predictive,
+            "active_thread_state": reloaded_state,
+            "stage17": {"status": stage17_report.get("status"), "checks": stage17_report.get("checks", {})},
+        }
+
     def initiative_status(
         self,
         *,
@@ -5265,6 +5513,34 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/fast-path-metrics":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_fast_path_metrics(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/predictive-continuity":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_predictive_continuity(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/trace-reflex-routing":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_reflex_routing(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        query=params.get("query", [""])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/deliberation-ledger":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.deliberation_ledger(
@@ -5622,6 +5898,17 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             sender=str(payload.get("sender", "")).strip() or None,
                             iterations=int(payload.get("iterations", 3) or 3),
                             warmup=int(payload.get("warmup", 1) or 1),
+                        ),
+                    )
+                    return
+                if parsed.path == "/trace-reflex-routing":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.trace_reflex_routing(
+                            query=str(payload.get("query", "")).strip(),
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "wechat")).strip() or "wechat",
                         ),
                     )
                     return

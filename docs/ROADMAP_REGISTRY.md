@@ -16,9 +16,9 @@ This registry exists so Holo planning does not collapse into a single forced cho
 This arc follows Stage17 thread-resident realtime runtime. Its purpose is to make Holo more continuous without turning continuity into a second brain or an unbounded loop.
 
 Stage18: dual-speed reflex and predictive continuity
-- Add bounded next-turn prediction inside `ActiveThreadState`.
-- Use prediction as action-market bias only.
-- Keep ordinary short turns on the Stage17 active fast lane.
+- Implemented bounded next-turn predictive continuity inside `ActiveThreadState`.
+- Uses existing `micro_fast` only as a conservative generation lane after action-market selection.
+- Keeps explicit memory/history/factual requests on recall escalation paths.
 
 Stage19: bounded background continuity and attention frontier
 - Reuse existing stream/runtime machinery to keep a small attention frontier warm.

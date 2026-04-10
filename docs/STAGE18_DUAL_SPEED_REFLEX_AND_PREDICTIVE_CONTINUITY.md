@@ -2,99 +2,105 @@
 
 ## Goal
 
-Stage18 extends Stage17 from thread-resident short-turn state into dual-speed subject continuity:
+Stage18 turns Stage17 thread-resident active state into a dual-speed subject path:
 
-- a reflex lane for ordinary short WeChat turns that still uses `ActiveThreadState`
-- a predictive continuity lane that records what the current turn makes likely on the next turn
+- ordinary short low-risk WeChat turns can still use `active-thread-fast`
+- if action-market selection chooses safe speech, generation can route through the existing `micro_fast` lane
+- predictive continuity is carried in `ActiveThreadState` and is visible to prompts/diagnostics
 
-The result should feel less like Holo is only reacting to the current message and more like Holo is carrying a near-future thread shape forward.
+This is not a second brain. Prediction is compact runtime metadata for the current canonical thread.
 
-## Boundary
+## Scope Boundary
 
-- No second brain layer.
+- No new processor lane names.
 - No new unbounded always-on loop.
-- No transport-side decision logic.
-- No new direct processor path outside the processor fabric.
-- No live repo hot edits.
-- Prediction is advisory only. It may bias the action market, but it must not select or execute an action by itself.
-- Preserve memory-is-self, processor-replaceable, transport-eyes-hands, canonical WeChat identity, and action-market-first deliberation.
+- No transport-side decision branch.
+- No prediction-only action selection.
+- No default multi-line recent-history block in fast/reflex prompts.
+- Explicit memory/history/factual/search/visual requests still escalate before active fast routing.
+- Preserve canonical WeChat identity as `wechat:<chat_name>` unless the real transport id is a `wxid_` or chatroom key.
 
-## Runtime Shape
+## Runtime Contract
 
-Stage18 has two internal speeds.
+Action selection remains first:
 
-The reflex speed is the existing Stage17 `active-thread-fast` route. It should keep ordinary short turns on a warm active state path, keep prompt history at `0-1` lines, and keep recall escalation tied to concrete reasons.
+1. `MemoryBridge.sidecar_packet()` builds the packet and action market.
+2. The subject runtime selects `selected_action`.
+3. `CodexCliProcessor.generate()` chooses a generation lane from the selected action, uncertainty, and Stage18 reflex metadata.
+4. Only safe speech actions can use `micro_fast`.
 
-The predictive speed is a bounded state reducer that runs as part of the normal ingress/outbound update path. It records a likely next need for the same canonical thread. It is not a daemon loop and it is not a scheduler.
+Conservative `micro_fast` criteria:
 
-The first implementation should prefer deterministic reducers over new model calls. If a future patch needs processor help, it must use a typed processor task through the existing processor fabric and must record usage in the processor ledger.
+- `turn_plan.fast_path == true`
+- `memory_route == "active_thread"`
+- no `recall` / `deep_recall` tier and no recall reason
+- no attachments, tools, search, visual, factual, or explicit memory/history request
+- pressure is not high
+- selected action is `reply_once`
+- uncertainty is below `0.45`
+- `reflex_eligibility == true`
+- `active_prediction_confidence >= 0.55`
+- `predicted_reply_pressure < 0.5`
+
+High-conflict actions and uncertainty above the existing reply threshold still route to `kernel_xhigh`. Other ordinary cases stay on `subject_main`.
 
 ## Data Contract
 
-`mind_graph.active_thread_state` should expose a nested `predictive_continuity` object through `MemoryBridge.active_thread_state()` and `mind_packet.active_thread_state`.
+`active_thread_state` stores `predictive_continuity_json` and exposes it as both:
+
+- `active_thread_state.predictive_continuity`
+- top-level aliases for the same fields
 
 Minimum fields:
 
 ```json
 {
-  "expected_next_need": "",
-  "likely_next_action_type": "",
-  "likely_recall_tier": "fast",
-  "recall_preheat_keys": [],
-  "unresolved_next_refs": [],
-  "prediction_confidence": 0.0,
-  "expires_at": "",
-  "evidence_refs": [],
-  "source": "stage18_reducer",
-  "updated_at": ""
+  "predicted_next_user_act": "",
+  "predicted_reply_pressure": 0.0,
+  "likely_reference_targets": [],
+  "expected_social_valence": "neutral",
+  "reflex_eligibility": false,
+  "turn_rhythm": {},
+  "freshness_at": "",
+  "active_prediction_confidence": 0.0
 }
 ```
 
-`mind_packet.stage18` should include:
+`mind_packet.stage18` exposes:
 
 ```json
 {
-  "prediction_available": false,
-  "prediction_used_as_bias": false,
+  "fast_lane": true,
+  "reflex_eligible": true,
   "prediction_confidence": 0.0,
-  "prediction_reason": "",
-  "prediction_expired": false,
-  "action_market_bias_applied": false,
-  "max_predictive_prompt_lines": 1
+  "predicted_next_user_act": "",
+  "predicted_reply_pressure": 0.0,
+  "likely_reference_targets": [],
+  "micro_fast_candidate": true,
+  "micro_fast_reason": "active_thread_reflex_candidate"
 }
 ```
 
-`active_thread_state.metrics` should add bounded counters:
+## Prompt Contract
 
-- `prediction_created`
-- `prediction_used`
-- `prediction_expired`
-- `prediction_missed`
-- `prediction_recall_escalation_overrode`
+For `active-thread-fast`, prompt context is ordered:
 
-## Action Market Contract
+1. `continuity_summary`
+2. `last_outbound_action`
+3. `predictive_continuity`
+4. optional one-line `last_exchange`
 
-Predictive continuity can bias candidate scores only after candidates are already built by the subject runtime.
+`history_lines_in_prompt` counts only verbatim recent-history lines. Stage18 also records `active_state_lines_in_prompt` and `predictive_lines_in_prompt`.
 
-Allowed bias targets:
+## Diagnostics
 
-- `reply_once`
-- `reply_multi`
-- `defer_reply`
-- `history_refresh`
-- `external_lookup`
-- `push_back`
-- `counter_offer`
-- `continuity_defense`
+```bash
+python -m holo_host show-fast-path-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+python -m holo_host show-predictive-continuity --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+python -m holo_host trace-reflex-routing --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "still here?"
+```
 
-Forbidden behavior:
-
-- selecting an action directly from `predictive_continuity`
-- sending from the prediction reducer
-- suppressing explicit recall escalation because a prediction exists
-- injecting more than one predictive line into fast-lane prompts
-
-## Acceptance Checklist
+## Acceptance
 
 Closure command:
 
@@ -102,37 +108,34 @@ Closure command:
 python -m holo_host --config .holo_host.example.toml accept-stage18 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
 ```
 
-The acceptance gate should verify:
+The gate verifies:
 
-- `accept-stage17` remains green.
-- Ordinary short turns still use `active_thread` memory route.
-- Fast-lane prompt history remains `0-1` lines.
-- A normal inbound/outbound pair creates `predictive_continuity` with evidence refs and an expiry.
-- A follow-up synthetic turn can use the prediction as action-market bias.
-- The selected action still comes from the action market.
-- Explicit memory/history/factual recall requests override the prediction.
-- Expired predictions are ignored and counted as expired.
-- No new daemon loop is required for Stage18.
+- Stage17 acceptance remains green.
+- Predictive continuity fields are inspectable and persisted.
+- Ordinary short active-thread speech can route generation to `micro_fast`.
+- Explicit memory/history query still escalates.
+- Low prediction confidence alone does not trigger `deep_recall`.
+- Fast prompts use predictive continuity before any optional verbatim history.
+- Action-market-first is preserved.
 
 Recommended regression commands:
 
 ```bash
-pytest -q tests/test_stage18_dual_speed_reflex.py
-pytest -q tests/test_stage17_realtime_runtime.py
+pytest -q tests/test_stage18_dual_speed_reflex.py tests/test_stage17_realtime_runtime.py tests/test_processor_fabric.py
+pytest -q tests/test_stage14_replay.py tests/test_stage15_modularization.py tests/test_stage16_release.py
 python -m holo_host --config .holo_host.example.toml accept-stage17 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
 python -m holo_host --config .holo_host.example.toml accept-stage18 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
-pytest -q
 ```
 
 ## Regression Risks
 
-- Prediction becomes a hidden action selector instead of an action-market bias.
-- Stale predictions cause Holo to answer the expected next turn rather than the real current turn.
-- Prediction state leaks across canonical thread keys.
-- Fast prompts grow back into multi-line recent-history prompts.
-- Low-confidence prediction suppresses recall that should escalate.
-- A model-specific prediction task sneaks around the processor fabric.
+- Treating prediction as an action selector instead of prompt/routing metadata.
+- Letting `micro_fast` bypass action-market selection.
+- Letting explicit memory/history/factual requests stay on the reflex path.
+- Counting compact active-state lines as verbatim history and masking recent-history growth.
+- Allowing low confidence to become a recall escalation reason.
+- Splitting WeChat identity between `Nemoqi` and `wechat:Nemoqi`.
 
 ## Rollback
 
-Stage18 should be rollback-safe by ignoring `predictive_continuity` and falling back to Stage17 active-thread behavior. The data should be additive and optional; missing Stage18 fields must not break `active-thread-fast`, graph recall, or replay.
+Stage18 is additive. If `predictive_continuity_json` is missing or empty, Stage17 active-thread behavior still works and generation remains on `subject_main` unless existing high-risk rules upgrade to `kernel_xhigh`.

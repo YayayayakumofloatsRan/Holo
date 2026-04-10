@@ -49,15 +49,18 @@ The real continuity lives in:
 2. Host normalizes input and records it as an event, not an automatic reply
 3. Memory bridge builds a structured `mind_packet` plus `intent_state` and `action_market`
 4. The subject kernel selects one action
-5. Only the selected speech action enters processor generation
-6. Expression budget, silence, or defer are treated as first-class action outcomes
-7. Host writes the chosen action and any outbound turn to runtime store
-8. Memory bridge writes archive + working/candidate observations
-9. Mind Graph incrementally re-syncs the active thread after each real turn
-10. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
+5. Stage18 may choose the existing `micro_fast` generation lane for conservative active-thread reflex speech; this happens only after action selection
+6. Only the selected speech action enters processor generation
+7. Expression budget, silence, or defer are treated as first-class action outcomes
+8. Host writes the chosen action and any outbound turn to runtime store
+9. Memory bridge writes archive + working/candidate observations
+10. Mind Graph incrementally re-syncs the active thread and predictive continuity after each real turn
+11. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
 
 ## Current Runtime Truth
 - Main processor: `codex_cli`
+- Processor lanes: `kernel_xhigh`, `subject_main`, and `micro_fast`
+- Stage18 dual-speed reflex is live: ordinary short active-thread speech can generate through existing `micro_fast`, while explicit memory/history/factual turns still escalate and high-risk actions still use `subject_main` or `kernel_xhigh`
 - Live WeChat transport: `pyweixin_dialog`
 - `wcferry` is not the live path on this machine because local `Weixin 4.1.x` is incompatible with the installed `wcferry 39.x` line
 - WSL kernel should be treated as authoritative; Windows helper is only a transport shell
@@ -99,6 +102,7 @@ Current relationship-memory rule:
 - Do not depend on one Codex chat thread to keep Holo alive
 - Do not treat `codex_session_id` as memory; it is only a resumable compute cache
 - Do not let WeChat single chats split into `wechat:<name>` and `<name>` alias threads
+- Do not let Stage18 predictive continuity select actions or bypass explicit memory/history escalation
 - Do not publish live memory JSONL or runtime graph state to a public remote; memory sync belongs only on trusted local/private paths
 
 ## Current Weak Spots

@@ -716,6 +716,7 @@ class MindGraph:
                 attention_focus TEXT NOT NULL DEFAULT '',
                 cache_warmth TEXT NOT NULL DEFAULT 'cold',
                 recent_turn_ids_json TEXT NOT NULL DEFAULT '[]',
+                predictive_continuity_json TEXT NOT NULL DEFAULT '{}',
                 metrics_json TEXT NOT NULL DEFAULT '{}',
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT '',
@@ -981,6 +982,12 @@ class MindGraph:
             }
             if "world_json" not in subject_columns:
                 self.conn.execute("ALTER TABLE subject_state ADD COLUMN world_json TEXT NOT NULL DEFAULT '{}'")
+            active_columns = {
+                str(row["name"] or "")
+                for row in self.conn.execute("PRAGMA table_info(active_thread_state)").fetchall()
+            }
+            if "predictive_continuity_json" not in active_columns:
+                self.conn.execute("ALTER TABLE active_thread_state ADD COLUMN predictive_continuity_json TEXT NOT NULL DEFAULT '{}'")
             for stream_name, payload in self.stream_cadences.items():
                 self.conn.execute(
                     """
@@ -1089,6 +1096,194 @@ class MindGraph:
             ordered.append(item)
         return ordered[-max(1, int(limit)) :]
 
+    @staticmethod
+    def _default_predictive_continuity(*, now: str = "") -> dict[str, Any]:
+        return {
+            "predicted_next_user_act": "",
+            "predicted_reply_pressure": 0.0,
+            "likely_reference_targets": [],
+            "expected_social_valence": "neutral",
+            "reflex_eligibility": False,
+            "turn_rhythm": {},
+            "freshness_at": str(now or ""),
+            "active_prediction_confidence": 0.0,
+        }
+
+    def _normalize_predictive_continuity(self, raw: Any, *, now: str = "") -> dict[str, Any]:
+        payload = self._default_predictive_continuity(now=now)
+        if isinstance(raw, dict):
+            current = dict(raw)
+        else:
+            current = _safe_json_dict(raw)
+        payload["predicted_next_user_act"] = compact_text(str(current.get("predicted_next_user_act", "") or ""), 80)
+        payload["predicted_reply_pressure"] = self._clamp(current.get("predicted_reply_pressure", 0.0), default=0.0)
+        payload["likely_reference_targets"] = [
+            compact_text(str(item).strip(), 64)
+            for item in current.get("likely_reference_targets", [])
+            if str(item).strip()
+        ][:3]
+        payload["expected_social_valence"] = compact_text(str(current.get("expected_social_valence", "") or "neutral"), 40) or "neutral"
+        payload["reflex_eligibility"] = bool(current.get("reflex_eligibility", False))
+        rhythm = current.get("turn_rhythm", {})
+        payload["turn_rhythm"] = dict(rhythm) if isinstance(rhythm, dict) else {}
+        payload["freshness_at"] = str(current.get("freshness_at", "") or now or "")
+        payload["active_prediction_confidence"] = self._clamp(current.get("active_prediction_confidence", 0.0), default=0.0)
+        return payload
+
+    def _apply_predictive_aliases(self, payload: dict[str, Any]) -> dict[str, Any]:
+        predictive = self._normalize_predictive_continuity(payload.get("predictive_continuity", {}))
+        payload["predictive_continuity"] = predictive
+        for key, value in predictive.items():
+            payload[key] = value
+        return payload
+
+    @staticmethod
+    def _predictive_signal(text: str) -> dict[str, Any]:
+        raw = " ".join(str(text or "").strip().split())
+        lowered = raw.lower()
+        meaningful = _meaningful_char_count(raw)
+        explicit_memory = any(hint in lowered for hint in ("remember", "history", "before", "earlier", "previous", "memory"))
+        search_or_visual = any(hint in lowered for hint in ("search", "look up", "latest", "official", "image", "photo", "picture", "screenshot"))
+        factual = bool(search_or_visual and any(hint in lowered for hint in ("who", "what", "when", "where", "wikipedia", "imdb", "latest", "official")))
+        question_like = "?" in raw or any(hint in lowered for hint in ("how", "why", "what", "when", "where", "can you"))
+        low_signal = meaningful <= 4 or lowered in {"ok", "okay", "ping", "hi", "hey"}
+        reference_like = any(hint in lowered for hint in ("that", "this", "it", "above", "earlier", "previous"))
+        return {
+            "meaningful": meaningful,
+            "explicit_memory": explicit_memory,
+            "search_or_visual": search_or_visual,
+            "factual": factual,
+            "question_like": question_like,
+            "low_signal": low_signal,
+            "reference_like": reference_like,
+        }
+
+    def _derive_predictive_continuity(
+        self,
+        *,
+        current: dict[str, Any],
+        direction: str,
+        text: str,
+        channel: str,
+        selected_action: dict[str, Any],
+        intent_state: dict[str, Any],
+        attention_focus: str,
+        active_affect_hint: str,
+        relationship_tension: float,
+        unresolved_references: list[str],
+        tempo_state: dict[str, Any],
+        event_ref: str,
+        now: str,
+    ) -> dict[str, Any]:
+        previous = self._normalize_predictive_continuity(current.get("predictive_continuity", {}), now=now)
+        signal = self._predictive_signal(text)
+        normalized_direction = str(direction or "").strip() or "event"
+        normalized_action_type = str(selected_action.get("action_type", "") or "").strip()
+        focus = str(attention_focus or current.get("attention_focus", "") or "").strip()
+        affect = str(active_affect_hint or current.get("active_affect_hint", "") or "").strip()
+        tension = self._clamp(relationship_tension, default=0.0)
+        refs: list[str] = []
+        for item in list(unresolved_references) + list(previous.get("likely_reference_targets", [])):
+            cleaned = compact_text(str(item).strip(), 64)
+            if cleaned and cleaned not in refs:
+                refs.append(cleaned)
+        if normalized_action_type:
+            action_ref = f"last_outbound_action:{normalized_action_type}"
+            if action_ref not in refs:
+                refs.append(action_ref)
+        if focus:
+            focus_ref = f"attention_focus:{focus}"
+            if focus_ref not in refs:
+                refs.append(focus_ref)
+        refs = refs[:3]
+
+        if normalized_direction == "outbound":
+            if normalized_action_type == "defer_reply":
+                predicted_next = "user_may_wait_or_follow_up"
+            elif normalized_action_type == "silence":
+                predicted_next = "user_may_reprompt"
+            elif normalized_action_type in {"push_back", "counter_offer", "continuity_defense"}:
+                predicted_next = "user_may_negotiate_boundary"
+            elif normalized_action_type:
+                predicted_next = "user_continuation_or_ack"
+            else:
+                predicted_next = str(previous.get("predicted_next_user_act", "") or "user_continuation_or_ack")
+        elif signal["explicit_memory"]:
+            predicted_next = "memory_or_history_request"
+        elif signal["factual"]:
+            predicted_next = "factual_or_tool_request"
+        elif signal["reference_like"]:
+            predicted_next = "reference_followup"
+        elif signal["question_like"]:
+            predicted_next = "short_answer_expected"
+        elif signal["low_signal"]:
+            predicted_next = "low_signal_ping_or_ack"
+        else:
+            predicted_next = "ordinary_continuation"
+
+        pressure = 0.18
+        pressure += 0.18 if bool(signal["question_like"]) else 0.0
+        pressure += 0.2 if bool(signal["explicit_memory"] or signal["factual"]) else 0.0
+        pressure += min(0.22, max(0, int(signal["meaningful"]) - 36) * 0.006)
+        pressure += tension * 0.42
+        pressure += 0.08 if refs else 0.0
+        if normalized_direction == "outbound" and normalized_action_type in {"reply_once", "reply_multi"}:
+            pressure = max(0.08, pressure - 0.12)
+        pressure = self._clamp(pressure, default=0.0)
+
+        if tension >= 0.58 or normalized_action_type in {"push_back", "counter_offer", "continuity_defense"}:
+            valence = "strained"
+        elif "play" in focus or "imagery" in focus:
+            valence = "playful"
+        elif "companionship" in focus or "warm" in affect.lower():
+            valence = "supportive"
+        else:
+            valence = "neutral"
+
+        blockers = bool(signal["explicit_memory"] or signal["factual"] or signal["search_or_visual"])
+        reflex_eligible = (
+            str(channel or "").strip() == "wechat"
+            and normalized_direction in {"inbound", "inspect"}
+            and int(signal["meaningful"]) <= 54
+            and tension < 0.58
+            and not blockers
+            and not unresolved_references
+        )
+        confidence = 0.52
+        confidence += 0.14 if bool(current.get("present", False)) else 0.0
+        confidence += 0.08 if str(current.get("continuity_summary", "") or "").strip() else 0.0
+        confidence += 0.08 if dict(current.get("last_outbound_action", {})).get("action_type") or normalized_action_type else 0.0
+        confidence += 0.06 if bool(signal["low_signal"]) else 0.0
+        confidence += 0.08 if reflex_eligible else 0.0
+        confidence -= 0.18 if blockers else 0.0
+        confidence -= 0.12 if int(signal["meaningful"]) > 54 else 0.0
+        confidence -= 0.18 if tension >= 0.58 else 0.0
+        if not reflex_eligible:
+            confidence = min(confidence, 0.54 if blockers else confidence)
+        confidence = self._clamp(confidence, default=0.0)
+
+        rhythm = dict(previous.get("turn_rhythm", {}))
+        rhythm.update(
+            {
+                "last_direction": normalized_direction,
+                "turn_count": int(tempo_state.get("turn_count", rhythm.get("turn_count", 0)) or 0),
+                "last_event_at": now,
+                "short_turn": bool(int(signal["meaningful"]) <= 18),
+            }
+        )
+        if event_ref:
+            rhythm["last_event_ref"] = str(event_ref)
+        return {
+            "predicted_next_user_act": predicted_next,
+            "predicted_reply_pressure": pressure,
+            "likely_reference_targets": refs,
+            "expected_social_valence": valence,
+            "reflex_eligibility": reflex_eligible,
+            "turn_rhythm": rhythm,
+            "freshness_at": now,
+            "active_prediction_confidence": confidence,
+        }
+
     def _active_thread_state_from_row(
         self,
         row: dict[str, Any] | None,
@@ -1098,7 +1293,7 @@ class MindGraph:
         chat_name: str,
     ) -> dict[str, Any]:
         if not row:
-            return {
+            payload = {
                 "channel": channel,
                 "thread_key": thread_key,
                 "chat_name": chat_name,
@@ -1118,7 +1313,8 @@ class MindGraph:
                 "updated_at": "",
                 "present": False,
             }
-        return {
+            return self._apply_predictive_aliases(payload)
+        payload = {
             "channel": str(row.get("channel", channel) or channel),
             "thread_key": str(row.get("thread_key", thread_key) or thread_key),
             "chat_name": str(row.get("chat_name", chat_name) or chat_name),
@@ -1140,12 +1336,14 @@ class MindGraph:
                 for item in _safe_json_list(row.get("recent_turn_ids_json", "[]"))
                 if str(item).strip()
             ],
+            "predictive_continuity": self._normalize_predictive_continuity(row.get("predictive_continuity_json", "{}")),
             "metrics": _safe_json_dict(row.get("metrics_json", "{}")),
             "metadata": _safe_json_dict(row.get("metadata_json", "{}")),
             "created_at": str(row.get("created_at", "") or ""),
             "updated_at": str(row.get("updated_at", "") or ""),
             "present": True,
         }
+        return self._apply_predictive_aliases(payload)
 
     def active_thread_state(
         self,
@@ -1299,6 +1497,27 @@ class MindGraph:
                 except (TypeError, ValueError):
                     pass
                 metrics["history_lines_in_prompt_samples"] = samples[-20:]
+            active_affect = str(active_affect_hint or current.get("active_affect_hint", "") or "").strip()
+            tension = self._clamp(
+                relationship_tension if relationship_tension is not None else current.get("relationship_tension", 0.0),
+                default=0.0,
+            )
+            active_focus = str(attention_focus or current.get("attention_focus", "") or "").strip()
+            predictive = self._derive_predictive_continuity(
+                current=current,
+                direction=str(direction or "").strip() or "event",
+                text=str(text or ""),
+                channel=normalized_channel,
+                selected_action=selected if str(direction or "").strip() == "outbound" or selected else {},
+                intent_state=intent,
+                attention_focus=active_focus,
+                active_affect_hint=active_affect,
+                relationship_tension=tension,
+                unresolved_references=refs,
+                tempo_state=tempo,
+                event_ref=event_ref,
+                now=now,
+            )
             payload = {
                 "channel": normalized_channel,
                 "thread_key": normalized_thread_key,
@@ -1307,12 +1526,13 @@ class MindGraph:
                 "last_user_intent": last_user_intent,
                 "last_outbound_action_json": json.dumps(selected if str(direction or "").strip() == "outbound" or selected else {}, ensure_ascii=False, sort_keys=True),
                 "unresolved_references_json": json.dumps(refs, ensure_ascii=False, sort_keys=True),
-                "active_affect_hint": str(active_affect_hint or current.get("active_affect_hint", "") or "").strip(),
-                "relationship_tension": self._clamp(relationship_tension if relationship_tension is not None else current.get("relationship_tension", 0.0), default=0.0),
+                "active_affect_hint": active_affect,
+                "relationship_tension": tension,
                 "tempo_state_json": json.dumps(tempo, ensure_ascii=False, sort_keys=True),
-                "attention_focus": str(attention_focus or current.get("attention_focus", "") or "").strip(),
+                "attention_focus": active_focus,
                 "cache_warmth": warmth,
                 "recent_turn_ids_json": json.dumps(recent_turn_ids, ensure_ascii=False, sort_keys=True),
+                "predictive_continuity_json": json.dumps(predictive, ensure_ascii=False, sort_keys=True),
                 "metrics_json": json.dumps(metrics, ensure_ascii=False, sort_keys=True),
                 "metadata_json": json.dumps(meta, ensure_ascii=False, sort_keys=True),
                 "created_at": str(current.get("created_at", "") or now),
@@ -1323,11 +1543,13 @@ class MindGraph:
                 INSERT INTO active_thread_state(
                     channel, thread_key, chat_name, continuity_summary, last_user_intent, last_outbound_action_json,
                     unresolved_references_json, active_affect_hint, relationship_tension, tempo_state_json,
-                    attention_focus, cache_warmth, recent_turn_ids_json, metrics_json, metadata_json, created_at, updated_at
+                    attention_focus, cache_warmth, recent_turn_ids_json, predictive_continuity_json,
+                    metrics_json, metadata_json, created_at, updated_at
                 ) VALUES (
                     :channel, :thread_key, :chat_name, :continuity_summary, :last_user_intent, :last_outbound_action_json,
                     :unresolved_references_json, :active_affect_hint, :relationship_tension, :tempo_state_json,
-                    :attention_focus, :cache_warmth, :recent_turn_ids_json, :metrics_json, :metadata_json, :created_at, :updated_at
+                    :attention_focus, :cache_warmth, :recent_turn_ids_json, :predictive_continuity_json,
+                    :metrics_json, :metadata_json, :created_at, :updated_at
                 )
                 ON CONFLICT(channel, thread_key) DO UPDATE SET
                     chat_name = excluded.chat_name,
@@ -1341,6 +1563,7 @@ class MindGraph:
                     attention_focus = excluded.attention_focus,
                     cache_warmth = excluded.cache_warmth,
                     recent_turn_ids_json = excluded.recent_turn_ids_json,
+                    predictive_continuity_json = excluded.predictive_continuity_json,
                     metrics_json = excluded.metrics_json,
                     metadata_json = excluded.metadata_json,
                     updated_at = excluded.updated_at

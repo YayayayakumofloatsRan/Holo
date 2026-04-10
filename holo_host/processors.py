@@ -289,6 +289,64 @@ def should_use_fast_path(context: TurnContext) -> bool:
     return False
 
 
+def _select_reply_lane(context: TurnContext, turn_plan: TurnPlan, config: HostConfig) -> tuple[str, str, bool]:
+    rule = config.processor_fabric.processor_routing.get("reply")
+    default_lane = str(getattr(rule, "lane", "subject_main") or "subject_main").strip() or "subject_main"
+    upgrade_lane = str(getattr(rule, "upgrade_to_lane", "kernel_xhigh") or "kernel_xhigh").strip() or "kernel_xhigh"
+    fallback_lane = str(getattr(rule, "fallback_lane", "micro_fast") or "micro_fast").strip() or "micro_fast"
+    high_conflict_actions = set(getattr(rule, "high_conflict_actions", ()) or ())
+    if not high_conflict_actions:
+        high_conflict_actions = {"push_back", "counter_offer", "continuity_defense"}
+    uncertainty_threshold = float(getattr(rule, "uncertainty_threshold", 0.72) or 0.72)
+    selected_action_type = str(
+        context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", ""))
+        or ""
+    ).strip()
+    try:
+        uncertainty = float(context.uncertainty_level or 0.0)
+    except (TypeError, ValueError):
+        uncertainty = 0.0
+    if selected_action_type in high_conflict_actions:
+        return upgrade_lane, "high_conflict_action", False
+    if uncertainty >= uncertainty_threshold:
+        return upgrade_lane, "high_uncertainty", False
+
+    packet = dict(context.mind_packet or context.sidecar)
+    active_state = dict(packet.get("active_thread_state", {})) if isinstance(packet.get("active_thread_state", {}), dict) else {}
+    predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+    stage18 = dict(packet.get("stage18", {})) if isinstance(packet.get("stage18", {}), dict) else {}
+    tool_requests = list(context.capability_context.get("tool_requests", []))
+    has_tool_request = any(isinstance(item, dict) for item in tool_requests)
+    has_attachment = bool(context.metadata.get("attachments") or packet.get("attachments"))
+    recall_tier = str(packet.get("tier", "") or "").strip().lower() in {"recall", "deep_recall"}
+    recall_reason = str(packet.get("recall_reason", "") or "").strip()
+    if recall_reason == "none":
+        recall_reason = ""
+    pressure = float(predictive.get("predicted_reply_pressure", stage18.get("predicted_reply_pressure", 1.0)) or 0.0)
+    prediction_confidence = float(
+        predictive.get("active_prediction_confidence", stage18.get("prediction_confidence", 0.0))
+        or 0.0
+    )
+    reflex_eligible = bool(predictive.get("reflex_eligibility", stage18.get("reflex_eligible", False)))
+    micro_fast_candidate = (
+        bool(turn_plan.fast_path)
+        and str(packet.get("memory_route", "") or "") == "active_thread"
+        and not recall_tier
+        and not recall_reason
+        and not has_tool_request
+        and not has_attachment
+        and context.attention_state.pressure_level != "high"
+        and selected_action_type == "reply_once"
+        and uncertainty < 0.45
+        and reflex_eligible
+        and prediction_confidence >= 0.55
+        and pressure < 0.5
+    )
+    if micro_fast_candidate:
+        return fallback_lane, "stage18_reflex_micro_fast", True
+    return default_lane, "conservative_subject_main", False
+
+
 def build_reply_bubbles(
     text: str,
     *,
@@ -386,16 +444,31 @@ def _history_block(context: TurnContext, turn_plan: TurnPlan) -> str:
         action_type = str(last_action.get("action_type", "") or "").strip()
         if action_type:
             lines.append(f"last_outbound_action: {action_type}")
+        predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+        predicted_next = compact_text(str(predictive.get("predicted_next_user_act", "") or ""), 80)
+        likely_targets = [
+            compact_text(str(item).strip(), 64)
+            for item in predictive.get("likely_reference_targets", [])
+            if str(item).strip()
+        ][:2]
+        if predicted_next or likely_targets:
+            target_text = f"; likely_reference_target={likely_targets[0]}" if likely_targets else ""
+            lines.append(f"predictive_continuity: next_user_act={predicted_next or 'unknown'}{target_text}")
         unresolved = [str(item).strip() for item in active_state.get("unresolved_references", []) if str(item).strip()]
         packet_window = dict(context.mind_packet.get("recent_dialogue_window", {}))
         packet_lines = [str(line).strip() for line in packet_window.get("lines", []) if str(line).strip()]
+        exchange_lines: list[str] = []
         if unresolved and packet_lines:
-            lines.append(f"last_exchange: {compact_text(packet_lines[-1], 120)}")
-        selected = lines[: max(1, int(turn_plan.history_window or 1))]
-        context.metadata["history_lines_in_prompt"] = len(selected)
+            exchange_lines.append(f"last_exchange: {compact_text(packet_lines[-1], 120)}")
+        selected = lines[:3] + exchange_lines[: max(0, min(1, int(turn_plan.history_window or 1)))]
+        context.metadata["history_lines_in_prompt"] = len(exchange_lines[:1])
+        context.metadata["active_state_lines_in_prompt"] = len(lines[:3])
+        context.metadata["predictive_lines_in_prompt"] = 1 if any(line.startswith("predictive_continuity:") for line in lines[:3]) else 0
         if selected:
             return "\n".join(f"- {line}" for line in selected)
         context.metadata["history_lines_in_prompt"] = 0
+        context.metadata["active_state_lines_in_prompt"] = 0
+        context.metadata["predictive_lines_in_prompt"] = 0
         return "- active thread state is warm; no verbatim recent history needed."
     packet_window = dict(context.mind_packet.get("recent_dialogue_window", {}))
     packet_lines = [str(line).strip() for line in packet_window.get("lines", []) if str(line).strip()]
@@ -1118,9 +1191,7 @@ class CodexCliProcessor:
         prompt = render_chat_prompt(context, turn_plan=turn_plan)
         started_at = time.perf_counter()
         selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
-        lane = "subject_main"
-        if selected_action_type in {"push_back", "counter_offer", "continuity_defense"} or float(context.uncertainty_level or 0.0) >= 0.72:
-            lane = "kernel_xhigh"
+        lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
         result = self._run_runner(
             prompt,
             session_id=session_id,
@@ -1134,6 +1205,9 @@ class CodexCliProcessor:
                 "selected_action_type": selected_action_type,
                 "uncertainty_level": float(context.uncertainty_level or 0.0),
                 "fast_path": bool(turn_plan.fast_path),
+                "reply_lane_reason": lane_reason,
+                "reflex_micro_fast_candidate": bool(reflex_micro_fast_candidate),
+                "stage18_reflex": bool(reflex_micro_fast_candidate),
             },
         )
         processor_ms = int((time.perf_counter() - started_at) * 1000)
@@ -1172,9 +1246,13 @@ class CodexCliProcessor:
                 "lane": result_metadata.get("lane", lane),
                 "reasoning_effort": result_metadata.get("reasoning_effort", ""),
                 "usage": dict(result_metadata.get("usage", {})),
+                "reply_lane_reason": result_metadata.get("reply_lane_reason", lane_reason),
+                "reflex_micro_fast_candidate": bool(result_metadata.get("reflex_micro_fast_candidate", reflex_micro_fast_candidate)),
                 "prompt_excerpt": compact_text(prompt, 240),
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
+                "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),
+                "predictive_lines_in_prompt": int(context.metadata.get("predictive_lines_in_prompt", 0) or 0),
             },
         )
 

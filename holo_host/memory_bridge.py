@@ -1698,6 +1698,16 @@ class MemoryBridge:
             return False
         if bool(signal.get("search_requested", False)) or bool(signal.get("visual_requested", False)):
             return False
+        predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+        if predictive:
+            if not bool(predictive.get("reflex_eligibility", False)):
+                return False
+            try:
+                confidence = float(predictive.get("active_prediction_confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if confidence < 0.55:
+                return False
         active_ready = bool(active_state.get("present", False)) and (
             bool(str(active_state.get("continuity_summary", "") or "").strip())
             or bool(str(active_state.get("last_user_intent", "") or "").strip())
@@ -1792,6 +1802,18 @@ class MemoryBridge:
             "history_policy": "continuity_summary_first",
             "max_fast_history_lines": 1,
         }
+        predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+        packet["stage18"] = {
+            "fast_lane": True,
+            "reflex_eligible": bool(predictive.get("reflex_eligibility", False)),
+            "prediction_confidence": float(predictive.get("active_prediction_confidence", 0.0) or 0.0),
+            "predicted_next_user_act": str(predictive.get("predicted_next_user_act", "") or ""),
+            "predicted_reply_pressure": float(predictive.get("predicted_reply_pressure", 0.0) or 0.0),
+            "likely_reference_targets": list(predictive.get("likely_reference_targets", []))[:3],
+            "micro_fast_candidate": True,
+            "micro_fast_reason": "active_thread_reflex_candidate",
+        }
+        packet.setdefault("retrieval_trace", {}).setdefault("stage18", dict(packet["stage18"]))
         result = self._finalize_stage2_packet(packet, query=query, context=context)
         if hasattr(self.graph, "update_active_thread_state"):
             self.graph.update_active_thread_state(
@@ -2510,6 +2532,17 @@ class MemoryBridge:
             "history_policy": "recall_window" if packet.get("tier") in {"recall", "deep_recall"} else "standard_window",
             "max_fast_history_lines": 1,
         }
+        predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+        packet["stage18"] = {
+            "fast_lane": False,
+            "reflex_eligible": bool(predictive.get("reflex_eligibility", False)),
+            "prediction_confidence": float(predictive.get("active_prediction_confidence", 0.0) or 0.0),
+            "predicted_next_user_act": str(predictive.get("predicted_next_user_act", "") or ""),
+            "predicted_reply_pressure": float(predictive.get("predicted_reply_pressure", 0.0) or 0.0),
+            "likely_reference_targets": list(predictive.get("likely_reference_targets", []))[:3],
+            "micro_fast_candidate": False,
+            "micro_fast_reason": recall_escalation_reason or "not_active_thread_fast",
+        }
         return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def inspect_mind(
@@ -2548,6 +2581,101 @@ class MemoryBridge:
             "active_thread_state": dict(packet.get("active_thread_state", {})),
             "stage17": dict(packet.get("stage17", {})),
             "mind_packet": packet,
+        }
+
+    def fast_path_metrics(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        metrics = dict(active_state.get("metrics", {}))
+        predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+        samples = [
+            int(item)
+            for item in list(metrics.get("history_lines_in_prompt_samples", []))
+            if str(item).strip().lstrip("-").isdigit()
+        ]
+        return {
+            "thread_key": active_state.get("thread_key", str(thread_key or "")),
+            "chat_name": active_state.get("chat_name", str(chat_name or "")),
+            "channel": active_state.get("channel", channel),
+            "present": bool(active_state.get("present", False)),
+            "fast_lane_hits": int(metrics.get("fast_lane_hits", 0) or 0),
+            "recall_escalations": int(metrics.get("recall_escalations", 0) or 0),
+            "active_history_refreshes": int(metrics.get("active_history_refreshes", 0) or 0),
+            "avg_history_lines_in_prompt": round(sum(samples) / len(samples), 4) if samples else 0.0,
+            "reflex_eligibility": bool(predictive.get("reflex_eligibility", False)),
+            "active_prediction_confidence": float(predictive.get("active_prediction_confidence", 0.0) or 0.0),
+            "predicted_reply_pressure": float(predictive.get("predicted_reply_pressure", 0.0) or 0.0),
+            "freshness_at": str(predictive.get("freshness_at", "") or ""),
+        }
+
+    def predictive_continuity(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+        return {
+            "thread_key": active_state.get("thread_key", str(thread_key or "")),
+            "chat_name": active_state.get("chat_name", str(chat_name or "")),
+            "channel": active_state.get("channel", channel),
+            "present": bool(active_state.get("present", False)),
+            "predictive_continuity": predictive,
+            "active_thread_state": active_state,
+        }
+
+    def trace_reflex_routing(
+        self,
+        query: str,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        context = {
+            "channel": channel,
+            "thread_key": str(thread_key or chat_name or ""),
+            "chat_name": str(chat_name or thread_key or ""),
+            "attachments": [],
+        }
+        active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        signal = self._query_signal(query)
+        recall_reason = self._recall_escalation_reason(
+            query,
+            context=context,
+            active_state=active_state,
+            signal=signal,
+        )
+        active_fast_eligible = self._active_fast_lane_eligible(
+            query,
+            context=context,
+            active_state=active_state,
+            signal=signal,
+            recall_escalation_reason=recall_reason,
+        )
+        packet = self.sidecar_packet(query, context={**context, "active_thread_state": active_state})
+        return {
+            "query": query,
+            "thread_key": active_state.get("thread_key", context["thread_key"]),
+            "chat_name": active_state.get("chat_name", context["chat_name"]),
+            "channel": active_state.get("channel", channel),
+            "signal": signal,
+            "recall_escalation_reason": recall_reason,
+            "active_fast_eligible": active_fast_eligible,
+            "retrieval_mode": packet.get("retrieval_mode", ""),
+            "memory_route": packet.get("memory_route", ""),
+            "tier": packet.get("tier", ""),
+            "selected_action": dict(packet.get("selected_action", {})),
+            "stage17": dict(packet.get("stage17", {})),
+            "stage18": dict(packet.get("stage18", {})),
+            "predictive_continuity": dict(active_state.get("predictive_continuity", {})),
         }
 
     def record_recall(self, selected_ids: list[str], *, success: bool = True) -> dict[str, Any]:
