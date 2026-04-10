@@ -978,6 +978,24 @@ class MindGraph:
                 created_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS world_coupling_signal (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                cue_type TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                source_ref TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0.0,
+                stale_after TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'live',
+                evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_world_coupling_thread
+            ON world_coupling_signal(channel, thread_key, status, stale_after, updated_at DESC);
             CREATE TABLE IF NOT EXISTS subject_state (
                 id INTEGER PRIMARY KEY,
                 channel TEXT NOT NULL DEFAULT '',
@@ -2861,6 +2879,161 @@ class MindGraph:
                 }
             )
         return items
+
+    def upsert_world_coupling_signal(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        cue_type: str,
+        summary: str,
+        source_ref: str = "",
+        confidence: float = 0.62,
+        stale_after: str = "",
+        status: str = "live",
+        evidence_refs: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_thread_key = _normalize_thread_key(normalized_channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        normalized_chat_name = str(chat_name or normalized_thread_key).strip()
+        normalized_type = str(cue_type or "").strip() or "file_artifact"
+        compact_summary = compact_text(str(summary or "").strip(), 240)
+        if not compact_summary:
+            return {"status": "skipped", "reason": "empty_summary", "present": False}
+        now = utc_now()
+        if not str(stale_after or "").strip():
+            stale_after = (
+                datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=7)
+            ).isoformat().replace("+00:00", "Z")
+        refs = [str(item).strip() for item in list(evidence_refs or []) if str(item).strip()][:4]
+        source = compact_text(str(source_ref or "").strip(), 500)
+        record_id = stable_digest(normalized_channel, normalized_thread_key, normalized_type, source, compact_summary, limit=24)
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO world_coupling_signal(
+                    id, channel, thread_key, chat_name, cue_type, summary, source_ref,
+                    confidence, stale_after, status, evidence_refs_json, metadata_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    chat_name = excluded.chat_name,
+                    summary = excluded.summary,
+                    confidence = excluded.confidence,
+                    stale_after = excluded.stale_after,
+                    status = excluded.status,
+                    evidence_refs_json = excluded.evidence_refs_json,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    record_id,
+                    normalized_channel,
+                    normalized_thread_key,
+                    normalized_chat_name,
+                    normalized_type,
+                    compact_summary,
+                    source,
+                    self._clamp(confidence, default=0.62),
+                    str(stale_after or "").strip(),
+                    str(status or "live").strip() or "live",
+                    json.dumps(refs, ensure_ascii=False),
+                    json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+            self.conn.commit()
+            row = self.conn.execute("SELECT * FROM world_coupling_signal WHERE id = ?", (record_id,)).fetchone()
+        return self._world_coupling_signal_from_row(dict(row) if row else None, now=now)
+
+    def _world_coupling_signal_from_row(self, row: dict[str, Any] | None, *, now: str) -> dict[str, Any]:
+        if not row:
+            return {"present": False}
+        stale_after = str(row.get("stale_after", "") or "")
+        stale = bool(stale_after and stale_after <= now)
+        status = str(row.get("status", "") or "live")
+        return {
+            "id": str(row.get("id", "") or ""),
+            "present": True,
+            "channel": str(row.get("channel", "") or ""),
+            "thread_key": str(row.get("thread_key", "") or ""),
+            "chat_name": str(row.get("chat_name", "") or ""),
+            "cue_type": str(row.get("cue_type", "") or ""),
+            "summary": str(row.get("summary", "") or ""),
+            "source_ref": str(row.get("source_ref", "") or ""),
+            "confidence": float(row.get("confidence", 0.0) or 0.0),
+            "stale_after": stale_after,
+            "status": "expired" if stale and status == "live" else status,
+            "stale": stale,
+            "evidence_refs": self._decode_json_array(row.get("evidence_refs_json", "[]"))[:4],
+            "metadata": dict(_safe_json_dict(row.get("metadata_json", "{}"))),
+            "created_at": str(row.get("created_at", "") or ""),
+            "updated_at": str(row.get("updated_at", "") or ""),
+        }
+
+    def world_coupling_signals(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 3,
+        include_inactive: bool = False,
+    ) -> list[dict[str, Any]]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        now = utc_now()
+        clauses = ["channel = ?", "thread_key = ?"]
+        args: list[Any] = [str(channel or "wechat").strip() or "wechat", normalized_thread_key]
+        if not include_inactive:
+            clauses.append("status = 'live'")
+            clauses.append("(stale_after = '' OR stale_after > ?)")
+            args.append(now)
+        args.append(max(1, int(limit)))
+        with self._lock:
+            rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    f"""
+                    SELECT *
+                    FROM world_coupling_signal
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    tuple(args),
+                ).fetchall()
+            ]
+        items = [self._world_coupling_signal_from_row(row, now=now) for row in rows]
+        return [item for item in items if bool(item.get("present", False))]
+
+    def show_world_coupling(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        items = self.world_coupling_signals(
+            thread_key=normalized_thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            include_inactive=include_inactive,
+        )
+        return {
+            "status": "ok",
+            "thread_key": normalized_thread_key,
+            "chat_name": str(chat_name or normalized_thread_key),
+            "channel": channel,
+            "count": len(items),
+            "items": items,
+        }
 
     def set_brain_mode(self, mode: str, *, note: str = "") -> dict[str, Any]:
         normalized_mode = str(mode or "").strip() or "companion"

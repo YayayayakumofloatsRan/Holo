@@ -35,6 +35,11 @@ Stage21: policy sedimentation and negotiated will
 - Promotion is replay-gated and support/confidence/evidence bounded.
 - Promoted rows bias action-market scoring only; hard policy gates, send permission, owner shutdown, secrets, auth, and safety boundaries remain outside sediment scope.
 
+Stage22: bounded blackbox online canary
+- Implemented as host-side `shadow` by default with `canary_live` behind whitelist, rate limits, rollback switch, and existing outbound policy.
+- Records operational `online_canary_traces` and artifacts for daily Stage14 replay-on-live-artifacts.
+- Hydrates bounded Mind Graph `world_coupling_signal` cues as same-thread perception inputs only; cues do not select actions or trigger recall by themselves.
+
 ## Parked Hypotheses
 - broader multi-agent social world
 - deeper imagination beyond current recall

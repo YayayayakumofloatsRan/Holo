@@ -1520,6 +1520,7 @@ class MemoryBridge:
         packet.setdefault("stage17", {})
         packet.setdefault("stage19", dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {})
         packet.setdefault("stage20", dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else {})
+        packet.setdefault("stage22", dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else {})
         packet["stage21"] = stage21_policy
         packet["action_market"] = action_market
         packet["selected_action"] = selected_action
@@ -1598,6 +1599,7 @@ class MemoryBridge:
         packet["state"]["stage19"] = dict(packet.get("stage19", {}))
         packet["state"]["stage20"] = dict(packet.get("stage20", {}))
         packet["state"]["stage21"] = dict(packet.get("stage21", {}))
+        packet["state"]["stage22"] = dict(packet.get("stage22", {}))
         packet["state"]["action_market"] = list(action_market)
         packet["state"]["selected_action"] = dict(selected_action)
         packet["state"]["selected_prediction"] = dict(selected_prediction)
@@ -2051,6 +2053,111 @@ class MemoryBridge:
             hydrated[key] = value
         return hydrated, stage20
 
+    @staticmethod
+    def _stage22_world_coupling_empty(*, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return {
+            "world_coupling_visible": False,
+            "world_coupling_used_for_thread": False,
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "channel": str(channel or "wechat"),
+            "signals": [],
+            "cue_summary": "",
+            "cue_types": [],
+            "hard_gate_preserved": True,
+        }
+
+    def _stage22_world_coupling_payload(
+        self,
+        signals: list[dict[str, Any]],
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        used: bool,
+    ) -> dict[str, Any]:
+        items = [dict(item) for item in signals if isinstance(item, dict) and bool(item.get("present", False))][:3]
+        cue_summary = compact_text(" | ".join(self._unique_strings([str(item.get("summary", "")) for item in items])), 360)
+        return {
+            "world_coupling_visible": bool(items),
+            "world_coupling_used_for_thread": bool(used and items),
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "channel": str(channel or "wechat"),
+            "signals": items,
+            "cue_summary": cue_summary,
+            "cue_types": self._unique_strings([str(item.get("cue_type", "")) for item in items])[:4],
+            "hard_gate_preserved": True,
+        }
+
+    def _hydrate_active_state_from_world_coupling(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or "")
+        if not hasattr(self.graph, "world_coupling_signals"):
+            return active_state, self._stage22_world_coupling_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        items = self.graph.world_coupling_signals(channel=channel, thread_key=thread_key, chat_name=chat_name, limit=3)
+        stage22 = self._stage22_world_coupling_payload(items, channel=channel, thread_key=thread_key, chat_name=chat_name, used=True)
+        if not bool(stage22.get("world_coupling_visible", False)):
+            return active_state, stage22
+
+        hydrated = dict(active_state)
+        metadata = dict(hydrated.get("metadata", {})) if isinstance(hydrated.get("metadata", {}), dict) else {}
+        metadata["stage22_world_coupling"] = {
+            "cue_summary": stage22["cue_summary"],
+            "cue_types": list(stage22["cue_types"])[:4],
+            "signal_ids": [str(item.get("id", "")) for item in stage22["signals"] if str(item.get("id", "")).strip()][:3],
+        }
+        hydrated["metadata"] = metadata
+        hydrated["present"] = True
+        hydrated["channel"] = channel
+        hydrated["thread_key"] = str(thread_key or chat_name)
+        hydrated["chat_name"] = str(chat_name or thread_key)
+        if stage22["cue_summary"] and not str(hydrated.get("continuity_summary", "") or "").strip():
+            hydrated["continuity_summary"] = compact_text(f"bounded_world_cues: {stage22['cue_summary']}", 220)
+        if not str(hydrated.get("attention_focus", "") or "").strip():
+            hydrated["attention_focus"] = "bounded_world_coupling"
+        if not str(hydrated.get("cache_warmth", "") or "").strip() or hydrated.get("cache_warmth") == "cold":
+            hydrated["cache_warmth"] = "frontier_warm"
+
+        predictive = dict(hydrated.get("predictive_continuity", {})) if isinstance(hydrated.get("predictive_continuity", {}), dict) else {}
+        blockers = bool(
+            signal.get("local_memory_requested", False)
+            or signal.get("factual_lookup", False)
+            or signal.get("search_requested", False)
+            or signal.get("visual_requested", False)
+        )
+        meaningful = self._meaningful_char_count(query)
+        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        targets = self._unique_strings(
+            list(predictive.get("likely_reference_targets", []))
+            + [str(item.get("summary", "")) for item in stage22["signals"]]
+        )[:3]
+        predictive.update(
+            {
+                "predicted_next_user_act": str(predictive.get("predicted_next_user_act", "") or "continue_with_world_cue"),
+                "likely_reference_targets": targets,
+                "reflex_eligibility": bool(reflex_eligible),
+                "turn_rhythm": {
+                    **(dict(predictive.get("turn_rhythm", {})) if isinstance(predictive.get("turn_rhythm", {}), dict) else {}),
+                    "world_coupling_hydrated": True,
+                },
+                "freshness_at": str((stage22["signals"][0] if stage22["signals"] else {}).get("updated_at", predictive.get("freshness_at", "")) or predictive.get("freshness_at", "")),
+                "active_prediction_confidence": self._clamp(max(float(predictive.get("active_prediction_confidence", 0.0) or 0.0), 0.57 if reflex_eligible else 0.4)),
+            }
+        )
+        hydrated["predictive_continuity"] = predictive
+        for key, value in predictive.items():
+            hydrated[key] = value
+        return hydrated, stage22
+
     def _recall_escalation_reason(
         self,
         query: str,
@@ -2132,6 +2239,7 @@ class MemoryBridge:
         chat_name = str(context.get("chat_name", "") or "")
         stage19_frontier = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else self._stage19_frontier_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         stage20_temporal = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else self._stage20_temporal_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        stage22_world_coupling = dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else self._stage22_world_coupling_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         limits = self._mind_limits(context, fast=True)
         summary = str(active_state.get("continuity_summary", "") or "").strip()
         last_intent = str(active_state.get("last_user_intent", "") or "").strip()
@@ -2173,12 +2281,14 @@ class MemoryBridge:
                         str(active_state.get("attention_focus", "") or ""),
                         str(stage19_frontier.get("wake_reason", "") or ""),
                         str(stage20_temporal.get("resume_cue", "") or ""),
+                        str(stage22_world_coupling.get("cue_summary", "") or ""),
                     ]
                 )[:4],
                 "recall_priors": {},
                 "contributor_counts": {
                     **({"attention_frontier": 1} if bool(stage19_frontier.get("frontier_used_for_thread", False)) else {}),
                     **({"temporal_state": 1} if bool(stage20_temporal.get("temporal_used_for_thread", False)) else {}),
+                    **({"world_coupling": 1} if bool(stage22_world_coupling.get("world_coupling_used_for_thread", False)) else {}),
                 },
                 "recent_events": [],
             },
@@ -2220,9 +2330,11 @@ class MemoryBridge:
         }
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
+        packet["stage22"] = dict(stage22_world_coupling)
         packet.setdefault("retrieval_trace", {}).setdefault("stage18", dict(packet["stage18"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage22", dict(packet["stage22"]))
         result = self._finalize_stage2_packet(packet, query=query, context=context)
         if hasattr(self.graph, "update_active_thread_state"):
             self.graph.update_active_thread_state(
@@ -2826,6 +2938,13 @@ class MemoryBridge:
             active_state=active_state,
             signal=signal,
         )
+        normalized_context["stage20_temporal_state"] = dict(stage20_temporal)
+        active_state, stage22_world_coupling = self._hydrate_active_state_from_world_coupling(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+        )
         recall_escalation_reason = self._recall_escalation_reason(
             query,
             context=normalized_context,
@@ -2833,7 +2952,7 @@ class MemoryBridge:
             signal=signal,
         )
         normalized_context["active_thread_state"] = dict(active_state)
-        normalized_context["stage20_temporal_state"] = dict(stage20_temporal)
+        normalized_context["stage22_world_coupling"] = dict(stage22_world_coupling)
         normalized_context["recall_escalation_reason"] = recall_escalation_reason
         if self._active_fast_lane_eligible(
             query,
@@ -2968,8 +3087,10 @@ class MemoryBridge:
         }
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
+        packet["stage22"] = dict(stage22_world_coupling)
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage22", dict(packet["stage22"]))
         return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def inspect_mind(
@@ -3009,6 +3130,7 @@ class MemoryBridge:
             "stage17": dict(packet.get("stage17", {})),
             "stage19": dict(packet.get("stage19", {})),
             "stage20": dict(packet.get("stage20", {})),
+            "stage22": dict(packet.get("stage22", {})),
             "mind_packet": packet,
         }
 
@@ -3107,6 +3229,7 @@ class MemoryBridge:
             "stage18": dict(packet.get("stage18", {})),
             "stage19": dict(packet.get("stage19", {})),
             "stage20": dict(packet.get("stage20", {})),
+            "stage22": dict(packet.get("stage22", {})),
             "predictive_continuity": dict(packet_active_state.get("predictive_continuity", {})),
         }
 
@@ -4614,8 +4737,86 @@ class MemoryBridge:
         source: str,
         tags: list[str],
         dry_run: bool = False,
+        channel: str = "",
+        thread_key: str = "",
+        chat_name: str = "",
+        world_cue_type: str = "",
+        due_at: str = "",
     ) -> dict[str, Any]:
-        return self.rag.ingest_artifact_result(path, note=note, source=source, tags=tags, dry_run=dry_run)
+        artifact = self.rag.ingest_artifact_result(path, note=note, source=source, tags=tags, dry_run=dry_run)
+        cue_type = str(world_cue_type or "").strip()
+        if cue_type and not dry_run and hasattr(self.graph, "upsert_world_coupling_signal"):
+            cue_summary = compact_text(
+                str(artifact.get("summary_text", "") or artifact.get("extracted_excerpt", "") or note or path),
+                240,
+            )
+            metadata = {
+                "artifact": artifact,
+                "note": note or "",
+                "source": source,
+                **({"due_at": str(due_at or "").strip()} if str(due_at or "").strip() else {}),
+            }
+            artifact_metadata = dict(artifact.get("metadata", {})) if isinstance(artifact.get("metadata", {}), dict) else {}
+            artifact["world_coupling_signal"] = self.graph.upsert_world_coupling_signal(
+                channel=channel or "wechat",
+                thread_key=thread_key or chat_name,
+                chat_name=chat_name or thread_key,
+                cue_type=cue_type,
+                summary=cue_summary,
+                source_ref=str(path),
+                confidence=0.64,
+                evidence_refs=[f"artifact:{str(artifact_metadata.get('artifact_digest', '') or stable_digest(str(path), cue_summary))}"],
+                metadata=metadata,
+            )
+        return artifact
+
+    def record_world_coupling_signal(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        cue_type: str,
+        summary: str,
+        source_ref: str = "",
+        confidence: float = 0.62,
+        stale_after: str = "",
+        evidence_refs: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "upsert_world_coupling_signal"):
+            return {"status": "unavailable", "present": False}
+        return self.graph.upsert_world_coupling_signal(
+            channel=channel,
+            thread_key=str(thread_key or chat_name or ""),
+            chat_name=str(chat_name or thread_key or ""),
+            cue_type=cue_type,
+            summary=summary,
+            source_ref=source_ref,
+            confidence=confidence,
+            stale_after=stale_after,
+            evidence_refs=evidence_refs or [],
+            metadata=metadata or {},
+        )
+
+    def show_world_coupling(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "show_world_coupling"):
+            return {"status": "unavailable", "count": 0, "items": []}
+        return self.graph.show_world_coupling(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            include_inactive=include_inactive,
+        )
 
     def queue_visual_ingest(
         self,
@@ -4737,6 +4938,19 @@ class MemoryBridge:
             metadata={"artifact": artifact, "note": note or "", "sync": bool(sync)},
             source=source,
         )
+        world_signal = {}
+        if hasattr(self.graph, "upsert_world_coupling_signal"):
+            world_signal = self.graph.upsert_world_coupling_signal(
+                channel=channel,
+                thread_key=thread_key or chat_name,
+                chat_name=chat_name or thread_key,
+                cue_type="image_summary",
+                summary=visual_payload["scene_summary"] or visual_payload["text_ocr"] or str(note or path),
+                source_ref=str(path),
+                confidence=float(visual_payload.get("thread_relevance", 0.62) or 0.62),
+                evidence_refs=[f"visual_memory:{upsert.get('id', '')}"],
+                metadata={"visual_memory": visual_payload, "artifact": artifact, "source": source},
+            )
         vector_sync = self.vector.upsert_documents(
             self._visual_vector_documents(
                 record_id=str(upsert.get("id", "")),
@@ -4761,6 +4975,7 @@ class MemoryBridge:
             "artifact": artifact,
             "visual_memory": visual_payload,
             "graph_sync": upsert,
+            "world_coupling_signal": world_signal,
             "vector_sync": vector_sync,
             "activation_sync": activation_sync,
         }

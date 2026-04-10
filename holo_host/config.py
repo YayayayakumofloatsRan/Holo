@@ -198,6 +198,13 @@ class AutonomyConfig:
     max_auto_replies_per_contact_per_hour: int = 4
     wechat_helper_config_path: str = ""
     wechat_helper_windows_repo_root: str = ""
+    stage22_canary_mode: str = "shadow"
+    stage22_canary_whitelist_threads: tuple[str, ...] = ()
+    stage22_canary_max_replies_per_thread_per_hour: int = 12
+    stage22_canary_max_replies_global_per_hour: int = 30
+    stage22_canary_artifact_capture: bool = True
+    stage22_canary_artifact_root: str = "artifacts/canary/stage22"
+    stage22_canary_rollback_file: str = ".holo_runtime/STAGE22_CANARY_ROLLBACK"
     blocked_keywords: tuple[str, ...] = field(default_factory=lambda: DEFAULT_BLOCKED_KEYWORDS)
 
 
@@ -507,6 +514,27 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         ),
         wechat_helper_config_path=str(autonomy_data.get("wechat_helper_config_path", "")),
         wechat_helper_windows_repo_root=str(autonomy_data.get("wechat_helper_windows_repo_root", "")),
+        stage22_canary_mode=str(autonomy_data.get("stage22_canary_mode", "shadow") or "shadow").strip().lower(),
+        stage22_canary_whitelist_threads=tuple(
+            str(item).strip()
+            for item in autonomy_data.get("stage22_canary_whitelist_threads", [])
+            if str(item).strip()
+        ),
+        stage22_canary_max_replies_per_thread_per_hour=int(
+            autonomy_data.get("stage22_canary_max_replies_per_thread_per_hour", 12)
+        ),
+        stage22_canary_max_replies_global_per_hour=int(
+            autonomy_data.get("stage22_canary_max_replies_global_per_hour", 30)
+        ),
+        stage22_canary_artifact_capture=bool(autonomy_data.get("stage22_canary_artifact_capture", True)),
+        stage22_canary_artifact_root=str(
+            autonomy_data.get("stage22_canary_artifact_root", "artifacts/canary/stage22")
+        ).strip()
+        or "artifacts/canary/stage22",
+        stage22_canary_rollback_file=str(
+            autonomy_data.get("stage22_canary_rollback_file", ".holo_runtime/STAGE22_CANARY_ROLLBACK")
+        ).strip()
+        or ".holo_runtime/STAGE22_CANARY_ROLLBACK",
         blocked_keywords=blocked_keywords,
     )
 

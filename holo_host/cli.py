@@ -1010,6 +1010,53 @@ def _world_state_payload(
     return daemon.memory.world_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
 
 
+def _world_coupling_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    include_inactive: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/world-coupling",
+        params={
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "channel": channel,
+            "limit": limit,
+            "include_inactive": str(bool(include_inactive)).lower(),
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.show_world_coupling(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+                include_inactive=include_inactive,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _autobiographical_state_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
     live_payload = _live_api_request(config_path, method="GET", path="/autobiographical-state")
     if live_payload is not None:
@@ -1203,6 +1250,154 @@ def _policy_influence_payload(
     service = HoloReplyService(load_config(config_path=config_path))
     try:
         return service.trace_policy_influence(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query, limit=limit), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _online_canary_payload(config_path: str | None, *, limit: int, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/online-canary", params={"limit": limit}, timeout=30.0)
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_online_canary(limit=limit), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _blackbox_metrics_payload(
+    config_path: str | None,
+    *,
+    window_hours: float,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str | None,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/blackbox-metrics",
+        params={"window_hours": window_hours, "thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.show_blackbox_metrics(
+                window_hours=window_hours,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _canary_decision_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/canary-decision",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "query": query},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_canary_decision(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _canary_rollback_payload(
+    config_path: str | None,
+    *,
+    enabled: bool,
+    reason: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/canary-rollback",
+        payload={"enabled": enabled, "reason": reason},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.set_canary_rollback(enabled=enabled, reason=reason), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _replay_live_artifacts_payload(
+    config_path: str | None,
+    *,
+    since_hours: float,
+    limit: int,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/replay-live-artifacts",
+        payload={"since_hours": since_hours, "limit": limit, "artifact_dir": artifact_dir or ""},
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.replay_live_artifacts(since_hours=since_hours, limit=limit, artifact_dir=artifact_dir), "local_process"
     finally:
         service.store.close()
         if hasattr(service.memory, "activation"):
@@ -3675,6 +3870,69 @@ def command_trace_policy_influence(
     return 0
 
 
+def command_show_online_canary(config_path: str | None, *, limit: int) -> int:
+    payload, _transport = _online_canary_payload(config_path, limit=limit)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_blackbox_metrics(
+    config_path: str | None,
+    *,
+    window_hours: float,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str | None,
+    limit: int,
+) -> int:
+    payload, _transport = _blackbox_metrics_payload(
+        config_path,
+        window_hours=window_hours,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_canary_decision(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+) -> int:
+    payload, _transport = _canary_decision_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_set_canary_rollback(config_path: str | None, *, enabled: bool, reason: str) -> int:
+    payload, _transport = _canary_rollback_payload(config_path, enabled=enabled, reason=reason)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_replay_live_artifacts(config_path: str | None, *, since_hours: float, limit: int, artifact_dir: str | None) -> int:
+    payload, _transport = _replay_live_artifacts_payload(
+        config_path,
+        since_hours=since_hours,
+        limit=limit,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_outcome_history(
     config_path: str | None,
     *,
@@ -4145,6 +4403,27 @@ def command_show_world_state(
         thread_key=thread_key,
         chat_name=chat_name,
         channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_world_coupling(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    include_inactive: bool,
+) -> int:
+    payload, _transport = _world_coupling_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+        include_inactive=include_inactive,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -5631,6 +5910,53 @@ def _accept_stage21_payload(
             service.memory.graph.close()
 
 
+def _accept_stage22_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage22",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage22(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -5809,6 +6135,27 @@ def command_accept_stage21(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage21_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage22(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage22_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -6800,6 +7147,11 @@ def command_ingest_artifact(
     tags: list[str],
     source: str,
     dry_run: bool,
+    channel: str,
+    thread_key: str | None,
+    chat_name: str | None,
+    world_cue_type: str,
+    due_at: str,
 ) -> int:
     daemon = build_daemon(config_path)
     print(
@@ -6810,6 +7162,11 @@ def command_ingest_artifact(
                 source=source,
                 tags=tags,
                 dry_run=dry_run,
+                channel=channel,
+                thread_key=thread_key or "",
+                chat_name=chat_name or "",
+                world_cue_type=world_cue_type,
+                due_at=due_at,
             ),
             ensure_ascii=False,
             indent=2,
@@ -6922,6 +7279,26 @@ def main(argv: list[str] | None = None) -> int:
     policy_influence_parser.add_argument("--channel", default="wechat")
     policy_influence_parser.add_argument("--query", default="")
     policy_influence_parser.add_argument("--limit", type=int, default=8)
+    online_canary_parser = subparsers.add_parser("show-online-canary", help="Show Stage-22 shadow/canary gate state and recent traces")
+    online_canary_parser.add_argument("--limit", type=int, default=24)
+    blackbox_metrics_parser = subparsers.add_parser("show-blackbox-metrics", help="Show Stage-22 blackbox and human-likeness canary metrics")
+    blackbox_metrics_parser.add_argument("--window-hours", type=float, default=24.0)
+    blackbox_metrics_parser.add_argument("--thread-key", default=None)
+    blackbox_metrics_parser.add_argument("--chat-name", default=None)
+    blackbox_metrics_parser.add_argument("--channel", default=None)
+    blackbox_metrics_parser.add_argument("--limit", type=int, default=500)
+    canary_trace_parser = subparsers.add_parser("trace-canary-decision", help="Trace Stage-22 shadow/canary gates for one turn without sending")
+    canary_trace_parser.add_argument("--thread-key", default=None)
+    canary_trace_parser.add_argument("--chat-name", default=None)
+    canary_trace_parser.add_argument("--channel", default="wechat")
+    canary_trace_parser.add_argument("--query", required=True)
+    canary_rollback_parser = subparsers.add_parser("set-canary-rollback", help="Enable or clear the Stage-22 canary rollback switch")
+    canary_rollback_parser.add_argument("--enabled", required=True, choices=("true", "false", "1", "0", "yes", "no"))
+    canary_rollback_parser.add_argument("--reason", default="cli_canary_rollback")
+    live_replay_parser = subparsers.add_parser("replay-live-artifacts", help="Convert Stage-22 live artifacts into Stage-14 replay fixtures and run replay")
+    live_replay_parser.add_argument("--since-hours", type=float, default=24.0)
+    live_replay_parser.add_argument("--limit", type=int, default=24)
+    live_replay_parser.add_argument("--artifact-dir", default=None)
     outcome_history_parser = subparsers.add_parser("trace-outcome-history", help="Show recent outcome appraisal history for one thread")
     outcome_history_parser.add_argument("--thread-key", default=None)
     outcome_history_parser.add_argument("--chat-name", default=None)
@@ -6995,6 +7372,12 @@ def main(argv: list[str] | None = None) -> int:
     world_state_parser.add_argument("--thread-key", default=None)
     world_state_parser.add_argument("--chat-name", default=None)
     world_state_parser.add_argument("--channel", default="wechat")
+    world_coupling_parser = subparsers.add_parser("show-world-coupling", help="Inspect Stage-22 bounded world-coupling cues for one thread")
+    world_coupling_parser.add_argument("--thread-key", default=None)
+    world_coupling_parser.add_argument("--chat-name", default=None)
+    world_coupling_parser.add_argument("--channel", default="wechat")
+    world_coupling_parser.add_argument("--limit", type=int, default=12)
+    world_coupling_parser.add_argument("--include-inactive", action="store_true")
     brain_mode_parser = subparsers.add_parser("set-brain-mode", help="Switch Always-On brain runtime mode without restart")
     brain_mode_parser.add_argument("--mode", required=True, choices=("silent", "companion", "dream_only", "full_brain"))
     brain_mode_parser.add_argument("--note", default="")
@@ -7126,6 +7509,11 @@ def main(argv: list[str] | None = None) -> int:
     artifact_parser.add_argument("--tags", nargs="*", default=[])
     artifact_parser.add_argument("--source", default="holo_host.cli.artifact")
     artifact_parser.add_argument("--dry-run", action="store_true")
+    artifact_parser.add_argument("--channel", default="wechat")
+    artifact_parser.add_argument("--thread-key", default=None)
+    artifact_parser.add_argument("--chat-name", default=None)
+    artifact_parser.add_argument("--world-cue-type", choices=("", "file_artifact", "image_summary", "schedule_cue", "task_cue"), default="")
+    artifact_parser.add_argument("--due-at", default="")
     image_parser = subparsers.add_parser("ingest-image", help="Ingest one local image into visual memory")
     image_parser.add_argument("--path", required=True)
     image_parser.add_argument("--note", default=None)
@@ -7316,6 +7704,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage21_parser.add_argument("--channel", default="wechat")
     accept_stage21_parser.add_argument("--sender", default=None)
     accept_stage21_parser.add_argument("--artifact-dir", default=None)
+    accept_stage22_parser = subparsers.add_parser("accept-stage22", help="Run the Stage-22 bounded blackbox online canary gate")
+    accept_stage22_parser.add_argument("--thread-key", default=None)
+    accept_stage22_parser.add_argument("--chat-name", default=None)
+    accept_stage22_parser.add_argument("--channel", default="wechat")
+    accept_stage22_parser.add_argument("--sender", default=None)
+    accept_stage22_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -7410,6 +7804,35 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             query=args.query,
             limit=args.limit,
+        )
+    if args.command == "show-online-canary":
+        return command_show_online_canary(args.config, limit=args.limit)
+    if args.command == "show-blackbox-metrics":
+        return command_show_blackbox_metrics(
+            args.config,
+            window_hours=args.window_hours,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    if args.command == "trace-canary-decision":
+        return command_trace_canary_decision(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
+        )
+    if args.command == "set-canary-rollback":
+        enabled = str(args.enabled).strip().lower() in {"1", "true", "yes"}
+        return command_set_canary_rollback(args.config, enabled=enabled, reason=args.reason)
+    if args.command == "replay-live-artifacts":
+        return command_replay_live_artifacts(
+            args.config,
+            since_hours=args.since_hours,
+            limit=args.limit,
+            artifact_dir=args.artifact_dir,
         )
     if args.command == "trace-outcome-history":
         return command_trace_outcome_history(
@@ -7536,6 +7959,15 @@ def main(argv: list[str] | None = None) -> int:
             thread_key=args.thread_key,
             chat_name=args.chat_name,
             channel=args.channel,
+        )
+    if args.command == "show-world-coupling":
+        return command_show_world_coupling(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+            include_inactive=args.include_inactive,
         )
     if args.command == "trace-drive-state":
         return command_trace_drive_state(
@@ -7739,6 +8171,11 @@ def main(argv: list[str] | None = None) -> int:
             tags=args.tags,
             source=args.source,
             dry_run=args.dry_run,
+            channel=args.channel,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            world_cue_type=args.world_cue_type,
+            due_at=args.due_at,
         )
     if args.command == "ingest-image":
         return command_ingest_image(
@@ -7990,6 +8427,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage21":
         return command_accept_stage21(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage22":
+        return command_accept_stage22(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

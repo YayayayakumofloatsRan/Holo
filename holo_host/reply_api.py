@@ -43,6 +43,7 @@ from .reply_service_parts.acceptance import (
     accept_stage19 as _accept_stage19,
     accept_stage20 as _accept_stage20,
     accept_stage21 as _accept_stage21,
+    accept_stage22 as _accept_stage22,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -691,6 +692,11 @@ class HoloReplyService:
                 source=str(payload.get("source", "holo_host.reply_api.artifact")).strip() or "holo_host.reply_api.artifact",
                 tags=[str(tag) for tag in tags if str(tag).strip()],
                 dry_run=bool(payload.get("dry_run", False)),
+                channel=str(payload.get("channel", "")).strip(),
+                thread_key=str(payload.get("thread_key", "")).strip(),
+                chat_name=str(payload.get("chat_name", "")).strip(),
+                world_cue_type=str(payload.get("world_cue_type", "")).strip(),
+                due_at=str(payload.get("due_at", "")).strip(),
             )
 
     def ingest_image(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1079,6 +1085,334 @@ class HoloReplyService:
     ) -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.trace_policy_influence(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query, limit=limit)
+
+    def show_online_canary(self, *, limit: int = 24) -> dict[str, Any]:
+        rollback_path = self._stage22_rollback_path()
+        traces = self.store.list_canary_traces(limit=max(1, int(limit)))
+        return {
+            "stage": "stage22",
+            "mode": self._stage22_canary_mode(),
+            "rollback_enabled": rollback_path.exists(),
+            "rollback_path": str(rollback_path),
+            "artifact_capture": bool(getattr(self.config.autonomy, "stage22_canary_artifact_capture", True)),
+            "artifact_root": str(self._stage22_artifact_root()),
+            "whitelist_threads": self._stage22_whitelist_threads(),
+            "rate_limits": {
+                "per_thread_per_hour": int(12 if getattr(self.config.autonomy, "stage22_canary_max_replies_per_thread_per_hour", 12) is None else getattr(self.config.autonomy, "stage22_canary_max_replies_per_thread_per_hour", 12)),
+                "global_per_hour": int(30 if getattr(self.config.autonomy, "stage22_canary_max_replies_global_per_hour", 30) is None else getattr(self.config.autonomy, "stage22_canary_max_replies_global_per_hour", 30)),
+            },
+            "recent_traces": traces,
+            "count": len(traces),
+            "contract": "host_side_shadow_first_block_only",
+        }
+
+    @staticmethod
+    def _stage22_rate(numerator: int, denominator: int) -> float:
+        if denominator <= 0:
+            return 0.0
+        return round(max(0.0, min(1.0, float(numerator) / float(denominator))), 4)
+
+    def show_blackbox_metrics(
+        self,
+        *,
+        window_hours: float = 24.0,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        hours = max(0.01, float(window_hours or 24.0))
+        since = (datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+        normalized_channel = str(channel or "").strip() or None
+        normalized_thread_key = str(thread_key or chat_name or "").strip() or None
+        if normalized_channel == "wechat" and normalized_thread_key:
+            normalized_thread_key = self._stage22_normalize_wechat_thread(normalized_thread_key, str(chat_name or ""))
+        rows = self.store.list_canary_traces(
+            since=since,
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            limit=max(1, int(limit)),
+        )
+        total = len(rows)
+        latency_buckets_by_action: dict[str, dict[str, int]] = {}
+        reflex_hits = 0
+        reread_history = 0
+        clarification_thrash = 0
+        duplicate_followups = 0
+        resume_due = 0
+        resume_success = 0
+        for row in rows:
+            metadata = dict(row.get("metadata", {})) if isinstance(row.get("metadata", {}), dict) else {}
+            trace = dict(metadata.get("trace", {})) if isinstance(metadata.get("trace", {}), dict) else {}
+            stage18 = dict(trace.get("stage18", {})) if isinstance(trace.get("stage18", {}), dict) else {}
+            stage20 = dict(trace.get("stage20", {})) if isinstance(trace.get("stage20", {}), dict) else {}
+            selected_action = str(row.get("selected_action", "") or "")
+            returned_action = str(row.get("returned_action", "") or "")
+            bucket = str(row.get("latency_bucket", "") or "unknown")
+            latency_buckets_by_action.setdefault(selected_action or "unknown", {})
+            latency_buckets_by_action[selected_action or "unknown"][bucket] = latency_buckets_by_action[selected_action or "unknown"].get(bucket, 0) + 1
+            if bool(stage18.get("fast_lane", False)) or bool(stage18.get("reflex_micro_fast_candidate", False)) or str(stage18.get("reply_lane", "")) == "micro_fast":
+                reflex_hits += 1
+            if selected_action == "history_refresh":
+                reread_history += 1
+            if selected_action in {"push_back", "counter_offer", "continuity_defense"}:
+                clarification_thrash += 1
+            if bool(stage20.get("duplicate_recovery_blocked", False)):
+                duplicate_followups += 1
+            if bool(stage20.get("temporal_visible", False)) or bool(stage20.get("commitment_due", False)) or str(stage20.get("resume_cue", "")).strip():
+                resume_due += 1
+                if returned_action in {"reply", "defer_reply", "silence"} and str(row.get("verdict", "")) not in {"not_whitelisted", "rollback_enabled", "thread_rate_limited", "global_rate_limited"}:
+                    resume_success += 1
+        return {
+            "stage": "stage22",
+            "window_hours": hours,
+            "since": since,
+            "total_traces": total,
+            "reflex_hit_rate": self._stage22_rate(reflex_hits, total),
+            "reread_history_rate": self._stage22_rate(reread_history, total),
+            "clarification_thrash_rate": self._stage22_rate(clarification_thrash, total),
+            "duplicate_followup_rate": self._stage22_rate(duplicate_followups, total),
+            "resume_success_after_interruption": self._stage22_rate(resume_success, resume_due),
+            "counts": {
+                "reflex_hits": reflex_hits,
+                "reread_history": reread_history,
+                "clarification_thrash": clarification_thrash,
+                "duplicate_followups": duplicate_followups,
+                "resume_due": resume_due,
+                "resume_success": resume_success,
+            },
+            "latency_buckets_by_action_type": latency_buckets_by_action,
+        }
+
+    def trace_canary_decision(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        normalized_chat_name = str(chat_name or thread_key or "Stage22Trace").strip()
+        normalized_thread_key = str(thread_key or normalized_chat_name).strip()
+        if normalized_channel == "wechat":
+            normalized_thread_key = self._stage22_normalize_wechat_thread(normalized_thread_key, normalized_chat_name)
+        turn = ChatTurn(
+            chat_name=normalized_chat_name,
+            text=str(query or "still here?"),
+            sender=normalized_chat_name,
+            channel=normalized_channel,
+            thread_key=normalized_thread_key,
+            message_id=f"stage22-trace-{stable_digest(normalized_thread_key, query or '', utc_now(), limit=12)}",
+        )
+        incoming = turn.to_incoming_message()
+        thread = self.store.find_thread(channel=normalized_channel, thread_key=incoming.thread_key)
+        history = list(reversed(self.store.recent_thread_messages(int(thread["id"]), self.config.memory.history_messages))) if thread else []
+        contact = self.store.find_contact(turn.synthetic_contact) or {"display_name": turn.chat_name, "email": turn.synthetic_contact}
+        context = self._mind_context(
+            turn=turn,
+            incoming=incoming,
+            thread=thread or {"thread_key": incoming.thread_key},
+            contact=contact,
+            history=history,
+        )
+        with self._memory_lock:
+            sidecar = self.memory.sidecar_packet(turn.text, context=context)
+        selected_action = self._normalize_selected_action(sidecar)
+        gate = self._stage22_canary_gate(turn=turn, incoming=incoming, selected_action=selected_action, sidecar=sidecar)
+        latest = self.store.list_canary_traces(channel=normalized_channel, thread_key=incoming.thread_key, limit=1)
+        return {
+            "stage": "stage22",
+            "thread_key": incoming.thread_key,
+            "chat_name": turn.chat_name,
+            "channel": normalized_channel,
+            "query": turn.text,
+            "selected_action": selected_action,
+            "gate": gate,
+            "stage22": dict(sidecar.get("stage22", {})),
+            "stage18": dict(sidecar.get("stage18", {})),
+            "stage19": dict(sidecar.get("stage19", {})),
+            "stage20": dict(sidecar.get("stage20", {})),
+            "stage21": dict(sidecar.get("stage21", {})),
+            "top_actions": list(sidecar.get("action_market", []))[:5],
+            "latest_trace": latest[0] if latest else {},
+        }
+
+    def set_canary_rollback(self, *, enabled: bool, reason: str = "") -> dict[str, Any]:
+        path = self._stage22_rollback_path()
+        if enabled:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(
+                path,
+                json.dumps(
+                    {
+                        "enabled": True,
+                        "reason": compact_text(reason or "manual_rollback", 200),
+                        "updated_at": utc_now(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+            )
+        else:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        return {
+            "stage": "stage22",
+            "rollback_enabled": path.exists(),
+            "rollback_path": str(path),
+            "reason": compact_text(reason, 200),
+        }
+
+    @staticmethod
+    def _stage22_fixture_from_artifact(artifact: dict[str, Any], index: int) -> dict[str, Any]:
+        selected = dict(artifact.get("selected_action", {})) if isinstance(artifact.get("selected_action", {}), dict) else {}
+        selected_action = str(selected.get("action_type", "") or "reply_once")
+        returned_action = str(artifact.get("returned_action", "") or dict(artifact.get("result", {})).get("action", "") or "")
+        best_action = "reply_once" if returned_action == "reply" else selected_action
+        thread_key = str(dict(artifact.get("input", {})).get("thread_key", "") or artifact.get("thread_key", "") or "stage22-live")
+        chat_name = str(dict(artifact.get("input", {})).get("chat_name", "") or artifact.get("chat_name", "") or thread_key)
+        query = str(dict(artifact.get("input", {})).get("text", "") or "stage22 live artifact")
+        timing = dict(artifact.get("timing_ms", {})) if isinstance(artifact.get("timing_ms", {}), dict) else {}
+        trace = dict(artifact.get("trace", {})) if isinstance(artifact.get("trace", {}), dict) else {}
+        return {
+            "fixture_id": str(artifact.get("event_row_id", "") or f"stage22-live-{index}"),
+            "channel": str(dict(artifact.get("input", {})).get("channel", "") or "wechat"),
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "query": query,
+            "expected_best_action": best_action,
+            "scenario_tags": ["stage22_live_artifact", str(dict(artifact.get("gate", {})).get("mode", "shadow") or "shadow")],
+            "candidate_actions": [item for item in [selected_action, best_action, "reply_once", "defer_reply", "silence"] if item],
+            "prior_state": {
+                "intent_state": {"reply_pull": 0.48, "continuity_pull": 0.32, "resistance_pull": 0.12},
+                "relationship_state": {"continuity_score": float(dict(trace.get("stage19", {})).get("thread_heat", 0.4) or 0.4)},
+            },
+            "realized_evidence": {
+                "selected_action": selected_action,
+                "realized_outcome": {
+                    "response_quality": 0.55 if returned_action in {"reply", "defer_reply"} else 0.45,
+                    "relational_delta": 0.04 if returned_action in {"reply", "defer_reply"} else 0.0,
+                    "identity_delta": 0.03,
+                    "risk": 0.12 if str(dict(artifact.get("gate", {})).get("verdict", "")) in {"allowed", "shadow_suppressed"} else 0.28,
+                    "reply_latency_seconds": max(0.0, float(timing.get("stage22_total_ms", 0.0) or 0.0) / 1000.0),
+                    "correction_count": 0,
+                    "initiative_success": 0.0,
+                    "was_ignored": 0.0 if returned_action == "reply" else 0.12,
+                    "was_rewarding": 0.55 if returned_action in {"reply", "defer_reply"} else 0.42,
+                    "future_initiative_bias": 0.06,
+                    "future_resistance_bias": 0.08,
+                    "success": True,
+                },
+                "usage_total_tokens": 0,
+                "evidence_refs": [f"stage22_artifact:{artifact.get('event_row_id', index)}"],
+                "metadata": {
+                    "fixture_id": str(artifact.get("event_row_id", "") or f"stage22-live-{index}"),
+                    "stage22_mode": str(dict(artifact.get("gate", {})).get("mode", "")),
+                    "stage22_verdict": str(dict(artifact.get("gate", {})).get("verdict", "")),
+                },
+            },
+        }
+
+    def replay_live_artifacts(
+        self,
+        *,
+        since_hours: float = 24.0,
+        limit: int = 24,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        hours = max(0.01, float(since_hours or 24.0))
+        since = (datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+        rows = [
+            row
+            for row in self.store.list_canary_traces(since=since, limit=max(1, int(limit)))
+            if str(row.get("artifact_path", "") or "").strip()
+        ]
+        output_root = Path(artifact_dir).resolve() if str(artifact_dir or "").strip() else self._stage22_artifact_root() / "live-replay" / time.strftime("%Y%m%d-%H%M%S")
+        fixture_root = output_root / "fixtures"
+        replay_root = output_root / "replay"
+        fixture_root.mkdir(parents=True, exist_ok=True)
+        fixtures: list[dict[str, Any]] = []
+        artifact_paths: list[str] = []
+        for index, row in enumerate(rows[: max(1, int(limit))]):
+            path = Path(str(row.get("artifact_path", "") or ""))
+            if not path.exists():
+                continue
+            try:
+                artifact = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(artifact, dict):
+                continue
+            fixtures.append(self._stage22_fixture_from_artifact(artifact, index))
+            artifact_paths.append(str(path))
+        if not fixtures:
+            return {
+                "status": "no_artifacts",
+                "stage": "stage22",
+                "since": since,
+                "fixture_count": 0,
+                "artifact_paths": [],
+                "fixture_dir": str(fixture_root),
+            }
+        for index, fixture in enumerate(fixtures):
+            path = fixture_root / f"{index:03d}-{stable_digest(str(fixture.get('fixture_id', index)), limit=10)}.json"
+            atomic_write_text(path, json.dumps(fixture, ensure_ascii=False, indent=2) + "\n")
+        replay = self.replay_calibration_fixture(
+            source_type="synthetic_fixture",
+            fixture_path=str(fixture_root),
+            limit=max(1, len(fixtures)),
+            artifact_dir=str(replay_root),
+        )
+        return {
+            "status": "pass" if str(replay.get("status", "")) == "pass" else "warn",
+            "stage": "stage22",
+            "since": since,
+            "fixture_count": len(fixtures),
+            "artifact_paths": artifact_paths,
+            "fixture_dir": str(fixture_root),
+            "replay_dir": str(replay_root),
+            "replay": replay,
+        }
+
+    def show_world_coupling(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.show_world_coupling(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+                include_inactive=include_inactive,
+            )
+
+    def accept_stage22(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage22(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
 
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
@@ -4015,6 +4349,188 @@ class HoloReplyService:
             "stage20": {"status": stage20_report.get("status"), "checks": stage20_report.get("checks", {})},
         }
 
+    def _accept_stage22_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        requested_chat_name = str(chat_name or "Nemoqi").strip()
+        requested_thread_key = str(thread_key or requested_chat_name).strip()
+        if normalized_channel == "wechat":
+            requested_thread_key = self._stage22_normalize_wechat_thread(requested_thread_key, requested_chat_name)
+        run_id = stable_digest(requested_thread_key, requested_chat_name, utc_now())[:12]
+        probe_chat_name = f"{requested_chat_name}-stage22-{run_id}"
+        probe_thread_key = f"wechat:{probe_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:{run_id}"
+        original_mode = getattr(self.config.autonomy, "stage22_canary_mode", "shadow")
+        original_whitelist = tuple(getattr(self.config.autonomy, "stage22_canary_whitelist_threads", ()))
+        original_artifact_root = getattr(self.config.autonomy, "stage22_canary_artifact_root", "artifacts/canary/stage22")
+        original_capture = bool(getattr(self.config.autonomy, "stage22_canary_artifact_capture", True))
+        original_rate_thread = int(getattr(self.config.autonomy, "stage22_canary_max_replies_per_thread_per_hour", 12) or 12)
+        original_rate_global = int(getattr(self.config.autonomy, "stage22_canary_max_replies_global_per_hour", 30) or 30)
+        artifact_root = Path(artifact_dir).resolve() / "stage22-canary" if str(artifact_dir or "").strip() else self._stage22_artifact_root()
+        self.set_canary_rollback(enabled=False, reason="accept_stage22_start")
+        try:
+            self.config.autonomy.stage22_canary_mode = "shadow"
+            self.config.autonomy.stage22_canary_whitelist_threads = (probe_thread_key,)
+            self.config.autonomy.stage22_canary_artifact_capture = True
+            self.config.autonomy.stage22_canary_artifact_root = str(artifact_root)
+            shadow_result = self.handle_reply(
+                {
+                    "chat_name": probe_chat_name,
+                    "thread_key": probe_thread_key,
+                    "channel": normalized_channel,
+                    "sender": str(sender or requested_chat_name),
+                    "text": "stage22 canary acceptance hello",
+                    "message_id": f"accept-stage22-shadow-{run_id}",
+                }
+            )
+            shadow_trace_id = int(dict(shadow_result.get("stage22", {})).get("trace_id", 0) or 0)
+            trace_rows = self.store.list_canary_traces(channel=normalized_channel, thread_key=probe_thread_key, limit=8)
+            latest_trace = trace_rows[0] if trace_rows else {}
+            artifact_path = str(dict(shadow_result.get("stage22", {})).get("artifact_path", "") or latest_trace.get("artifact_path", ""))
+
+            self.config.autonomy.stage22_canary_mode = "canary_live"
+            self.config.autonomy.stage22_canary_whitelist_threads = (probe_thread_key,)
+            self.config.autonomy.stage22_canary_max_replies_per_thread_per_hour = max(1, original_rate_thread)
+            self.config.autonomy.stage22_canary_max_replies_global_per_hour = max(1, original_rate_global)
+            live_clear_trace = self.trace_canary_decision(
+                thread_key=probe_thread_key,
+                chat_name=probe_chat_name,
+                channel=normalized_channel,
+                query="stage22 live gate clear",
+            )
+            rollback_on = self.set_canary_rollback(enabled=True, reason="accept_stage22_probe")
+            rollback_trace = self.trace_canary_decision(
+                thread_key=probe_thread_key,
+                chat_name=probe_chat_name,
+                channel=normalized_channel,
+                query="stage22 live gate rollback",
+            )
+            rollback_off = self.set_canary_rollback(enabled=False, reason="accept_stage22_probe_done")
+            self.config.autonomy.stage22_canary_max_replies_per_thread_per_hour = 0
+            rate_trace = self.trace_canary_decision(
+                thread_key=probe_thread_key,
+                chat_name=probe_chat_name,
+                channel=normalized_channel,
+                query="stage22 live gate rate limit",
+            )
+            self.config.autonomy.stage22_canary_max_replies_per_thread_per_hour = max(1, original_rate_thread)
+
+            world_signal = self.memory.record_world_coupling_signal(
+                channel=normalized_channel,
+                thread_key=probe_thread_key,
+                chat_name=probe_chat_name,
+                cue_type="task_cue",
+                summary="stage22 acceptance has a bounded live canary cue",
+                source_ref=f"accept-stage22:{run_id}",
+                confidence=0.74,
+                evidence_refs=[f"accept_stage22:{run_id}:world_cue"],
+                metadata={"source": "accept_stage22"},
+            )
+            self.memory.clear_packet_cache()
+            packet = self.memory.sidecar_packet(
+                "still here?",
+                context={
+                    "channel": normalized_channel,
+                    "thread_key": probe_thread_key,
+                    "chat_name": probe_chat_name,
+                    "sender": str(sender or requested_chat_name),
+                    "attachments": [],
+                    "message_id": f"accept-stage22-world-{run_id}",
+                    "event_id": "2201",
+                },
+            )
+            world_coupling = self.show_world_coupling(
+                thread_key=probe_thread_key,
+                chat_name=probe_chat_name,
+                channel=normalized_channel,
+                limit=6,
+            )
+            metrics = self.show_blackbox_metrics(window_hours=24.0, channel=normalized_channel, thread_key=probe_thread_key, limit=100)
+            online = self.show_online_canary(limit=12)
+            replay = self.replay_live_artifacts(since_hours=24.0, limit=8, artifact_dir=str(Path(artifact_dir).resolve() / "stage22-live-replay") if str(artifact_dir or "").strip() else None)
+            stage21_report = self.accept_stage21(
+                thread_key=requested_thread_key,
+                chat_name=requested_chat_name,
+                channel=normalized_channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            )
+        finally:
+            self.set_canary_rollback(enabled=False, reason="accept_stage22_cleanup")
+            self.config.autonomy.stage22_canary_mode = original_mode
+            self.config.autonomy.stage22_canary_whitelist_threads = original_whitelist
+            self.config.autonomy.stage22_canary_artifact_root = original_artifact_root
+            self.config.autonomy.stage22_canary_artifact_capture = original_capture
+            self.config.autonomy.stage22_canary_max_replies_per_thread_per_hour = original_rate_thread
+            self.config.autonomy.stage22_canary_max_replies_global_per_hour = original_rate_global
+
+        live_gate = dict(live_clear_trace.get("gate", {}))
+        rollback_gate = dict(rollback_trace.get("gate", {}))
+        rate_gate = dict(rate_trace.get("gate", {}))
+        stage22_packet = dict(packet.get("stage22", {}))
+        metric_keys = {
+            "reflex_hit_rate",
+            "reread_history_rate",
+            "clarification_thrash_rate",
+            "duplicate_followup_rate",
+            "resume_success_after_interruption",
+            "latency_buckets_by_action_type",
+        }
+        checks = {
+            "shadow_mode_captures_and_suppresses_send": bool(shadow_result.get("stage22_shadow", False))
+            and str(shadow_result.get("action", "")) == "silence"
+            and str(dict(shadow_result.get("stage22", {})).get("mode", "")) == "shadow"
+            and shadow_trace_id > 0,
+            "artifact_capture_by_default": bool(artifact_path) and Path(artifact_path).exists(),
+            "canary_live_requires_gates": bool(live_gate.get("allowed", False))
+            and str(live_gate.get("mode", "")) == "canary_live"
+            and bool(live_gate.get("whitelisted", False)),
+            "rollback_switch_reversible": bool(rollback_on.get("rollback_enabled", False))
+            and str(rollback_gate.get("verdict", "")) == "rollback_enabled"
+            and not bool(rollback_off.get("rollback_enabled", True)),
+            "rate_limit_blocks_without_selecting_new_action": str(rate_gate.get("verdict", "")) == "thread_rate_limited"
+            and bool(str(rate_gate.get("selected_action", "")).strip()),
+            "metrics_are_deterministic_and_visible": metric_keys.issubset(set(metrics.keys()))
+            and int(metrics.get("total_traces", 0) or 0) >= 1,
+            "live_artifacts_feed_stage14_replay": int(replay.get("fixture_count", 0) or 0) >= 1
+            and str(replay.get("status", "")) in {"pass", "warn"},
+            "world_coupling_hydrates_without_heavy_recall": bool(world_signal.get("present", False))
+            and bool(stage22_packet.get("world_coupling_visible", False))
+            and bool(stage22_packet.get("world_coupling_used_for_thread", False))
+            and str(packet.get("tier", "")) not in {"deep_recall"},
+            "canonical_wechat_identity_preserved": normalized_channel != "wechat" or probe_thread_key.startswith("wechat:"),
+            "stage21_acceptance_green": str(stage21_report.get("status", "")) == "pass",
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "bounded-blackbox-online-canary-stage22",
+            "checks": checks,
+            "thread_key": requested_thread_key,
+            "chat_name": requested_chat_name,
+            "channel": normalized_channel,
+            "probe_thread_key": probe_thread_key,
+            "shadow_result": shadow_result,
+            "online_canary": online,
+            "metrics": metrics,
+            "live_gate": live_gate,
+            "rollback_gate": rollback_gate,
+            "rate_gate": rate_gate,
+            "world_coupling": world_coupling,
+            "packet_stage22": stage22_packet,
+            "replay_live_artifacts": {
+                "status": replay.get("status"),
+                "fixture_count": replay.get("fixture_count"),
+                "fixture_dir": replay.get("fixture_dir"),
+            },
+            "stage21": {"status": stage21_report.get("status"), "checks": stage21_report.get("checks", {})},
+        }
+
     def initiative_status(
         self,
         *,
@@ -4297,6 +4813,273 @@ class HoloReplyService:
                 "fast_consciousness_k": self.config.memory.fast_consciousness_k,
                 "recall_consciousness_k": self.config.memory.recall_consciousness_k,
             },
+        }
+
+    def _stage22_canary_mode(self) -> str:
+        mode = str(getattr(self.config.autonomy, "stage22_canary_mode", "shadow") or "shadow").strip().lower()
+        if mode not in {"disabled", "shadow", "canary_live"}:
+            return "shadow"
+        return mode
+
+    def _stage22_path(self, raw: str, *, fallback: str) -> Path:
+        current = str(raw or fallback).strip() or fallback
+        path = Path(current).expanduser()
+        if not path.is_absolute():
+            path = (self.config.runtime.repo_root / path).resolve()
+        return path
+
+    def _stage22_rollback_path(self) -> Path:
+        return self._stage22_path(
+            getattr(self.config.autonomy, "stage22_canary_rollback_file", ".holo_runtime/STAGE22_CANARY_ROLLBACK"),
+            fallback=".holo_runtime/STAGE22_CANARY_ROLLBACK",
+        )
+
+    def _stage22_artifact_root(self) -> Path:
+        return self._stage22_path(
+            getattr(self.config.autonomy, "stage22_canary_artifact_root", "artifacts/canary/stage22"),
+            fallback="artifacts/canary/stage22",
+        )
+
+    @staticmethod
+    def _stage22_normalize_wechat_thread(thread_key: str, chat_name: str = "") -> str:
+        current = str(thread_key or "").strip()
+        name = str(chat_name or "").strip()
+        while current.startswith("wechat:wechat:"):
+            current = "wechat:" + current[len("wechat:wechat:") :]
+        if not current:
+            current = name
+        if current.startswith("wechat:") or current.endswith("@chatroom") or current.startswith("wxid_"):
+            return current
+        return f"wechat:{current}" if current else ""
+
+    def _stage22_whitelist_threads(self) -> list[str]:
+        configured = [
+            self._stage22_normalize_wechat_thread(str(item), str(item))
+            for item in getattr(self.config.autonomy, "stage22_canary_whitelist_threads", ())
+            if str(item).strip()
+        ]
+        if configured:
+            return sorted(set(configured))
+        helper = self._load_wechat_helper_runtime()
+        return sorted(
+            {
+                self._stage22_normalize_wechat_thread(str(item), str(item))
+                for item in list(helper.get("whitelist", []))
+                if str(item).strip()
+            }
+        )
+
+    def _stage22_trace_from_sidecar(self, sidecar: dict[str, Any]) -> dict[str, Any]:
+        market = list(sidecar.get("action_market_v4", sidecar.get("action_market", [])))
+        return {
+            "stage18": dict(sidecar.get("stage18", {})),
+            "stage19": {
+                key: value
+                for key, value in dict(sidecar.get("stage19", {})).items()
+                if key in {"frontier_used_for_thread", "thread_heat", "thread_warmth", "wake_reason", "unresolved_thread_pull"}
+            },
+            "stage20": {
+                key: value
+                for key, value in dict(sidecar.get("stage20", {})).items()
+                if key in {"temporal_visible", "temporal_used_for_thread", "resume_cue", "commitment_due", "duplicate_recovery_blocked"}
+            },
+            "stage21": dict(sidecar.get("stage21", {})),
+            "stage22": dict(sidecar.get("stage22", {})),
+            "tier": str(sidecar.get("tier", "") or ""),
+            "memory_route": str(sidecar.get("memory_route", "") or ""),
+            "retrieval_mode": str(sidecar.get("retrieval_mode", "") or ""),
+            "recall_reason": str(sidecar.get("recall_reason", "") or ""),
+            "top_actions": [
+                str(item.get("action_type", "") or "")
+                for item in market[:5]
+                if isinstance(item, dict) and str(item.get("action_type", "") or "").strip()
+            ],
+        }
+
+    def _stage22_canary_gate(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        selected_action: dict[str, Any],
+        sidecar: dict[str, Any],
+    ) -> dict[str, Any]:
+        mode = self._stage22_canary_mode()
+        selected_type = str(selected_action.get("action_type", "") or "reply_once")
+        whitelist = self._stage22_whitelist_threads() if turn.channel == "wechat" else []
+        canonical_thread = incoming.thread_key
+        whitelisted = True if turn.channel != "wechat" else canonical_thread in set(whitelist)
+        rollback_path = self._stage22_rollback_path()
+        rollback_enabled = rollback_path.exists()
+        cutoff = (datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        per_thread_count = self.store.count_canary_live_replies(since=cutoff, channel=turn.channel, thread_key=canonical_thread)
+        global_count = self.store.count_canary_live_replies(since=cutoff, channel=turn.channel)
+        per_thread_limit_raw = getattr(self.config.autonomy, "stage22_canary_max_replies_per_thread_per_hour", 12)
+        global_limit_raw = getattr(self.config.autonomy, "stage22_canary_max_replies_global_per_hour", 30)
+        per_thread_limit = max(0, int(12 if per_thread_limit_raw is None else per_thread_limit_raw))
+        global_limit = max(0, int(30 if global_limit_raw is None else global_limit_raw))
+        per_thread_ok = per_thread_count < per_thread_limit
+        global_ok = global_count < global_limit
+        allowed = mode == "disabled" or (
+            mode == "canary_live"
+            and whitelisted
+            and not rollback_enabled
+            and per_thread_ok
+            and global_ok
+        )
+        verdict = "disabled"
+        if mode == "shadow":
+            verdict = "shadow_suppressed"
+        elif mode == "canary_live":
+            if not whitelisted:
+                verdict = "not_whitelisted"
+            elif rollback_enabled:
+                verdict = "rollback_enabled"
+            elif not per_thread_ok:
+                verdict = "thread_rate_limited"
+            elif not global_ok:
+                verdict = "global_rate_limited"
+            else:
+                verdict = "allowed"
+        return {
+            "stage": "stage22",
+            "mode": mode,
+            "allowed": bool(allowed),
+            "verdict": verdict,
+            "selected_action": selected_type,
+            "thread_key": canonical_thread,
+            "chat_name": turn.chat_name,
+            "channel": turn.channel,
+            "whitelist": whitelist,
+            "whitelisted": bool(whitelisted),
+            "rollback_enabled": bool(rollback_enabled),
+            "rollback_path": str(rollback_path),
+            "rate_limits": {
+                "per_thread": {"count": per_thread_count, "limit": per_thread_limit, "ok": per_thread_ok},
+                "global": {"count": global_count, "limit": global_limit, "ok": global_ok},
+            },
+            "artifact_capture": bool(getattr(self.config.autonomy, "stage22_canary_artifact_capture", True)),
+            "hard_gate_preserved": True,
+            "trace": self._stage22_trace_from_sidecar(sidecar),
+        }
+
+    def _stage22_shadow_result(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        event_row_id: int,
+        selected_action: dict[str, Any],
+        sidecar: dict[str, Any],
+        gate: dict[str, Any],
+        started_at: float,
+    ) -> dict[str, Any]:
+        result = {
+            "action": "silence",
+            "reason": str(gate.get("verdict", "stage22_shadow") or "stage22_shadow"),
+            "stage22_shadow": str(gate.get("mode", "")) == "shadow",
+            "thread_key": incoming.thread_key,
+            "message_id": incoming.message_id,
+            "selected_action": dict(selected_action),
+            "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget", 0)) or 0),
+            "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+            "deliberation_trace_id": str(sidecar.get("deliberation_trace_id", "") or ""),
+        }
+        result["stage22"] = self._record_stage22_canary(
+            turn=turn,
+            incoming=incoming,
+            event_row_id=event_row_id,
+            selected_action=selected_action,
+            sidecar=sidecar,
+            gate=gate,
+            result=result,
+            latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
+        self.store.update_event_result(event_row_id, status="silenced", result=result)
+        self._record_consciousness_entry(
+            turn=turn,
+            incoming=incoming,
+            event_row_id=event_row_id,
+            entry_type="stage22_canary_suppressed",
+            selected_action=str(selected_action.get("action_type", "") or ""),
+            payload=result,
+        )
+        return result
+
+    def _record_stage22_canary(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        event_row_id: int,
+        selected_action: dict[str, Any],
+        sidecar: dict[str, Any],
+        gate: dict[str, Any],
+        result: dict[str, Any],
+        latency_ms: int,
+    ) -> dict[str, Any]:
+        if str(gate.get("mode", "")) == "disabled":
+            return dict(gate)
+        artifact_path = ""
+        trace_payload = {
+            "schema_version": "stage22.canary.v1",
+            "captured_at": utc_now(),
+            "event_row_id": int(event_row_id or 0),
+            "input": {
+                "channel": turn.channel,
+                "thread_key": incoming.thread_key,
+                "chat_name": turn.chat_name,
+                "message_id": incoming.message_id,
+                "text": compact_text(turn.text, 500),
+                "source_ref": turn.source_ref,
+                "attachments": list((turn.metadata or {}).get("attachments", []))[:4] if isinstance((turn.metadata or {}).get("attachments", []), list) else [],
+            },
+            "selected_action": dict(selected_action),
+            "returned_action": str(result.get("action", "") or ""),
+            "result": {
+                "action": str(result.get("action", "") or ""),
+                "reason": str(result.get("reason", "") or ""),
+                "text": compact_text(str(result.get("text", "") or ""), 500),
+                "bubbles": [compact_text(str(item), 200) for item in list(result.get("bubbles", []))[:4]],
+            },
+            "gate": {key: value for key, value in dict(gate).items() if key != "trace"},
+            "trace": self._stage22_trace_from_sidecar(sidecar),
+            "timing_ms": {
+                **(dict(result.get("timing_ms", {})) if isinstance(result.get("timing_ms", {}), dict) else {}),
+                "stage22_total_ms": max(0, int(latency_ms or 0)),
+            },
+        }
+        if bool(getattr(self.config.autonomy, "stage22_canary_artifact_capture", True)):
+            root = self._stage22_artifact_root() / time.strftime("%Y%m%d")
+            filename = f"{int(event_row_id or 0)}-{stable_digest(incoming.thread_key, incoming.message_id, str(result.get('action', '')), limit=12)}.json"
+            artifact = root / filename
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(artifact, json.dumps(trace_payload, ensure_ascii=False, indent=2) + "\n")
+            artifact_path = str(artifact)
+        row = self.store.record_canary_trace(
+            event_row_id=event_row_id,
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            message_id=incoming.message_id,
+            mode=str(gate.get("mode", "shadow") or "shadow"),
+            verdict=str(gate.get("verdict", "") or ""),
+            selected_action=str(selected_action.get("action_type", "") or ""),
+            returned_action=str(result.get("action", "") or ""),
+            latency_ms=max(0, int(latency_ms or 0)),
+            artifact_path=artifact_path,
+            metadata={
+                "gate": {key: value for key, value in dict(gate).items() if key != "trace"},
+                "trace": trace_payload["trace"],
+                "result": trace_payload["result"],
+                "timing_ms": trace_payload["timing_ms"],
+            },
+        )
+        return {
+            **{key: value for key, value in dict(gate).items() if key != "trace"},
+            "artifact_path": artifact_path,
+            "trace_id": int(row.get("id", 0) or 0),
+            "latency_bucket": str(row.get("latency_bucket", "")),
         }
 
     def _load_wechat_history_state(self) -> dict[str, Any]:
@@ -5174,6 +5957,7 @@ class HoloReplyService:
         )
 
     def handle_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        started_at = time.perf_counter()
         turn = self._parse_turn(payload)
         if not turn.text.strip():
             return {"action": "ignore", "reason": "empty_text"}
@@ -5270,6 +6054,22 @@ class HoloReplyService:
                 "selected_prediction": dict(sidecar.get("selected_prediction", {})),
             },
         )
+        stage22_gate = self._stage22_canary_gate(
+            turn=turn,
+            incoming=incoming,
+            selected_action=selected_action,
+            sidecar=sidecar,
+        )
+        if str(stage22_gate.get("mode", "")) != "disabled" and not bool(stage22_gate.get("allowed", False)):
+            return self._stage22_shadow_result(
+                turn=turn,
+                incoming=incoming,
+                event_row_id=event_row_id,
+                selected_action=selected_action,
+                sidecar=sidecar,
+                gate=stage22_gate,
+                started_at=started_at,
+            )
 
         if selected_action_type == "silence":
             result = {
@@ -5328,6 +6128,17 @@ class HoloReplyService:
                     "_stage17_history_lines_in_prompt": 0,
                 },
             )
+            if str(stage22_gate.get("mode", "")) != "disabled":
+                result["stage22"] = self._record_stage22_canary(
+                    turn=turn,
+                    incoming=incoming,
+                    event_row_id=event_row_id,
+                    selected_action=selected_action,
+                    sidecar=sidecar,
+                    gate=stage22_gate,
+                    result=result,
+                    latency_ms=int((time.perf_counter() - started_at) * 1000),
+                )
             return result
 
         if selected_action_type == "defer_reply":
@@ -5397,6 +6208,17 @@ class HoloReplyService:
                     "_stage17_history_lines_in_prompt": 0,
                 },
             )
+            if str(stage22_gate.get("mode", "")) != "disabled":
+                result["stage22"] = self._record_stage22_canary(
+                    turn=turn,
+                    incoming=incoming,
+                    event_row_id=event_row_id,
+                    selected_action=selected_action,
+                    sidecar=sidecar,
+                    gate=stage22_gate,
+                    result=result,
+                    latency_ms=int((time.perf_counter() - started_at) * 1000),
+                )
             return result
 
         if selected_action_type == "history_refresh" and self._should_refresh_wechat_history(turn, sidecar):
@@ -5545,6 +6367,18 @@ class HoloReplyService:
         )
         if appraisal:
             result["outcome_appraisal"] = appraisal
+        if str(stage22_gate.get("mode", "")) != "disabled":
+            result["stage22"] = self._record_stage22_canary(
+                turn=turn,
+                incoming=incoming,
+                event_row_id=event_row_id,
+                selected_action=selected_action,
+                sidecar=sidecar,
+                gate=stage22_gate,
+                result=result,
+                latency_ms=int((time.perf_counter() - started_at) * 1000),
+            )
+            self.store.update_event_result(event_row_id, status="completed", result=result)
         return result
 
     def _handle_reply_stage5_legacy(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -6328,6 +7162,45 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/online-canary":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_online_canary(
+                        limit=int(params.get("limit", ["24"])[0] or 24),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/blackbox-metrics":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_blackbox_metrics(
+                        window_hours=float(params.get("window_hours", ["24"])[0] or 24.0),
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", [None])[0],
+                        limit=int(params.get("limit", ["500"])[0] or 500),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/canary-decision":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_canary_decision(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        query=params.get("query", [""])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/world-coupling":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_world_coupling(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["12"])[0] or 12),
+                        include_inactive=str(params.get("include_inactive", ["false"])[0]).strip().lower() in {"1", "true", "yes"},
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/outcome-history":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.trace_outcome_history(
@@ -6740,6 +7613,29 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         self.server.reply_service.rollback_policy(
                             policy_id=str(payload.get("id", payload.get("policy_id", ""))).strip(),
                             reason=str(payload.get("reason", "http_rollback_policy")).strip(),
+                        ),
+                    )
+                    return
+                if parsed.path == "/canary-rollback":
+                    enabled_raw = payload.get("enabled", False)
+                    enabled = bool(enabled_raw)
+                    if isinstance(enabled_raw, str):
+                        enabled = enabled_raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.set_canary_rollback(
+                            enabled=enabled,
+                            reason=str(payload.get("reason", "http_canary_rollback")).strip(),
+                        ),
+                    )
+                    return
+                if parsed.path == "/replay-live-artifacts":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.replay_live_artifacts(
+                            since_hours=float(payload.get("since_hours", 24.0) or 24.0),
+                            limit=int(payload.get("limit", 24) or 24),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
                         ),
                     )
                     return

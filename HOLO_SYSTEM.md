@@ -58,7 +58,9 @@ The real continuity lives in:
 11. Existing bounded streams update the Stage19 attention frontier for same-thread continuity warmth
 12. Stage20 temporal state hydrates same-thread open loops, commitments, deferred intentions, and resume candidates before heavier recall
 13. Stage21 promoted policy sediment applies replay-gated soft overlays inside action-market ranking
-14. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
+14. Stage22 may hydrate bounded same-thread world-coupling cues before heavier recall
+15. Stage22 canary gate records shadow/live artifacts after action selection and can only block or suppress
+16. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
 
 ## Current Runtime Truth
 - Main processor: `codex_cli`
@@ -67,6 +69,7 @@ The real continuity lives in:
 - Stage19 bounded continuity is live: `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle` can warm a bounded Mind Graph `attention_frontier`; ingress reads one same-thread row before heavier recall and exposes `mind_packet.stage19`
 - Stage20 temporal continuity is live: Mind Graph `temporal_subject_state` persists open loops, commitments, deferred intentions, interruption markers, resume candidates, and due followup keys; `QueueStore.jobs` remains the timing/job surface and recovery flows through action-market metadata
 - Stage21 policy sedimentation is live: Mind Graph `policy_sediment` stores replay-gated, reversible soft overlays; promoted rows can bias action-market scores but cannot grant send permission or override hard policy gates
+- Stage22 online canary is live in host-side shadow-first form: `online_canary_traces` and canary artifacts record would-have decisions, `canary_live` requires whitelist/rate/rollback gates, and Mind Graph `world_coupling_signal` hydrates bounded perception cues without creating a new decision layer
 - Live WeChat transport: `pyweixin_dialog`
 - `wcferry` is not the live path on this machine because local `Weixin 4.1.x` is incompatible with the installed `wcferry 39.x` line
 - WSL kernel should be treated as authoritative; Windows helper is only a transport shell
@@ -112,11 +115,13 @@ Current relationship-memory rule:
 - Do not let Stage19 attention frontier become a second brain, a new always-on loop, or a transport-side decision layer
 - Do not let Stage20 temporal state send directly, duplicate due jobs, override hard policy gates, or bypass explicit memory/history escalation
 - Do not let Stage21 policy sediment become hidden training, hard policy, transport-side decision logic, or a send-permission bypass
+- Do not let Stage22 canary choose actions, grant send permission, mutate live policy, or let world-coupling cues trigger recall by themselves
 - Do not publish live memory JSONL or runtime graph state to a public remote; memory sync belongs only on trusted local/private paths
 
 ## Current Weak Spots
 - `pyweixin_dialog` on `Weixin 4.1` is usable but still the most fragile part
 - live trigger behavior still needs more real-world hardening
+- Stage22 default is `shadow`; a live canary window still needs deliberate enablement and monitoring
 - image understanding is still "artifact + sidecar text + metadata first", not a fully native visual stack
 - latency still needs more fast-path tuning
 

@@ -161,6 +161,29 @@ class QueueStore:
             CREATE INDEX IF NOT EXISTS idx_processor_usage_created ON processor_usage_ledger(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_processor_usage_task ON processor_usage_ledger(task_type, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_processor_usage_lane ON processor_usage_ledger(lane, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS online_canary_traces (
+                id INTEGER PRIMARY KEY,
+                event_row_id INTEGER NOT NULL DEFAULT 0,
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                message_id TEXT NOT NULL DEFAULT '',
+                mode TEXT NOT NULL DEFAULT 'shadow',
+                verdict TEXT NOT NULL DEFAULT '',
+                selected_action TEXT NOT NULL DEFAULT '',
+                returned_action TEXT NOT NULL DEFAULT '',
+                latency_ms INTEGER NOT NULL DEFAULT 0,
+                latency_bucket TEXT NOT NULL DEFAULT '',
+                artifact_path TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_online_canary_thread
+            ON online_canary_traces(channel, thread_key, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_online_canary_created
+            ON online_canary_traces(created_at DESC);
             """
         )
         self._ensure_column("contacts", "last_initiative_at", "TEXT")
@@ -985,6 +1008,149 @@ class QueueStore:
             """,
             tuple(args),
         )
+
+    @staticmethod
+    def _decode_json_dict(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return dict(raw)
+        try:
+            payload = json.loads(str(raw or "{}"))
+        except json.JSONDecodeError:
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def latency_bucket(duration_ms: int | float) -> str:
+        seconds = max(0.0, float(duration_ms or 0) / 1000.0)
+        if seconds < 2.0:
+            return "<2s"
+        if seconds < 5.0:
+            return "2-5s"
+        if seconds < 15.0:
+            return "5-15s"
+        if seconds < 60.0:
+            return "15-60s"
+        return ">=60s"
+
+    @staticmethod
+    def _canary_trace_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        payload["metadata"] = QueueStore._decode_json_dict(payload.pop("metadata_json", "{}"))
+        return payload
+
+    @_synchronized
+    def record_canary_trace(
+        self,
+        *,
+        event_row_id: int = 0,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        message_id: str,
+        mode: str,
+        verdict: str,
+        selected_action: str,
+        returned_action: str,
+        latency_ms: int = 0,
+        artifact_path: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_thread_key = self._normalize_wechat_thread_key(channel, thread_key, subject=chat_name, display_name=chat_name)
+        now = utc_now()
+        duration_ms = max(0, int(latency_ms or 0))
+        cursor = self.conn.execute(
+            """
+            INSERT INTO online_canary_traces(
+                event_row_id, channel, thread_key, chat_name, message_id,
+                mode, verdict, selected_action, returned_action, latency_ms,
+                latency_bucket, artifact_path, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(event_row_id or 0),
+                str(channel or "").strip(),
+                normalized_thread_key,
+                str(chat_name or normalized_thread_key).strip(),
+                str(message_id or "").strip(),
+                str(mode or "shadow").strip(),
+                str(verdict or "").strip(),
+                str(selected_action or "").strip(),
+                str(returned_action or "").strip(),
+                duration_ms,
+                self.latency_bucket(duration_ms),
+                str(artifact_path or "").strip(),
+                json_dumps(metadata or {}),
+                now,
+            ),
+        )
+        self.conn.commit()
+        row = self._fetchone("SELECT * FROM online_canary_traces WHERE id = ?", (int(cursor.lastrowid),)) or {}
+        return self._canary_trace_from_row(row) if row else {}
+
+    @_synchronized
+    def list_canary_traces(
+        self,
+        *,
+        since: str | None = None,
+        channel: str | None = None,
+        thread_key: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["1=1"]
+        args: list[Any] = []
+        if str(since or "").strip():
+            clauses.append("created_at >= ?")
+            args.append(str(since).strip())
+        if str(channel or "").strip():
+            clauses.append("channel = ?")
+            args.append(str(channel).strip())
+        if str(thread_key or "").strip():
+            normalized = self._normalize_wechat_thread_key(str(channel or "wechat").strip() or "wechat", str(thread_key).strip())
+            clauses.append("thread_key = ?")
+            args.append(normalized)
+        args.append(max(1, int(limit)))
+        rows = self._fetchall(
+            f"""
+            SELECT * FROM online_canary_traces
+            WHERE {' AND '.join(clauses)}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(args),
+        )
+        return [self._canary_trace_from_row(row) for row in rows]
+
+    @_synchronized
+    def count_canary_live_replies(
+        self,
+        *,
+        since: str,
+        channel: str | None = None,
+        thread_key: str | None = None,
+    ) -> int:
+        clauses = [
+            "mode = 'canary_live'",
+            "verdict = 'allowed'",
+            "returned_action = 'reply'",
+            "created_at >= ?",
+        ]
+        args: list[Any] = [str(since or "").strip()]
+        if str(channel or "").strip():
+            clauses.append("channel = ?")
+            args.append(str(channel).strip())
+        if str(thread_key or "").strip():
+            normalized = self._normalize_wechat_thread_key(str(channel or "wechat").strip() or "wechat", str(thread_key).strip())
+            clauses.append("thread_key = ?")
+            args.append(normalized)
+        row = self.conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM online_canary_traces
+            WHERE {' AND '.join(clauses)}
+            """,
+            tuple(args),
+        ).fetchone()
+        return int(row["count"]) if row else 0
 
     @_synchronized
     def has_pending_proactive(self, thread_id: int) -> bool:

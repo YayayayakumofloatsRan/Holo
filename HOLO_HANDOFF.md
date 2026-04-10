@@ -34,11 +34,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 29. `docs/ENGINEERING_HANDOFF_STAGE20.md`
 30. `docs/STAGE21_POLICY_SEDIMENTATION_AND_NEGOTIATED_WILL.md`
 31. `docs/ENGINEERING_HANDOFF_STAGE21.md`
-32. `HOLO_SYSTEM.md`
-33. `HOLO_HOST.md`
-34. `OPERATIONS.md`
-35. `holo_memory_library/MEMORY_LIBRARY.md`
-36. `windows_helper/README.md`
+32. `docs/STAGE22_BOUNDED_BLACKBOX_ONLINE_CANARY.md`
+33. `docs/ENGINEERING_HANDOFF_STAGE22.md`
+34. `HOLO_SYSTEM.md`
+35. `HOLO_HOST.md`
+36. `OPERATIONS.md`
+37. `holo_memory_library/MEMORY_LIBRARY.md`
+38. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -53,14 +55,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage21-policy-sedimentation-and-negotiated-will`.
+- The current milestone tag is `stage22-bounded-blackbox-online-canary`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage21 policy sedimentation and negotiated will: Mind Graph now persists replay-gated policy candidates and promoted soft overlays while the action market remains the only action-selection path.
-- Next subject-runtime focus should build from Stage21 without adding a second brain or unbounded loop:
+- Current focus is Stage22 bounded blackbox online canary: `/reply` is host-side shadow-first by default, canary telemetry feeds Stage14 replay, and bounded world-coupling cues hydrate subject state without making the watcher a decision layer.
+- The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
   - Stage20: temporal commitments and interruption recovery through queue + Mind Graph state is implemented
   - Stage21: reversible policy sedimentation and negotiated will as action-market bias is implemented
+  - Stage22: host-side shadow/canary telemetry, live-artifact replay, rollback switch, and bounded world-coupling cues are implemented
 - This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
@@ -167,6 +170,13 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host show-promoted-policies --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
   - `python3 -m holo_host trace-policy-influence --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "continue this carefully"`
   - `python3 -m holo_host rollback-policy --id <policy_id>`
+- Stage22 online canary diagnostics:
+  - `python3 -m holo_host show-online-canary`
+  - `python3 -m holo_host show-blackbox-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+  - `python3 -m holo_host trace-canary-decision --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "still here?"`
+  - `python3 -m holo_host set-canary-rollback --enabled true --reason manual_hold`
+  - `python3 -m holo_host replay-live-artifacts --since-hours 24`
+  - `python3 -m holo_host show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -218,6 +228,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - Stage18 `micro_fast` routing is intentionally conservative; do not broaden it without proving explicit memory/history escalation and action-market-first still hold
 - Stage20 temporal state is intentionally bounded and inspectable; do not let it create direct sends, unbounded scheduling, or a second decision layer
 - Stage21 policy sediment is intentionally replay-gated and reversible; do not let it become a hard policy override, learned hidden weights, or send-permission bypass
+- Stage22 canary is host-side and shadow-first; do not let it pick actions, grant send permission, hide metrics, or turn world-coupling cues into a recall trigger
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -256,6 +267,12 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host show-promoted-policies --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host trace-policy-influence --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "continue this carefully"`
 - `python3 -m holo_host rollback-policy --id <policy_id>`
+- `python3 -m holo_host accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host show-online-canary`
+- `python3 -m holo_host show-blackbox-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host trace-canary-decision --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "still here?"`
+- `python3 -m holo_host replay-live-artifacts --since-hours 24`
+- `python3 -m holo_host show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
 ## Invariants
 - Do not silently change online transport modes
@@ -269,6 +286,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - Do not treat `autobiographical_state`, `goal_state`, or `world_state` as display-only metadata; they are now part of subject deliberation
 - Do not publish live memory or runtime state to the public repo
 - Do not treat `show-processor-routing`, `show-provider-status`, or `show-usage-ledger` as optional maintenance extras; they are required observability for safe handoff
+- Do not enable `canary_live` or restart live services as part of a normal Stage22 code push
 
 ## Minimum Done For Any Holo Change
 - local behavior works

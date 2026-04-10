@@ -165,6 +165,12 @@ What it does:
 - writes watcher output to `receipt_dir\\pyweixin_watcher.log`
 - writes transport heartbeat/state to `transport_state_file`
 
+Stage22 online canary stays entirely on the host side:
+- default host mode is `shadow`, so `/reply` may return `action="silence"` with `stage22_shadow=true` after recording the would-have decision
+- the watcher must treat that as a normal non-reply and must not send anything
+- `canary_live` is enabled only in host config and still needs whitelist, rate limits, rollback clear, and existing outbound policy
+- image/file captures may be ingested as bounded world-coupling cues, but the helper does not use those cues to decide
+
 The intended online path on this machine is now `pyweixin_dialog`. `wcferry` stays available only as a diagnostic/legacy lane because the current local pairing is `wcferry 39.x` against `Weixin 4.1.x`, which is not a supported match.
 
 To stop the hidden watcher cleanly:

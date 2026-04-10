@@ -135,6 +135,8 @@ The reply API returns a structured decision such as:
 
 If `action != "reply"`, the watcher must not manufacture text on its own.
 
+Stage22 keeps canary policy host-side. In default `shadow` mode, `/reply` may return `action = "silence"` with `stage22_shadow = true` and `stage22` trace metadata after the host has selected the would-have action. The watcher must treat that exactly like any other non-reply response and must not send.
+
 If `action == "reply"`, the payload may include:
 
 - `text`
@@ -158,8 +160,16 @@ The payload includes:
 - `tags`
 - `source`
 - `dry_run`
+- optional Stage22 bounded world-cue fields:
+  - `channel`
+  - `thread_key`
+  - `chat_name`
+  - `world_cue_type`: `file_artifact`, `image_summary`, `schedule_cue`, or `task_cue`
+  - `due_at`
 
 The host must accept Windows-origin artifact paths from the helper.
+
+Stage22 world-cue fields are perception inputs only. They do not let the watcher decide, schedule, recall, or send.
 
 ## 6. Artifact Path Normalization Contract
 
@@ -277,6 +287,7 @@ Treat these as contract changes, not refactors:
 - changing `AgentClient` fallback behavior
 - changing `/reply` response semantics expected by the watcher
 - changing `/ingest-artifact` path semantics
+- moving Stage22 canary decisions out of the host
 - moving `.holo_runtime\wechat-helper\` paths
 
 If any of those change, update:

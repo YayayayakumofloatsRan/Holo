@@ -99,6 +99,24 @@
 - Processor mesh tasks:
   - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-processor-mesh`
 
+## Stage22 Online Canary
+
+- Default mode is host-side `shadow`.
+- Do not restart live services or enable `canary_live` during a normal code publish.
+- The watcher still only observes and sends; it does not decide whether to answer.
+- `canary_live` requires whitelist, hourly rate limits, a clear rollback switch, and existing outbound policy.
+- Rollback switch:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml set-canary-rollback --enabled true --reason manual_hold`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml set-canary-rollback --enabled false --reason clear_hold`
+- Canary diagnostics:
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-online-canary`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-blackbox-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml trace-canary-decision --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "still here?"`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml replay-live-artifacts --since-hours 24`
+  - `python3 -m holo_host --config /home/holo/holo/.holo_host.toml show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Artifact root:
+  - `/home/holo/holo/artifacts/canary/stage22/`
+
 ## Memory Fabric Stage-1 Live Diagnostics
 - Vector DB:
   - `/home/holo/holo/.holo_runtime/milvus/memory_fabric.db`
