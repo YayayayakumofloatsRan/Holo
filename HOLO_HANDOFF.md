@@ -26,11 +26,19 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 21. `docs/ENGINEERING_HANDOFF_STAGE16.md`
 22. `docs/STAGE17_THREAD_RESIDENT_REALTIME_RUNTIME.md`
 23. `docs/ENGINEERING_HANDOFF_STAGE17.md`
-24. `HOLO_SYSTEM.md`
-25. `HOLO_HOST.md`
-26. `OPERATIONS.md`
-27. `holo_memory_library/MEMORY_LIBRARY.md`
-28. `windows_helper/README.md`
+24. `docs/STAGE18_DUAL_SPEED_REFLEX_AND_PREDICTIVE_CONTINUITY.md`
+25. `docs/ENGINEERING_HANDOFF_STAGE18.md`
+26. `docs/STAGE19_BOUNDED_BACKGROUND_CONTINUITY_AND_ATTENTION_FRONTIER.md`
+27. `docs/ENGINEERING_HANDOFF_STAGE19.md`
+28. `docs/STAGE20_TEMPORAL_COMMITMENTS_AND_INTERRUPTION_RECOVERY.md`
+29. `docs/ENGINEERING_HANDOFF_STAGE20.md`
+30. `docs/STAGE21_POLICY_SEDIMENTATION_AND_NEGOTIATED_WILL.md`
+31. `docs/ENGINEERING_HANDOFF_STAGE21.md`
+32. `HOLO_SYSTEM.md`
+33. `HOLO_HOST.md`
+34. `OPERATIONS.md`
+35. `holo_memory_library/MEMORY_LIBRARY.md`
+36. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -48,7 +56,12 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - The current milestone tag is `stage17-thread-resident-realtime-runtime`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
 - Current focus is Stage17 real-time subject runtime: ordinary short WeChat turns should use thread-resident active state, keep fast-lane prompts history-light, and only escalate recall when concrete evidence requires it.
-- Next stage focus is online shadow observation of latency, prompt history line counts, fast-lane hit rate, and recall escalation rate after `accept-stage17` is green.
+- Next stage focus is the Stage18-21 continuous-subject arc:
+  - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState`
+  - Stage19: bounded background continuity and attention frontier using existing stream/runtime machinery
+  - Stage20: temporal commitments and interruption recovery through queue + Mind Graph state
+  - Stage21: reversible policy sedimentation and negotiated will as action-market bias
+- This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
 - Persona and prompt bones:
@@ -203,6 +216,13 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host accept-stage8 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+
+## Next Subject-Runtime Arc Commands
+- `python3 -m holo_host accept-stage18 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage19 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage20 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage21 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Until implementation lands, these are target gates documented by the Stage18-21 handoff docs, not current runnable commands.
 
 ## Invariants
 - Do not silently change online transport modes
