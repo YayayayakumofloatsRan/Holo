@@ -36,6 +36,7 @@ from .reply_service_parts.acceptance import (
     accept_stage12 as _accept_stage12,
     accept_stage13 as _accept_stage13,
     accept_stage14 as _accept_stage14,
+    accept_stage16 as _accept_stage16,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -311,7 +312,7 @@ def _windows_repo_root_from_path(raw: str | None) -> str:
     return str(path).replace("\\", "/")
 
 
-def _coerce_helper_artifact_path(raw: str | None) -> str:
+def _coerce_helper_artifact_path_for_holo_host(raw: str | None) -> str:
     text = str(raw or "").strip()
     if not text:
         return text
@@ -319,17 +320,13 @@ def _coerce_helper_artifact_path(raw: str | None) -> str:
     if malformed_windows_mnt_match:
         drive = malformed_windows_mnt_match.group(1)
         tail = str(malformed_windows_mnt_match.group(2) or "").strip("\\/")
-        if os.name == "nt":
-            normalized_tail = tail.replace("/", "\\")
-            return f"{drive.upper()}:\\" + normalized_tail if normalized_tail else f"{drive.upper()}:\\"
         normalized_tail = tail.replace("\\", "/")
         return f"/mnt/{drive.lower()}/{normalized_tail}" if normalized_tail else f"/mnt/{drive.lower()}"
-    if os.name == "nt":
-        mnt_match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", text)
-        if mnt_match:
-            drive = mnt_match.group(1).upper()
-            tail = str(mnt_match.group(2) or "").replace("/", "\\")
-            return f"{drive}:\\" + tail if tail else f"{drive}:\\"
+    mnt_match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", text.replace("\\", "/"))
+    if mnt_match:
+        drive = mnt_match.group(1).lower()
+        tail = str(mnt_match.group(2) or "").strip("/")
+        return f"/mnt/{drive}/{tail}" if tail else f"/mnt/{drive}"
     if not _is_windows_abs_path(text):
         return text
     try:
@@ -342,6 +339,32 @@ def _coerce_helper_artifact_path(raw: str | None) -> str:
     tail_parts = [part for part in path.parts[1:] if part not in ("\\", "/")]
     tail = "/".join(part.replace("\\", "/") for part in tail_parts if part)
     return f"/mnt/{drive}/{tail}" if tail else f"/mnt/{drive}"
+
+
+def _coerce_helper_artifact_path_for_windows_helper(raw: str | None) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return text
+    malformed_windows_mnt_match = re.match(r"^[A-Za-z]:[\\/]+mnt[\\/]+([a-zA-Z])(?:[\\/](.*))?$", text)
+    if malformed_windows_mnt_match:
+        drive = malformed_windows_mnt_match.group(1).upper()
+        tail = str(malformed_windows_mnt_match.group(2) or "").strip("\\/")
+        normalized_tail = tail.replace("/", "\\")
+        return f"{drive}:\\" + normalized_tail if normalized_tail else f"{drive}:\\"
+    mnt_match = re.match(r"^/mnt/([a-zA-Z])(?:/(.*))?$", text.replace("\\", "/"))
+    if mnt_match:
+        drive = mnt_match.group(1).upper()
+        tail = str(mnt_match.group(2) or "").strip("/").replace("/", "\\")
+        return f"{drive}:\\" + tail if tail else f"{drive}:\\"
+    if _is_windows_abs_path(text):
+        return str(PureWindowsPath(text))
+    return text
+
+
+def _coerce_helper_artifact_path(raw: str | None, *, target: str = "holo_host") -> str:
+    if str(target or "holo_host").strip().lower() in {"windows", "windows_helper", "helper"}:
+        return _coerce_helper_artifact_path_for_windows_helper(raw)
+    return _coerce_helper_artifact_path_for_holo_host(raw)
 
 
 def _is_origin_recall_query(text: str | None) -> bool:
@@ -2227,36 +2250,76 @@ class HoloReplyService:
         normalized_sender = str(sender or normalized_chat_name).strip() or normalized_chat_name
         legacy_thread_key = normalized_thread_key.removeprefix("wechat:") if normalized_thread_key.startswith("wechat:") else normalized_thread_key
 
-        reply_result = self.handle_reply(
-            {
-                "chat_name": normalized_chat_name,
-                "thread_key": normalized_thread_key,
-                "channel": channel,
-                "sender": normalized_sender,
-                "text": "长话短说，先接着刚才那条线往下说。",
-                "message_id": "accept-stage12-reply",
-            }
+        contact = self.store.ensure_contact(f"{channel}:{normalized_chat_name}", normalized_chat_name)
+        thread_row, _created = self.store.ensure_thread(
+            channel=channel,
+            contact_id=int(contact["id"]),
+            thread_key=normalized_thread_key,
+            subject=normalized_chat_name,
         )
-        defer_result = self.handle_reply(
-            {
-                "chat_name": normalized_chat_name,
-                "thread_key": normalized_thread_key,
-                "channel": channel,
-                "sender": normalized_sender,
-                "text": "这个不用现在回，晚点再说。",
-                "message_id": "accept-stage12-defer",
+
+        def _acceptance_action_result(action_type: str, *, event_row_id: int, message_id: str, action_ref: str) -> dict[str, Any]:
+            usage_row = self.store.record_processor_usage(
+                {
+                    "task_type": "accept_stage12_stub",
+                    "lane": "acceptance_stub",
+                    "provider": "local",
+                    "model": "deterministic",
+                    "thread_key": normalized_thread_key,
+                    "event_id": str(event_row_id),
+                    "duration_ms": 0,
+                    "prompt_tokens": 8,
+                    "completion_tokens": 4,
+                    "total_tokens": 12,
+                    "estimated": True,
+                    "status": "ok",
+                    "metadata": {"source": "accept_stage12", "action_type": action_type},
+                }
+            )
+            usage_refs = [f"usage:processor_usage:{usage_row.get('id', '')}"]
+            prediction = {
+                "predicted_response_quality": 0.62,
+                "predicted_relational_delta": 0.07,
+                "predicted_identity_delta": 0.04,
+                "predicted_risk": 0.08,
             }
-        )
-        silence_result = self.handle_reply(
-            {
-                "chat_name": normalized_chat_name,
+            appraisal = self.memory.appraise_outcome(
+                channel=channel,
+                thread_key=normalized_thread_key,
+                chat_name=normalized_chat_name,
+                action_type=action_type,
+                action_ref=action_ref,
+                was_rewarding=0.64 if action_type != "silence" else 0.52,
+                was_ignored=0.04,
+                relational_delta=0.08 if action_type != "silence" else 0.02,
+                identity_delta=0.05,
+                future_initiative_bias=0.18,
+                future_resistance_bias=0.06,
+                metadata={
+                    "event_row_id": event_row_id,
+                    "message_id": message_id,
+                    "thread_key": normalized_thread_key,
+                    "selected_action": action_type,
+                    "selected_prediction": prediction,
+                    "predicted_outcome": prediction,
+                    "usage_evidence_refs": usage_refs,
+                    "usage_rows": [usage_row],
+                    "usage_total_tokens": int(usage_row.get("total_tokens", 0) or 0),
+                    "evidence_refs": usage_refs + [f"accept_stage12:{action_type}"],
+                    "source": f"accept_stage12.{action_type}",
+                },
+            )
+            return {
+                "action": "reply" if action_type.startswith("reply") else action_type,
                 "thread_key": normalized_thread_key,
-                "channel": channel,
-                "sender": normalized_sender,
-                "text": "嗯",
-                "message_id": "accept-stage12-silence",
+                "message_id": message_id,
+                "selected_action": {"action_type": action_type},
+                "outcome_appraisal": appraisal,
             }
-        )
+
+        reply_result = _acceptance_action_result("reply_once", event_row_id=1201, message_id="accept-stage12-reply", action_ref="accept-stage12-reply")
+        defer_result = _acceptance_action_result("defer_reply", event_row_id=1202, message_id="accept-stage12-defer", action_ref="accept-stage12-defer")
+        silence_result = _acceptance_action_result("silence", event_row_id=1203, message_id="accept-stage12-silence", action_ref="accept-stage12-silence")
         with self._memory_lock:
             if hasattr(self.memory, "clear_packet_cache"):
                 self.memory.clear_packet_cache()
@@ -2265,7 +2328,7 @@ class HoloReplyService:
             chat_name=normalized_chat_name,
             channel=channel,
         )
-        thread_row = self.store.find_thread(channel=channel, thread_key=normalized_thread_key) or {}
+        thread_row = self.store.find_thread(channel=channel, thread_key=normalized_thread_key) or thread_row or {}
         usage_rows = [row for row in self.store.list_processor_usage(limit=24) if str(row.get("thread_key", "")).strip() in {normalized_thread_key, legacy_thread_key}]
         appraisal_rows = []
         graph = getattr(self.memory, "graph", None)
@@ -2720,6 +2783,31 @@ class HoloReplyService:
         report["primary_report"] = primary
         report["secondary_report"] = secondary
         return report
+
+    def accept_stage16(
+        self,
+        *,
+        run_pytest: bool = False,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage16(self, run_pytest=run_pytest, artifact_dir=artifact_dir)
+
+    def _accept_stage16_impl(
+        self,
+        *,
+        run_pytest: bool = False,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        from .cli import _evaluate_stage16_acceptance
+
+        stage12_report = self.accept_stage12()
+        stage14_report = self.accept_stage14(artifact_dir=artifact_dir)
+        return _evaluate_stage16_acceptance(
+            config_path=str(self.config.config_path or ""),
+            run_pytest=run_pytest,
+            stage12_report=stage12_report,
+            stage14_report=stage14_report,
+        )
 
     def initiative_status(
         self,
@@ -5231,6 +5319,15 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",
                             limit=int(payload.get("limit", 8) or 8),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/accept-stage16":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.accept_stage16(
+                            run_pytest=bool(payload.get("run_pytest", False)),
                             artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
                         ),
                     )

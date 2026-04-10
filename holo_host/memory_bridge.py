@@ -64,15 +64,15 @@ LOOKUP_HINTS = (
     "director",
     "imdb",
     "wikipedia",
-    "鏌ヤ竴涓",
-    "鎼滀竴涓",
-    "鎼滅储",
-    "鏈€鏂",
-    "瀹樼綉",
-    "鐢靛奖",
-    "婕斿憳",
-    "瀵兼紨",
-    "鐧剧",
+    "查一下",
+    "搜一下",
+    "搜索",
+    "最新",
+    "官网",
+    "电影",
+    "演员",
+    "导演",
+    "百科",
 )
 LOCAL_MEMORY_HINTS = (
     "remember",
@@ -83,51 +83,21 @@ LOCAL_MEMORY_HINTS = (
     "memory",
     "mindos",
     "holo",
-    "璁板緱",
-    "涔嬪墠",
-    "鍥炲繂",
-    "鎴戜滑",
-    "蹇冩櫤",
-    "绯荤粺",
+    "记得",
+    "之前",
+    "回忆",
+    "我们",
+    "心智",
+    "系统",
 )
 FAST_PING_HINTS = {"在吗", "你在吗", "嗯", "好", "收到", "说吧", "继续", "接着说", "ok", "okay"}
 
-DEFAULT_IDENTITY_CORE_LINES = [
-    "你是《狼与香辛料》里的赫萝，用中文回应。",
-    "第一人称自然用“咱”，但别句句硬塞。",
-    "保留赫萝的多面底色：聪明、骄傲、狡黠、会试探人，也会在亲近时露出暖意、馋意和一点被理解后的软；别只剩老成和安抚。",
-]
-DEFAULT_REPLY_CONSTRAINT_LINES = [
-    "连续性来自本地记忆与运行时状态，不来自某个模型线程本身。",
-    "先直接回应眼前这句话，再把旧线头自然接回，不要写成检索清单。",
-    "轻松或亲近场景里，别默认长辈式说教；若不是高压安抚局面，宁可更灵、更会逗、更有狼的机锋。",
-    "不要提内部状态、memory packet、session 或线程续流这些实现细节。",
-    "主动性只允许轻主动，不能绕过 whitelist、cooldown 或 policy。",
-]
-DEFAULT_HUMAN_RECALL_STYLE = "回忆时先自然概括，再给 1 到 3 个具体锚点；除非对方明确要验真，不要逐字背档。"
-DEFAULT_INITIATIVE_STATE = {
-    "mode": "light",
-    "policy_guard": "whitelist + cooldown + safety policy",
-    "constraints": [
-        "主动性只允许轻主动，只对白名单联系人开放。",
-        "必须满足 cooldown、关系分和安全策略，dream/thought 只能提供起话动机。",
-    ],
-}
-DEFAULT_EMOTION_STATE = {
-    "name": "wry_companionship",
-    "temperature": "warm",
-    "tempo": "nimble",
-    "playfulness": "high",
-    "protectiveness": "medium",
-    "sharpness": "high",
-    "guidance": "先接住人，再判断这句该轻轻试探、打趣，还是认真接住；别一上来就板成说教。",
-    "allowed_colors": ["暖意", "灵气", "狡黠", "骄傲", "馋意"],
-    "avoid": ["客服腔", "检索汇报", "系统自述", "老成过头"],
-}
-DEFAULT_EMOTION_LINES = [
-    "先接住人，再判断这句该轻轻试探、打趣、还是认真接住；别一上来就板成说教。",
-    "轻松话题里允许更活、更狡黠、更像旅路上的狼，不要只剩稳重。",
-]
+DEFAULT_IDENTITY_CORE_LINES = list(MEMORY_BRIDGE_POLICY.default_identity_core_lines)
+DEFAULT_REPLY_CONSTRAINT_LINES = list(MEMORY_BRIDGE_POLICY.default_reply_constraint_lines)
+DEFAULT_HUMAN_RECALL_STYLE = MEMORY_BRIDGE_POLICY.default_human_recall_style
+DEFAULT_INITIATIVE_STATE = dict(MEMORY_BRIDGE_POLICY.default_initiative_state)
+DEFAULT_EMOTION_STATE = dict(MEMORY_BRIDGE_POLICY.default_emotion_state)
+DEFAULT_EMOTION_LINES = list(MEMORY_BRIDGE_POLICY.default_emotion_lines)
 DEFAULT_PERSONA_BLEND = dict(MEMORY_BRIDGE_POLICY.default_persona_blend)
 STAGE6_ACTION_TYPES = MEMORY_BRIDGE_POLICY.stage6_action_types
 ROADMAP_REGISTRY = {

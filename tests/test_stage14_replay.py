@@ -34,6 +34,8 @@ class Stage14ReplayTests(unittest.TestCase):
                 bridge.graph.close()
 
             self.assertEqual(first["aggregate_metrics"], second["aggregate_metrics"])
+            self.assertIn("raw_aggregate_metrics", first)
+            self.assertIn("risk_mae", first["raw_aggregate_metrics"])
             self.assertEqual(len(before), len(after))
             self.assertEqual(first["fixture_count"], 4)
             self.assertGreater(first["aggregate_metrics"]["policy_regret_vs_best_available_action"], 0.0)

@@ -15,7 +15,13 @@ from holo_host.mail_gateway import MaildirGateway
 from holo_host.mind_graph import MindGraph
 from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, TurnContext
 from holo_host.policy import AutonomyPolicy
-from holo_host.reply_api import HoloReplyService, _coerce_helper_artifact_path, shape_wechat_reply
+from holo_host.reply_api import (
+    HoloReplyService,
+    _coerce_helper_artifact_path,
+    _coerce_helper_artifact_path_for_holo_host,
+    _coerce_helper_artifact_path_for_windows_helper,
+    shape_wechat_reply,
+)
 from holo_host.processors import build_attention_state, build_reply_bubbles, build_turn_plan
 from holo_host.store import QueueStore
 import holo_memory_library.rag_memory as rm
@@ -1994,25 +2000,24 @@ class ReplyBubbleTests(unittest.TestCase):
         plan = build_turn_plan(context, load_config(repo_root=tempfile.mkdtemp()))
         self.assertGreaterEqual(plan.bubble_target, 4)
 
-    def test_coerce_helper_artifact_path_converts_mnt_path_on_windows(self) -> None:
-        converted = _coerce_helper_artifact_path("/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history.md")
-        self.assertTrue(converted.lower().startswith("d:\\"))
-        self.assertIn(".holo_runtime\\wechat-helper\\receipts\\history.md".lower(), converted.lower())
+    def test_coerce_helper_artifact_path_has_explicit_directions(self) -> None:
+        wsl_path = "/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history.md"
+        windows_path = r"D:\Holo\holo\.holo_runtime\wechat-helper\receipts\history.md"
+        self.assertEqual(_coerce_helper_artifact_path_for_holo_host(windows_path), wsl_path)
+        self.assertEqual(_coerce_helper_artifact_path_for_holo_host(wsl_path), wsl_path)
+        self.assertEqual(_coerce_helper_artifact_path_for_windows_helper(wsl_path).lower(), windows_path.lower())
+        self.assertEqual(_coerce_helper_artifact_path(windows_path), wsl_path)
 
     def test_coerce_helper_artifact_path_repairs_malformed_windows_prefixed_mnt_path(self) -> None:
-        converted = _coerce_helper_artifact_path(
-            r"D:\mnt\d\Holo\holo\.holo_runtime\wechat-helper\receipts\history_exports\demo.md"
+        raw = r"D:\mnt\d\Holo\holo\.holo_runtime\wechat-helper\receipts\history_exports\demo.md"
+        self.assertEqual(
+            _coerce_helper_artifact_path_for_holo_host(raw),
+            "/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history_exports/demo.md",
         )
-        if os.name == "nt":
-            self.assertEqual(
-                converted.lower(),
-                r"d:\holo\holo\.holo_runtime\wechat-helper\receipts\history_exports\demo.md".lower(),
-            )
-        else:
-            self.assertEqual(
-                converted,
-                "/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history_exports/demo.md",
-            )
+        self.assertEqual(
+            _coerce_helper_artifact_path_for_windows_helper(raw).lower(),
+            r"d:\holo\holo\.holo_runtime\wechat-helper\receipts\history_exports\demo.md".lower(),
+        )
 
     def test_poll_inbox_skips_corrupt_json_mail(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

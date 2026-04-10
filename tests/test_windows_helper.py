@@ -707,6 +707,16 @@ class WindowsHelperTests(unittest.TestCase):
             ],
         )
 
+    def test_agent_client_skips_wsl_fallback_for_remote_base_url(self) -> None:
+        import windows_helper.wechat_helper as helper
+
+        client = helper.AgentClient("http://example.test:8004", timeout_seconds=1)
+        with mock.patch.object(helper, "_resolve_wsl_agent_base_url", return_value="http://172.28.44.15:8004"):
+            self.assertEqual(
+                client._candidate_base_urls(helper.parse.urlparse("http://example.test:8004/health")),
+                ["http://example.test:8004"],
+            )
+
     def test_watch_pyweixin_dialog_agent_unreachable_degrades_without_crash(self) -> None:
         import windows_helper.wechat_helper as helper
 

@@ -392,7 +392,7 @@ class AgentClient:
 
     def _candidate_base_urls(self, parsed: parse.ParseResult) -> list[str]:
         bases = [self.base_url]
-        if os.name != "nt" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        if parsed.hostname not in {"127.0.0.1", "localhost"}:
             return bases
         fallback = _resolve_wsl_agent_base_url(self.base_url)
         if fallback and fallback not in bases:
@@ -436,8 +436,6 @@ def _candidate_wsl_distros() -> list[str]:
 
 
 def _resolve_wsl_agent_base_url(base_url: str) -> str:
-    if os.name != "nt":
-        return ""
     try:
         parsed = parse.urlparse(base_url)
     except Exception:  # noqa: BLE001

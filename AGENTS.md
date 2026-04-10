@@ -26,6 +26,7 @@
   - `python -m holo_host --config .holo_host.example.toml accept-stage12`
   - `python -m holo_host --config .holo_host.example.toml accept-stage13`
   - `python -m holo_host --config .holo_host.example.toml accept-stage14`
+  - `python -m holo_host --config .holo_host.example.toml accept-stage16`
   - `python -m holo_host --config .holo_host.example.toml replay-calibration-fixture --fixture-path tests/fixtures/stage14`
   - `python -m holo_host --config .holo_host.example.toml replay-policy-regret --fixture-path tests/fixtures/stage14`
 
@@ -49,6 +50,14 @@
 - Reducer logic belongs under `holo_host/mind_graph_parts/`.
 - Policy and counterfactual logic belongs under `holo_host/policy_runtime/`.
 - Reply diagnostics, acceptance helpers, artifact helpers, and route helpers belong under `holo_host/reply_service_parts/`.
+
+## Stage16 Release Hardening
+
+- Helper artifact paths must be converted by explicit direction: Holo-host-facing paths use `/mnt/<drive>/...`, Windows-helper-facing paths use `X:\...`.
+- Localhost-to-WSL fallback depends on endpoint topology, not the host OS running tests.
+- Stage12 acceptance must stay deterministic in local/offline mode and may use only acceptance-scoped stub evidence.
+- Stage14 replay metrics must expose raw values and deterministic display rounding.
+- Persona/default and autobiographical update text must remain UTF-8 clean; do not reintroduce mojibake into policy defaults.
 # Holo Repo Agent Notes
 
 ## Canonical invariants

@@ -9,6 +9,7 @@ injector.log
 .tmp-smoke/
 .tmp-tests/
 codex-smoke-output.txt
+artifacts/
 windows_helper/wechat_helper.live.json
 holo_memory_library/memories/*.jsonl
 !holo_memory_library/memories/README.md

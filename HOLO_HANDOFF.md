@@ -22,11 +22,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 17. `docs/ENGINEERING_HANDOFF_STAGE14.md`
 18. `docs/STAGE15_KERNEL_MODULARIZATION.md`
 19. `docs/ENGINEERING_HANDOFF_STAGE15.md`
-20. `HOLO_SYSTEM.md`
-21. `HOLO_HOST.md`
-22. `OPERATIONS.md`
-23. `holo_memory_library/MEMORY_LIBRARY.md`
-24. `windows_helper/README.md`
+20. `docs/STAGE16_RELEASE_HARDENING_SHADOW_TEST.md`
+21. `docs/ENGINEERING_HANDOFF_STAGE16.md`
+22. `HOLO_SYSTEM.md`
+23. `HOLO_HOST.md`
+24. `OPERATIONS.md`
+25. `holo_memory_library/MEMORY_LIBRARY.md`
+26. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -41,10 +43,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage15-kernel-modularization`.
+- The current milestone tag is `stage16-online-shadow-release-hardening`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage15 behavior-preserving modularization of reducer and policy code under replay regression gates.
-- Next stage focus is finishing remaining façade slimming only when replay baselines stay stable.
+- Current focus is Stage16 release hardening for online shadow testing: deterministic path contracts, localhost-to-WSL fallback, replay metric rounding, offline acceptance, and UTF-8 self-narrative integrity.
+- Next stage focus is shadow-launch observation only after `accept-stage16` and replay artifacts are green.
 
 ## Source Of Truth
 - Persona and prompt bones:

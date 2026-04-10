@@ -5,7 +5,9 @@ import json
 import os
 import statistics
 import subprocess
+import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -4325,11 +4327,18 @@ def _evaluate_stage12_acceptance(
         "helper_artifact_path_contract": str(helper_contracts.get("artifact_path", "")).startswith("/mnt/d/"),
         "wsl_fallback_contract": len(list(helper_contracts.get("wsl_fallback_candidates", []))) >= 2,
         "action_market_first_preserved": str(reply_result.get("selected_action", {}).get("action_type", "") or "") in {
+            "silence",
+            "defer_reply",
             "reply_once",
             "reply_multi",
+            "external_lookup",
+            "history_refresh",
+            "visual_recall",
+            "proactive_ping",
             "push_back",
             "counter_offer",
             "continuity_defense",
+            "operator_self_fix",
         },
     }
     passed = sum(1 for value in checks.values() if value)
@@ -4588,6 +4597,182 @@ def _accept_stage14_payload(
     )
 
 
+def _contains_mojibake(value: object) -> bool:
+    sentinels = ("浣犳槸", "鏈€", "闀胯", "鈧", "锟", "閸", "娑撳", "銆?")
+    if isinstance(value, dict):
+        return any(_contains_mojibake(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_mojibake(item) for item in value)
+    return any(marker in str(value or "") for marker in sentinels)
+
+
+def _stage16_helper_path_contract() -> dict[str, object]:
+    from .reply_api import _coerce_helper_artifact_path_for_holo_host, _coerce_helper_artifact_path_for_windows_helper
+
+    wsl_path = "/mnt/d/Holo/holo/.holo_runtime/wechat-helper/receipts/history.md"
+    windows_path = r"D:\Holo\holo\.holo_runtime\wechat-helper\receipts\history.md"
+    malformed = r"D:\mnt\d\Holo\holo\.holo_runtime\wechat-helper\receipts\history.md"
+    host_from_windows = _coerce_helper_artifact_path_for_holo_host(windows_path)
+    host_from_malformed = _coerce_helper_artifact_path_for_holo_host(malformed)
+    windows_from_wsl = _coerce_helper_artifact_path_for_windows_helper(wsl_path)
+    return {
+        "host_from_windows": host_from_windows,
+        "host_from_malformed": host_from_malformed,
+        "windows_from_wsl": windows_from_wsl,
+        "ok": host_from_windows == wsl_path and host_from_malformed == wsl_path and windows_from_wsl.lower() == windows_path.lower(),
+    }
+
+
+def _stage16_wsl_fallback_contract() -> dict[str, object]:
+    from urllib import parse
+
+    import windows_helper.wechat_helper as helper
+
+    original_resolver = helper._resolve_wsl_agent_base_url
+    try:
+        helper._resolve_wsl_agent_base_url = lambda base_url: "http://172.28.44.15:8000" if base_url.startswith("http://127.0.0.1:8000") else ""
+        local_candidates = helper.AgentClient("http://127.0.0.1:8000")._candidate_base_urls(parse.urlparse("http://127.0.0.1:8000/health"))
+        remote_candidates = helper.AgentClient("http://example.test:8000")._candidate_base_urls(parse.urlparse("http://example.test:8000/health"))
+    finally:
+        helper._resolve_wsl_agent_base_url = original_resolver
+    return {
+        "local_candidates": local_candidates,
+        "remote_candidates": remote_candidates,
+        "ok": local_candidates == ["http://127.0.0.1:8000", "http://172.28.44.15:8000"] and remote_candidates == ["http://example.test:8000"],
+    }
+
+
+def _stage16_text_integrity_report() -> dict[str, object]:
+    from .policies import MEMORY_BRIDGE_POLICY
+
+    policy_values = {
+        "identity": MEMORY_BRIDGE_POLICY.default_identity_core_lines,
+        "reply_constraints": MEMORY_BRIDGE_POLICY.default_reply_constraint_lines,
+        "human_recall_style": MEMORY_BRIDGE_POLICY.default_human_recall_style,
+        "initiative": MEMORY_BRIDGE_POLICY.default_initiative_state,
+        "emotion_state": MEMORY_BRIDGE_POLICY.default_emotion_state,
+        "emotion_lines": MEMORY_BRIDGE_POLICY.default_emotion_lines,
+    }
+    source_paths = [
+        Path(__file__).resolve().parent / "policies.py",
+        Path(__file__).resolve().parent / "mind_graph_parts" / "outcome_appraisal.py",
+    ]
+    source_hits = {
+        str(path.relative_to(Path(__file__).resolve().parents[1])): _contains_mojibake(path.read_text(encoding="utf-8"))
+        for path in source_paths
+    }
+    return {
+        "policy_defaults_ok": not _contains_mojibake(policy_values),
+        "source_files_ok": not any(source_hits.values()),
+        "source_hits": source_hits,
+    }
+
+
+def _stage16_shadow_launch_sanity(config_path: str | None) -> dict[str, object]:
+    config = load_config(config_path=config_path)
+    operator_shadow_root = str(config.memory.operator_shadow_root or "").strip()
+    helper_config_path = str(config.autonomy.wechat_helper_config_path or "").strip()
+    return {
+        "processor_backend": config.runtime.processor_backend,
+        "operator_shadow_root": operator_shadow_root,
+        "wechat_helper_config_path": helper_config_path,
+        "repo_root": str(config.runtime.repo_root),
+        "ok": bool(operator_shadow_root)
+        and "operator_shadow" in operator_shadow_root.replace("\\", "/")
+        and bool(config.runtime.repo_root)
+        and bool(config.runtime.processor_backend),
+    }
+
+
+def _evaluate_stage16_acceptance(
+    *,
+    config_path: str | None,
+    run_pytest: bool,
+    stage12_report: dict[str, object],
+    stage14_report: dict[str, object],
+) -> dict[str, object]:
+    pytest_report: dict[str, object]
+    if run_pytest:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q"],
+            cwd=str(load_config(config_path=config_path).runtime.repo_root),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        pytest_report = {"returncode": proc.returncode, "stdout_tail": proc.stdout[-500:], "stderr_tail": proc.stderr[-500:]}
+    else:
+        pytest_report = {"skipped": True, "returncode": None}
+    path_contract = _stage16_helper_path_contract()
+    fallback_contract = _stage16_wsl_fallback_contract()
+    text_report = _stage16_text_integrity_report()
+    shadow_launch = _stage16_shadow_launch_sanity(config_path)
+    primary_report = dict(stage14_report.get("primary_report", {})) if isinstance(stage14_report.get("primary_report", {}), dict) else {}
+    stage14_metrics = dict(stage14_report.get("aggregate_metrics", {})) if isinstance(stage14_report.get("aggregate_metrics", {}), dict) else {}
+    if not stage14_metrics:
+        stage14_metrics = dict(primary_report.get("aggregate_metrics", {})) if isinstance(primary_report.get("aggregate_metrics", {}), dict) else {}
+    if isinstance(stage14_report.get("artifacts", {}), dict) and stage14_report.get("artifacts", {}):
+        stage14_artifacts = dict(stage14_report.get("artifacts", {}))
+    else:
+        stage14_artifacts = dict(primary_report.get("artifacts", {})) if isinstance(primary_report.get("artifacts", {}), dict) else {}
+    action_market_aligned = bool(dict(stage12_report.get("checks", {})).get("action_market_first_preserved"))
+    checks = {
+        "full_local_test_readiness": bool(run_pytest and pytest_report.get("returncode") == 0),
+        "stage12_deterministic_acceptance_green": str(stage12_report.get("status", "")).strip() == "pass",
+        "stage14_acceptance_green": str(stage14_report.get("status", "")).strip() == "pass",
+        "policy_defaults_text_integrity": bool(text_report.get("policy_defaults_ok")),
+        "autobiographical_text_integrity": bool(text_report.get("source_files_ok")),
+        "helper_path_roundtrip_contract": bool(path_contract.get("ok")),
+        "localhost_wsl_fallback_contract": bool(fallback_contract.get("ok")),
+        "replay_artifact_generation": bool(stage14_artifacts.get("primary", {}).get("summary_json") or stage14_artifacts.get("summary_json")),
+        "shadow_launch_config_sanity": bool(shadow_launch.get("ok")),
+        "action_market_first_acceptance_aligned": action_market_aligned,
+    }
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "stage": "release-hardening-shadow-testing-stage16",
+        "checks": checks,
+        "pytest": pytest_report,
+        "stage12": {"status": stage12_report.get("status"), "checks": stage12_report.get("checks", {})},
+        "stage14": {"status": stage14_report.get("status"), "aggregate_metrics": stage14_metrics},
+        "path_contract": path_contract,
+        "wsl_fallback_contract": fallback_contract,
+        "text_integrity": text_report,
+        "artifacts": stage14_artifacts,
+        "shadow_launch": shadow_launch,
+    }
+
+
+def _accept_stage16_payload(
+    config_path: str | None,
+    *,
+    run_pytest: bool,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage16",
+        payload={"run_pytest": run_pytest, "artifact_dir": artifact_dir or ""},
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.accept_stage16(run_pytest=run_pytest, artifact_dir=artifact_dir), "local_service"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -4652,6 +4837,21 @@ def command_accept_stage13(
         sender=sender,
         iterations=iterations,
         warmup=warmup,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage16(
+    config_path: str | None,
+    *,
+    run_pytest: bool,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage16_payload(
+        config_path,
+        run_pytest=run_pytest,
+        artifact_dir=artifact_dir,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -6061,6 +6261,9 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage14_parser.add_argument("--channel", default="wechat")
     accept_stage14_parser.add_argument("--limit", type=int, default=8)
     accept_stage14_parser.add_argument("--artifact-dir", default=None)
+    accept_stage16_parser = subparsers.add_parser("accept-stage16", help="Run the Stage-16 online shadow-testing release hardening gate")
+    accept_stage16_parser.add_argument("--skip-pytest", action="store_true")
+    accept_stage16_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -6595,6 +6798,12 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
             limit=args.limit,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage16":
+        return command_accept_stage16(
+            args.config,
+            run_pytest=not args.skip_pytest,
             artifact_dir=args.artifact_dir,
         )
     if args.command == "show-processor-mesh":

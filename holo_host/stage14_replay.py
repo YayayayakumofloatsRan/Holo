@@ -4,6 +4,7 @@ import json
 import tempfile
 import time
 from collections import Counter
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,11 @@ class Stage14ReplayHarness:
 
     def artifact_root(self) -> Path:
         return (self.bridge.repo_root / "artifacts" / "replays" / "stage14").resolve()
+
+    @staticmethod
+    def metric_round(value: float, places: int = 4) -> float:
+        quant = Decimal("1").scaleb(-int(places))
+        return float(Decimal(str(float(value))).quantize(quant, rounding=ROUND_HALF_UP))
 
     @staticmethod
     def read_fixture_file(path: Path) -> list[dict[str, Any]]:
@@ -353,7 +359,7 @@ class Stage14ReplayHarness:
                         world_state=dict(seeded.get("world_state", {})),
                         context=context,
                     )
-                    simulation["score"] = round(float(simulation.get("recommended_bias", 0.0) or 0.0), 4)
+                    simulation["score"] = self.metric_round(float(simulation.get("recommended_bias", 0.0) or 0.0))
                     simulations.append(simulation)
                 simulations.sort(key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
                 selected_action = str(realized_evidence.get("selected_action", "reply_once") or "reply_once")
@@ -417,10 +423,10 @@ class Stage14ReplayHarness:
                     "channel": channel,
                     "scenario_tags": list(fixture.get("scenario_tags", [])),
                     "selected_action": selected_action,
-                    "selected_action_score": round(float(selected_simulation.get("score", 0.0) or 0.0), 4),
+                    "selected_action_score": self.metric_round(float(selected_simulation.get("score", 0.0) or 0.0)),
                     "best_available_action": str(best_simulation.get("action_type", "") or selected_action),
-                    "best_available_action_score": round(float(best_simulation.get("score", 0.0) or 0.0), 4),
-                    "policy_regret_vs_best_available_action": round(max(0.0, float(best_simulation.get("score", 0.0) or 0.0) - float(selected_simulation.get("score", 0.0) or 0.0)), 4),
+                    "best_available_action_score": self.metric_round(float(best_simulation.get("score", 0.0) or 0.0)),
+                    "policy_regret_vs_best_available_action": self.metric_round(max(0.0, float(best_simulation.get("score", 0.0) or 0.0) - float(selected_simulation.get("score", 0.0) or 0.0))),
                     "expected_best_action": str(fixture.get("expected_best_action", "") or ""),
                     "best_action_matches_fixture": str(best_simulation.get("action_type", "") or "") == str(fixture.get("expected_best_action", "") or ""),
                     "predicted_outcome": predicted_outcome,
@@ -452,15 +458,32 @@ class Stage14ReplayHarness:
             support_counter[str(item.get("selected_action", "") or "")] += int(item.get("calibration_support_delta", 0) or 0)
         total_tokens = sum(int(item.get("usage_total_tokens", 0) or 0) for item in fixtures)
         return {
-            "response_quality_mae": round(sum(response_errors) / len(response_errors), 4) if response_errors else 0.0,
-            "relational_delta_mae": round(sum(relational_errors) / len(relational_errors), 4) if relational_errors else 0.0,
-            "risk_mae": round(sum(risk_errors) / len(risk_errors), 4) if risk_errors else 0.0,
+            "response_quality_mae": self.metric_round(sum(response_errors) / len(response_errors)) if response_errors else 0.0,
+            "relational_delta_mae": self.metric_round(sum(relational_errors) / len(relational_errors)) if relational_errors else 0.0,
+            "risk_mae": self.metric_round(sum(risk_errors) / len(risk_errors)) if risk_errors else 0.0,
             "calibration_support_by_action_type": dict(sorted(support_counter.items())),
-            "false_initiative_block_rate": round(sum(1 for item in fixtures if bool(item.get("false_initiative_block", False))) / len(fixtures), 4) if fixtures else 0.0,
-            "overlong_reply_rate": round(sum(1 for item in fixtures if bool(item.get("overlong_reply", False))) / len(fixtures), 4) if fixtures else 0.0,
-            "stiffness_overflow_rate": round(sum(1 for item in fixtures if bool(item.get("stiffness_overflow", False))) / len(fixtures), 4) if fixtures else 0.0,
-            "cost_per_successful_turn": round(total_tokens / len(successful_turns), 4) if successful_turns else 0.0,
-            "policy_regret_vs_best_available_action": round(sum(float(item.get("policy_regret_vs_best_available_action", 0.0) or 0.0) for item in fixtures) / len(fixtures), 4) if fixtures else 0.0,
+            "false_initiative_block_rate": self.metric_round(sum(1 for item in fixtures if bool(item.get("false_initiative_block", False))) / len(fixtures)) if fixtures else 0.0,
+            "overlong_reply_rate": self.metric_round(sum(1 for item in fixtures if bool(item.get("overlong_reply", False))) / len(fixtures)) if fixtures else 0.0,
+            "stiffness_overflow_rate": self.metric_round(sum(1 for item in fixtures if bool(item.get("stiffness_overflow", False))) / len(fixtures)) if fixtures else 0.0,
+            "cost_per_successful_turn": self.metric_round(total_tokens / len(successful_turns)) if successful_turns else 0.0,
+            "policy_regret_vs_best_available_action": self.metric_round(sum(float(item.get("policy_regret_vs_best_available_action", 0.0) or 0.0) for item in fixtures) / len(fixtures)) if fixtures else 0.0,
+        }
+
+    def raw_aggregate(self, fixtures: list[dict[str, Any]]) -> dict[str, Any]:
+        response_errors = [abs(float(item.get("prediction_error", {}).get("response_quality", 0.0) or 0.0)) for item in fixtures]
+        relational_errors = [abs(float(item.get("prediction_error", {}).get("relational_delta", 0.0) or 0.0)) for item in fixtures]
+        risk_errors = [abs(float(item.get("prediction_error", {}).get("risk", 0.0) or 0.0)) for item in fixtures]
+        successful_turns = [item for item in fixtures if bool(item.get("successful_turn", False))]
+        total_tokens = sum(int(item.get("usage_total_tokens", 0) or 0) for item in fixtures)
+        return {
+            "response_quality_mae": sum(response_errors) / len(response_errors) if response_errors else 0.0,
+            "relational_delta_mae": sum(relational_errors) / len(relational_errors) if relational_errors else 0.0,
+            "risk_mae": sum(risk_errors) / len(risk_errors) if risk_errors else 0.0,
+            "false_initiative_block_rate": sum(1 for item in fixtures if bool(item.get("false_initiative_block", False))) / len(fixtures) if fixtures else 0.0,
+            "overlong_reply_rate": sum(1 for item in fixtures if bool(item.get("overlong_reply", False))) / len(fixtures) if fixtures else 0.0,
+            "stiffness_overflow_rate": sum(1 for item in fixtures if bool(item.get("stiffness_overflow", False))) / len(fixtures) if fixtures else 0.0,
+            "cost_per_successful_turn": total_tokens / len(successful_turns) if successful_turns else 0.0,
+            "policy_regret_vs_best_available_action": sum(float(item.get("policy_regret_vs_best_available_action", 0.0) or 0.0) for item in fixtures) / len(fixtures) if fixtures else 0.0,
         }
 
     def write_artifact(self, report: dict[str, Any], *, artifact_dir: str | None = None) -> dict[str, Any]:
@@ -521,6 +544,7 @@ class Stage14ReplayHarness:
             "fixture_count": len(evaluated),
             "fixtures": evaluated,
             "aggregate_metrics": self.aggregate(evaluated),
+            "raw_aggregate_metrics": self.raw_aggregate(evaluated),
         }
         report["artifacts"] = self.write_artifact(report, artifact_dir=artifact_dir)
         if mode == "calibration":
