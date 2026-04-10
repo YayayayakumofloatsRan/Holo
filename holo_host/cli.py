@@ -1088,6 +1088,129 @@ def _action_calibration_payload(
     ), "local_process"
 
 
+def _policy_candidates_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int = 24,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/policy-candidates",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_policy_candidates(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _promoted_policies_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int = 24,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/promoted-policies",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_promoted_policies(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _rollback_policy_payload(
+    config_path: str | None,
+    *,
+    policy_id: str,
+    reason: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/rollback-policy",
+        payload={"id": policy_id, "reason": reason},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.rollback_policy(policy_id=policy_id, reason=reason), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _policy_influence_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int = 8,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/policy-influence",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "query": query, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_policy_influence(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query, limit=limit), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _outcome_history_payload(
     config_path: str | None,
     *,
@@ -3487,6 +3610,71 @@ def command_show_action_calibration(
     return 0
 
 
+def command_show_policy_candidates(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _policy_candidates_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_promoted_policies(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _promoted_policies_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_rollback_policy(config_path: str | None, *, policy_id: str, reason: str) -> int:
+    payload, _transport = _rollback_policy_payload(config_path, policy_id=policy_id, reason=reason)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_policy_influence(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    query: str,
+    limit: int,
+) -> int:
+    payload, _transport = _policy_influence_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        query=query,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_outcome_history(
     config_path: str | None,
     *,
@@ -5396,6 +5584,53 @@ def _accept_stage20_payload(
             service.memory.graph.close()
 
 
+def _accept_stage21_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage21",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage21(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -5553,6 +5788,27 @@ def command_accept_stage20(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage20_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage21(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage21_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -6647,6 +6903,25 @@ def main(argv: list[str] | None = None) -> int:
     action_calibration_parser.add_argument("--action-type", default=None)
     action_calibration_parser.add_argument("--scenario-bucket", default=None)
     action_calibration_parser.add_argument("--limit", type=int, default=24)
+    policy_candidates_parser = subparsers.add_parser("show-policy-candidates", help="Show Stage-21 replay-gated policy sediment candidates")
+    policy_candidates_parser.add_argument("--thread-key", default=None)
+    policy_candidates_parser.add_argument("--chat-name", default=None)
+    policy_candidates_parser.add_argument("--channel", default="wechat")
+    policy_candidates_parser.add_argument("--limit", type=int, default=24)
+    promoted_policies_parser = subparsers.add_parser("show-promoted-policies", help="Show Stage-21 promoted policy sediment overlays")
+    promoted_policies_parser.add_argument("--thread-key", default=None)
+    promoted_policies_parser.add_argument("--chat-name", default=None)
+    promoted_policies_parser.add_argument("--channel", default="wechat")
+    promoted_policies_parser.add_argument("--limit", type=int, default=24)
+    rollback_policy_parser = subparsers.add_parser("rollback-policy", help="Rollback one Stage-21 promoted policy overlay by id or policy_id")
+    rollback_policy_parser.add_argument("--id", required=True)
+    rollback_policy_parser.add_argument("--reason", default="cli_rollback_policy")
+    policy_influence_parser = subparsers.add_parser("trace-policy-influence", help="Trace Stage-21 policy sediment influence for one thread")
+    policy_influence_parser.add_argument("--thread-key", default=None)
+    policy_influence_parser.add_argument("--chat-name", default=None)
+    policy_influence_parser.add_argument("--channel", default="wechat")
+    policy_influence_parser.add_argument("--query", default="")
+    policy_influence_parser.add_argument("--limit", type=int, default=8)
     outcome_history_parser = subparsers.add_parser("trace-outcome-history", help="Show recent outcome appraisal history for one thread")
     outcome_history_parser.add_argument("--thread-key", default=None)
     outcome_history_parser.add_argument("--chat-name", default=None)
@@ -7035,6 +7310,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage20_parser.add_argument("--channel", default="wechat")
     accept_stage20_parser.add_argument("--sender", default=None)
     accept_stage20_parser.add_argument("--artifact-dir", default=None)
+    accept_stage21_parser = subparsers.add_parser("accept-stage21", help="Run the Stage-21 policy sedimentation and negotiated will gate")
+    accept_stage21_parser.add_argument("--thread-key", default=None)
+    accept_stage21_parser.add_argument("--chat-name", default=None)
+    accept_stage21_parser.add_argument("--channel", default="wechat")
+    accept_stage21_parser.add_argument("--sender", default=None)
+    accept_stage21_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -7101,6 +7382,33 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             action_type=args.action_type,
             scenario_bucket=args.scenario_bucket,
+            limit=args.limit,
+        )
+    if args.command == "show-policy-candidates":
+        return command_show_policy_candidates(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    if args.command == "show-promoted-policies":
+        return command_show_promoted_policies(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+        )
+    if args.command == "rollback-policy":
+        return command_rollback_policy(args.config, policy_id=args.id, reason=args.reason)
+    if args.command == "trace-policy-influence":
+        return command_trace_policy_influence(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            query=args.query,
             limit=args.limit,
         )
     if args.command == "trace-outcome-history":
@@ -7673,6 +7981,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage20":
         return command_accept_stage20(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage21":
+        return command_accept_stage21(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

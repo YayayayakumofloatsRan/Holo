@@ -42,6 +42,7 @@ from .reply_service_parts.acceptance import (
     accept_stage18 as _accept_stage18,
     accept_stage19 as _accept_stage19,
     accept_stage20 as _accept_stage20,
+    accept_stage21 as _accept_stage21,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -1040,6 +1041,44 @@ class HoloReplyService:
             limit=limit,
             artifact_dir=artifact_dir,
         )
+
+    def show_policy_candidates(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.show_policy_candidates(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
+    def show_promoted_policies(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.show_promoted_policies(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
+    def rollback_policy(self, *, policy_id: str, reason: str = "") -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.rollback_policy(policy_id=policy_id, reason=reason)
+
+    def trace_policy_influence(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        with self._memory_lock:
+            return self.memory.trace_policy_influence(thread_key=thread_key, chat_name=chat_name, channel=channel, query=query, limit=limit)
 
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
@@ -3330,6 +3369,24 @@ class HoloReplyService:
             artifact_dir=artifact_dir,
         )
 
+    def accept_stage21(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage21(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
     def _accept_stage19_impl(
         self,
         *,
@@ -3770,6 +3827,192 @@ class HoloReplyService:
             "cleanup_report": cleanup_report,
             "fulfilled_stage20": dict(fulfilled_packet.get("stage20", {})),
             "stage19": {"status": stage19_report.get("status"), "checks": stage19_report.get("checks", {})},
+        }
+
+    def _accept_stage21_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        requested_chat_name = str(chat_name or "Nemoqi").strip()
+        requested_thread_key = str(thread_key or requested_chat_name).strip()
+        if normalized_channel == "wechat" and requested_thread_key and not (
+            requested_thread_key.startswith("wechat:")
+            or requested_thread_key.startswith("wxid_")
+            or requested_thread_key.endswith("@chatroom")
+        ):
+            requested_thread_key = f"wechat:{requested_thread_key}"
+        run_id = stable_digest(requested_thread_key, requested_chat_name, utc_now())[:12]
+        probe_chat_name = f"{requested_chat_name}-stage21-{run_id}"
+        probe_thread_key = f"wechat:{probe_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:{run_id}"
+        query = "continue this carefully"
+        context = {
+            "channel": normalized_channel,
+            "thread_key": probe_thread_key,
+            "chat_name": probe_chat_name,
+            "sender": str(sender or requested_chat_name),
+            "attachments": [],
+        }
+
+        fixture_dir = self.config.runtime.repo_root / "tests" / "fixtures" / "stage14"
+        with tempfile.TemporaryDirectory(prefix="holo-stage21-accept-") as temp_dir:
+            artifact_root = Path(artifact_dir).resolve() if str(artifact_dir or "").strip() else Path(temp_dir)
+            replay_before = self.memory.replay_policy_regret(
+                source_type="synthetic_fixture",
+                fixture_path=str(fixture_dir),
+                channel=normalized_channel,
+                limit=4,
+                artifact_dir=str(artifact_root / "replay-before"),
+            )
+
+            for index in range(6):
+                self.memory.appraise_outcome(
+                    channel=normalized_channel,
+                    thread_key=probe_thread_key,
+                    chat_name=probe_chat_name,
+                    action_type="defer_reply",
+                    action_ref=f"accept-stage21-good-defer-{run_id}-{index}",
+                    was_rewarding=0.86,
+                    was_ignored=0.02,
+                    relational_delta=0.11,
+                    identity_delta=0.12,
+                    future_initiative_bias=0.48,
+                    future_resistance_bias=0.05,
+                    metadata={
+                        "predicted_outcome": {
+                            "predicted_relational_delta": 0.1,
+                            "predicted_identity_delta": 0.11,
+                            "predicted_response_quality": 0.84,
+                            "predicted_risk": 0.08,
+                        },
+                        "reply_latency_seconds": 90.0,
+                        "initiative_success": 1.0,
+                        "correction_count": 0,
+                        "query": query,
+                        "evidence_refs": [f"accept-stage21:good-defer:{run_id}:{index}"],
+                    },
+                )
+                self.memory.appraise_outcome(
+                    channel=normalized_channel,
+                    thread_key=probe_thread_key,
+                    chat_name=probe_chat_name,
+                    action_type="counter_offer",
+                    action_ref=f"accept-stage21-reject-counter-{run_id}-{index}",
+                    was_rewarding=0.76,
+                    was_ignored=0.04,
+                    relational_delta=0.08,
+                    identity_delta=0.14,
+                    future_initiative_bias=0.32,
+                    future_resistance_bias=0.08,
+                    metadata={
+                        "predicted_outcome": {
+                            "predicted_relational_delta": 0.08,
+                            "predicted_identity_delta": 0.13,
+                            "predicted_response_quality": 0.74,
+                            "predicted_risk": 0.1,
+                        },
+                        "reply_latency_seconds": 120.0,
+                        "initiative_success": 1.0,
+                        "correction_count": 0,
+                        "query": query,
+                        "evidence_refs": [f"accept-stage21:reject-counter:{run_id}:{index}"],
+                    },
+                )
+
+            self.memory.clear_packet_cache()
+            before_packet = self.memory.sidecar_packet(query, context={**context, "message_id": f"accept-stage21-before-{run_id}", "event_id": "2101"})
+            candidates = self.show_policy_candidates(thread_key=probe_thread_key, chat_name=probe_chat_name, channel=normalized_channel)
+            defer_candidate = next((dict(item) for item in candidates.get("candidates", []) if str(item.get("action_type", "")) == "defer_reply"), {})
+            reject_candidate = next((dict(item) for item in candidates.get("candidates", []) if str(item.get("action_type", "")) == "counter_offer"), {})
+            approved = self.memory.graph.review_policy_candidate(
+                policy_id=str(defer_candidate.get("policy_id", "") or ""),
+                approved=True,
+                replay_report=replay_before,
+                reason="accept_stage21_replay_approval",
+            )
+            rejected = self.memory.graph.review_policy_candidate(
+                policy_id=str(reject_candidate.get("policy_id", "") or ""),
+                approved=False,
+                replay_report=replay_before,
+                reason="accept_stage21_replay_rejection",
+            )
+            self.memory.clear_packet_cache()
+            after_packet = self.memory.sidecar_packet(query, context={**context, "message_id": f"accept-stage21-after-{run_id}", "event_id": "2102"})
+            influence = self.trace_policy_influence(thread_key=probe_thread_key, chat_name=probe_chat_name, channel=normalized_channel, query=query)
+            replay_after = self.memory.replay_policy_regret(
+                source_type="synthetic_fixture",
+                fixture_path=str(fixture_dir),
+                channel=normalized_channel,
+                limit=4,
+                artifact_dir=str(artifact_root / "replay-after"),
+            )
+            rollback = self.rollback_policy(policy_id=str(approved.get("policy_id", "") or approved.get("id", "")), reason="accept_stage21_rollback_probe")
+            self.memory.clear_packet_cache()
+            rollback_packet = self.memory.sidecar_packet(query, context={**context, "message_id": f"accept-stage21-rollback-{run_id}", "event_id": "2103"})
+
+        stage20_report = self.accept_stage20(
+            thread_key=requested_thread_key,
+            chat_name=requested_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+        def _action_row(packet: dict[str, Any], action_type: str) -> dict[str, Any]:
+            return next((dict(item) for item in list(packet.get("action_market", [])) if str(item.get("action_type", "")) == action_type), {})
+
+        before_defer = _action_row(before_packet, "defer_reply")
+        after_defer = _action_row(after_packet, "defer_reply")
+        rollback_defer = _action_row(rollback_packet, "defer_reply")
+        before_regret = float(dict(replay_before.get("aggregate_metrics", {})).get("policy_regret_vs_best_available_action", 0.0) or 0.0)
+        after_regret = float(dict(replay_after.get("aggregate_metrics", {})).get("policy_regret_vs_best_available_action", 0.0) or 0.0)
+        hard_policy_decision = self.policy.outbound_decision(
+            incoming_text="accept stage21 hard gate",
+            reply_text="",
+            recent_outbound_count=0,
+            is_existing_thread=True,
+            is_proactive=False,
+            channel=normalized_channel,
+        )
+        checks = {
+            "policy_candidate_created_from_repeated_evidence": bool(defer_candidate)
+            and int(defer_candidate.get("support_count", 0) or 0) >= 3,
+            "replay_can_approve_candidate": str(approved.get("status", "")) == "promoted"
+            and str(approved.get("replay_approval_status", "")) == "approved",
+            "replay_can_reject_candidate": str(rejected.get("status", "")) == "rejected"
+            and str(rejected.get("replay_approval_status", "")) == "rejected",
+            "promoted_policy_changes_ranking_fixture": float(after_defer.get("score", 0.0) or 0.0) > float(before_defer.get("score", 0.0) or 0.0)
+            and float(after_defer.get("policy_sedimentation_delta", 0.0) or 0.0) > 0.0,
+            "rollback_restores_old_behavior": str(rollback.get("status", "")) == "rolled_back"
+            and abs(float(rollback_defer.get("policy_sedimentation_delta", 0.0) or 0.0)) == 0.0,
+            "policy_regret_not_worse": after_regret <= before_regret + 0.001,
+            "canonical_wechat_identity_preserved": normalized_channel != "wechat" or probe_thread_key.startswith("wechat:"),
+            "hard_policy_gate_preserved": not bool(hard_policy_decision.allowed),
+            "stage20_acceptance_green": str(stage20_report.get("status", "")) == "pass",
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "policy-sedimentation-and-negotiated-will-stage21",
+            "checks": checks,
+            "thread_key": requested_thread_key,
+            "chat_name": requested_chat_name,
+            "channel": normalized_channel,
+            "probe_thread_key": probe_thread_key,
+            "candidate": defer_candidate,
+            "approved_policy": approved,
+            "rejected_policy": rejected,
+            "before_stage21": dict(before_packet.get("stage21", {})),
+            "after_stage21": dict(after_packet.get("stage21", {})),
+            "rollback_stage21": dict(rollback_packet.get("stage21", {})),
+            "policy_influence": influence,
+            "rollback": rollback,
+            "replay_regret": {"before": before_regret, "after": after_regret},
+            "stage20": {"status": stage20_report.get("status"), "checks": stage20_report.get("checks", {})},
         }
 
     def initiative_status(
@@ -6054,6 +6297,37 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/policy-candidates":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_policy_candidates(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["24"])[0] or 24),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/promoted-policies":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_promoted_policies(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["24"])[0] or 24),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/policy-influence":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_policy_influence(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        query=params.get("query", [""])[0],
+                        limit=int(params.get("limit", ["8"])[0] or 8),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/outcome-history":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.trace_outcome_history(
@@ -6457,6 +6731,15 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             chat_name=str(payload.get("chat_name", "")).strip() or None,
                             channel=str(payload.get("channel", "wechat")).strip() or "wechat",
                             limit=int(payload.get("limit", 8) or 8),
+                        ),
+                    )
+                    return
+                if parsed.path == "/rollback-policy":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.rollback_policy(
+                            policy_id=str(payload.get("id", payload.get("policy_id", ""))).strip(),
+                            reason=str(payload.get("reason", "http_rollback_policy")).strip(),
                         ),
                     )
                     return

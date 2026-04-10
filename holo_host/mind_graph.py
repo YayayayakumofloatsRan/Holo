@@ -16,6 +16,14 @@ from .mind_graph_parts.autobiographical_updates import update_autobiographical_s
 from .mind_graph_parts.goal_updates import goal_state as _goal_state
 from .mind_graph_parts.goal_updates import update_goal_state as _update_goal_state
 from .mind_graph_parts.outcome_appraisal import record_outcome_appraisal as _record_outcome_appraisal
+from .mind_graph_parts.policy_sedimentation import list_policy_sediment as _list_policy_sediment
+from .mind_graph_parts.policy_sedimentation import policy_scenario_bucket as _policy_scenario_bucket
+from .mind_graph_parts.policy_sedimentation import promoted_policy_overlays as _promoted_policy_overlays
+from .mind_graph_parts.policy_sedimentation import review_policy_candidate as _review_policy_candidate
+from .mind_graph_parts.policy_sedimentation import rollback_policy as _rollback_policy
+from .mind_graph_parts.policy_sedimentation import show_policy_candidates as _show_policy_candidates
+from .mind_graph_parts.policy_sedimentation import show_promoted_policies as _show_promoted_policies
+from .mind_graph_parts.policy_sedimentation import upsert_policy_candidate_from_calibration as _upsert_policy_candidate_from_calibration
 from .mind_graph_parts.state_defaults import (
     ACTION_CALIBRATION_HISTORY_LIMIT as POLICY_ACTION_CALIBRATION_HISTORY_LIMIT,
     ACTION_CALIBRATION_RECENT_METRICS_LIMIT as POLICY_ACTION_CALIBRATION_RECENT_METRICS_LIMIT,
@@ -641,7 +649,7 @@ class MindGraph:
             return "resistance"
         if normalized in {"silence", "defer_reply"}:
             return "hold"
-        if normalized == "initiative_ping":
+        if normalized in {"initiative_ping", "proactive_ping"}:
             return "initiative"
         return normalized or "unknown"
 
@@ -1045,6 +1053,33 @@ class MindGraph:
             );
             CREATE INDEX IF NOT EXISTS idx_action_calibration_bucket
             ON action_calibration(channel, thread_key_bucket, action_type, last_updated_at DESC);
+            CREATE TABLE IF NOT EXISTS policy_sediment (
+                id INTEGER PRIMARY KEY,
+                policy_id TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                scenario_bucket TEXT NOT NULL DEFAULT '',
+                scenario_features_json TEXT NOT NULL DEFAULT '{}',
+                action_type TEXT NOT NULL DEFAULT '',
+                action_preference_shift REAL NOT NULL DEFAULT 0.0,
+                support_count INTEGER NOT NULL DEFAULT 0,
+                recency_support REAL NOT NULL DEFAULT 0.0,
+                observed_regret_delta REAL NOT NULL DEFAULT 0.0,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                replay_approval_status TEXT NOT NULL DEFAULT 'pending',
+                rollback_handle TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'candidate',
+                evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                promoted_at TEXT NOT NULL DEFAULT '',
+                rolled_back_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(channel, thread_key, scenario_bucket, action_type),
+                UNIQUE(policy_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_policy_sediment_lookup
+            ON policy_sediment(channel, thread_key, status, action_type, updated_at DESC);
             CREATE TABLE IF NOT EXISTS consciousness_ledger (
                 id INTEGER PRIMARY KEY,
                 channel TEXT NOT NULL DEFAULT '',
@@ -2521,6 +2556,30 @@ class MindGraph:
 
     def trace_resume_candidate(self, **kwargs: Any) -> dict[str, Any]:
         return _trace_resume_candidate(self, **kwargs)
+
+    def upsert_policy_candidate_from_calibration(self, **kwargs: Any) -> dict[str, Any]:
+        return _upsert_policy_candidate_from_calibration(self, **kwargs)
+
+    def list_policy_sediment(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return _list_policy_sediment(self, **kwargs)
+
+    def policy_scenario_bucket(self, **kwargs: Any) -> dict[str, Any]:
+        return _policy_scenario_bucket(self, **kwargs)
+
+    def promoted_policy_overlays(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return _promoted_policy_overlays(self, **kwargs)
+
+    def review_policy_candidate(self, **kwargs: Any) -> dict[str, Any]:
+        return _review_policy_candidate(self, **kwargs)
+
+    def rollback_policy(self, **kwargs: Any) -> dict[str, Any]:
+        return _rollback_policy(self, **kwargs)
+
+    def show_policy_candidates(self, **kwargs: Any) -> dict[str, Any]:
+        return _show_policy_candidates(self, **kwargs)
+
+    def show_promoted_policies(self, **kwargs: Any) -> dict[str, Any]:
+        return _show_promoted_policies(self, **kwargs)
 
     def top_thread_commitments(self, *, limit: int = 5) -> list[dict[str, Any]]:
         with self._lock:

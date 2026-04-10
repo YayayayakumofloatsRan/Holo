@@ -32,3 +32,65 @@ def apply_simulation_overlay(
         annotated["score"] = round(float(annotated.get("score", 0.0) or 0.0) + rerank_delta, 4)
         updated_market.append(annotated)
     return sorted(updated_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+
+
+def apply_policy_sedimentation_overlay(
+    self: Any,
+    *,
+    action_market: list[dict[str, Any]],
+    context: dict[str, Any],
+    world_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not hasattr(self, "graph") or not hasattr(self.graph, "promoted_policy_overlays"):
+        return action_market
+    channel = str(context.get("channel", "wechat") or "wechat")
+    thread_key = str(context.get("thread_key", "") or "")
+    chat_name = str(context.get("chat_name", "") or thread_key)
+    stage19 = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {}
+    thread_model = dict(world_state.get("thread_models", {})).get(thread_key, {}) if isinstance(world_state.get("thread_models", {}), dict) else {}
+    updated_market: list[dict[str, Any]] = []
+    for candidate in action_market:
+        annotated = dict(candidate)
+        action_type = str(annotated.get("action_type", "") or "")
+        predicted = dict(annotated.get("predicted_outcome", {})) if isinstance(annotated.get("predicted_outcome", {}), dict) else {}
+        calibration_bucket = dict(annotated.get("calibration_bucket", {})) if isinstance(annotated.get("calibration_bucket", {}), dict) else {}
+        scenario = self.graph.policy_scenario_bucket(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            action_type=action_type,
+            calibration_bucket=calibration_bucket,
+            candidate={**annotated, "predicted_outcome": predicted},
+            metadata={
+                "stage19": stage19,
+                "relationship_tension": float(thread_model.get("risk_level", predicted.get("predicted_risk", 0.0)) or 0.0),
+                "low_signal": "low_signal" in str(calibration_bucket.get("scenario_bucket", "")),
+            },
+        )
+        scenario_bucket = str(scenario.get("scenario_bucket", "") or "")
+        policies = self.graph.promoted_policy_overlays(
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            action_type=action_type,
+            scenario_bucket=scenario_bucket,
+            limit=3,
+        )
+        raw_delta = sum(float(item.get("action_preference_shift", 0.0) or 0.0) for item in policies)
+        delta = round(max(-0.18, min(0.18, raw_delta)), 4)
+        annotated["policy_scenario_bucket"] = scenario_bucket
+        annotated["policy_sedimentation_delta"] = delta
+        annotated["policy_sedimentation"] = {
+            "applied": bool(policies and abs(delta) > 0.0),
+            "available_count": len(policies),
+            "policy_ids": [str(item.get("policy_id", "") or "") for item in policies if str(item.get("policy_id", "") or "")],
+            "rollback_handles": [str(item.get("rollback_handle", "") or "") for item in policies if str(item.get("rollback_handle", "") or "")],
+            "scenario_bucket": scenario_bucket,
+            "scenario_features": dict(scenario.get("scenario_features", {})),
+            "hard_gate_preserved": True,
+            "negotiated_will_mode": "active_soft",
+        }
+        if policies:
+            annotated["score"] = round(float(annotated.get("score", 0.0) or 0.0) + delta, 4)
+        updated_market.append(annotated)
+    return sorted(updated_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)

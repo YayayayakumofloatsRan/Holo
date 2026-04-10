@@ -57,7 +57,8 @@ The real continuity lives in:
 10. Mind Graph incrementally re-syncs the active thread and predictive continuity after each real turn
 11. Existing bounded streams update the Stage19 attention frontier for same-thread continuity warmth
 12. Stage20 temporal state hydrates same-thread open loops, commitments, deferred intentions, and resume candidates before heavier recall
-13. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
+13. Stage21 promoted policy sediment applies replay-gated soft overlays inside action-market ranking
+14. Background promotion/dream/self-model/drive cycles adjust longer-term memory and future action bias
 
 ## Current Runtime Truth
 - Main processor: `codex_cli`
@@ -65,6 +66,7 @@ The real continuity lives in:
 - Stage18 dual-speed reflex is live: ordinary short active-thread speech can generate through existing `micro_fast`, while explicit memory/history/factual turns still escalate and high-risk actions still use `subject_main` or `kernel_xhigh`
 - Stage19 bounded continuity is live: `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle` can warm a bounded Mind Graph `attention_frontier`; ingress reads one same-thread row before heavier recall and exposes `mind_packet.stage19`
 - Stage20 temporal continuity is live: Mind Graph `temporal_subject_state` persists open loops, commitments, deferred intentions, interruption markers, resume candidates, and due followup keys; `QueueStore.jobs` remains the timing/job surface and recovery flows through action-market metadata
+- Stage21 policy sedimentation is live: Mind Graph `policy_sediment` stores replay-gated, reversible soft overlays; promoted rows can bias action-market scores but cannot grant send permission or override hard policy gates
 - Live WeChat transport: `pyweixin_dialog`
 - `wcferry` is not the live path on this machine because local `Weixin 4.1.x` is incompatible with the installed `wcferry 39.x` line
 - WSL kernel should be treated as authoritative; Windows helper is only a transport shell
@@ -109,6 +111,7 @@ Current relationship-memory rule:
 - Do not let Stage18 predictive continuity select actions or bypass explicit memory/history escalation
 - Do not let Stage19 attention frontier become a second brain, a new always-on loop, or a transport-side decision layer
 - Do not let Stage20 temporal state send directly, duplicate due jobs, override hard policy gates, or bypass explicit memory/history escalation
+- Do not let Stage21 policy sediment become hidden training, hard policy, transport-side decision logic, or a send-permission bypass
 - Do not publish live memory JSONL or runtime graph state to a public remote; memory sync belongs only on trusted local/private paths
 
 ## Current Weak Spots

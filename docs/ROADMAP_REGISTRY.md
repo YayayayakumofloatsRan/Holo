@@ -31,9 +31,9 @@ Stage20: temporal commitments and interruption recovery
 - Routes recovery through action-market candidate metadata; temporal state never sends directly.
 
 Stage21: policy sedimentation and negotiated will
-- Turn repeated outcomes and explicit negotiation into reversible soft policy sediment.
-- Bias action-market scoring without weakening hard policy gates.
-- Keep owner shutdown, secrets, auth, and safety boundaries outside sediment scope.
+- Implemented as Mind Graph `policy_sediment` rows with candidate/promoted/rejected/rolled-back statuses.
+- Promotion is replay-gated and support/confidence/evidence bounded.
+- Promoted rows bias action-market scoring only; hard policy gates, send permission, owner shutdown, secrets, auth, and safety boundaries remain outside sediment scope.
 
 ## Parked Hypotheses
 - broader multi-agent social world

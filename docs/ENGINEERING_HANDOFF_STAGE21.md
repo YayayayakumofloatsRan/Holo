@@ -2,47 +2,73 @@
 
 ## Target Change
 
-Add reversible policy sediment and negotiated-will biasing on top of existing hard policy and action-market simulation.
+Stage21 is implemented as replay-gated policy sediment in Mind Graph. It converts repeated Stage13 calibration evidence into candidate overlays, promotes them only through replay approval, and applies promoted rows as bounded action-market score deltas.
 
-## Files To Touch First
+## Runtime Files Changed
 
-- `holo_host/policy.py`
-  - keep hard gates authoritative
-  - expose sediment only as soft context, not as permission
-- `holo_host/policy_runtime/action_market.py`
-  - apply sediment bias to candidate scoring
-- `holo_host/policy_runtime/action_simulation.py`
-  - include sediment rationale in simulated outcomes
 - `holo_host/mind_graph.py`
-  - persist policy sediment and counterevidence
-  - update sediment from outcome appraisal evidence
+  - creates `policy_sediment`
+  - exposes policy sediment wrappers
+  - keeps canonical WeChat thread scoping
+- `holo_host/mind_graph_parts/policy_sedimentation.py`
+  - owns scenario buckets, candidate upsert, replay review, promotion, rollback, and diagnostics
+- `holo_host/mind_graph_parts/outcome_appraisal.py`
+  - creates/refreshes policy candidates after calibration updates
+- `holo_host/policy_runtime/action_market.py`
+  - applies promoted overlays after simulation overlay and before final selection
 - `holo_host/memory_bridge.py`
-  - expose `mind_packet.stage21`
-  - include applied policy keys and hard-gate preservation flag
-- `holo_host/brain_ops.py`
-  - update `trace_resistance` or add adjacent diagnostics for negotiated will
+  - exposes `mind_packet.stage21`
+  - adds policy diagnostics and cache-clearing rollback
 - `holo_host/reply_api.py`
-  - add `accept_stage21`
-  - expose `/accept-stage21`
+  - exposes service/HTTP diagnostics and `accept_stage21`
 - `holo_host/cli.py`
-  - add `accept-stage21`
+  - adds `show-policy-candidates`, `show-promoted-policies`, `rollback-policy`, `trace-policy-influence`, and `accept-stage21`
 - `holo_host/reply_service_parts/acceptance.py`
-  - add acceptance wrapper
+  - adds the Stage21 acceptance wrapper
+- `holo_host/reply_service_parts/endpoints.py`
+  - adds HTTP acceptance dispatch
 
-## Tests To Add
+## Table Contract
 
-- `tests/test_stage21_policy_sedimentation.py`
+Table: `policy_sediment`
 
-Minimum cases:
+Unique key:
 
-- positive repeated outcomes create soft sediment
-- explicit correction lowers or supersedes sediment
-- sediment biases action-market score but does not select action directly
-- hard policy denial still denies
-- initiative gates are not bypassed
-- resistance posture uses sediment only when risk allows it
-- sediment is canonical-thread scoped
-- replay policy regret remains inside Stage14 threshold
+- `(channel, thread_key, scenario_bucket, action_type)`
+
+Fields:
+
+- `policy_id`
+- `channel`
+- `thread_key`
+- `scenario_bucket`
+- `scenario_features_json`
+- `action_type`
+- `action_preference_shift`
+- `support_count`
+- `recency_support`
+- `observed_regret_delta`
+- `confidence`
+- `replay_approval_status`
+- `rollback_handle`
+- `status`
+- `evidence_refs_json`
+- `metadata_json`
+- `created_at`
+- `updated_at`
+- `promoted_at`
+- `rolled_back_at`
+
+Live promotion requires `status='promoted'` and `replay_approval_status='approved'`.
+
+## Diagnostics
+
+```bash
+python -m holo_host show-policy-candidates --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+python -m holo_host show-promoted-policies --thread-key Nemoqi --chat-name Nemoqi --channel wechat
+python -m holo_host trace-policy-influence --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "continue this carefully"
+python -m holo_host rollback-policy --id <policy_id>
+```
 
 ## Acceptance Command
 
@@ -50,37 +76,34 @@ Minimum cases:
 python -m holo_host --config .holo_host.example.toml accept-stage21 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
 ```
 
-Expected supporting checks:
+The gate checks candidate creation, replay approval, replay rejection, score influence, rollback, replay regret non-worsening, canonical thread identity, hard policy preservation, and Stage20 compatibility.
+
+## Tests
 
 ```bash
-pytest -q tests/test_stage21_policy_sedimentation.py
-pytest -q tests/test_stage20_temporal_commitments.py
-python -m holo_host --config .holo_host.example.toml replay-policy-regret --fixture-path tests/fixtures/stage14
-python -m holo_host --config .holo_host.example.toml accept-stage21 --thread-key Nemoqi --chat-name Nemoqi --channel wechat
-pytest -q
+pytest -q tests/test_stage21_policy_sedimentation.py tests/test_stage20_temporal_commitments.py tests/test_stage19_attention_frontier.py tests/test_stage18_dual_speed_reflex.py
+pytest -q tests/test_stage13_calibration.py tests/test_stage14_replay.py tests/test_stage15_modularization.py
 ```
+
+`tests/test_stage21_policy_sedimentation.py` covers:
+
+- repeated evidence creates candidates
+- replay approval/rejection gates promotion
+- promoted overlays change action-market scoring
+- rollback removes overlay effect
+- Stage14 replay regret does not worsen
+- canonical thread scoping prevents cross-contact leakage
+- overlays do not grant send permission
 
 ## Contracts To Preserve
 
-- Hard policy, owner shutdown, secrets, and auth boundaries are not sediment scopes.
-- Sediment cannot grant send permission.
-- Sediment cannot bypass initiative whitelist, cooldown, or policy.
-- Processor calls remain routed through the processor fabric.
-- Negotiated will must be inspectable, reversible, and evidence-linked.
-
-## Implementation Notes
-
-Start with `negotiated_will_mode=observe` or equivalent config behavior if runtime risk is unclear. Biasing can be enabled after diagnostics show stable sediment rows.
-
-Keep sediment narrow:
-
-- thread-scoped by default
-- confidence-gated
-- evidence refs required
-- counterevidence lowers confidence before broadening any rule
-
-Do not convert tone preferences into safety constraints. A style negotiation can bias expression or action-market scoring, but it cannot rewrite policy.
+- Replay is the promotion gate.
+- Sediment is a soft score overlay only.
+- Rejected and rolled-back rows are inspectable but inactive.
+- Hard policy, owner shutdown, secrets, auth, cooldowns, and initiative whitelist remain final.
+- Processor calls stay inside the existing processor fabric.
+- Stage18/19/20 continuity behavior remains unchanged.
 
 ## Done State
 
-Stage21 is done when Holo can accumulate reversible, evidence-linked preferences and resistance tendencies that shape action-market scoring while hard policy remains unchanged.
+Stage21 is done when repeated experience can create stable default action preferences, those preferences are inspectable and reversible, replay remains the gatekeeper, and acceptance plus Stage13/14/15/18/19/20 regressions remain green.

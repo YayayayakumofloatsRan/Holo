@@ -53,14 +53,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage20-temporal-commitments-and-interruption-recovery`.
+- The current milestone tag is `stage21-policy-sedimentation-and-negotiated-will`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage20 temporal continuity: Mind Graph now persists open loops, commitments, deferred intentions, interruption markers, resume candidates, and due followup keys while `QueueStore` remains the timing surface.
-- Next stage focus is Stage21 policy sedimentation and negotiated will:
+- Current focus is Stage21 policy sedimentation and negotiated will: Mind Graph now persists replay-gated policy candidates and promoted soft overlays while the action market remains the only action-selection path.
+- Next subject-runtime focus should build from Stage21 without adding a second brain or unbounded loop:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
   - Stage20: temporal commitments and interruption recovery through queue + Mind Graph state is implemented
-  - Stage21: reversible policy sedimentation and negotiated will as action-market bias is next
+  - Stage21: reversible policy sedimentation and negotiated will as action-market bias is implemented
 - This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
@@ -162,6 +162,11 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host show-open-loops --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
   - `python3 -m holo_host show-commitments --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
   - `python3 -m holo_host trace-resume-candidate --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Stage21 policy sediment diagnostics:
+  - `python3 -m holo_host show-policy-candidates --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+  - `python3 -m holo_host show-promoted-policies --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+  - `python3 -m holo_host trace-policy-influence --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "continue this carefully"`
+  - `python3 -m holo_host rollback-policy --id <policy_id>`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -212,6 +217,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 
 - Stage18 `micro_fast` routing is intentionally conservative; do not broaden it without proving explicit memory/history escalation and action-market-first still hold
 - Stage20 temporal state is intentionally bounded and inspectable; do not let it create direct sends, unbounded scheduling, or a second decision layer
+- Stage21 policy sediment is intentionally replay-gated and reversible; do not let it become a hard policy override, learned hidden weights, or send-permission bypass
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -246,7 +252,10 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host show-commitments --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host trace-resume-candidate --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage21 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
-- Stage21 commands are still target gates documented by the next handoff docs, not current runnable commands.
+- `python3 -m holo_host show-policy-candidates --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host show-promoted-policies --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host trace-policy-influence --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "continue this carefully"`
+- `python3 -m holo_host rollback-policy --id <policy_id>`
 
 ## Invariants
 - Do not silently change online transport modes

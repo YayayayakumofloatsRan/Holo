@@ -17,7 +17,7 @@ from .mind_graph import MindGraph
 from .models import ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state
 from .policies import MEMORY_BRIDGE_POLICY
-from .policy_runtime.action_market import apply_simulation_overlay
+from .policy_runtime.action_market import apply_policy_sedimentation_overlay, apply_simulation_overlay
 from .policy_runtime.action_simulation import simulate_action_candidate as _simulate_action_candidate_impl
 from .policy_runtime.counterfactuals import fast_counterfactual_set as _fast_counterfactual_set_impl
 from .policy_runtime.world_calibration_trace import expression_budget_summary
@@ -1209,6 +1209,12 @@ class MemoryBridge:
             simulation_by_action=simulation_by_action,
             world_thread=world_thread,
         )
+        action_market = apply_policy_sedimentation_overlay(
+            self,
+            action_market=action_market,
+            context=context,
+            world_state=world_state,
+        )
         selected = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
         if bool(intent_state.get("factual_lookup", False)) and lookup_ready and selected["action_type"] not in {"silence", "defer_reply"}:
             lookup_candidate = next((dict(item) for item in action_market if item.get("action_type") == "external_lookup"), None)
@@ -1296,6 +1302,41 @@ class MemoryBridge:
         if defer_reason:
             selected["defer_reason"] = defer_reason
         return action_market, selected, int(expression_budget), silence_reason, defer_reason, action_rationale, counterfactual_set, selected_prediction
+
+    def _stage21_policy_trace(self, *, action_market: list[dict[str, Any]], selected_action: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        applied: list[dict[str, Any]] = []
+        visible = False
+        scenario_bucket = ""
+        for candidate in action_market:
+            sediment = dict(candidate.get("policy_sedimentation", {})) if isinstance(candidate.get("policy_sedimentation", {}), dict) else {}
+            if sediment:
+                visible = visible or int(sediment.get("available_count", 0) or 0) > 0
+            if not scenario_bucket and str(candidate.get("policy_scenario_bucket", "") or ""):
+                scenario_bucket = str(candidate.get("policy_scenario_bucket", "") or "")
+            if not bool(sediment.get("applied", False)):
+                continue
+            applied.append(
+                {
+                    "action_type": str(candidate.get("action_type", "") or ""),
+                    "delta": round(float(candidate.get("policy_sedimentation_delta", 0.0) or 0.0), 4),
+                    "policy_ids": list(sediment.get("policy_ids", []))[:6],
+                    "rollback_handles": list(sediment.get("rollback_handles", []))[:6],
+                    "scenario_bucket": str(sediment.get("scenario_bucket", "") or ""),
+                }
+            )
+        return {
+            "sediments_visible": bool(visible or applied),
+            "sediment_bias_applied": bool(applied),
+            "applied_policy_keys": [policy_id for item in applied for policy_id in list(item.get("policy_ids", []))][:8],
+            "scenario_bucket": scenario_bucket,
+            "hard_gate_preserved": True,
+            "negotiated_will_mode": "active_soft",
+            "selected_action": str(selected_action.get("action_type", "") or ""),
+            "applied": applied,
+            "thread_key": str(context.get("thread_key", "") or ""),
+            "chat_name": str(context.get("chat_name", "") or ""),
+            "channel": str(context.get("channel", "wechat") or "wechat"),
+        }
 
     def _mind_limits(self, context: dict[str, Any], *, fast: bool) -> dict[str, int]:
         budget = dict(context.get("mind_budget", {}))
@@ -1453,6 +1494,7 @@ class MemoryBridge:
             1.0 - max((float(item.get("confidence", 0.0) or 0.0) for item in counterfactual_set), default=0.0),
             4,
         )
+        stage21_policy = self._stage21_policy_trace(action_market=action_market, selected_action=selected_action, context=context)
         packet["mind_packet_version"] = "v11"
         packet["persona_blend"] = persona_blend
         packet["brain_state"] = brain_state
@@ -1478,6 +1520,7 @@ class MemoryBridge:
         packet.setdefault("stage17", {})
         packet.setdefault("stage19", dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {})
         packet.setdefault("stage20", dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else {})
+        packet["stage21"] = stage21_policy
         packet["action_market"] = action_market
         packet["selected_action"] = selected_action
         packet["selected_prediction"] = selected_prediction
@@ -1554,6 +1597,7 @@ class MemoryBridge:
         packet["state"]["stage17"] = dict(packet.get("stage17", {}))
         packet["state"]["stage19"] = dict(packet.get("stage19", {}))
         packet["state"]["stage20"] = dict(packet.get("stage20", {}))
+        packet["state"]["stage21"] = dict(packet.get("stage21", {}))
         packet["state"]["action_market"] = list(action_market)
         packet["state"]["selected_action"] = dict(selected_action)
         packet["state"]["selected_prediction"] = dict(selected_prediction)
@@ -3695,6 +3739,7 @@ class MemoryBridge:
                 "expression_budget_v4": int(packet.get("expression_budget_v4", packet.get("expression_budget_v3", packet.get("expression_budget_v2", packet.get("expression_budget", 0)))) or 0),
                 "goal_alignment": dict(packet.get("goal_alignment", {})),
                 "identity_consistency": dict(packet.get("identity_consistency", {})),
+                "stage21": dict(packet.get("stage21", {})),
             }
         subject = self._subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=normalized_chat_name)
         metadata = dict(subject.get("metadata", {}))
@@ -3714,6 +3759,7 @@ class MemoryBridge:
             "expression_budget_v4": int(metadata.get("last_expression_budget_v4", metadata.get("last_expression_budget_v3", metadata.get("last_expression_budget_v2", metadata.get("last_expression_budget", 0)))) or 0),
             "goal_alignment": dict(metadata.get("last_goal_alignment", {})),
             "identity_consistency": dict(metadata.get("last_identity_consistency", {})),
+            "stage21": dict(metadata.get("last_stage21_policy", {})),
         }
 
     def trace_action_selection(
@@ -3764,6 +3810,7 @@ class MemoryBridge:
             "predicted_best_outcome": dict(packet.get("predicted_best_outcome", {})),
             "predicted_worst_outcome": dict(packet.get("predicted_worst_outcome", {})),
             "selected_prediction": dict(packet.get("selected_prediction", {})),
+            "stage21": dict(packet.get("stage21", {})),
             "uncertainty_level": float(packet.get("uncertainty_level", 0.0) or 0.0),
             "resistance_posture": dict(packet.get("resistance_posture", {})),
             "game_state": dict(packet.get("game_state", {})),
@@ -3895,6 +3942,84 @@ class MemoryBridge:
             "chat_name": str(state.get("chat_name", chat_name or "")),
             "channel": channel,
             "rows": rows,
+        }
+
+    def show_policy_candidates(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "show_policy_candidates"):
+            return {"status": "unavailable", "candidates": [], "count": 0}
+        return self.graph.show_policy_candidates(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
+    def show_promoted_policies(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 24,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "show_promoted_policies"):
+            return {"status": "unavailable", "promoted_policies": [], "count": 0}
+        return self.graph.show_promoted_policies(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
+    def rollback_policy(self, *, policy_id: str, reason: str = "") -> dict[str, Any]:
+        if not hasattr(self.graph, "rollback_policy"):
+            return {"status": "unavailable", "reason": "policy_sedimentation_unavailable"}
+        payload = self.graph.rollback_policy(policy_id=policy_id, reason=reason)
+        self.clear_packet_cache()
+        return payload
+
+    def trace_policy_influence(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        query: str = "",
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        normalized_thread_key = str(thread_key or chat_name or "").strip()
+        normalized_chat_name = str(chat_name or thread_key or normalized_thread_key).strip()
+        if str(query or "").strip():
+            packet = self.sidecar_packet(
+                query,
+                context={"channel": channel, "thread_key": normalized_thread_key, "chat_name": normalized_chat_name},
+            )
+            market = list(packet.get("action_market", []))[: max(1, int(limit or 8))]
+            stage21 = dict(packet.get("stage21", {}))
+            selected = dict(packet.get("selected_action", {}))
+        else:
+            payload = self.action_market(thread_key=thread_key, chat_name=chat_name, channel=channel, query="", limit=limit)
+            market = list(payload.get("action_market_v4", payload.get("action_market", [])))[: max(1, int(limit or 8))]
+            stage21 = dict(payload.get("stage21", {}))
+            selected = dict(payload.get("selected_action", {}))
+        promoted = self.show_promoted_policies(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+        influence_rows = [
+            {
+                "action_type": str(item.get("action_type", "") or ""),
+                "score": float(item.get("score", 0.0) or 0.0),
+                "policy_sedimentation_delta": float(item.get("policy_sedimentation_delta", 0.0) or 0.0),
+                "policy_scenario_bucket": str(item.get("policy_scenario_bucket", "") or ""),
+                "policy_sedimentation": dict(item.get("policy_sedimentation", {})) if isinstance(item.get("policy_sedimentation", {}), dict) else {},
+            }
+            for item in market
+        ]
+        return {
+            "status": "ok",
+            "thread_key": normalized_thread_key,
+            "chat_name": normalized_chat_name,
+            "channel": channel,
+            "query": str(query or ""),
+            "stage21": stage21,
+            "selected_action": selected,
+            "policy_influence": influence_rows,
+            "promoted_policies": list(promoted.get("promoted_policies", [])),
         }
 
     def trace_outcome_history(
@@ -4061,6 +4186,7 @@ class MemoryBridge:
             "last_counterfactual_summary": selected_prediction,
             "last_goal_alignment": goal_alignment,
             "last_identity_consistency": identity_consistency,
+            "last_stage21_policy": self._stage21_policy_trace(action_market=list(action_market), selected_action=dict(selected_action), context={"channel": channel, "thread_key": thread_key, "chat_name": chat_name}),
             "last_chapter_relevance": str(selected_action.get("chapter_relevance", "") or ""),
             "last_self_narrative_hint": str(selected_action.get("self_narrative_hint", "") or ""),
         }

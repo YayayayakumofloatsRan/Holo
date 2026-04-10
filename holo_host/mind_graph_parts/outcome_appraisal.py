@@ -251,6 +251,23 @@ def record_outcome_appraisal(
         metadata={**evidence_metadata, "predicted_outcome": predicted_outcome, "evidence_refs": evidence_refs},
         created_at=now,
     )
+    policy_sediment_update: dict[str, Any] = {}
+    if hasattr(self, "upsert_policy_candidate_from_calibration"):
+        policy_sediment_update = self.upsert_policy_candidate_from_calibration(
+            channel=channel,
+            thread_key=normalized_thread_key,
+            chat_name=chat_name,
+            action_type=str(action_type or "").strip(),
+            calibration_row=calibration_row,
+            calibration_bucket=calibration_bucket,
+            metadata={
+                **evidence_metadata,
+                "source": "outcome_appraisal",
+                "evidence_refs": evidence_refs,
+                "relationship_tension": max(float(observed_risk or 0.0), float(evidence_metadata.get("relationship_pressure", 0.0) or 0.0)),
+                "correction_rate": min(1.0, correction_count / 3.0),
+            },
+        )
     world["response_expectations"] = {
         "reply_likelihood": self.metric_state(contact_model.get("reply_likelihood", WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"]), default=WORLD_CONTACT_MODEL_DEFAULTS["reply_likelihood"], confidence=0.74, evidence_refs=evidence_refs + ["response_expectations:reply_likelihood"], updated_at=now, updated_by="outcome_appraisal", decay_policy="interaction_window"),
         "delay_tolerance": self.metric_state(contact_model.get("delay_tolerance", WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"]), default=WORLD_CONTACT_MODEL_DEFAULTS["delay_tolerance"], confidence=0.68, evidence_refs=evidence_refs + ["response_expectations:delay_tolerance"], updated_at=now, updated_by="outcome_appraisal", decay_policy="interaction_window"),
@@ -273,7 +290,7 @@ def record_outcome_appraisal(
     world["recent_outcome_history"] = recent_outcome_history
     world["recent_prediction_errors"] = recent_prediction_errors
     world["action_calibration_summary"] = action_calibration_summary
-    world["last_post_outcome_calibration"] = {"action_type": str(action_type or "").strip(), "action_ref": str(action_ref or "").strip(), "was_rewarding": outcome["was_rewarding"], "was_ignored": outcome["was_ignored"], "relational_delta": outcome["relational_delta"], "identity_delta": outcome["identity_delta"], "predicted_outcome": predicted_outcome, "realized_outcome": realized_outcome, "prediction_error": prediction_error, "calibration_bucket": calibration_bucket, "calibration_stats": {"support_count": int(calibration_row.get("support_count", 0) or 0), "recent_support_count": float(calibration_row.get("recent_support_count", 0.0) or 0.0), "confidence": float(calibration_row.get("confidence", 0.0) or 0.0), "response_quality_mae": float(calibration_row.get("response_quality_mae", 0.0) or 0.0), "relational_delta_mae": float(calibration_row.get("relational_delta_mae", 0.0) or 0.0), "risk_mae": float(calibration_row.get("risk_mae", 0.0) or 0.0)}, "evidence_refs": evidence_refs[:6], "at": now}
+    world["last_post_outcome_calibration"] = {"action_type": str(action_type or "").strip(), "action_ref": str(action_ref or "").strip(), "was_rewarding": outcome["was_rewarding"], "was_ignored": outcome["was_ignored"], "relational_delta": outcome["relational_delta"], "identity_delta": outcome["identity_delta"], "predicted_outcome": predicted_outcome, "realized_outcome": realized_outcome, "prediction_error": prediction_error, "calibration_bucket": calibration_bucket, "calibration_stats": {"support_count": int(calibration_row.get("support_count", 0) or 0), "recent_support_count": float(calibration_row.get("recent_support_count", 0.0) or 0.0), "confidence": float(calibration_row.get("confidence", 0.0) or 0.0), "response_quality_mae": float(calibration_row.get("response_quality_mae", 0.0) or 0.0), "relational_delta_mae": float(calibration_row.get("relational_delta_mae", 0.0) or 0.0), "risk_mae": float(calibration_row.get("risk_mae", 0.0) or 0.0)}, "policy_sediment_update": policy_sediment_update, "evidence_refs": evidence_refs[:6], "at": now}
     subject_update = self.update_subject_state(channel=channel, thread_key=normalized_thread_key, chat_name=chat_name or normalized_thread_key, affect_state=affect, drive_state=drive, world_state=world, outcome_memory=outcome, metadata={"last_outcome_action": str(action_type or "").strip()}, note=f"outcome_appraisal:{action_type}", source="outcome_appraisal")
     current_autobio = self.autobiographical_state()
     current_goal = self.goal_state()
@@ -321,4 +338,4 @@ def record_outcome_appraisal(
                 )
             )
         temporal_update = {"status": "ok", "updates": updates, "updated": sum(int(item.get("updated", 0) or 0) for item in updates)}
-    return {"status": "ok", "outcome_appraisal_id": int(row_id or 0), "thread_key": normalized_thread_key, "chat_name": str(chat_name or normalized_thread_key), "channel": channel, "action_type": str(action_type or "").strip(), "action_ref": str(action_ref or "").strip(), "outcome": outcome, "calibration_bucket": calibration_bucket, "calibration_row": calibration_row, "subject_update": subject_update, "autobiographical_update": autobiographical_update, "goal_update": goal_update, "temporal_update": temporal_update}
+    return {"status": "ok", "outcome_appraisal_id": int(row_id or 0), "thread_key": normalized_thread_key, "chat_name": str(chat_name or normalized_thread_key), "channel": channel, "action_type": str(action_type or "").strip(), "action_ref": str(action_ref or "").strip(), "outcome": outcome, "calibration_bucket": calibration_bucket, "calibration_row": calibration_row, "policy_sediment_update": policy_sediment_update, "subject_update": subject_update, "autobiographical_update": autobiographical_update, "goal_update": goal_update, "temporal_update": temporal_update}
