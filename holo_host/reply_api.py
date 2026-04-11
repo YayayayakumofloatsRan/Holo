@@ -48,6 +48,7 @@ from .reply_service_parts.acceptance import (
     accept_stage22 as _accept_stage22,
     accept_stage23 as _accept_stage23,
     accept_stage24 as _accept_stage24,
+    accept_stage25 as _accept_stage25,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -505,6 +506,16 @@ class HoloReplyService:
             activation_cache_enabled=config.memory.activation_cache_enabled,
             private_memory_sync_enabled=config.memory.private_memory_sync_enabled,
             private_memory_repo_path=config.memory.private_memory_repo_path,
+            stage25_max_hot_threads_per_cycle=config.memory.stage25_max_hot_threads_per_cycle,
+            stage25_per_thread_pulse_budget=config.memory.stage25_per_thread_pulse_budget,
+            stage25_skip_cold_without_pressure=config.memory.stage25_skip_cold_without_pressure,
+            stage25_max_dense_working_set_threads=config.memory.stage25_max_dense_working_set_threads,
+            stage25_cooldown_seconds_by_stream={
+                "maintenance_stream": config.memory.stage25_maintenance_stream_cooldown_seconds,
+                "association_stream": config.memory.stage25_association_stream_cooldown_seconds,
+                "social_stream": config.memory.stage25_social_stream_cooldown_seconds,
+                "deep_dream_cycle": config.memory.stage25_deep_dream_cycle_cooldown_seconds,
+            },
             runner=self.runner,
         )
         self.policy = policy or AutonomyPolicy(config)
@@ -1473,6 +1484,24 @@ class HoloReplyService:
         artifact_dir: str | None = None,
     ) -> dict[str, Any]:
         return _accept_stage24(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def accept_stage25(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage25(
             self,
             thread_key=thread_key,
             chat_name=chat_name,
@@ -3475,6 +3504,30 @@ class HoloReplyService:
     ) -> dict[str, Any]:
         return self.memory.trace_scene_compression(thread_key=thread_key, chat_name=chat_name, channel=channel)
 
+    def show_continuity_budget(
+        self,
+        *,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.show_continuity_budget(channel=channel)
+
+    def show_dense_working_set(
+        self,
+        *,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.show_dense_working_set(channel=channel)
+
+    def trace_thread_pulse(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        return self.memory.trace_thread_pulse(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+
     def trace_reflex_routing(
         self,
         *,
@@ -4876,6 +4929,228 @@ class HoloReplyService:
             },
             "action_market": action_market,
             "reloaded_state": reloaded_state,
+        }
+
+    def _accept_stage25_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        requested_chat_name = str(chat_name or "Nemoqi").strip()
+        requested_thread_key = str(thread_key or requested_chat_name).strip()
+        if normalized_channel == "wechat":
+            requested_thread_key = self._stage22_normalize_wechat_thread(requested_thread_key, requested_chat_name)
+        stage24_report = self.accept_stage24(
+            thread_key=requested_thread_key,
+            chat_name=requested_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        run_id = stable_digest(requested_thread_key, requested_chat_name, utc_now(), "stage25")[:12]
+        probe_chat_name = f"{requested_chat_name}-stage25-{run_id}"
+        probe_thread_key = f"wechat:{probe_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:{run_id}"
+        probe_text = "still here?"
+        self.memory.rag.archive_turn(
+            "stage25 dense continuity seed",
+            "stage25 should keep this hot thread warm between turns without deeper recall",
+            source="accept_stage25.seed",
+            tags=["wechat", "stage25"],
+            turn_id=f"accept-stage25-{run_id}",
+            metadata={"channel": normalized_channel, "thread_key": probe_thread_key, "chat_name": probe_chat_name},
+        )
+        sync_report = self.memory.graph.sync_thread(channel=normalized_channel, thread_key=probe_thread_key, chat_name=probe_chat_name)
+        inspect = self.memory.graph.inspect_graph(thread_key=probe_thread_key, chat_name=probe_chat_name, channel=normalized_channel, limit=6)
+        archive_node = next((dict(node) for node in inspect.get("nodes", []) if str(node.get("source_store", "")) == "archive"), {})
+        inbound_state = self.memory.update_active_thread_state(
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            direction="inbound",
+            text="we can keep the thread warm for a little while",
+            message_id=f"accept-stage25-inbound-{run_id}",
+            event_row_id=2501,
+            metadata={"source": "accept-stage25", "_stage24_force_scene_hint": True},
+        )
+        stream_reports = [
+            self.memory.record_stream_run(
+                stream_name,
+                status="ok",
+                note="stage25_acceptance",
+                payload={
+                    "thoughts": [
+                        {
+                            "channel": normalized_channel,
+                            "thread_key": probe_thread_key,
+                            "chat_name": probe_chat_name,
+                            "motif": f"stage25_{stream_name}",
+                            "source_archive_id": str(archive_node.get("source_id", archive_node.get("id", "")) or ""),
+                        }
+                    ],
+                    "selected_memory_ids": [str(archive_node.get("source_id", archive_node.get("id", "")) or "")],
+                },
+            )
+            for stream_name in ("association_stream", "social_stream")
+        ]
+        dense_before = self.show_dense_working_set(channel=normalized_channel)
+        budget_diag = self.show_continuity_budget(channel=normalized_channel)
+        pulse_trace = self.trace_thread_pulse(
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            limit=8,
+        )
+        with self.memory.graph._lock:
+            self.memory.graph.conn.execute(
+                "UPDATE attention_frontier SET stale_after = ? WHERE channel = ? AND canonical_thread_key = ?",
+                ("2000-01-01T00:00:00Z", normalized_channel, probe_thread_key),
+            )
+            self.memory.graph.conn.execute(
+                "DELETE FROM active_thread_state WHERE channel = ? AND thread_key = ?",
+                (normalized_channel, probe_thread_key),
+            )
+            self.memory.graph.conn.commit()
+        warm_context = {
+            "channel": normalized_channel,
+            "thread_key": probe_thread_key,
+            "incoming_thread_key": probe_thread_key,
+            "message_id": f"accept-stage25-warm-{run_id}",
+            "chat_name": probe_chat_name,
+            "sender": str(sender or requested_chat_name),
+            "attachments": [],
+            "recent_history": [
+                {"direction": "inbound", "body_text": "old line one"},
+                {"direction": "outbound", "body_text": "old line two"},
+                {"direction": "inbound", "body_text": "old line three"},
+            ],
+            "event_id": "2502",
+        }
+        warm_packet = self.memory.sidecar_packet(probe_text, context=warm_context)
+        warm_turn_context = TurnContext(
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            sender=str(sender or requested_chat_name),
+            user_text=probe_text,
+            sidecar=warm_packet,
+            mind_packet=warm_packet,
+            attention_state=build_attention_state(probe_text, channel=normalized_channel, metadata={}),
+            emotion_state=dict(warm_packet.get("state", {}).get("emotion_state", {})),
+            history=list(warm_context["recent_history"]),
+            metadata={},
+            capability_context={},
+        )
+        warm_turn_plan = build_turn_plan(warm_turn_context, self.config)
+        warm_prompt = render_chat_prompt(warm_turn_context, turn_plan=warm_turn_plan)
+        explicit_packet = self.memory.sidecar_packet(
+            "remember previous history",
+            context={**warm_context, "message_id": f"accept-stage25-recall-{run_id}", "event_id": "2503"},
+        )
+        reloaded_dense = {}
+        reopened = MemoryBridge(
+            self.config.runtime.repo_root,
+            top_k=self.config.memory.prompt_top_k,
+            graph_db_path=self.config.memory.mind_graph_db_path,
+            stream_cadences=stream_cadences_from_config(self.config),
+            graph_led_reply=self.config.memory.graph_led_reply,
+            graph_fallback=self.config.memory.graph_fallback,
+            deep_recall_on_memory_queries=self.config.memory.deep_recall_on_memory_queries,
+            active_wechat_history_enabled=self.config.memory.active_wechat_history_enabled,
+            vector_backend=self.config.memory.vector_backend,
+            milvus_uri=self.config.memory.milvus_uri,
+            milvus_collection_prefix=self.config.memory.milvus_collection_prefix,
+            activation_cache_enabled=self.config.memory.activation_cache_enabled,
+            private_memory_sync_enabled=self.config.memory.private_memory_sync_enabled,
+            private_memory_repo_path=self.config.memory.private_memory_repo_path,
+            stage25_max_hot_threads_per_cycle=self.config.memory.stage25_max_hot_threads_per_cycle,
+            stage25_per_thread_pulse_budget=self.config.memory.stage25_per_thread_pulse_budget,
+            stage25_skip_cold_without_pressure=self.config.memory.stage25_skip_cold_without_pressure,
+            stage25_max_dense_working_set_threads=self.config.memory.stage25_max_dense_working_set_threads,
+            stage25_cooldown_seconds_by_stream={
+                "maintenance_stream": self.config.memory.stage25_maintenance_stream_cooldown_seconds,
+                "association_stream": self.config.memory.stage25_association_stream_cooldown_seconds,
+                "social_stream": self.config.memory.stage25_social_stream_cooldown_seconds,
+                "deep_dream_cycle": self.config.memory.stage25_deep_dream_cycle_cooldown_seconds,
+            },
+            rag=self.memory.rag,
+        )
+        try:
+            reloaded_dense = reopened.show_dense_working_set(channel=normalized_channel)
+        finally:
+            reopened.activation.close()
+            reopened.graph.close()
+
+        dense_entries = list(dict(dense_before.get("dense_working_set", {})).get("top_hot_threads", []))
+        pulse_traces = list(pulse_trace.get("thread_pulse_trace", []))
+        checks = {
+            "stage24_acceptance_green": str(stage24_report.get("status", "")) == "pass",
+            "allowed_streams_only": all(
+                str(report.get("stream_name", "") or "") in {"maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"}
+                for report in stream_reports
+            ),
+            "dense_working_set_persisted_and_bounded": bool(reloaded_dense.get("present", False))
+            and int(reloaded_dense.get("entry_count", 0) or 0) <= int(self.config.memory.stage25_max_dense_working_set_threads)
+            and any(str(item.get("thread_key", "") or "") == probe_thread_key for item in list(dict(reloaded_dense.get("dense_working_set", {})).get("top_hot_threads", []))),
+            "pulse_trace_is_inspectable": bool(pulse_traces)
+            and all(str(item.get("stream_name", "") or "") in {"maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"} for item in pulse_traces),
+            "hot_thread_reenters_from_dense_before_deeper_recall": str(warm_packet.get("memory_route", "") or "") == "active_thread"
+            and str(warm_packet.get("retrieval_mode", "") or "") == "active-thread-fast"
+            and bool(dict(warm_packet.get("stage25", {})).get("working_set_used_for_thread", False))
+            and not bool(dict(warm_packet.get("stage19", {})).get("frontier_used_for_thread", False)),
+            "ordinary_turn_remains_history_light": int(warm_turn_context.metadata.get("history_lines_in_prompt", 0) or 0) <= 1
+            and "old line two" not in warm_prompt,
+            "explicit_memory_query_still_escalates": str(explicit_packet.get("tier", "")).strip() in {"recall", "deep_recall"}
+            and str(explicit_packet.get("recall_reason", "")).startswith("stage17:"),
+            "continuity_budget_visible": bool(budget_diag.get("configured_budget")) and bool(budget_diag.get("current_budget")),
+            "dense_snapshot_shape_visible": all(
+                key in dict(dense_before.get("dense_working_set", {}))
+                for key in (
+                    "top_hot_threads",
+                    "current_self_pose",
+                    "pending_interpersonal_pressure",
+                    "open_loops_likely_to_reenter",
+                    "budget",
+                    "last_stream_name",
+                    "updated_at",
+                )
+            ) and bool(dense_entries),
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "dense-continuity-scheduler-and-working-set-stage25",
+            "checks": checks,
+            "thread_key": requested_thread_key,
+            "chat_name": requested_chat_name,
+            "channel": normalized_channel,
+            "probe_thread_key": probe_thread_key,
+            "stage24": {"status": stage24_report.get("status"), "checks": stage24_report.get("checks", {})},
+            "sync": sync_report,
+            "stream_reports": stream_reports,
+            "continuity_budget": budget_diag,
+            "dense_working_set": dense_before,
+            "thread_pulse": pulse_trace,
+            "warm_packet": {
+                "tier": warm_packet.get("tier"),
+                "memory_route": warm_packet.get("memory_route"),
+                "retrieval_mode": warm_packet.get("retrieval_mode"),
+                "stage19": dict(warm_packet.get("stage19", {})),
+                "stage24": dict(warm_packet.get("stage24", {})),
+                "stage25": dict(warm_packet.get("stage25", {})),
+                "history_lines_in_prompt": int(warm_turn_context.metadata.get("history_lines_in_prompt", 0) or 0),
+                "prompt_excerpt": compact_text(warm_prompt, 360),
+            },
+            "explicit_recall_probe": {
+                "tier": explicit_packet.get("tier"),
+                "recall_reason": explicit_packet.get("recall_reason"),
+                "memory_route": explicit_packet.get("memory_route"),
+            },
+            "reloaded_dense_working_set": reloaded_dense,
+            "inbound_state": inbound_state,
         }
 
     def initiative_status(
@@ -7798,6 +8073,30 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         thread_key=params.get("thread_key", [None])[0],
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/continuity-budget":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_continuity_budget(
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/dense-working-set":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_dense_working_set(
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/thread-pulse":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_thread_pulse(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["12"])[0]),
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return

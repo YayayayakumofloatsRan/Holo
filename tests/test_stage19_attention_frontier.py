@@ -156,6 +156,44 @@ class Stage19AttentionFrontierTests(unittest.TestCase):
                 bridge.activation.close()
                 bridge.graph.close()
 
+    def test_dense_continuity_keeps_hot_thread_available_after_frontier_decay(self) -> None:
+        with TempMemoryRepo() as temp:
+            bridge = self._bridge(temp)
+            try:
+                seeded = self._seed_frontier(bridge, suffix="dense")
+                bridge.update_active_thread_state(
+                    channel="wechat",
+                    thread_key=seeded["thread_key"],
+                    chat_name=seeded["chat_name"],
+                    direction="inbound",
+                    text="keep the thread warm after the pause",
+                    message_id="stage19-dense-message",
+                    event_row_id=1902,
+                )
+                with bridge.graph._lock:
+                    bridge.graph.conn.execute(
+                        "UPDATE attention_frontier SET stale_after = ? WHERE channel = ? AND canonical_thread_key = ?",
+                        ("2000-01-01T00:00:00Z", "wechat", seeded["thread_key"]),
+                    )
+                    bridge.graph.conn.execute(
+                        "DELETE FROM active_thread_state WHERE channel = ? AND thread_key = ?",
+                        ("wechat", seeded["thread_key"]),
+                    )
+                    bridge.graph.conn.commit()
+
+                with mock.patch.object(bridge, "_hybrid_trace", side_effect=AssertionError("hybrid recall should not run")):
+                    packet = bridge.sidecar_packet(
+                        "still here?",
+                        context={"channel": "wechat", "thread_key": seeded["thread_key"], "chat_name": seeded["chat_name"], "attachments": []},
+                    )
+
+                self.assertEqual(packet["memory_route"], "active_thread")
+                self.assertTrue(packet["stage25"]["working_set_used_for_thread"])
+                self.assertFalse(packet["stage19"]["frontier_used_for_thread"])
+            finally:
+                bridge.activation.close()
+                bridge.graph.close()
+
 
 if __name__ == "__main__":
     unittest.main()

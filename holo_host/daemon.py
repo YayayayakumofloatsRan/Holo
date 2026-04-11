@@ -202,6 +202,16 @@ class HoloDaemon:
             activation_cache_enabled=config.memory.activation_cache_enabled,
             private_memory_sync_enabled=config.memory.private_memory_sync_enabled,
             private_memory_repo_path=config.memory.private_memory_repo_path,
+            stage25_max_hot_threads_per_cycle=config.memory.stage25_max_hot_threads_per_cycle,
+            stage25_per_thread_pulse_budget=config.memory.stage25_per_thread_pulse_budget,
+            stage25_skip_cold_without_pressure=config.memory.stage25_skip_cold_without_pressure,
+            stage25_max_dense_working_set_threads=config.memory.stage25_max_dense_working_set_threads,
+            stage25_cooldown_seconds_by_stream={
+                "maintenance_stream": config.memory.stage25_maintenance_stream_cooldown_seconds,
+                "association_stream": config.memory.stage25_association_stream_cooldown_seconds,
+                "social_stream": config.memory.stage25_social_stream_cooldown_seconds,
+                "deep_dream_cycle": config.memory.stage25_deep_dream_cycle_cooldown_seconds,
+            },
             runner=self.runner,
         )
         self.policy = policy or AutonomyPolicy(config)

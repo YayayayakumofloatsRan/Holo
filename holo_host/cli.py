@@ -894,6 +894,93 @@ def _scene_compression_payload(
             service.memory.graph.close()
 
 
+def _continuity_budget_payload(
+    config_path: str | None,
+    *,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/continuity-budget",
+        params={"channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_continuity_budget(channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _dense_working_set_payload(
+    config_path: str | None,
+    *,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/dense-working-set",
+        params={"channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_dense_working_set(channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _thread_pulse_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/thread-pulse",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_thread_pulse(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _attention_frontier_payload(
     config_path: str | None,
     *,
@@ -4424,6 +4511,51 @@ def command_trace_scene_compression(
     return 0
 
 
+def command_show_continuity_budget(
+    config_path: str | None,
+    *,
+    channel: str,
+) -> int:
+    payload, _transport = _continuity_budget_payload(
+        config_path,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_dense_working_set(
+    config_path: str | None,
+    *,
+    channel: str,
+) -> int:
+    payload, _transport = _dense_working_set_payload(
+        config_path,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_thread_pulse(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _thread_pulse_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_attention_frontier(
     config_path: str | None,
     *,
@@ -6192,6 +6324,53 @@ def _accept_stage24_payload(
             service.memory.graph.close()
 
 
+def _accept_stage25_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage25",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage25(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -6433,6 +6612,27 @@ def command_accept_stage24(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage24_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage25(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage25_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -7630,6 +7830,15 @@ def main(argv: list[str] | None = None) -> int:
     scene_compression_parser.add_argument("--thread-key", default=None)
     scene_compression_parser.add_argument("--chat-name", default=None)
     scene_compression_parser.add_argument("--channel", default="wechat")
+    continuity_budget_parser = subparsers.add_parser("show-continuity-budget", help="Show the Stage-25 dense continuity budget")
+    continuity_budget_parser.add_argument("--channel", default="wechat")
+    dense_working_set_parser = subparsers.add_parser("show-dense-working-set", help="Show the Stage-25 dense working set")
+    dense_working_set_parser.add_argument("--channel", default="wechat")
+    thread_pulse_parser = subparsers.add_parser("trace-thread-pulse", help="Show Stage-25 thread pulse decisions for one thread")
+    thread_pulse_parser.add_argument("--thread-key", default=None)
+    thread_pulse_parser.add_argument("--chat-name", default=None)
+    thread_pulse_parser.add_argument("--channel", default="wechat")
+    thread_pulse_parser.add_argument("--limit", type=int, default=12)
     attention_frontier_parser = subparsers.add_parser("show-attention-frontier", help="Show Stage-19 bounded attention frontier entries")
     attention_frontier_parser.add_argument("--channel", default=None)
     attention_frontier_parser.add_argument("--limit", type=int, default=8)
@@ -8011,6 +8220,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage24_parser.add_argument("--channel", default="wechat")
     accept_stage24_parser.add_argument("--sender", default=None)
     accept_stage24_parser.add_argument("--artifact-dir", default=None)
+    accept_stage25_parser = subparsers.add_parser("accept-stage25", help="Run the Stage-25 dense continuity scheduler and working set gate")
+    accept_stage25_parser.add_argument("--thread-key", default=None)
+    accept_stage25_parser.add_argument("--chat-name", default=None)
+    accept_stage25_parser.add_argument("--channel", default="wechat")
+    accept_stage25_parser.add_argument("--sender", default=None)
+    accept_stage25_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -8229,6 +8444,24 @@ def main(argv: list[str] | None = None) -> int:
             thread_key=args.thread_key,
             chat_name=args.chat_name,
             channel=args.channel,
+        )
+    if args.command == "show-continuity-budget":
+        return command_show_continuity_budget(
+            args.config,
+            channel=args.channel,
+        )
+    if args.command == "show-dense-working-set":
+        return command_show_dense_working_set(
+            args.config,
+            channel=args.channel,
+        )
+    if args.command == "trace-thread-pulse":
+        return command_trace_thread_pulse(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
         )
     if args.command == "show-attention-frontier":
         return command_show_attention_frontier(
@@ -8776,6 +9009,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage24":
         return command_accept_stage24(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage25":
+        return command_accept_stage25(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

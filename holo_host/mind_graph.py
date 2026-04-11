@@ -258,6 +258,9 @@ ATTENTION_FRONTIER_HEAT_DELTA = {
     "social_stream": 0.24,
     "deep_dream_cycle": 0.2,
 }
+DENSE_CONTINUITY_ALLOWED_STREAMS = set(ATTENTION_FRONTIER_ALLOWED_STREAMS)
+DENSE_WORKING_SET_MAX_ENTRIES = 8
+THREAD_PULSE_TRACE_KEEP_PER_THREAD = 12
 
 
 def _tokenize(text: str) -> list[str]:
@@ -818,6 +821,27 @@ class MindGraph:
             ON temporal_subject_state(channel, thread_key, status, due_at, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_temporal_subject_state_due
             ON temporal_subject_state(status, due_at, revisit_after, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS dense_working_set (
+                channel TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                last_stream_name TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS thread_pulse_trace (
+                id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL DEFAULT '',
+                canonical_thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                stream_name TEXT NOT NULL DEFAULT '',
+                pulse_verdict TEXT NOT NULL DEFAULT '',
+                pulse_score REAL NOT NULL DEFAULT 0.0,
+                budget_remaining INTEGER NOT NULL DEFAULT 0,
+                reasons_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_thread_pulse_trace_thread
+            ON thread_pulse_trace(channel, canonical_thread_key, created_at DESC);
             CREATE TABLE IF NOT EXISTS mind_runs (
                 id INTEGER PRIMARY KEY,
                 run_type TEXT NOT NULL,
@@ -1312,6 +1336,113 @@ class MindGraph:
         payload["response_sketch"] = compact_text(str(current.get("response_sketch", "") or ""), 140)
         payload["scene_confidence"] = self._clamp(current.get("scene_confidence", 0.0), default=0.0)
         payload["freshness_at"] = str(current.get("freshness_at", "") or now or "")
+        return payload
+
+    @staticmethod
+    def _default_dense_hot_thread(*, now: str = "") -> dict[str, Any]:
+        return {
+            "thread_key": "",
+            "chat_name": "",
+            "thread_heat": 0.0,
+            "thread_warmth": "cold",
+            "reentry_priority": 0.0,
+            "pending_open_loop_count": 0,
+            "pending_interpersonal_pressure": 0.0,
+            "reentry_hint": "",
+            "last_pulse_at": "",
+            "cooldown_until": "",
+            "pulse_count": 0,
+            "sources": [],
+        }
+
+    def _normalize_dense_hot_thread(self, raw: Any, *, now: str = "") -> dict[str, Any]:
+        payload = self._default_dense_hot_thread(now=now)
+        current = dict(raw) if isinstance(raw, dict) else _safe_json_dict(raw)
+        payload["thread_key"] = str(current.get("thread_key", "") or "")
+        payload["chat_name"] = compact_text(str(current.get("chat_name", "") or ""), 80)
+        payload["thread_heat"] = self._clamp(current.get("thread_heat", 0.0), default=0.0)
+        warmth = str(current.get("thread_warmth", "cold") or "cold").strip().lower()
+        payload["thread_warmth"] = warmth if warmth in {"cold", "cool", "warm", "hot"} else "cold"
+        payload["reentry_priority"] = self._clamp(current.get("reentry_priority", 0.0), default=0.0)
+        payload["pending_open_loop_count"] = max(0, min(8, int(current.get("pending_open_loop_count", 0) or 0)))
+        payload["pending_interpersonal_pressure"] = self._clamp(current.get("pending_interpersonal_pressure", 0.0), default=0.0)
+        payload["reentry_hint"] = compact_text(str(current.get("reentry_hint", "") or ""), 160)
+        payload["last_pulse_at"] = str(current.get("last_pulse_at", "") or "")
+        payload["cooldown_until"] = str(current.get("cooldown_until", "") or "")
+        payload["pulse_count"] = max(0, int(current.get("pulse_count", 0) or 0))
+        payload["sources"] = _dedupe_strings(
+            compact_text(str(item).strip(), 64)
+            for item in current.get("sources", [])
+            if str(item).strip()
+        )[:4]
+        return payload
+
+    def _default_dense_working_set(self, *, channel: str = "", now: str = "") -> dict[str, Any]:
+        return {
+            "channel": str(channel or ""),
+            "top_hot_threads": [],
+            "current_self_pose": "",
+            "pending_interpersonal_pressure": [],
+            "open_loops_likely_to_reenter": [],
+            "budget": {
+                "max_hot_threads_per_cycle": 0,
+                "per_thread_pulse_budget": 0,
+                "skip_cold_without_pressure": True,
+                "max_dense_working_set_threads": DENSE_WORKING_SET_MAX_ENTRIES,
+                "cooldown_seconds_by_stream": {},
+                "considered_threads": 0,
+                "pulsed_this_cycle": 0,
+            },
+            "last_stream_name": "",
+            "updated_at": str(now or ""),
+        }
+
+    def _normalize_dense_working_set(self, raw: Any, *, channel: str = "", now: str = "") -> dict[str, Any]:
+        payload = self._default_dense_working_set(channel=channel, now=now)
+        current = dict(raw) if isinstance(raw, dict) else _safe_json_dict(raw)
+        payload["channel"] = str(current.get("channel", channel) or channel)
+        payload["top_hot_threads"] = [
+            self._normalize_dense_hot_thread(item, now=now)
+            for item in list(current.get("top_hot_threads", []))
+            if isinstance(item, dict)
+        ][:DENSE_WORKING_SET_MAX_ENTRIES]
+        payload["current_self_pose"] = compact_text(str(current.get("current_self_pose", "") or ""), 180)
+        payload["pending_interpersonal_pressure"] = [
+            {
+                "thread_key": str(item.get("thread_key", "") or ""),
+                "chat_name": compact_text(str(item.get("chat_name", "") or ""), 80),
+                "pressure": self._clamp(item.get("pressure", item.get("pending_interpersonal_pressure", 0.0)), default=0.0),
+                "hint": compact_text(str(item.get("hint", item.get("reentry_hint", "") or "") or ""), 140),
+            }
+            for item in list(current.get("pending_interpersonal_pressure", []))
+            if isinstance(item, dict)
+        ][:4]
+        payload["open_loops_likely_to_reenter"] = [
+            {
+                "thread_key": str(item.get("thread_key", "") or ""),
+                "chat_name": compact_text(str(item.get("chat_name", "") or ""), 80),
+                "pending_open_loop_count": max(0, min(8, int(item.get("pending_open_loop_count", 0) or 0))),
+                "resume_cue": compact_text(str(item.get("resume_cue", item.get("reentry_hint", "") or "") or ""), 140),
+            }
+            for item in list(current.get("open_loops_likely_to_reenter", []))
+            if isinstance(item, dict)
+        ][:4]
+        budget = dict(current.get("budget", {})) if isinstance(current.get("budget", {}), dict) else {}
+        payload["budget"] = {
+            "max_hot_threads_per_cycle": max(0, int(budget.get("max_hot_threads_per_cycle", 0) or 0)),
+            "per_thread_pulse_budget": max(0, int(budget.get("per_thread_pulse_budget", 0) or 0)),
+            "skip_cold_without_pressure": bool(budget.get("skip_cold_without_pressure", True)),
+            "max_dense_working_set_threads": max(1, int(budget.get("max_dense_working_set_threads", DENSE_WORKING_SET_MAX_ENTRIES) or DENSE_WORKING_SET_MAX_ENTRIES)),
+            "cooldown_seconds_by_stream": {
+                str(key).strip(): max(1, int(value))
+                for key, value in dict(budget.get("cooldown_seconds_by_stream", {})).items()
+                if str(key).strip()
+            },
+            "considered_threads": max(0, int(budget.get("considered_threads", 0) or 0)),
+            "pulsed_this_cycle": max(0, int(budget.get("pulsed_this_cycle", 0) or 0)),
+        }
+        payload["last_stream_name"] = str(current.get("last_stream_name", "") or "")
+        payload["updated_at"] = str(current.get("updated_at", "") or now or "")
         return payload
 
     def _apply_predictive_aliases(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2347,6 +2478,480 @@ class MindGraph:
             "stale_after": str(item.get("stale_after", "") or ""),
             "last_stream_touch_at": str(item.get("last_stream_touch_at", "") or ""),
             "frontier_item": item,
+        }
+
+    def _dense_working_set_from_row(self, row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return self._default_dense_working_set()
+        return self._normalize_dense_working_set(
+            row.get("snapshot_json", "{}"),
+            channel=str(row.get("channel", "") or ""),
+            now=str(row.get("updated_at", "") or ""),
+        )
+
+    def _prune_thread_pulse_trace_locked(self, *, channel: str, canonical_thread_key: str) -> None:
+        rows = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT id
+                FROM thread_pulse_trace
+                WHERE channel = ? AND canonical_thread_key = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (channel, canonical_thread_key),
+            ).fetchall()
+        ]
+        for row in rows[THREAD_PULSE_TRACE_KEEP_PER_THREAD:]:
+            self.conn.execute("DELETE FROM thread_pulse_trace WHERE id = ?", (int(row["id"]),))
+
+    def _record_thread_pulse_trace_locked(
+        self,
+        *,
+        channel: str,
+        canonical_thread_key: str,
+        chat_name: str,
+        stream_name: str,
+        pulse_verdict: str,
+        pulse_score: float,
+        budget_remaining: int,
+        reasons: Iterable[str],
+        metadata: dict[str, Any],
+        now: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO thread_pulse_trace(
+                channel, canonical_thread_key, chat_name, stream_name, pulse_verdict, pulse_score,
+                budget_remaining, reasons_json, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                channel,
+                canonical_thread_key,
+                str(chat_name or ""),
+                stream_name,
+                pulse_verdict,
+                self._clamp(pulse_score, default=0.0),
+                max(0, int(budget_remaining)),
+                json.dumps(_dedupe_strings([str(item).strip() for item in reasons if str(item).strip()])[:6], ensure_ascii=False, sort_keys=True),
+                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                now,
+            ),
+        )
+        self._prune_thread_pulse_trace_locked(channel=channel, canonical_thread_key=canonical_thread_key)
+
+    def dense_working_set(self, *, channel: str = "wechat") -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM dense_working_set WHERE channel = ?",
+                (normalized_channel,),
+            ).fetchone()
+        snapshot = self._dense_working_set_from_row(dict(row) if row else None)
+        return {
+            "status": "ok",
+            "channel": normalized_channel,
+            "present": bool(snapshot.get("top_hot_threads") or snapshot.get("updated_at")),
+            "entry_count": len(list(snapshot.get("top_hot_threads", []))),
+            "dense_working_set": snapshot,
+        }
+
+    def dense_working_set_thread_hint(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        canonical_thread_key = _normalize_thread_key(
+            normalized_channel,
+            str(thread_key or "").strip(),
+            chat_name=str(chat_name or "").strip(),
+        )
+        snapshot = self.dense_working_set(channel=normalized_channel).get("dense_working_set", {})
+        entries = [self._normalize_dense_hot_thread(item) for item in list(snapshot.get("top_hot_threads", [])) if isinstance(item, dict)]
+        entry = next((item for item in entries if str(item.get("thread_key", "") or "") == canonical_thread_key), {})
+        budget = dict(snapshot.get("budget", {})) if isinstance(snapshot.get("budget", {}), dict) else {}
+        return {
+            "status": "ok",
+            "channel": normalized_channel,
+            "thread_key": canonical_thread_key,
+            "chat_name": str(entry.get("chat_name", chat_name or "") or chat_name or ""),
+            "present": bool(entry),
+            "entry": entry,
+            "budget": budget,
+            "snapshot_updated_at": str(snapshot.get("updated_at", "") or ""),
+            "current_self_pose": str(snapshot.get("current_self_pose", "") or ""),
+        }
+
+    def trace_thread_pulse(
+        self,
+        *,
+        channel: str = "wechat",
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        limit: int = THREAD_PULSE_TRACE_KEEP_PER_THREAD,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        canonical_thread_key = _normalize_thread_key(
+            normalized_channel,
+            str(thread_key or "").strip(),
+            chat_name=str(chat_name or "").strip(),
+        )
+        with self._lock:
+            rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    """
+                    SELECT *
+                    FROM thread_pulse_trace
+                    WHERE channel = ? AND canonical_thread_key = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (normalized_channel, canonical_thread_key, max(1, int(limit))),
+                ).fetchall()
+            ]
+        traces = [
+            {
+                "channel": normalized_channel,
+                "thread_key": canonical_thread_key,
+                "chat_name": str(row.get("chat_name", "") or ""),
+                "stream_name": str(row.get("stream_name", "") or ""),
+                "pulse_verdict": str(row.get("pulse_verdict", "") or ""),
+                "pulse_score": self._clamp(row.get("pulse_score", 0.0), default=0.0),
+                "budget_remaining": max(0, int(row.get("budget_remaining", 0) or 0)),
+                "reasons": list(_safe_json_list(row.get("reasons_json", "[]")))[:6],
+                "metadata": _safe_json_dict(row.get("metadata_json", "{}")),
+                "created_at": str(row.get("created_at", "") or ""),
+            }
+            for row in rows
+        ]
+        return {
+            "status": "ok",
+            "channel": normalized_channel,
+            "thread_key": canonical_thread_key,
+            "chat_name": str(chat_name or (traces[0].get("chat_name", "") if traces else "") or ""),
+            "trace_count": len(traces),
+            "thread_pulse_trace": traces,
+            "dense_working_set": self.dense_working_set_thread_hint(channel=normalized_channel, thread_key=canonical_thread_key, chat_name=chat_name),
+        }
+
+    def update_dense_working_set_from_stream(
+        self,
+        stream_name: str,
+        *,
+        report: dict[str, Any] | None = None,
+        max_hot_threads_per_cycle: int = 6,
+        per_thread_pulse_budget: int = 2,
+        cooldown_seconds_by_stream: dict[str, int] | None = None,
+        skip_cold_without_pressure: bool = True,
+        max_dense_working_set_threads: int = DENSE_WORKING_SET_MAX_ENTRIES,
+    ) -> dict[str, Any]:
+        normalized_stream_name = str(stream_name or "").strip()
+        if normalized_stream_name not in DENSE_CONTINUITY_ALLOWED_STREAMS:
+            return {"status": "skipped", "reason": "unsupported_stream", "stream_name": normalized_stream_name, "snapshots": []}
+        cooldowns = {
+            "maintenance_stream": 600,
+            "association_stream": 900,
+            "social_stream": 1200,
+            "deep_dream_cycle": 3600,
+            **{str(key).strip(): max(1, int(value)) for key, value in dict(cooldown_seconds_by_stream or {}).items() if str(key).strip()},
+        }
+        max_hot_threads = max(1, int(max_hot_threads_per_cycle))
+        per_thread_budget = max(1, int(per_thread_pulse_budget))
+        max_dense_threads = max(1, int(max_dense_working_set_threads))
+        now = utc_now()
+        snapshots: list[dict[str, Any]] = []
+        with self._lock:
+            frontier_updates = [
+                dict(item)
+                for item in list(dict(report.get("influence", {})).get("frontier_updates", []))
+                if isinstance(item, dict)
+            ] if isinstance(report, dict) else []
+            candidate_channels = {
+                str(item.get("channel", "") or "").strip()
+                for item in frontier_updates
+                if str(item.get("channel", "") or "").strip()
+            }
+            if not candidate_channels:
+                candidate_channels = {
+                    str(row["channel"] or "").strip()
+                    for row in self.conn.execute("SELECT DISTINCT channel FROM attention_frontier WHERE stale_after = '' OR stale_after > ?", (now,)).fetchall()
+                    if str(row["channel"] or "").strip()
+                }
+            for normalized_channel in sorted(candidate_channels):
+                previous_row = self.conn.execute(
+                    "SELECT * FROM dense_working_set WHERE channel = ?",
+                    (normalized_channel,),
+                ).fetchone()
+                previous = self._dense_working_set_from_row(dict(previous_row) if previous_row else None)
+                previous_entries = {
+                    str(item.get("thread_key", "") or ""): self._normalize_dense_hot_thread(item, now=now)
+                    for item in list(previous.get("top_hot_threads", []))
+                    if isinstance(item, dict) and str(item.get("thread_key", "") or "").strip()
+                }
+                candidate_keys: list[tuple[str, str]] = []
+                for item in frontier_updates:
+                    if str(item.get("channel", "") or "").strip() != normalized_channel:
+                        continue
+                    key = str(item.get("canonical_thread_key", item.get("thread_key", "")) or "").strip()
+                    if key:
+                        candidate_keys.append((key, str(item.get("chat_name", "") or "")))
+                for row in self.conn.execute(
+                    """
+                    SELECT canonical_thread_key, chat_name
+                    FROM attention_frontier
+                    WHERE channel = ? AND (stale_after = '' OR stale_after > ?)
+                    ORDER BY reentry_priority DESC, thread_heat DESC, last_stream_touch_at DESC
+                    LIMIT ?
+                    """,
+                    (normalized_channel, now, max_dense_threads * 3),
+                ).fetchall():
+                    key = str(row["canonical_thread_key"] or "").strip()
+                    if key:
+                        candidate_keys.append((key, str(row["chat_name"] or "")))
+                for row in self.conn.execute(
+                    """
+                    SELECT thread_key, chat_name
+                    FROM temporal_subject_state
+                    WHERE channel = ? AND status IN ('open', 'scheduled')
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (normalized_channel, max_dense_threads * 3),
+                ).fetchall():
+                    key = str(row["thread_key"] or "").strip()
+                    if key:
+                        candidate_keys.append((key, str(row["chat_name"] or "")))
+                for row in self.conn.execute(
+                    """
+                    SELECT thread_key, chat_name
+                    FROM active_thread_state
+                    WHERE channel = ?
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (normalized_channel, max_dense_threads * 2),
+                ).fetchall():
+                    key = str(row["thread_key"] or "").strip()
+                    if key:
+                        candidate_keys.append((key, str(row["chat_name"] or "")))
+                ordered_candidates: list[tuple[str, str]] = []
+                for key, name in candidate_keys:
+                    if not key or any(existing[0] == key for existing in ordered_candidates):
+                        continue
+                    ordered_candidates.append((key, name))
+                assessments: list[dict[str, Any]] = []
+                pulsed_this_cycle = 0
+                for canonical_thread_key, fallback_chat_name in ordered_candidates[: max_dense_threads * 3]:
+                    frontier = self.attention_frontier_item(channel=normalized_channel, thread_key=canonical_thread_key, chat_name=fallback_chat_name)
+                    temporal = self.temporal_state(channel=normalized_channel, thread_key=canonical_thread_key, chat_name=fallback_chat_name)
+                    active = self.active_thread_state(channel=normalized_channel, thread_key=canonical_thread_key, chat_name=fallback_chat_name)
+                    scene = dict(active.get("scene_state", {})) if isinstance(active.get("scene_state", {}), dict) else {}
+                    previous_entry = previous_entries.get(canonical_thread_key, self._default_dense_hot_thread(now=now))
+                    chat_name = str(
+                        active.get("chat_name", "")
+                        or frontier.get("chat_name", "")
+                        or temporal.get("chat_name", "")
+                        or fallback_chat_name
+                        or canonical_thread_key
+                    )
+                    open_loop_count = len(list(temporal.get("open_loops", []))) + len(list(temporal.get("commitments", []))) + len(list(temporal.get("resume_candidates", [])))
+                    temporal_pressure = float(temporal.get("temporal_pressure", 0.0) or 0.0)
+                    latent_pressure = min(0.18, len(list(scene.get("latent_questions", []))) * 0.06)
+                    relational_pressure = 0.12 if str(scene.get("relationship_trajectory", "") or "") in {"holding_open_loop", "strained_negotiation"} else 0.0
+                    pending_pressure = self._clamp(temporal_pressure + latent_pressure + relational_pressure, default=0.0)
+                    scene_fresh_at = str(scene.get("freshness_at", "") or "")
+                    scene_recent = bool(scene_fresh_at and scene_fresh_at >= _utc_after_seconds(now, -12 * 3600))
+                    live_temporal = bool(temporal.get("items", []))
+                    has_same_thread_evidence = bool(frontier.get("present", False) or live_temporal or scene_recent)
+                    cold_without_pressure = (
+                        str(frontier.get("thread_warmth", "cold") or "cold") == "cold"
+                        and not live_temporal
+                        and not scene_recent
+                        and pending_pressure < 0.12
+                    )
+                    cooldown_until = str(previous_entry.get("cooldown_until", "") or "")
+                    on_cooldown = bool(cooldown_until and cooldown_until > now)
+                    pulse_count = max(0, int(previous_entry.get("pulse_count", 0) or 0))
+                    reentry_hint = compact_text(
+                        str(
+                            temporal.get("resume_cue", "")
+                            or dict(temporal.get("resume_candidate", {})).get("resume_cue", "")
+                            or scene.get("response_sketch", "")
+                            or frontier.get("anticipated_next_turn", "")
+                            or scene.get("shared_frame", "")
+                            or frontier.get("wake_reason", "")
+                        ),
+                        160,
+                    )
+                    thread_heat = max(float(frontier.get("thread_heat", 0.0) or 0.0), min(0.62, pulse_count * 0.16))
+                    reentry_priority = self._clamp(
+                        max(float(frontier.get("reentry_priority", 0.0) or 0.0), thread_heat + pending_pressure * 0.42 + (0.08 if scene_recent else 0.0)),
+                        default=0.0,
+                    )
+                    reasons = _dedupe_strings(
+                        [
+                            compact_text(str(frontier.get("wake_reason", "") or ""), 120),
+                            compact_text(str(dict(temporal.get("resume_candidate", {})).get("resume_cue", "") or temporal.get("resume_cue", "") or ""), 120),
+                            compact_text(str(scene.get("shared_frame", "") or ""), 120),
+                        ]
+                    )[:4]
+                    sources = _dedupe_strings(
+                        [
+                            f"stream:{normalized_stream_name}",
+                            "frontier" if bool(frontier.get("present", False)) else "",
+                            "temporal" if live_temporal else "",
+                            "scene_state" if scene_recent else "",
+                        ]
+                    )[:4]
+                    verdict = "eligible"
+                    if not has_same_thread_evidence:
+                        verdict = "skipped_no_evidence"
+                    elif skip_cold_without_pressure and cold_without_pressure:
+                        verdict = "skipped_cold"
+                    elif on_cooldown:
+                        verdict = "skipped_cooldown"
+                    elif pulse_count >= per_thread_budget:
+                        verdict = "skipped_budget"
+                    elif pulsed_this_cycle >= max_hot_threads:
+                        verdict = "carryover_budget_full"
+                    else:
+                        verdict = "pulsed"
+                        pulse_count += 1
+                        pulsed_this_cycle += 1
+                        cooldown_until = _utc_after_seconds(now, cooldowns.get(normalized_stream_name, 600))
+                    last_pulse_at = now if verdict == "pulsed" else str(previous_entry.get("last_pulse_at", "") or "")
+                    thread_warmth = str(frontier.get("thread_warmth", "cold") or "cold")
+                    if thread_warmth == "cold" and (live_temporal or scene_recent or verdict in {"pulsed", "carryover_budget_full", "skipped_cooldown"}):
+                        thread_warmth = "warm"
+                    entry = self._normalize_dense_hot_thread(
+                        {
+                            "thread_key": canonical_thread_key,
+                            "chat_name": chat_name,
+                            "thread_heat": thread_heat,
+                            "thread_warmth": thread_warmth,
+                            "reentry_priority": reentry_priority,
+                            "pending_open_loop_count": open_loop_count,
+                            "pending_interpersonal_pressure": pending_pressure,
+                            "reentry_hint": reentry_hint,
+                            "last_pulse_at": last_pulse_at,
+                            "cooldown_until": cooldown_until,
+                            "pulse_count": pulse_count,
+                            "sources": sources,
+                        },
+                        now=now,
+                    )
+                    self._record_thread_pulse_trace_locked(
+                        channel=normalized_channel,
+                        canonical_thread_key=canonical_thread_key,
+                        chat_name=chat_name,
+                        stream_name=normalized_stream_name,
+                        pulse_verdict=verdict,
+                        pulse_score=reentry_priority,
+                        budget_remaining=max(0, per_thread_budget - pulse_count),
+                        reasons=reasons,
+                        metadata={
+                            "entry": entry,
+                            "frontier_present": bool(frontier.get("present", False)),
+                            "temporal_visible": bool(temporal.get("items", [])),
+                            "scene_recent": scene_recent,
+                        },
+                        now=now,
+                    )
+                    if verdict in {"pulsed", "skipped_cooldown", "carryover_budget_full", "eligible"} or reentry_priority >= 0.32 or pending_pressure >= 0.16:
+                        assessments.append(entry)
+
+                assessments = sorted(
+                    assessments,
+                    key=lambda item: (
+                        float(item.get("reentry_priority", 0.0) or 0.0),
+                        float(item.get("pending_interpersonal_pressure", 0.0) or 0.0),
+                        float(item.get("thread_heat", 0.0) or 0.0),
+                        str(item.get("last_pulse_at", "") or ""),
+                    ),
+                    reverse=True,
+                )[:max_dense_threads]
+                snapshot = self._normalize_dense_working_set(
+                    {
+                        "channel": normalized_channel,
+                        "top_hot_threads": assessments,
+                        "current_self_pose": compact_text(
+                            f"{normalized_stream_name} keeps bounded continuity warm around "
+                            + ", ".join(
+                                item.get("chat_name") or item.get("thread_key", "")
+                                for item in assessments[:3]
+                                if str(item.get("chat_name") or item.get("thread_key", "")).strip()
+                            ),
+                            180,
+                        ),
+                        "pending_interpersonal_pressure": [
+                            {
+                                "thread_key": item.get("thread_key", ""),
+                                "chat_name": item.get("chat_name", ""),
+                                "pressure": item.get("pending_interpersonal_pressure", 0.0),
+                                "hint": item.get("reentry_hint", ""),
+                            }
+                            for item in assessments
+                            if float(item.get("pending_interpersonal_pressure", 0.0) or 0.0) >= 0.16
+                        ][:4],
+                        "open_loops_likely_to_reenter": [
+                            {
+                                "thread_key": item.get("thread_key", ""),
+                                "chat_name": item.get("chat_name", ""),
+                                "pending_open_loop_count": item.get("pending_open_loop_count", 0),
+                                "resume_cue": item.get("reentry_hint", ""),
+                            }
+                            for item in assessments
+                            if int(item.get("pending_open_loop_count", 0) or 0) > 0
+                        ][:4],
+                        "budget": {
+                            "max_hot_threads_per_cycle": max_hot_threads,
+                            "per_thread_pulse_budget": per_thread_budget,
+                            "skip_cold_without_pressure": bool(skip_cold_without_pressure),
+                            "max_dense_working_set_threads": max_dense_threads,
+                            "cooldown_seconds_by_stream": cooldowns,
+                            "considered_threads": len(ordered_candidates[: max_dense_threads * 3]),
+                            "pulsed_this_cycle": pulsed_this_cycle,
+                        },
+                        "last_stream_name": normalized_stream_name,
+                        "updated_at": now,
+                    },
+                    channel=normalized_channel,
+                    now=now,
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO dense_working_set(channel, snapshot_json, last_stream_name, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(channel) DO UPDATE SET
+                        snapshot_json = excluded.snapshot_json,
+                        last_stream_name = excluded.last_stream_name,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        normalized_channel,
+                        json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
+                        normalized_stream_name,
+                        now,
+                    ),
+                )
+                snapshots.append(
+                    {
+                        "channel": normalized_channel,
+                        "entry_count": len(list(snapshot.get("top_hot_threads", []))),
+                        "dense_working_set": snapshot,
+                    }
+                )
+            self.conn.commit()
+        return {
+            "status": "ok",
+            "stream_name": normalized_stream_name,
+            "updated_channels": len(snapshots),
+            "snapshots": snapshots,
         }
 
     @staticmethod

@@ -186,6 +186,11 @@ class MemoryBridge:
         activation_cache_enabled: bool = True,
         private_memory_sync_enabled: bool = False,
         private_memory_repo_path: str = "",
+        stage25_max_hot_threads_per_cycle: int = 6,
+        stage25_per_thread_pulse_budget: int = 2,
+        stage25_skip_cold_without_pressure: bool = True,
+        stage25_max_dense_working_set_threads: int = 8,
+        stage25_cooldown_seconds_by_stream: dict[str, int] | None = None,
         runner: Any | None = None,
         rag: ModuleType | None = None,
         vector: VectorMemory | None = None,
@@ -200,6 +205,23 @@ class MemoryBridge:
         self.activation_cache_enabled = bool(activation_cache_enabled)
         self.private_memory_sync_enabled = bool(private_memory_sync_enabled)
         self.private_memory_repo_path = Path(private_memory_repo_path).expanduser() if str(private_memory_repo_path).strip() else None
+        self.stage25_budget = {
+            "max_hot_threads_per_cycle": max(1, int(stage25_max_hot_threads_per_cycle)),
+            "per_thread_pulse_budget": max(1, int(stage25_per_thread_pulse_budget)),
+            "skip_cold_without_pressure": bool(stage25_skip_cold_without_pressure),
+            "max_dense_working_set_threads": max(1, int(stage25_max_dense_working_set_threads)),
+            "cooldown_seconds_by_stream": {
+                "maintenance_stream": 600,
+                "association_stream": 900,
+                "social_stream": 1200,
+                "deep_dream_cycle": 3600,
+                **{
+                    str(key).strip(): max(1, int(value))
+                    for key, value in dict(stage25_cooldown_seconds_by_stream or {}).items()
+                    if str(key).strip()
+                },
+            },
+        }
         self.runner = runner
         self.rag = rag or self._load_rag_memory()
         self.graph = MindGraph(
@@ -2273,6 +2295,158 @@ class MemoryBridge:
             "compression_reason": str(trace.get("compression_reason", "") or ""),
         }
 
+    @staticmethod
+    def _stage25_dense_empty(*, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return {
+            "dense_working_set_visible": False,
+            "working_set_used_for_thread": False,
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "channel": str(channel or "wechat"),
+            "reentry_hint": "",
+            "pending_interpersonal_pressure": 0.0,
+            "open_loop_reentry_visible": False,
+            "last_pulse_at": "",
+            "cooldown_until": "",
+            "budget_remaining": 0,
+        }
+
+    def _stage25_dense_payload(
+        self,
+        hint: dict[str, Any],
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        used: bool,
+    ) -> dict[str, Any]:
+        entry = dict(hint.get("entry", {})) if isinstance(hint.get("entry", {}), dict) else {}
+        budget = dict(hint.get("budget", {})) if isinstance(hint.get("budget", {}), dict) else {}
+        if not entry:
+            return self._stage25_dense_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        pulse_budget = max(0, int(budget.get("per_thread_pulse_budget", 0) or 0))
+        pulse_count = max(0, int(entry.get("pulse_count", 0) or 0))
+        return {
+            "dense_working_set_visible": True,
+            "working_set_used_for_thread": bool(used),
+            "thread_key": str(entry.get("thread_key", thread_key) or thread_key),
+            "chat_name": str(entry.get("chat_name", chat_name) or chat_name),
+            "channel": str(channel or "wechat"),
+            "reentry_hint": str(entry.get("reentry_hint", "") or ""),
+            "pending_interpersonal_pressure": float(entry.get("pending_interpersonal_pressure", 0.0) or 0.0),
+            "open_loop_reentry_visible": bool(int(entry.get("pending_open_loop_count", 0) or 0) > 0),
+            "last_pulse_at": str(entry.get("last_pulse_at", "") or ""),
+            "cooldown_until": str(entry.get("cooldown_until", "") or ""),
+            "budget_remaining": max(0, pulse_budget - pulse_count),
+        }
+
+    def _hydrate_active_state_from_dense_working_set(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or "")
+        if not hasattr(self.graph, "dense_working_set_thread_hint"):
+            return active_state, self._stage25_dense_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        hint = self.graph.dense_working_set_thread_hint(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        stage25 = self._stage25_dense_payload(hint, channel=channel, thread_key=thread_key, chat_name=chat_name, used=True)
+        if not bool(stage25.get("dense_working_set_visible", False)):
+            return active_state, stage25
+
+        hydrated = dict(active_state)
+        metadata = dict(hydrated.get("metadata", {})) if isinstance(hydrated.get("metadata", {}), dict) else {}
+        metadata["stage25_dense_continuity"] = {
+            "reentry_hint": stage25["reentry_hint"],
+            "pending_interpersonal_pressure": float(stage25["pending_interpersonal_pressure"]),
+            "last_pulse_at": stage25["last_pulse_at"],
+            "cooldown_until": stage25["cooldown_until"],
+            "budget_remaining": int(stage25["budget_remaining"]),
+        }
+        hydrated["metadata"] = metadata
+        hydrated["present"] = bool(hydrated.get("present", False) or stage25["dense_working_set_visible"])
+        hydrated["channel"] = channel
+        hydrated["thread_key"] = str(stage25.get("thread_key", thread_key) or thread_key)
+        hydrated["chat_name"] = str(stage25.get("chat_name", chat_name) or chat_name)
+        weak_summary = not str(hydrated.get("continuity_summary", "") or "").strip()
+        weak_scene = not bool(dict(hydrated.get("scene_state", {})).get("shared_frame"))
+        if weak_summary and stage25["reentry_hint"]:
+            hydrated["continuity_summary"] = compact_text(f"dense_reentry: {stage25['reentry_hint']}", 220)
+        if not str(hydrated.get("last_user_intent", "") or "").strip() and stage25["reentry_hint"]:
+            hydrated["last_user_intent"] = compact_text(stage25["reentry_hint"], 140)
+        if not str(hydrated.get("attention_focus", "") or "").strip():
+            hydrated["attention_focus"] = "dense_working_set"
+        if not str(hydrated.get("active_affect_hint", "") or "").strip() and float(stage25.get("pending_interpersonal_pressure", 0.0) or 0.0) >= 0.16:
+            hydrated["active_affect_hint"] = "pending_interpersonal_pressure"
+        if str(hydrated.get("cache_warmth", "") or "") in {"", "cold", "seeded"}:
+            hydrated["cache_warmth"] = "working_set_warm"
+
+        predictive = dict(hydrated.get("predictive_continuity", {})) if isinstance(hydrated.get("predictive_continuity", {}), dict) else {}
+        blockers = bool(
+            signal.get("local_memory_requested", False)
+            or signal.get("factual_lookup", False)
+            or signal.get("search_requested", False)
+            or signal.get("visual_requested", False)
+        )
+        meaningful = self._meaningful_char_count(query)
+        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        confidence = max(
+            float(predictive.get("active_prediction_confidence", 0.0) or 0.0),
+            min(
+                0.78,
+                0.58
+                + float(stage25.get("pending_interpersonal_pressure", 0.0) or 0.0) * 0.22
+                + (0.08 if stage25.get("open_loop_reentry_visible", False) else 0.0)
+                + (0.04 if str(stage25.get("last_pulse_at", "") or "").strip() else 0.0),
+            ),
+        )
+        if not reflex_eligible:
+            confidence = min(confidence, 0.54)
+        predictive.update(
+            {
+                "predicted_next_user_act": str(predictive.get("predicted_next_user_act", "") or ("resume_or_ack" if stage25.get("open_loop_reentry_visible", False) else "ordinary_continuation")),
+                "predicted_reply_pressure": min(0.46, float(predictive.get("predicted_reply_pressure", 0.16) or 0.16) + float(stage25.get("pending_interpersonal_pressure", 0.0) or 0.0) * 0.18),
+                "likely_reference_targets": self._unique_strings(
+                    list(predictive.get("likely_reference_targets", [])) + [str(stage25.get("reentry_hint", "") or "")]
+                )[:3],
+                "reflex_eligibility": bool(reflex_eligible),
+                "turn_rhythm": {
+                    **(dict(predictive.get("turn_rhythm", {})) if isinstance(predictive.get("turn_rhythm", {}), dict) else {}),
+                    "dense_continuity_hydrated": True,
+                    "short_turn": meaningful <= 18,
+                },
+                "freshness_at": str(stage25.get("last_pulse_at", "") or predictive.get("freshness_at", "")),
+                "active_prediction_confidence": self._clamp(confidence),
+            }
+        )
+        hydrated["predictive_continuity"] = predictive
+        for key, value in predictive.items():
+            hydrated[key] = value
+        if weak_scene:
+            scene = dict(hydrated.get("scene_state", {})) if isinstance(hydrated.get("scene_state", {}), dict) else {}
+            scene.setdefault("shared_frame", compact_text(str(stage25.get("reentry_hint", "") or hydrated.get("continuity_summary", "") or ""), 160))
+            scene.setdefault("topic_stack", [])
+            scene.setdefault("salient_objects", [])
+            scene.setdefault("latent_questions", [])
+            if not list(scene.get("predicted_branches", [])):
+                scene["predicted_branches"] = ["resume_then_continue"] if stage25.get("open_loop_reentry_visible", False) else ["continue_same_frame"]
+            if not str(scene.get("relationship_trajectory", "") or "").strip():
+                scene["relationship_trajectory"] = "holding_open_loop" if stage25.get("open_loop_reentry_visible", False) else "ordinary_continuation"
+            if not str(scene.get("response_sketch", "") or "").strip():
+                scene["response_sketch"] = compact_text(str(stage25.get("reentry_hint", "") or ""), 140)
+            scene["scene_confidence"] = round(
+                max(float(scene.get("scene_confidence", 0.0) or 0.0), float(predictive.get("active_prediction_confidence", 0.0) or 0.0) * 0.94),
+                4,
+            )
+            if not str(scene.get("freshness_at", "") or "").strip():
+                scene["freshness_at"] = str(stage25.get("last_pulse_at", "") or "")
+            hydrated["scene_state"] = scene
+        return hydrated, stage25
+
     def _active_fast_lane_eligible(
         self,
         query: str,
@@ -2331,6 +2505,7 @@ class MemoryBridge:
         stage19_frontier = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else self._stage19_frontier_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         stage20_temporal = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else self._stage20_temporal_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         stage22_world_coupling = dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else self._stage22_world_coupling_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        stage25_dense = dict(context.get("stage25_dense_working_set", {})) if isinstance(context.get("stage25_dense_working_set", {}), dict) else self._stage25_dense_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         limits = self._mind_limits(context, fast=True)
         summary = str(active_state.get("continuity_summary", "") or "").strip()
         last_intent = str(active_state.get("last_user_intent", "") or "").strip()
@@ -2380,6 +2555,7 @@ class MemoryBridge:
                     **({"attention_frontier": 1} if bool(stage19_frontier.get("frontier_used_for_thread", False)) else {}),
                     **({"temporal_state": 1} if bool(stage20_temporal.get("temporal_used_for_thread", False)) else {}),
                     **({"world_coupling": 1} if bool(stage22_world_coupling.get("world_coupling_used_for_thread", False)) else {}),
+                    **({"dense_working_set": 1} if bool(stage25_dense.get("working_set_used_for_thread", False)) else {}),
                 },
                 "recent_events": [],
             },
@@ -2423,11 +2599,13 @@ class MemoryBridge:
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
         packet["stage22"] = dict(stage22_world_coupling)
+        packet["stage25"] = dict(stage25_dense)
         packet.setdefault("retrieval_trace", {}).setdefault("stage24", dict(packet["stage24"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage18", dict(packet["stage18"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage22", dict(packet["stage22"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage25", dict(packet["stage25"]))
         result = self._finalize_stage2_packet(packet, query=query, context=context)
         if hasattr(self.graph, "update_active_thread_state"):
             self.graph.update_active_thread_state(
@@ -3045,6 +3223,13 @@ class MemoryBridge:
             active_state=active_state,
             signal=signal,
         )
+        active_state, stage25_dense = self._hydrate_active_state_from_dense_working_set(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+        )
+        normalized_context["stage25_dense_working_set"] = dict(stage25_dense)
         recall_escalation_reason = self._recall_escalation_reason(
             query,
             context=normalized_context,
@@ -3188,10 +3373,12 @@ class MemoryBridge:
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
         packet["stage22"] = dict(stage22_world_coupling)
+        packet["stage25"] = dict(stage25_dense)
         packet.setdefault("retrieval_trace", {}).setdefault("stage24", dict(packet["stage24"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage22", dict(packet["stage22"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage25", dict(packet["stage25"]))
         return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
 
     def inspect_mind(
@@ -3234,6 +3421,7 @@ class MemoryBridge:
             "stage19": dict(packet.get("stage19", {})),
             "stage20": dict(packet.get("stage20", {})),
             "stage22": dict(packet.get("stage22", {})),
+            "stage25": dict(packet.get("stage25", {})),
             "mind_packet": packet,
         }
 
@@ -3304,6 +3492,15 @@ class MemoryBridge:
             "predictive_continuity": dict(active_state.get("predictive_continuity", {})),
             "active_thread_state": active_state,
             "stage24": self._stage24_scene_packet(active_state),
+            "stage25": self._stage25_dense_payload(
+                self.graph.dense_working_set_thread_hint(channel=channel, thread_key=thread_key, chat_name=chat_name)
+                if hasattr(self.graph, "dense_working_set_thread_hint")
+                else {},
+                channel=channel,
+                thread_key=str(active_state.get("thread_key", str(thread_key or ""))),
+                chat_name=str(active_state.get("chat_name", str(chat_name or ""))),
+                used=False,
+            ),
         }
 
     def trace_predicted_branches(
@@ -3326,6 +3523,15 @@ class MemoryBridge:
             "response_sketch": str(scene.get("response_sketch", "") or ""),
             "predictive_continuity": dict(active_state.get("predictive_continuity", {})),
             "stage24": self._stage24_scene_packet(active_state),
+            "stage25": self._stage25_dense_payload(
+                self.graph.dense_working_set_thread_hint(channel=channel, thread_key=thread_key, chat_name=chat_name)
+                if hasattr(self.graph, "dense_working_set_thread_hint")
+                else {},
+                channel=channel,
+                thread_key=str(active_state.get("thread_key", str(thread_key or ""))),
+                chat_name=str(active_state.get("chat_name", str(chat_name or ""))),
+                used=False,
+            ),
         }
 
     def trace_scene_compression(
@@ -3352,7 +3558,49 @@ class MemoryBridge:
             "bounded_truncation": dict(stage24.get("truncation", {})) if isinstance(stage24.get("truncation", {}), dict) else {},
             "source_turn_refs": list(stage24.get("source_turn_refs", []))[:4] if isinstance(stage24.get("source_turn_refs", []), list) else [],
             "stage24": self._stage24_scene_packet(active_state),
+            "stage25": self._stage25_dense_payload(
+                self.graph.dense_working_set_thread_hint(channel=channel, thread_key=thread_key, chat_name=chat_name)
+                if hasattr(self.graph, "dense_working_set_thread_hint")
+                else {},
+                channel=channel,
+                thread_key=str(active_state.get("thread_key", str(thread_key or ""))),
+                chat_name=str(active_state.get("chat_name", str(chat_name or ""))),
+                used=False,
+            ),
         }
+
+    def show_continuity_budget(self, *, channel: str = "wechat") -> dict[str, Any]:
+        snapshot = self.graph.dense_working_set(channel=channel) if hasattr(self.graph, "dense_working_set") else {"dense_working_set": {}}
+        current_budget = dict(snapshot.get("dense_working_set", {}).get("budget", {})) if isinstance(snapshot.get("dense_working_set", {}).get("budget", {}), dict) else {}
+        return {
+            "status": "ok",
+            "channel": str(channel or "wechat"),
+            "configured_budget": copy.deepcopy(self.stage25_budget),
+            "current_budget": current_budget,
+            "dense_working_set_updated_at": str(snapshot.get("dense_working_set", {}).get("updated_at", "") or ""),
+            "last_stream_name": str(snapshot.get("dense_working_set", {}).get("last_stream_name", "") or ""),
+        }
+
+    def show_dense_working_set(self, *, channel: str = "wechat") -> dict[str, Any]:
+        if not hasattr(self.graph, "dense_working_set"):
+            return {"status": "unavailable", "channel": str(channel or "wechat"), "present": False, "dense_working_set": {}}
+        payload = self.graph.dense_working_set(channel=channel)
+        payload["configured_budget"] = copy.deepcopy(self.stage25_budget)
+        return payload
+
+    def trace_thread_pulse(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "trace_thread_pulse"):
+            return {"status": "unavailable", "thread_key": str(thread_key or ""), "chat_name": str(chat_name or ""), "channel": channel, "thread_pulse_trace": []}
+        payload = self.graph.trace_thread_pulse(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+        payload["active_thread_state"] = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        return payload
 
     def trace_reflex_routing(
         self,
@@ -3403,6 +3651,7 @@ class MemoryBridge:
             "stage19": dict(packet.get("stage19", {})),
             "stage20": dict(packet.get("stage20", {})),
             "stage22": dict(packet.get("stage22", {})),
+            "stage25": dict(packet.get("stage25", {})),
             "predictive_continuity": dict(packet_active_state.get("predictive_continuity", {})),
             "scene_state": dict(packet_active_state.get("scene_state", {})),
         }
@@ -4587,6 +4836,16 @@ class MemoryBridge:
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
         report = self.graph.record_stream_run(stream_name, status=status, note=note, payload=payload)
+        if hasattr(self.graph, "update_dense_working_set_from_stream"):
+            report["dense_working_set"] = self.graph.update_dense_working_set_from_stream(
+                stream_name,
+                report=report,
+                max_hot_threads_per_cycle=int(self.stage25_budget.get("max_hot_threads_per_cycle", 6) or 6),
+                per_thread_pulse_budget=int(self.stage25_budget.get("per_thread_pulse_budget", 2) or 2),
+                cooldown_seconds_by_stream=dict(self.stage25_budget.get("cooldown_seconds_by_stream", {})),
+                skip_cold_without_pressure=bool(self.stage25_budget.get("skip_cold_without_pressure", True)),
+                max_dense_working_set_threads=int(self.stage25_budget.get("max_dense_working_set_threads", 8) or 8),
+            )
         self.clear_packet_cache()
         sampled_ids = [
             str(item).strip()

@@ -371,6 +371,53 @@ class Stage20TemporalCommitmentsTests(unittest.TestCase):
             finally:
                 self._close_bridge(bridge)
 
+    def test_temporal_pressure_is_reflected_into_dense_working_set(self) -> None:
+        with TempMemoryRepo() as temp:
+            bridge = self._bridge(temp)
+            try:
+                self._seed_resume(bridge, dedupe_key="stage20-dense-pressure")
+                rm.archive_turn(
+                    "stage20 dense seed",
+                    "keep the same thread warm without deep recall",
+                    source="unit.stage20",
+                    tags=["wechat", "stage20"],
+                    turn_id="stage20-dense-seed",
+                    metadata={"channel": "wechat", "thread_key": "wechat:Nemoqi", "chat_name": "Nemoqi"},
+                )
+                bridge.graph.sync_thread(channel="wechat", thread_key="wechat:Nemoqi", chat_name="Nemoqi")
+                inspect = bridge.graph.inspect_graph(thread_key="wechat:Nemoqi", chat_name="Nemoqi", channel="wechat", limit=6)
+                archive_node = next(node for node in inspect["nodes"] if node["source_store"] == "archive")
+                bridge.record_stream_run(
+                    "social_stream",
+                    status="ok",
+                    note="stage20_dense",
+                    payload={
+                        "thoughts": [
+                            {
+                                "channel": "wechat",
+                                "thread_key": "wechat:Nemoqi",
+                                "chat_name": "Nemoqi",
+                                "motif": "stage20_dense",
+                                "source_archive_id": archive_node.get("source_id", archive_node["id"]),
+                            }
+                        ],
+                        "selected_memory_ids": [archive_node.get("source_id", archive_node["id"])],
+                    },
+                )
+
+                dense = bridge.show_dense_working_set(channel="wechat")
+                entry = next(item for item in dense["dense_working_set"]["top_hot_threads"] if item["thread_key"] == "wechat:Nemoqi")
+                packet = bridge.sidecar_packet(
+                    "we were talking about the postponed line",
+                    context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi", "attachments": []},
+                )
+
+                self.assertGreater(int(entry["pending_open_loop_count"]), 0)
+                self.assertTrue(packet["stage20"]["temporal_visible"])
+                self.assertTrue(packet["stage25"]["dense_working_set_visible"])
+            finally:
+                self._close_bridge(bridge)
+
 
 if __name__ == "__main__":
     unittest.main()

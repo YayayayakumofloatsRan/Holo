@@ -175,6 +175,14 @@ class MemoryConfig:
     active_wechat_history_deep_timeout_seconds: int = 300
     active_wechat_history_include_visible: bool = True
     active_wechat_history_include_captures: bool = False
+    stage25_max_hot_threads_per_cycle: int = 6
+    stage25_per_thread_pulse_budget: int = 2
+    stage25_skip_cold_without_pressure: bool = True
+    stage25_max_dense_working_set_threads: int = 8
+    stage25_maintenance_stream_cooldown_seconds: int = 600
+    stage25_association_stream_cooldown_seconds: int = 900
+    stage25_social_stream_cooldown_seconds: int = 1200
+    stage25_deep_dream_cycle_cooldown_seconds: int = 3600
 
 
 @dataclass(slots=True)
@@ -488,6 +496,14 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         active_wechat_history_deep_timeout_seconds=int(memory_data.get("active_wechat_history_deep_timeout_seconds", 300)),
         active_wechat_history_include_visible=bool(memory_data.get("active_wechat_history_include_visible", True)),
         active_wechat_history_include_captures=bool(memory_data.get("active_wechat_history_include_captures", False)),
+        stage25_max_hot_threads_per_cycle=int(memory_data.get("stage25_max_hot_threads_per_cycle", 6)),
+        stage25_per_thread_pulse_budget=int(memory_data.get("stage25_per_thread_pulse_budget", 2)),
+        stage25_skip_cold_without_pressure=bool(memory_data.get("stage25_skip_cold_without_pressure", True)),
+        stage25_max_dense_working_set_threads=int(memory_data.get("stage25_max_dense_working_set_threads", 8)),
+        stage25_maintenance_stream_cooldown_seconds=int(memory_data.get("stage25_maintenance_stream_cooldown_seconds", 600)),
+        stage25_association_stream_cooldown_seconds=int(memory_data.get("stage25_association_stream_cooldown_seconds", 900)),
+        stage25_social_stream_cooldown_seconds=int(memory_data.get("stage25_social_stream_cooldown_seconds", 1200)),
+        stage25_deep_dream_cycle_cooldown_seconds=int(memory_data.get("stage25_deep_dream_cycle_cooldown_seconds", 3600)),
     )
 
     autonomy_data = data.get("autonomy", {})

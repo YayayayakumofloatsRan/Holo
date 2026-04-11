@@ -50,13 +50,14 @@ Stage24: scene-state continuity layer
 - Makes ordinary short turns prefer compact scene summaries and response sketches before verbatim history while keeping explicit memory/history/factual turns on escalation paths.
 - Adds inspectable scene diagnostics and bounded scene deltas in action-market scoring without introducing a second brain or a new always-on loop.
 
+Stage25: dense continuity scheduler and working set
+- Implemented as a bounded `dense_working_set` plus `thread_pulse_trace` rebuilt only from `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`.
+- Keeps a small hot-thread working set warm between turns, applies inspectable per-thread pulse budgets and cooldowns, and hydrates ingress before heavier recall.
+- Does not add a new loop family, watcher-side decision logic, or background heavy recall.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage24. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
-
-Stage25: artifact/tool/outcome progress coupling
-- Planned. Routes artifact, tool, deferred-reply, and world-cue outcomes into the same bounded scene-state surface.
-- Requires dedupe, evidence refs, and canonical-thread scoping across service, memory, and validation layers.
+This planned arc starts after Stage25. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 
 Stage26: long-horizon replay and promotion gates
 - Planned. Extends replay discipline from short-turn calibration to multi-step program quality.
@@ -66,8 +67,11 @@ Stage27: online long-horizon canary
 - Planned. Canaries program-aware long-horizon behavior online in host-side shadow-first mode.
 - Must stay whitelist-bound, rate-limited, rollback-safe, replay-disciplined, and action-market-first.
 
+Artifact/tool/outcome progress coupling
+- Deferred. This older Stage25 placeholder was explicitly superseded by the dense continuity scheduler milestone and should not be silently folded into Stage26.
+
 Bounded subject programs
-- Deferred. This is no longer the live Stage24 scope and should not be treated as implemented or active-planning default without an explicit re-plan.
+- Deferred. This is no longer the live Stage24 or Stage25 scope and should not be treated as implemented or active-planning default without an explicit re-plan.
 
 ## Parked Hypotheses
 - broader multi-agent social world

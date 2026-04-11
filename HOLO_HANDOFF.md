@@ -43,11 +43,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 38. `docs/ENGINEERING_HANDOFF_STAGE23.md`
 39. `docs/STAGE24_SCENE_STATE_CONTINUITY_LAYER.md`
 40. `docs/ENGINEERING_HANDOFF_STAGE24.md`
-41. `HOLO_SYSTEM.md`
-42. `HOLO_HOST.md`
-43. `OPERATIONS.md`
-44. `holo_memory_library/MEMORY_LIBRARY.md`
-45. `windows_helper/README.md`
+41. `docs/STAGE25_DENSE_CONTINUITY_SCHEDULER_AND_WORKING_SET.md`
+42. `docs/ENGINEERING_HANDOFF_STAGE25.md`
+43. `HOLO_SYSTEM.md`
+44. `HOLO_HOST.md`
+45. `OPERATIONS.md`
+46. `holo_memory_library/MEMORY_LIBRARY.md`
+47. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -62,9 +64,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage24-scene-state-continuity-layer`.
+- The current milestone tag is `stage25-dense-continuity-scheduler-and-working-set`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage25 artifact/tool/outcome progress coupling on top of a green Stage24 scene-state baseline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
+- Current focus is Stage26 replay and promotion gating on top of a green Stage25 dense-continuity baseline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -73,11 +75,12 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage22: host-side shadow/canary telemetry, live-artifact replay, rollback switch, and bounded world-coupling cues are implemented
   - Stage23: semantic subject results are orthogonalized from delivery/canary suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics while rounded metrics remain reporting-only
   - Stage24: per-thread `scene_state` is now persisted, inspectable, prompt-visible before verbatim history, and action-market-visible as bounded scene deltas
+  - Stage25: bounded dense continuity now keeps a hot-thread working set warm between turns using the existing stream family only, persists `dense_working_set` and `thread_pulse_trace`, and hydrates ingress before heavier recall
 - The next planned arc is:
-  - Stage25: artifact/tool/outcome progress coupling
   - Stage26: long-horizon replay and promotion gates
   - Stage27: online long-horizon canary
-  - Bounded subject programs are deferred beyond the current Stage24 scene-state milestone
+  - Artifact/tool/outcome progress coupling is deferred beyond the current Stage25 milestone and should not be silently folded into Stage26
+  - Bounded subject programs are deferred beyond the current Stage25 dense-continuity milestone
 - This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
@@ -193,6 +196,14 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage23 release-parity acceptance:
   - `python3 -m holo_host accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Stage24 scene-state continuity acceptance:
+  - `python3 -m holo_host accept-stage24 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Stage25 dense continuity diagnostics:
+  - `python3 -m holo_host show-continuity-budget --channel wechat`
+  - `python3 -m holo_host show-dense-working-set --channel wechat`
+  - `python3 -m holo_host trace-thread-pulse --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Stage25 dense continuity acceptance:
+  - `python3 -m holo_host accept-stage25 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -246,6 +257,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - Stage20 temporal state is intentionally bounded and inspectable; do not let it create direct sends, unbounded scheduling, or a second decision layer
 - Stage21 policy sediment is intentionally replay-gated and reversible; do not let it become a hard policy override, learned hidden weights, or send-permission bypass
 - Stage22 canary is host-side and shadow-first; do not let it pick actions, grant send permission, hide metrics, or turn world-coupling cues into a recall trigger
+- Stage25 dense continuity is intentionally bounded and stream-driven; do not let it trigger heavy recall, create a new loop family, or become a watcher-side decision layer
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints

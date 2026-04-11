@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27. Stage24 is now the live runtime milestone, and Stage25 is the next planned implementation focus.
+- Use this document as the concrete execution spec for Stage23 through Stage27. Stage25 is now the live runtime milestone, and Stage26 is the next planned implementation focus.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -28,6 +28,12 @@
   - bounded per-thread `scene_state` persists inside `active_thread_state` and survives reload or restart
   - fast-lane prompt composition now reads continuity summary, scene state, scene sketch, last outbound action, and predictive continuity before any optional verbatim history line
   - action-market candidates expose bounded `scene_delta` and `scene_rationale` overlays without bypassing explicit memory/history escalation or existing hard gates
+- Stage25 exit state on `2026-04-11`:
+  - `pytest -q` passed
+  - `python -m holo_host --config .holo_host.example.toml accept-stage25 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
+  - bounded `dense_working_set` and `thread_pulse_trace` now persist dense continuity snapshots and pulse decisions by channel and canonical thread
+  - existing stream runs now rebuild a bounded hot-thread working set without adding a new loop family or any background heavy recall
+  - ingress can rehydrate a hot thread from dense continuity before hybrid or deep recall, even after fresher frontier or active-state surfaces have decayed
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -39,7 +45,8 @@
 - Keep canonical ordinary WeChat direct-message identity as `wechat:<name>`.
 - Treat Stage22 runtime behavior as fixed during this bootstrap; Stage23 pays down blockers before Stage24-27 add new behavior.
 - From Stage23 onward, use raw replay metrics for gating decisions and rounded replay metrics for reporting only.
-- Bounded subject programs are deferred beyond the current Stage24 implementation; do not treat them as live scope without an explicit re-plan.
+- Bounded subject programs are deferred beyond the current Stage25 implementation; do not treat them as live scope without an explicit re-plan.
+- The older Stage25 artifact/tool/outcome progress-coupling scope is deferred and must not be silently folded into Stage26.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
 ## Milestones
@@ -60,13 +67,13 @@
 - `Stop rule`: do not regress Stage17 fast-lane latency or behavior, explicit memory/history/factual escalation, bounded inspectability, or action-market-first deliberation
 - `Rollback rule`: ignore Stage24 scene overlays and fall back to Stage23 predictive continuity surfaces without changing Stage23 semantic/delivery behavior
 
-### Stage25: Artifact/Tool/Outcome Progress Coupling
-- `Status`: planned
-- `Goal`: make artifacts, tool outcomes, deferred replies, and world cues update the same bounded scene-state continuity surface
-- `Scope`: unify artifact, task, schedule, file, image, and lookup outcomes as bounded same-thread scene reducers with dedupe and evidence refs; no transport-side decisions and no direct execution rights
-- `Validation`: same-thread progress updates, cross-thread leakage blocked, explicit memory/history requests still escalate, and artifact-ingest contracts remain compatible across service code, memory bridge, and tests
-- `Stop rule`: do not advance if ingest surfaces fork into incompatible schemas again
-- `Rollback rule`: disable progress reducers while preserving Stage24 scene-state read surfaces
+### Stage25: Dense Continuity Scheduler And Working Set
+- `Status`: implemented on `2026-04-11`
+- `Goal`: keep a bounded set of hot threads warm between turns by reusing the existing stream family only
+- `Scope`: persist `dense_working_set` and `thread_pulse_trace`, apply an inspectable continuity budget, update dense continuity only from `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`, and hydrate ingress from the dense working set before heavier recall without adding a new loop family or background heavy recall
+- `Validation`: `pytest -q` green; `accept-stage24` green; `accept-stage25` green; `tests/test_stage25_dense_continuity.py`; `tests/test_stage19_attention_frontier.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage22_online_canary.py`
+- `Stop rule`: do not regress explicit memory/history/factual escalation, bounded ingress, or the stream-only continuity scheduler boundary
+- `Rollback rule`: ignore dense continuity hydration and fall back to Stage24 scene-state ingress while preserving inspectable continuity diagnostics
 
 ### Stage26: Long-Horizon Replay And Promotion Gates
 - `Status`: planned
@@ -89,7 +96,7 @@
 | --- | --- | --- | --- |
 | `Stage23` | `accept-stage22`; `tests/test_stage22_online_canary.py`; `tests/test_stage15_modularization.py` | `pytest -q`; `accept-stage23`; semantic or delivery split assertions in `tests/test_holo_host.py` | Completed on `2026-04-11`: the four Stage22 blockers were resolved without weakening canary safety boundaries. |
 | `Stage24` | All Stage23 surfaces | `accept-stage24`; `tests/test_stage24_scene_state.py`; `tests/test_stage17_realtime_runtime.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py` | Scene state is inspectable, restart-safe, prompt-visible before verbatim history, and action-market-first. |
-| `Stage25` | All Stage24 surfaces | Planned `accept-stage25`; planned `tests/test_stage25_progress_coupling.py`; artifact-ingest compatibility checks across service and memory layers | Artifacts, tools, deferred replies, and world cues update the same bounded scene-state surface without schema drift. |
+| `Stage25` | All Stage24 surfaces | `accept-stage25`; `tests/test_stage25_dense_continuity.py`; `tests/test_stage19_attention_frontier.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage22_online_canary.py` | Dense continuity stays bounded, restart-safe, stream-driven only, and ingress-visible before heavier recall. |
 | `Stage26` | All Stage25 surfaces | Planned `accept-stage26`; planned `tests/test_stage26_long_horizon_replay.py`; `tests/test_stage14_replay.py` with raw-vs-rounded checks | Replay and promotion gates use raw metrics for decisions and keep rounded metrics as reporting only. |
 | `Stage27` | All Stage26 surfaces | Planned `accept-stage27`; planned `tests/test_stage27_long_horizon_canary.py`; `replay-live-artifacts` remains usable on program-aware traces | Program-aware long-horizon online canary remains host-side, shadow-first, bounded, reversible, and replay-disciplined. |
 
