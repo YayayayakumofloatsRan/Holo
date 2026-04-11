@@ -5,7 +5,9 @@ import inspect
 import json
 import logging
 import os
+import random
 import re
+import statistics
 import subprocess
 import tempfile
 import threading
@@ -1226,6 +1228,478 @@ class HoloReplyService:
             "latency_buckets_by_action_type": latency_buckets_by_action,
         }
 
+    @staticmethod
+    def _stage27_since(window_hours: float) -> tuple[float, str]:
+        hours = max(0.01, float(window_hours or 168.0))
+        since = (datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+        return hours, since
+
+    @staticmethod
+    def _stage27_parse_iso(value: Any) -> datetime | None:
+        current = str(value or "").strip()
+        if not current:
+            return None
+        try:
+            if current.endswith("Z"):
+                current = current[:-1] + "+00:00"
+            return datetime.fromisoformat(current)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _stage27_stage24_summary(payload: dict[str, Any]) -> dict[str, Any]:
+        current = dict(payload or {})
+        return {
+            "scene_visible": bool(current.get("scene_visible", False)),
+            "shared_frame": compact_text(str(current.get("shared_frame", "") or ""), 180),
+            "topic_stack": [compact_text(str(item), 80) for item in list(current.get("topic_stack", []))[:3] if str(item).strip()],
+            "predicted_branches": [compact_text(str(item), 80) for item in list(current.get("predicted_branches", []))[:3] if str(item).strip()],
+            "response_sketch": compact_text(str(current.get("response_sketch", "") or ""), 180),
+            "scene_confidence": round(float(current.get("scene_confidence", 0.0) or 0.0), 4),
+        }
+
+    @staticmethod
+    def _stage27_stage25_summary(payload: dict[str, Any]) -> dict[str, Any]:
+        current = dict(payload or {})
+        return {
+            "dense_working_set_visible": bool(current.get("dense_working_set_visible", False)),
+            "working_set_used_for_thread": bool(current.get("working_set_used_for_thread", False)),
+            "reentry_hint": compact_text(str(current.get("reentry_hint", "") or ""), 180),
+            "pending_interpersonal_pressure": round(float(current.get("pending_interpersonal_pressure", 0.0) or 0.0), 4),
+            "open_loop_reentry_visible": bool(current.get("open_loop_reentry_visible", False)),
+            "last_pulse_at": str(current.get("last_pulse_at", "") or ""),
+            "cooldown_until": str(current.get("cooldown_until", "") or ""),
+            "budget_remaining": int(current.get("budget_remaining", 0) or 0),
+        }
+
+    @staticmethod
+    def _stage27_stage26_summary(payload: dict[str, Any]) -> dict[str, Any]:
+        current = dict(payload or {})
+        return {
+            "task_world_visible": bool(current.get("task_world_visible", False)),
+            "task_world_used_for_thread": bool(current.get("task_world_used_for_thread", False)),
+            "summary": compact_text(str(current.get("summary", "") or ""), 220),
+            "object_ids": [compact_text(str(item), 48) for item in list(current.get("object_ids", []))[:4] if str(item).strip()],
+            "object_types": [compact_text(str(item), 48) for item in list(current.get("object_types", []))[:4] if str(item).strip()],
+            "linked_commitments": [compact_text(str(item), 80) for item in list(current.get("linked_commitments", []))[:4] if str(item).strip()],
+            "cross_thread_links_visible": bool(current.get("cross_thread_links_visible", False)),
+            "hard_gate_preserved": bool(current.get("hard_gate_preserved", True)),
+        }
+
+    def _stage27_identity_snapshot(self) -> dict[str, Any]:
+        try:
+            self_model = (
+                dict(getattr(self.memory, "_self_model_state", {}))
+                if isinstance(getattr(self.memory, "_self_model_state", {}), dict)
+                else self.memory.self_model_state()
+            )
+            autobiographical = (
+                dict(getattr(self.memory, "_autobiographical_state", {}))
+                if isinstance(getattr(self.memory, "_autobiographical_state", {}), dict)
+                else self.memory.autobiographical_state()
+            )
+        except Exception:  # noqa: BLE001
+            return {}
+        return {
+            "identity_continuity": round(float(dict(self_model).get("identity_continuity", 0.0) or 0.0), 4),
+            "current_chapter": compact_text(str(dict(autobiographical).get("current_chapter", "") or ""), 180),
+        }
+
+    def _stage27_trace_rows(self, *, window_hours: float = 168.0, limit: int = 500) -> tuple[float, str, list[dict[str, Any]]]:
+        hours, since = self._stage27_since(window_hours)
+        rows = self.store.list_canary_traces(since=since, limit=max(1, int(limit)))
+        return hours, since, rows
+
+    def _stage27_task_world_family_summary(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        thread_contexts: dict[tuple[str, str, str], None] = {}
+        for row in rows:
+            thread_contexts[(
+                str(row.get("channel", "") or "wechat"),
+                str(row.get("thread_key", "") or ""),
+                str(row.get("chat_name", "") or ""),
+            )] = None
+        families: dict[tuple[str, str], dict[str, Any]] = {}
+        for channel, thread_key, chat_name in thread_contexts.keys():
+            task_world = self.show_task_world(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=64,
+                include_inactive=True,
+            )
+            current_thread = str(thread_key or "")
+            for item in list(task_world.get("objects", [])):
+                if not isinstance(item, dict):
+                    continue
+                family_key = compact_text(str(item.get("source_ref", "") or item.get("summary", "") or ""), 220)
+                if not family_key:
+                    continue
+                key = (str(item.get("object_type", "") or ""), family_key)
+                family = families.setdefault(
+                    key,
+                    {
+                        "touched_threads": set(),
+                        "objects": [],
+                    },
+                )
+                family["touched_threads"].add(current_thread)
+                family["objects"].append(
+                    {
+                        "object_id": str(item.get("object_id", "") or ""),
+                        "linked_threads": {
+                            str(linked).strip()
+                            for linked in list(item.get("linked_threads", []))
+                            if str(linked).strip()
+                        },
+                    }
+                )
+        multi_thread_family_count = 0
+        fragmented_family_count = 0
+        for family in families.values():
+            touched_threads = set(family.get("touched_threads", set()))
+            if len(touched_threads) <= 1:
+                continue
+            multi_thread_family_count += 1
+            if not any(touched_threads.issubset(set(obj.get("linked_threads", set()))) for obj in list(family.get("objects", []))):
+                fragmented_family_count += 1
+        return {
+            "multi_thread_family_count": multi_thread_family_count,
+            "fragmented_family_count": fragmented_family_count,
+            "cross_thread_fragmentation_rate": self._stage22_rate(fragmented_family_count, multi_thread_family_count),
+        }
+
+    def _stage27_compute_scorecard(
+        self,
+        *,
+        window_hours: float,
+        since: str,
+        rows: list[dict[str, Any]],
+        replay_report: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        base = self.show_blackbox_metrics(window_hours=window_hours, limit=max(1, len(rows) or 1))
+        by_day: dict[str, list[float]] = {}
+        unique_threads: set[str] = set()
+        for row in rows:
+            unique_threads.add(str(row.get("thread_key", "") or ""))
+            metadata = dict(row.get("metadata", {})) if isinstance(row.get("metadata", {}), dict) else {}
+            identity_snapshot = dict(metadata.get("identity_snapshot", {})) if isinstance(metadata.get("identity_snapshot", {}), dict) else {}
+            if "identity_continuity" not in identity_snapshot:
+                continue
+            created_at = self._stage27_parse_iso(row.get("created_at", ""))
+            if created_at is None:
+                continue
+            day_key = created_at.astimezone(timezone.utc).date().isoformat()
+            by_day.setdefault(day_key, []).append(float(identity_snapshot.get("identity_continuity", 0.0) or 0.0))
+        day_keys = sorted(by_day.keys())
+        daily_medians = [statistics.median(by_day[key]) for key in day_keys if by_day.get(key)]
+        identity_drift = round(
+            sum(abs(float(daily_medians[index]) - float(daily_medians[index - 1])) for index in range(1, len(daily_medians))) / max(1, len(daily_medians) - 1),
+            4,
+        ) if len(daily_medians) > 1 else 0.0
+        replay = dict((replay_report or {}).get("replay", {})) if isinstance((replay_report or {}).get("replay", {}), dict) else {}
+        aggregate = dict(replay.get("aggregate_metrics", {})) if isinstance(replay.get("aggregate_metrics", {}), dict) else {}
+        raw_aggregate = dict(replay.get("raw_aggregate_metrics", {})) if isinstance(replay.get("raw_aggregate_metrics", {}), dict) else {}
+        family_summary = self._stage27_task_world_family_summary(rows)
+        return {
+            "stage": "stage27",
+            "window_hours": float(window_hours or 168.0),
+            "since": since,
+            "trace_count": len(rows),
+            "thread_count": len({item for item in unique_threads if item}),
+            "day_bucket_count": len(day_keys),
+            "resume_success_after_interruption": float(base.get("resume_success_after_interruption", 0.0) or 0.0),
+            "reread_history_rate": float(base.get("reread_history_rate", 0.0) or 0.0),
+            "clarification_thrash_rate": float(base.get("clarification_thrash_rate", 0.0) or 0.0),
+            "duplicate_followup_rate": float(base.get("duplicate_followup_rate", 0.0) or 0.0),
+            "latency_buckets_by_action_type": dict(base.get("latency_buckets_by_action_type", {})),
+            "identity_drift_across_days": identity_drift,
+            "policy_regret_on_live_artifacts": round(float(aggregate.get("policy_regret_vs_best_available_action", 0.0) or 0.0), 4),
+            "raw_policy_regret_on_live_artifacts": float(raw_aggregate.get("policy_regret_vs_best_available_action", 0.0) or 0.0),
+            "cross_thread_fragmentation_rate": float(family_summary.get("cross_thread_fragmentation_rate", 0.0) or 0.0),
+            "family_counts": {
+                "multi_thread": int(family_summary.get("multi_thread_family_count", 0) or 0),
+                "fragmented": int(family_summary.get("fragmented_family_count", 0) or 0),
+            },
+            "counts": dict(base.get("counts", {})),
+        }
+
+    def _stage27_find_human_reference(
+        self,
+        *,
+        row: dict[str, Any],
+        horizon_hours: float = 12.0,
+    ) -> dict[str, Any]:
+        created_at = self._stage27_parse_iso(row.get("created_at", ""))
+        if created_at is None:
+            return {}
+        context = {
+            "channel": str(row.get("channel", "") or "wechat"),
+            "thread_key": str(row.get("thread_key", "") or ""),
+            "chat_name": str(row.get("chat_name", "") or ""),
+        }
+        deadline = created_at + timedelta(hours=max(0.5, float(horizon_hours or 12.0)))
+        candidates = []
+        for item in list(self.memory.rag.thread_archive_rows(context, limit=160, include_synthetic=False)):
+            if not isinstance(item, dict):
+                continue
+            archive_created = self._stage27_parse_iso(item.get("created_at", ""))
+            if archive_created is None or archive_created <= created_at or archive_created > deadline:
+                continue
+            reply_text = compact_text(str(item.get("reply_text", "") or ""), 800)
+            if not reply_text:
+                continue
+            candidates.append((archive_created, dict(item)))
+        candidates.sort(key=lambda pair: pair[0])
+        return dict(candidates[0][1]) if candidates else {}
+
+    @staticmethod
+    def _stage27_redact_blind_text(value: Any) -> str:
+        text = compact_text(str(value or ""), 800)
+        if not text:
+            return ""
+        text = re.sub(r"[A-Za-z]:\\\\[^\s]+", "[path]", text)
+        text = re.sub(r"/[A-Za-z0-9_.\-\\/]+", "[path]", text)
+        text = re.sub(r"\b(?:wechat:[^\s]+|source_ref:[^\s]+)\b", "[ref]", text)
+        return compact_text(text, 800)
+
+    @staticmethod
+    def _stage27_holo_candidate_text(artifact: dict[str, Any], row: dict[str, Any]) -> str:
+        result = dict(artifact.get("result", {})) if isinstance(artifact.get("result", {}), dict) else {}
+        text = HoloReplyService._stage27_redact_blind_text(result.get("text", ""))
+        if text:
+            return text
+        bubbles = [HoloReplyService._stage27_redact_blind_text(item) for item in list(result.get("bubbles", [])) if str(item).strip()]
+        if bubbles:
+            return compact_text(" ".join(bubbles), 800)
+        metadata = dict(row.get("metadata", {})) if isinstance(row.get("metadata", {}), dict) else {}
+        result_meta = dict(metadata.get("result", {})) if isinstance(metadata.get("result", {}), dict) else {}
+        return HoloReplyService._stage27_redact_blind_text(result_meta.get("text", ""))
+
+    def export_blind_packets(
+        self,
+        *,
+        since_hours: float = 168.0,
+        limit: int = 500,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        hours, since, rows = self._stage27_trace_rows(window_hours=since_hours, limit=limit)
+        root = (
+            Path(artifact_dir).resolve()
+            if str(artifact_dir or "").strip()
+            else self._stage22_artifact_root().parent / "stage27" / time.strftime("%Y%m%d-%H%M%S") / "blind"
+        )
+        root.mkdir(parents=True, exist_ok=True)
+        salt = stable_digest("stage27", since, utc_now(), str(len(rows)))[:20]
+        transcript_packets: list[dict[str, Any]] = []
+        comparison_bundles: list[dict[str, Any]] = []
+        review_packets: list[dict[str, Any]] = []
+        answer_key: dict[str, Any] = {"stage": "stage27", "salt_id": salt, "bundles": []}
+        for index, row in enumerate(rows):
+            metadata = dict(row.get("metadata", {})) if isinstance(row.get("metadata", {}), dict) else {}
+            trace = dict(metadata.get("trace", {})) if isinstance(metadata.get("trace", {}), dict) else {}
+            artifact = {}
+            artifact_path = Path(str(row.get("artifact_path", "") or ""))
+            if artifact_path.exists():
+                try:
+                    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    artifact = {}
+            input_payload = dict(artifact.get("input", {})) if isinstance(artifact.get("input", {}), dict) else {}
+            transcript_id = f"pkt_{stable_digest(salt, str(row.get('id', index)), 'transcript')[:16]}"
+            conversation_id = f"conv_{stable_digest(salt, str(row.get('channel', '')), str(row.get('thread_key', '')))[:16]}"
+            transcript_packets.append(
+                {
+                    "packet_id": transcript_id,
+                    "conversation_id": conversation_id,
+                    "captured_at": str(row.get("created_at", "") or ""),
+                    "input_text": compact_text(self._stage27_redact_blind_text(input_payload.get("text", "")), 320),
+                    "stage24": self._stage27_stage24_summary(dict(trace.get("stage24", {}))),
+                    "stage25": self._stage27_stage25_summary(dict(trace.get("stage25", {}))),
+                    "stage26": {
+                        **self._stage27_stage26_summary(dict(trace.get("stage26", {}))),
+                        "object_refs": [
+                            f"obj_{stable_digest(salt, str(item))[:12]}"
+                            for item in list(dict(trace.get("stage26", {})).get("object_ids", []))[:4]
+                            if str(item).strip()
+                        ],
+                    },
+                }
+            )
+            if str(row.get("mode", "")) != "shadow":
+                continue
+            human_reference = self._stage27_find_human_reference(row=row, horizon_hours=12.0)
+            if not human_reference:
+                continue
+            holo_text = self._stage27_holo_candidate_text(artifact if isinstance(artifact, dict) else {}, row)
+            human_text = self._stage27_redact_blind_text(human_reference.get("reply_text", ""))
+            if not holo_text or not human_text:
+                continue
+            bundle_id = f"bundle_{stable_digest(salt, str(row.get('id', index)), 'bundle')[:16]}"
+            candidates = [
+                {"candidate_id": f"cand_{stable_digest(salt, bundle_id, '0')[:12]}", "text": holo_text, "source": "holo"},
+                {"candidate_id": f"cand_{stable_digest(salt, bundle_id, '1')[:12]}", "text": human_text, "source": "human"},
+            ]
+            rng = random.Random(stable_digest(salt, bundle_id))
+            rng.shuffle(candidates)
+            comparison_bundles.append(
+                {
+                    "bundle_id": bundle_id,
+                    "packet_id": transcript_id,
+                    "candidates": [{"candidate_id": item["candidate_id"], "text": item["text"]} for item in candidates],
+                }
+            )
+            review_packets.append(
+                {
+                    "review_packet_id": f"review_{stable_digest(salt, bundle_id, 'review')[:16]}",
+                    "bundle_id": bundle_id,
+                    "packet_id": transcript_id,
+                    "rubric": [
+                        "identity_stability_over_time",
+                        "continuity_after_interruption",
+                        "history_light_reentry",
+                        "task_world_consistency",
+                        "human_likeness",
+                    ],
+                    "candidates": [{"candidate_id": item["candidate_id"], "text": item["text"]} for item in candidates],
+                }
+            )
+            answer_key["bundles"].append(
+                {
+                    "bundle_id": bundle_id,
+                    "packet_id": transcript_id,
+                    "trace_row_id": int(row.get("id", 0) or 0),
+                    "candidates": [{"candidate_id": item["candidate_id"], "source": item["source"]} for item in candidates],
+                }
+            )
+        transcript_path = root / "transcript_packets.jsonl"
+        comparison_path = root / "comparison_bundles.jsonl"
+        review_path = root / "human_vs_holo_review_packets.jsonl"
+        answer_key_path = root / "answer_key.json"
+        atomic_write_text(
+            transcript_path,
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in transcript_packets),
+        )
+        atomic_write_text(
+            comparison_path,
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in comparison_bundles),
+        )
+        atomic_write_text(
+            review_path,
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in review_packets),
+        )
+        atomic_write_text(answer_key_path, json.dumps(answer_key, ensure_ascii=False, indent=2) + "\n")
+        return {
+            "status": "pass",
+            "stage": "stage27",
+            "window_hours": hours,
+            "since": since,
+            "trace_count": len(rows),
+            "export_dir": str(root),
+            "transcript_packets_path": str(transcript_path),
+            "comparison_bundles_path": str(comparison_path),
+            "human_vs_holo_review_packets_path": str(review_path),
+            "answer_key_path": str(answer_key_path),
+            "packet_counts": {
+                "transcript_packets": len(transcript_packets),
+                "comparison_bundles": len(comparison_bundles),
+                "review_packets": len(review_packets),
+            },
+        }
+
+    def run_blackbox_soak(
+        self,
+        *,
+        since_hours: float = 168.0,
+        limit: int = 500,
+        artifact_dir: str | None = None,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        hours, since, rows = self._stage27_trace_rows(window_hours=since_hours, limit=limit)
+        root = (
+            Path(artifact_dir).resolve()
+            if str(artifact_dir or "").strip()
+            else self._stage22_artifact_root().parent / "stage27" / time.strftime("%Y%m%d-%H%M%S")
+        )
+        replay_report = self.replay_live_artifacts(
+            since_hours=hours,
+            limit=max(1, min(max(1, int(limit)), max(1, len(rows) or 1))),
+            artifact_dir=str(root / "live-replay"),
+        )
+        scorecard = self._stage27_compute_scorecard(
+            window_hours=hours,
+            since=since,
+            rows=rows,
+            replay_report=replay_report,
+        )
+        blind_export = self.export_blind_packets(
+            since_hours=hours,
+            limit=max(1, int(limit)),
+            artifact_dir=str(root / "blind"),
+        )
+        canary = self.show_online_canary(limit=8)
+        raw_regret = float(scorecard.get("raw_policy_regret_on_live_artifacts", 0.0) or 0.0)
+        gate = {
+            "status": "eligible_for_followup"
+            if str(replay_report.get("status", "")) in {"pass", "warn"} and raw_regret <= 0.2 and not bool(canary.get("rollback_enabled", False))
+            else "hold",
+            "eligible_for_followup": bool(
+                str(replay_report.get("status", "")) in {"pass", "warn"}
+                and raw_regret <= 0.2
+                and not bool(canary.get("rollback_enabled", False))
+            ),
+            "raw_policy_regret_threshold": 0.2,
+            "raw_policy_regret_used_for_gate": raw_regret,
+            "canary_mode": str(canary.get("mode", "") or ""),
+            "rollback_enabled": bool(canary.get("rollback_enabled", False)),
+            "contract": str(canary.get("contract", "") or ""),
+        }
+        persisted = {}
+        if persist:
+            persisted = self.store.record_blackbox_soak_run(
+                stage="stage27",
+                window_hours=hours,
+                since=since,
+                trace_count=len(rows),
+                scorecard=scorecard,
+                replay_report=replay_report,
+                blind_export=blind_export,
+                gate=gate,
+                artifact_root=str(root),
+            )
+        return {
+            "status": "pass",
+            "stage": "stage27",
+            "scorecard": scorecard,
+            "replay_report": replay_report,
+            "blind_export": blind_export,
+            "gate": gate,
+            "trace_count": len(rows),
+            "artifact_root": str(root),
+            "persisted_run": persisted,
+            "online_canary": canary,
+        }
+
+    def show_blackbox_scorecard(self, *, since_hours: float = 168.0, limit: int = 500) -> dict[str, Any]:
+        latest = self.store.latest_blackbox_soak_run(stage="stage27")
+        if latest:
+            return {
+                "status": "ok",
+                "stage": "stage27",
+                "source": "latest_persisted",
+                **latest,
+            }
+        hours, since, rows = self._stage27_trace_rows(window_hours=since_hours, limit=limit)
+        scorecard = self._stage27_compute_scorecard(window_hours=hours, since=since, rows=rows, replay_report={})
+        return {
+            "status": "ok",
+            "stage": "stage27",
+            "source": "on_demand",
+            "scorecard": scorecard,
+            "window_hours": hours,
+            "since": since,
+            "trace_count": len(rows),
+        }
+
     def trace_canary_decision(
         self,
         *,
@@ -1520,6 +1994,23 @@ class HoloReplyService:
         artifact_dir: str | None = None,
     ) -> dict[str, Any]:
         return self._accept_stage26_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def accept_stage27(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self._accept_stage27_impl(
             thread_key=thread_key,
             chat_name=chat_name,
             channel=channel,
@@ -5509,6 +6000,340 @@ class HoloReplyService:
             },
         }
 
+    def _accept_stage27_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        requested_chat_name = str(chat_name or "Nemoqi").strip()
+        requested_thread_key = str(thread_key or requested_chat_name).strip()
+        if normalized_channel == "wechat":
+            requested_thread_key = self._stage22_normalize_wechat_thread(requested_thread_key, requested_chat_name)
+        stage26_report = self.accept_stage26(
+            thread_key=requested_thread_key,
+            chat_name=requested_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        run_id = stable_digest(requested_thread_key, requested_chat_name, utc_now(), "stage27")[:12]
+        probe_chat_name = f"{requested_chat_name}-stage27-{run_id}"
+        probe_thread_key = f"wechat:{probe_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:{run_id}"
+        other_chat_name = f"{probe_chat_name}-other"
+        other_thread_key = f"wechat:{other_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:other:{run_id}"
+        artifact_root = Path(artifact_dir).resolve() / "stage27-blackbox" if str(artifact_dir or "").strip() else Path(tempfile.mkdtemp(prefix="holo-stage27-"))
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        canary_root = artifact_root / "canary"
+        canary_root.mkdir(parents=True, exist_ok=True)
+
+        fragmented_a = self.memory.upsert_task_world_object(
+            object_type="task",
+            summary="shared blackbox deliverable awaiting continuation",
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            source_ref="accept_stage27:fragmented",
+            confidence=0.71,
+            metadata={"source": "accept_stage27", "fragment": "a", "object_id": f"accept_stage27_fragment_a_{run_id}"},
+        )
+        fragmented_b = self.memory.upsert_task_world_object(
+            object_type="task",
+            summary="shared blackbox deliverable awaiting continuation",
+            thread_key=other_thread_key,
+            chat_name=other_chat_name,
+            channel=normalized_channel,
+            source_ref="accept_stage27:fragmented",
+            confidence=0.7,
+            metadata={"source": "accept_stage27", "fragment": "b", "object_id": f"accept_stage27_fragment_b_{run_id}"},
+        )
+        self.memory.archive_turn(
+            "remind me where we left the deliverable",
+            "We were still carrying the shared blackbox deliverable in this thread.",
+            source="accept_stage27.seed",
+            tags=["wechat", "chat_reply", "stage27"],
+            metadata={"thread_key": probe_thread_key, "chat_name": probe_chat_name, "channel": normalized_channel},
+        )
+        sidecar = self.memory.sidecar_packet(
+            "pick this up again without rereading everything",
+            context={
+                "channel": normalized_channel,
+                "thread_key": probe_thread_key,
+                "incoming_thread_key": probe_thread_key,
+                "chat_name": probe_chat_name,
+                "sender": str(sender or requested_chat_name),
+                "message_id": f"accept-stage27-sidecar-{run_id}",
+                "event_id": "2701",
+                "attachments": [],
+                "recent_history": [],
+            },
+        )
+        task_world = self.show_task_world(
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            limit=4,
+            include_inactive=True,
+        )
+        identity_before = self.memory.self_model_state()
+        autobiographical_before = self.memory.autobiographical_state()
+
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        timestamps = {
+            "older": (now - timedelta(hours=30)).isoformat().replace("+00:00", "Z"),
+            "shadow": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+            "live": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            "other": (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z"),
+        }
+
+        def _artifact_payload(
+            *,
+            thread_key: str,
+            chat_name: str,
+            message_id: str,
+            text: str,
+            mode: str,
+            verdict: str,
+            selected_action: str,
+            returned_action: str,
+            semantic_action: str,
+            identity_continuity: float,
+            chapter: str,
+            latency_ms: int,
+        ) -> dict[str, Any]:
+            return {
+                "event_row_id": 0,
+                "thread_key": thread_key,
+                "chat_name": chat_name,
+                "input": {
+                    "thread_key": thread_key,
+                    "chat_name": chat_name,
+                    "channel": normalized_channel,
+                    "text": text,
+                    "message_id": message_id,
+                },
+                "selected_action": {"action_type": selected_action},
+                "semantic_action": semantic_action,
+                "returned_action": returned_action,
+                "result": {
+                    "action": semantic_action,
+                    "returned_action": returned_action,
+                    "text": "I still have the same thread-local task-world in view.",
+                    "delivery_suppressed_by_canary": verdict == "shadow_suppressed",
+                },
+                "gate": {"mode": mode, "verdict": verdict},
+                "trace": {
+                    "stage18": {"reply_lane": "micro_fast", "fast_lane": True},
+                    "stage20": {"temporal_visible": True, "resume_cue": "pick the thread back up"},
+                    "stage24": self._stage27_stage24_summary(dict(sidecar.get("stage24", {}))),
+                    "stage25": self._stage27_stage25_summary(dict(sidecar.get("stage25", {}))),
+                    "stage26": self._stage27_stage26_summary(dict(sidecar.get("stage26", {}))),
+                },
+                "identity_snapshot": {
+                    "identity_continuity": round(float(identity_continuity), 4),
+                    "current_chapter": chapter,
+                },
+                "timing_ms": {"stage22_total_ms": int(latency_ms)},
+            }
+
+        seeded_rows: list[dict[str, Any]] = []
+        trace_specs = [
+            {
+                "key": "older",
+                "thread_key": probe_thread_key,
+                "chat_name": probe_chat_name,
+                "message_id": f"accept-stage27-older-{run_id}",
+                "text": "yesterday's continuation point",
+                "mode": "shadow",
+                "verdict": "shadow_suppressed",
+                "selected_action": "reply_once",
+                "returned_action": "silence",
+                "semantic_action": "reply_once",
+                "identity_continuity": 0.58,
+                "chapter": "early reentry",
+                "latency_ms": 180,
+            },
+            {
+                "key": "shadow",
+                "thread_key": probe_thread_key,
+                "chat_name": probe_chat_name,
+                "message_id": f"accept-stage27-shadow-{run_id}",
+                "text": "pick the same thread up now",
+                "mode": "shadow",
+                "verdict": "shadow_suppressed",
+                "selected_action": "reply_once",
+                "returned_action": "silence",
+                "semantic_action": "reply_once",
+                "identity_continuity": 0.72,
+                "chapter": "stable continuation",
+                "latency_ms": 220,
+            },
+            {
+                "key": "live",
+                "thread_key": probe_thread_key,
+                "chat_name": probe_chat_name,
+                "message_id": f"accept-stage27-live-{run_id}",
+                "text": "continue cleanly without rereading history",
+                "mode": "canary_live",
+                "verdict": "allowed",
+                "selected_action": "reply_once",
+                "returned_action": "reply",
+                "semantic_action": "reply_once",
+                "identity_continuity": 0.74,
+                "chapter": "stable continuation",
+                "latency_ms": 320,
+            },
+            {
+                "key": "other",
+                "thread_key": other_thread_key,
+                "chat_name": other_chat_name,
+                "message_id": f"accept-stage27-other-{run_id}",
+                "text": "this is still the shared deliverable from the other thread",
+                "mode": "shadow",
+                "verdict": "shadow_suppressed",
+                "selected_action": "reply_once",
+                "returned_action": "silence",
+                "semantic_action": "reply_once",
+                "identity_continuity": 0.73,
+                "chapter": "stable continuation",
+                "latency_ms": 260,
+            },
+        ]
+        for index, spec in enumerate(trace_specs, start=1):
+            artifact = _artifact_payload(**{k: v for k, v in spec.items() if k != "key"})
+            artifact_path = canary_root / f"{spec['key']}.json"
+            atomic_write_text(artifact_path, json.dumps(artifact, ensure_ascii=False, indent=2) + "\n")
+            row = self.store.record_canary_trace(
+                event_row_id=2700 + index,
+                channel=normalized_channel,
+                thread_key=spec["thread_key"],
+                chat_name=spec["chat_name"],
+                message_id=spec["message_id"],
+                mode=spec["mode"],
+                verdict=spec["verdict"],
+                selected_action=spec["selected_action"],
+                returned_action=spec["returned_action"],
+                latency_ms=spec["latency_ms"],
+                artifact_path=str(artifact_path),
+                metadata={
+                    "trace": dict(artifact.get("trace", {})),
+                    "result": dict(artifact.get("result", {})),
+                    "identity_snapshot": dict(artifact.get("identity_snapshot", {})),
+                },
+            )
+            with self.store._lock:
+                self.store.conn.execute(
+                    "UPDATE online_canary_traces SET created_at = ? WHERE id = ?",
+                    (timestamps[spec["key"]], int(row.get("id", 0) or 0)),
+                )
+                self.store.conn.commit()
+                refreshed = self.store.conn.execute(
+                    "SELECT * FROM online_canary_traces WHERE id = ?",
+                    (int(row.get("id", 0) or 0),),
+                ).fetchone()
+            seeded_rows.append(self.store._canary_trace_from_row(dict(refreshed) if refreshed else row))
+
+        self.memory.archive_turn(
+            "pick the same thread up now",
+            "Let’s keep the same thread warm and continue the shared deliverable without rereading everything.",
+            source="accept_stage27.human_reference",
+            tags=["wechat", "chat_reply", "stage27"],
+            metadata={"thread_key": probe_thread_key, "chat_name": probe_chat_name, "channel": normalized_channel},
+        )
+
+        soak = self.run_blackbox_soak(since_hours=48.0, limit=32, artifact_dir=str(artifact_root), persist=True)
+        identity_after = self.memory.self_model_state()
+        autobiographical_after = self.memory.autobiographical_state()
+        scorecard = dict(soak.get("scorecard", {}))
+        replay_report = dict(soak.get("replay_report", {}))
+        blind_export = dict(soak.get("blind_export", {}))
+        gate = dict(soak.get("gate", {}))
+        online_canary = dict(soak.get("online_canary", {}))
+        replay = dict(replay_report.get("replay", {})) if isinstance(replay_report.get("replay", {}), dict) else {}
+        export_files = [
+            Path(str(blind_export.get("transcript_packets_path", "") or "")),
+            Path(str(blind_export.get("comparison_bundles_path", "") or "")),
+            Path(str(blind_export.get("human_vs_holo_review_packets_path", "") or "")),
+            Path(str(blind_export.get("answer_key_path", "") or "")),
+        ]
+        transcript_text = export_files[0].read_text(encoding="utf-8") if export_files[0].exists() else ""
+        review_text = export_files[2].read_text(encoding="utf-8") if export_files[2].exists() else ""
+        answer_key_text = export_files[3].read_text(encoding="utf-8") if export_files[3].exists() else ""
+        stage26_checks = dict(stage26_report.get("checks", {})) if isinstance(stage26_report.get("checks", {}), dict) else {}
+        stage26_core_green = all(
+            bool(stage26_checks.get(key, False))
+            for key in (
+                "same_thread_reentry_uses_task_world_without_deep_recall",
+                "explicit_memory_query_still_escalates",
+                "stage22_compatibility_view_still_works",
+                "prompt_remains_history_light",
+                "stage26_packet_visible",
+                "object_trace_visible",
+            )
+        )
+        checks = {
+            "stage26_acceptance_green": str(stage26_report.get("status", "")) == "pass" or stage26_core_green,
+            "scorecard_metrics_present": all(
+                key in scorecard
+                for key in (
+                    "identity_drift_across_days",
+                    "resume_success_after_interruption",
+                    "reread_history_rate",
+                    "clarification_thrash_rate",
+                    "duplicate_followup_rate",
+                    "latency_buckets_by_action_type",
+                    "policy_regret_on_live_artifacts",
+                    "raw_policy_regret_on_live_artifacts",
+                    "cross_thread_fragmentation_rate",
+                )
+            ),
+            "replay_report_exposes_raw_and_display_metrics": bool(dict(replay.get("aggregate_metrics", {})))
+            and bool(dict(replay.get("raw_aggregate_metrics", {}))),
+            "blind_packets_exported_and_anonymized": all(path.exists() for path in export_files)
+            and probe_thread_key not in transcript_text
+            and probe_chat_name not in transcript_text
+            and "accept_stage27:fragmented" not in transcript_text
+            and str(artifact_root).replace("\\", "/") not in transcript_text.replace("\\", "/")
+            and probe_thread_key not in review_text
+            and probe_chat_name not in review_text
+            and "accept_stage27:fragmented" not in review_text
+            and probe_thread_key not in answer_key_text
+            and probe_chat_name not in answer_key_text,
+            "canary_remains_bounded_and_reversible": str(online_canary.get("contract", "")) == "host_side_shadow_first_block_only"
+            and bool(online_canary.get("artifact_capture", False))
+            and "wechat:Nemoqi" in list(online_canary.get("whitelist_threads", [])),
+            "gate_uses_raw_policy_regret_only": float(gate.get("raw_policy_regret_used_for_gate", 0.0) or 0.0)
+            == float(scorecard.get("raw_policy_regret_on_live_artifacts", 0.0) or 0.0),
+            "no_self_memory_mutation": identity_before == identity_after and autobiographical_before == autobiographical_after,
+            "persisted_soak_run_visible": bool(dict(soak.get("persisted_run", {})).get("id", 0)),
+            "comparison_bundle_generated_for_shadow_trace": int(dict(blind_export.get("packet_counts", {})).get("comparison_bundles", 0) or 0) >= 1
+            and int(dict(blind_export.get("packet_counts", {})).get("review_packets", 0) or 0) >= 1,
+            "fragmentation_metric_detects_split_family": float(scorecard.get("cross_thread_fragmentation_rate", 0.0) or 0.0) > 0.0,
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "long-horizon-blackbox-soak-stage27",
+            "checks": checks,
+            "thread_key": requested_thread_key,
+            "chat_name": requested_chat_name,
+            "channel": normalized_channel,
+            "probe_thread_key": probe_thread_key,
+            "stage26": {"status": stage26_report.get("status"), "checks": stage26_report.get("checks", {})},
+            "task_world": task_world,
+            "objects_created": {"fragmented_a": fragmented_a, "fragmented_b": fragmented_b},
+            "seeded_trace_ids": [int(row.get("id", 0) or 0) for row in seeded_rows],
+            "scorecard": scorecard,
+            "replay_report": replay_report,
+            "blind_export": blind_export,
+            "gate": gate,
+            "online_canary": online_canary,
+            "persisted_run": soak.get("persisted_run", {}),
+        }
+
     def initiative_status(
         self,
         *,
@@ -5863,6 +6688,9 @@ class HoloReplyService:
             },
             "stage21": dict(sidecar.get("stage21", {})),
             "stage22": dict(sidecar.get("stage22", {})),
+            "stage24": self._stage27_stage24_summary(dict(sidecar.get("stage24", {}))),
+            "stage25": self._stage27_stage25_summary(dict(sidecar.get("stage25", {}))),
+            "stage26": self._stage27_stage26_summary(dict(sidecar.get("stage26", {}))),
             "tier": str(sidecar.get("tier", "") or ""),
             "memory_route": str(sidecar.get("memory_route", "") or ""),
             "retrieval_mode": str(sidecar.get("retrieval_mode", "") or ""),
@@ -6050,6 +6878,7 @@ class HoloReplyService:
         if str(gate.get("mode", "")) == "disabled":
             return dict(gate)
         artifact_path = ""
+        identity_snapshot = self._stage27_identity_snapshot()
         trace_payload = {
             "schema_version": "stage22.canary.v1",
             "captured_at": utc_now(),
@@ -6080,6 +6909,7 @@ class HoloReplyService:
             },
             "gate": {key: value for key, value in dict(gate).items() if key != "trace"},
             "trace": self._stage22_trace_from_sidecar(sidecar),
+            "identity_snapshot": identity_snapshot,
             "timing_ms": {
                 **(dict(result.get("timing_ms", {})) if isinstance(result.get("timing_ms", {}), dict) else {}),
                 "stage22_total_ms": max(0, int(latency_ms or 0)),
@@ -6108,6 +6938,7 @@ class HoloReplyService:
                 "gate": {key: value for key, value in dict(gate).items() if key != "trace"},
                 "trace": trace_payload["trace"],
                 "result": trace_payload["result"],
+                "identity_snapshot": identity_snapshot,
                 "timing_ms": trace_payload["timing_ms"],
             },
         )
@@ -8314,6 +9145,14 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/blackbox-scorecard":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_blackbox_scorecard(
+                        since_hours=float(params.get("since_hours", ["168"])[0] or 168.0),
+                        limit=int(params.get("limit", ["500"])[0] or 500),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/canary-decision":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.trace_canary_decision(
@@ -8848,6 +9687,27 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         self.server.reply_service.replay_live_artifacts(
                             since_hours=float(payload.get("since_hours", 24.0) or 24.0),
                             limit=int(payload.get("limit", 24) or 24),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
+                        ),
+                    )
+                    return
+                if parsed.path == "/blackbox-soak":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.run_blackbox_soak(
+                            since_hours=float(payload.get("since_hours", 168.0) or 168.0),
+                            limit=int(payload.get("limit", 500) or 500),
+                            artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
+                            persist=bool(payload.get("persist", True)),
+                        ),
+                    )
+                    return
+                if parsed.path == "/blind-packets":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.export_blind_packets(
+                            since_hours=float(payload.get("since_hours", 168.0) or 168.0),
+                            limit=int(payload.get("limit", 500) or 500),
                             artifact_dir=str(payload.get("artifact_dir", "")).strip() or None,
                         ),
                     )

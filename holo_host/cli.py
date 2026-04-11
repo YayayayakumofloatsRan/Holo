@@ -1607,6 +1607,35 @@ def _blackbox_metrics_payload(
             service.memory.graph.close()
 
 
+def _blackbox_scorecard_payload(
+    config_path: str | None,
+    *,
+    since_hours: float,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/blackbox-scorecard",
+        params={"since_hours": since_hours, "limit": limit},
+        timeout=60.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_blackbox_scorecard(since_hours=since_hours, limit=limit), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _canary_decision_payload(
     config_path: str | None,
     *,
@@ -1689,6 +1718,70 @@ def _replay_live_artifacts_payload(
     service = HoloReplyService(load_config(config_path=config_path))
     try:
         return service.replay_live_artifacts(since_hours=since_hours, limit=limit, artifact_dir=artifact_dir), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _export_blind_packets_payload(
+    config_path: str | None,
+    *,
+    since_hours: float,
+    limit: int,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/blind-packets",
+        payload={"since_hours": since_hours, "limit": limit, "artifact_dir": artifact_dir or ""},
+        timeout=600.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.export_blind_packets(since_hours=since_hours, limit=limit, artifact_dir=artifact_dir), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _run_blackbox_soak_payload(
+    config_path: str | None,
+    *,
+    since_hours: float,
+    limit: int,
+    artifact_dir: str | None,
+    persist: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/blackbox-soak",
+        payload={"since_hours": since_hours, "limit": limit, "artifact_dir": artifact_dir or "", "persist": persist},
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.run_blackbox_soak(since_hours=since_hours, limit=limit, artifact_dir=artifact_dir, persist=persist),
+            "local_process",
+        )
     finally:
         service.store.close()
         if hasattr(service.memory, "activation"):
@@ -4188,6 +4281,12 @@ def command_show_blackbox_metrics(
     return 0
 
 
+def command_show_blackbox_scorecard(config_path: str | None, *, since_hours: float, limit: int) -> int:
+    payload, _transport = _blackbox_scorecard_payload(config_path, since_hours=since_hours, limit=limit)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_canary_decision(
     config_path: str | None,
     *,
@@ -4219,6 +4318,36 @@ def command_replay_live_artifacts(config_path: str | None, *, since_hours: float
         since_hours=since_hours,
         limit=limit,
         artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_export_blind_packets(config_path: str | None, *, since_hours: float, limit: int, artifact_dir: str | None) -> int:
+    payload, _transport = _export_blind_packets_payload(
+        config_path,
+        since_hours=since_hours,
+        limit=limit,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_run_blackbox_soak(
+    config_path: str | None,
+    *,
+    since_hours: float,
+    limit: int,
+    artifact_dir: str | None,
+    persist: bool,
+) -> int:
+    payload, _transport = _run_blackbox_soak_payload(
+        config_path,
+        since_hours=since_hours,
+        limit=limit,
+        artifact_dir=artifact_dir,
+        persist=persist,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -6585,6 +6714,53 @@ def _accept_stage26_payload(
             service.memory.graph.close()
 
 
+def _accept_stage27_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage27",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=1200.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage27(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -6868,6 +7044,27 @@ def command_accept_stage26(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage26_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage27(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage27_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -7999,6 +8196,9 @@ def main(argv: list[str] | None = None) -> int:
     blackbox_metrics_parser.add_argument("--chat-name", default=None)
     blackbox_metrics_parser.add_argument("--channel", default=None)
     blackbox_metrics_parser.add_argument("--limit", type=int, default=500)
+    blackbox_scorecard_parser = subparsers.add_parser("show-blackbox-scorecard", help="Show the latest or on-demand Stage-27 long-horizon blackbox scorecard")
+    blackbox_scorecard_parser.add_argument("--since-hours", type=float, default=168.0)
+    blackbox_scorecard_parser.add_argument("--limit", type=int, default=500)
     canary_trace_parser = subparsers.add_parser("trace-canary-decision", help="Trace Stage-22 shadow/canary gates for one turn without sending")
     canary_trace_parser.add_argument("--thread-key", default=None)
     canary_trace_parser.add_argument("--chat-name", default=None)
@@ -8011,6 +8211,15 @@ def main(argv: list[str] | None = None) -> int:
     live_replay_parser.add_argument("--since-hours", type=float, default=24.0)
     live_replay_parser.add_argument("--limit", type=int, default=24)
     live_replay_parser.add_argument("--artifact-dir", default=None)
+    blind_packets_parser = subparsers.add_parser("export-blind-packets", help="Export Stage-27 blind evaluation packets from live canary artifacts")
+    blind_packets_parser.add_argument("--since-hours", type=float, default=168.0)
+    blind_packets_parser.add_argument("--limit", type=int, default=500)
+    blind_packets_parser.add_argument("--artifact-dir", default=None)
+    blackbox_soak_parser = subparsers.add_parser("run-blackbox-soak", help="Run the Stage-27 long-horizon blackbox soak harness")
+    blackbox_soak_parser.add_argument("--since-hours", type=float, default=168.0)
+    blackbox_soak_parser.add_argument("--limit", type=int, default=500)
+    blackbox_soak_parser.add_argument("--artifact-dir", default=None)
+    blackbox_soak_parser.add_argument("--persist", required=False, default="true", choices=("true", "false", "1", "0", "yes", "no"))
     outcome_history_parser = subparsers.add_parser("trace-outcome-history", help="Show recent outcome appraisal history for one thread")
     outcome_history_parser.add_argument("--thread-key", default=None)
     outcome_history_parser.add_argument("--chat-name", default=None)
@@ -8480,6 +8689,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage26_parser.add_argument("--channel", default="wechat")
     accept_stage26_parser.add_argument("--sender", default=None)
     accept_stage26_parser.add_argument("--artifact-dir", default=None)
+    accept_stage27_parser = subparsers.add_parser("accept-stage27", help="Run the Stage-27 long-horizon blackbox soak gate")
+    accept_stage27_parser.add_argument("--thread-key", default=None)
+    accept_stage27_parser.add_argument("--chat-name", default=None)
+    accept_stage27_parser.add_argument("--channel", default="wechat")
+    accept_stage27_parser.add_argument("--sender", default=None)
+    accept_stage27_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -8586,6 +8801,12 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             limit=args.limit,
         )
+    if args.command == "show-blackbox-scorecard":
+        return command_show_blackbox_scorecard(
+            args.config,
+            since_hours=args.since_hours,
+            limit=args.limit,
+        )
     if args.command == "trace-canary-decision":
         return command_trace_canary_decision(
             args.config,
@@ -8603,6 +8824,22 @@ def main(argv: list[str] | None = None) -> int:
             since_hours=args.since_hours,
             limit=args.limit,
             artifact_dir=args.artifact_dir,
+        )
+    if args.command == "export-blind-packets":
+        return command_export_blind_packets(
+            args.config,
+            since_hours=args.since_hours,
+            limit=args.limit,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "run-blackbox-soak":
+        persist = str(args.persist).strip().lower() in {"1", "true", "yes"}
+        return command_run_blackbox_soak(
+            args.config,
+            since_hours=args.since_hours,
+            limit=args.limit,
+            artifact_dir=args.artifact_dir,
+            persist=persist,
         )
     if args.command == "trace-outcome-history":
         return command_trace_outcome_history(
@@ -9303,6 +9540,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage26":
         return command_accept_stage26(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage27":
+        return command_accept_stage27(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

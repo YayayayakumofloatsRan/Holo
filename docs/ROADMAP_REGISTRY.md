@@ -60,20 +60,21 @@ Stage26: bounded task-world state
 - Keeps Stage22 `world_coupling_signal` as a compatibility projection while same-thread ingress hydrates from explicit task-world objects before heavier recall.
 - Links temporal commitments and resume pressure into inspectable task-world state without adding a new decision layer or heavy-recall trigger.
 
+Stage27: long-horizon blackbox soak and blind evaluation harness
+- Implemented as an observational `QueueStore` soak-run surface plus artifact export under the Stage22 canary tree.
+- Computes long-horizon scorecards, replays live artifacts, and exports blind transcript or comparison packets without mutating self-memory or widening runtime autonomy.
+- Keeps online long-horizon canary deferred; Stage27 is replay-first and operational-only.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage26. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
-
-Stage27: long-horizon replay and promotion gates
-- Planned. Extends replay discipline from short-turn calibration to task-world-aware longer-horizon behavior.
-- Gating must use raw replay metrics, while rounded metrics stay reporting-only.
+This planned arc starts after Stage27. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 
 Online long-horizon canary
-- Deferred until after Stage27 replay discipline lands.
+- Deferred until after Stage27 soak discipline lands and a new explicit re-plan approves any live widening.
 - Any future rollout must stay host-side, shadow-first, whitelist-bound, rate-limited, rollback-safe, replay-disciplined, and action-market-first.
 
 Artifact/tool/outcome progress coupling
-- Deferred. This older Stage25 placeholder was explicitly superseded by the dense continuity scheduler milestone and should not be silently folded into Stage27.
+- Deferred. This older Stage25 placeholder was explicitly superseded by the dense continuity scheduler milestone and should not be silently folded into Stage27 or any post-Stage27 canary work.
 
 Bounded subject programs
 - Deferred. This is no longer the live Stage24 or Stage25 scope and should not be treated as implemented or active-planning default without an explicit re-plan.

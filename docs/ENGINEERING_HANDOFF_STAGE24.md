@@ -118,6 +118,6 @@ python -m holo_host --config .holo_host.example.toml accept-stage24 --thread-key
 
 ## Next Stage
 
-Stage25 should couple artifacts, tool outcomes, deferred replies, and world cues into the same bounded scene-state surface.
+Stage25 is implemented as the bounded dense continuity scheduler and working set.
 
-Bounded subject programs are explicitly deferred until a later re-plan.
+Artifact/tool/outcome progress coupling and bounded subject programs are both explicitly deferred until a later re-plan.

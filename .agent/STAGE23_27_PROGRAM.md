@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27. Stage26 is now the live runtime milestone, and Stage27 is the next planned implementation focus.
+- Use this document as the concrete execution spec for Stage23 through Stage27. Stage27 is now the live runtime milestone, and the next arc remains replay-first and explicitly re-planned.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -40,6 +40,12 @@
   - bounded `task_world_object` plus `task_world_link` now persist file, task, schedule, image-summary, and person objects with explicit thread and commitment links
   - same-thread ingress can hydrate bounded task-world state before scene shaping or heavier recall, while explicit memory/history/factual turns still escalate
   - Stage22 `world_coupling_signal` remains a compatibility projection over same-thread task-world visibility, so canary diagnostics and bounded cue behavior stay intact
+- Stage27 exit state on `2026-04-11`:
+  - `pytest -q` passed
+  - `python -m holo_host --config .holo_host.example.toml accept-stage27 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
+  - long-horizon scorecards now combine Stage22 carry-forward metrics with identity drift, raw and rounded live-artifact policy regret, and cross-thread fragmentation
+  - `run-blackbox-soak`, `show-blackbox-scorecard`, and `export-blind-packets` now persist operational soak runs and export blind review packets without writing into self-memory
+  - Stage24/25/26 provenance and bounded identity snapshots now ride along with Stage22 canary artifacts and traces for replay-first review
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -53,7 +59,7 @@
 - From Stage23 onward, use raw replay metrics for gating decisions and rounded replay metrics for reporting only.
 - Bounded subject programs are deferred beyond the current Stage25 implementation; do not treat them as live scope without an explicit re-plan.
 - The older Stage25 artifact/tool/outcome progress-coupling scope is deferred and must not be silently folded into Stage26 or Stage27.
-- The older online long-horizon canary milestone is deferred until after Stage27 replay discipline lands and must not be treated as current-arc scope.
+- The older online long-horizon canary milestone remains deferred beyond Stage27 and must not be treated as current-arc scope.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
 ## Milestones
@@ -90,13 +96,13 @@
 - `Stop rule`: do not regress Stage22 canary transport boundaries, Stage24/25 bounded ingress, explicit recall escalation, or same-thread inspectability
 - `Rollback rule`: ignore Stage26 task-world hydration and fall back to Stage25 dense+scene ingress while preserving stored task-world observability
 
-### Stage27: Long-Horizon Replay And Promotion Gates
-- `Status`: planned
-- `Goal`: extend replay discipline and promotion gates from short-turn calibration to task-world-aware longer-horizon behavior
-- `Scope`: add Stage27 replay fixtures for task-world-aware behavior, keep raw-vs-display separation, and define promotion or rollback rules that use raw metrics only for gating and rounded metrics only for reporting
-- `Validation`: deterministic replay across reruns, raw metrics exposed beside rounded metrics, no gating decision made from display-rounded values, and regret non-worsening across promoted task-world-aware behavior
-- `Stop rule`: do not advance if replay cannot explain why a task-world-aware behavior was approved or rejected
-- `Rollback rule`: disable promotion of task-world-aware overlays and keep replay observational only
+### Stage27: Long-Horizon Blackbox Soak And Blind Evaluation Harness
+- `Status`: implemented on `2026-04-11`
+- `Goal`: add a replay-first, long-horizon soak and blind-review harness that can evaluate task-world-aware subject stability over multi-hour and multi-day windows
+- `Scope`: persist operational soak runs in `QueueStore`, compute long-horizon scorecards from Stage22 canary traces plus Stage26 task-world links, export blind transcript and comparison packets, keep raw-vs-display replay separation, and report follow-up eligibility without promoting runtime behavior
+- `Validation`: `pytest -q` green; `accept-stage22` green; `accept-stage25` green; `accept-stage26` green; `accept-stage27` green; `tests/test_stage27_blackbox_soak.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py`
+- `Stop rule`: do not widen canary send rights, bypass replay or safety gates, or let the soak path mutate self-memory, policy sediment, or runtime autonomy
+- `Rollback rule`: keep Stage27 observational only, disable follow-up eligibility if replay evidence degrades, and defer any live long-horizon canary rollout until a later explicit re-plan
 
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
@@ -105,7 +111,7 @@
 | `Stage24` | All Stage23 surfaces | `accept-stage24`; `tests/test_stage24_scene_state.py`; `tests/test_stage17_realtime_runtime.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py` | Scene state is inspectable, restart-safe, prompt-visible before verbatim history, and action-market-first. |
 | `Stage25` | All Stage24 surfaces | `accept-stage25`; `tests/test_stage25_dense_continuity.py`; `tests/test_stage19_attention_frontier.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage22_online_canary.py` | Dense continuity stays bounded, restart-safe, stream-driven only, and ingress-visible before heavier recall. |
 | `Stage26` | All Stage25 surfaces | `accept-stage26`; `tests/test_stage26_task_world_state.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage14_replay.py` | Task-world state is restart-safe, bounded, same-thread-first, and visible before heavier recall without regressing Stage22/24/25. |
-| `Stage27` | All Stage26 surfaces | Planned `accept-stage27`; planned `tests/test_stage27_long_horizon_replay.py`; `tests/test_stage14_replay.py` with raw-vs-rounded checks | Replay and promotion gates use raw metrics for decisions and keep rounded metrics as reporting only for task-world-aware behavior. |
+| `Stage27` | All Stage26 surfaces | `accept-stage27`; `tests/test_stage27_blackbox_soak.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py` | Long-horizon scorecards, blind review export, and replay-first soak eligibility remain bounded, inspectable, and operational-only. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

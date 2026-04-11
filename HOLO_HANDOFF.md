@@ -66,9 +66,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage26-bounded-task-world-state`.
+- The current milestone tag is `stage27-long-horizon-blackbox-soak`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage27 replay and promotion gating on top of a green Stage26 bounded-task-world baseline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
+- Current focus is Stage27 observational blackbox soak evaluation on top of a green Stage26 bounded-task-world baseline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -80,10 +80,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage25: bounded dense continuity now keeps a hot-thread working set warm between turns using the existing stream family only, persists `dense_working_set` and `thread_pulse_trace`, and hydrates ingress before heavier recall
   - Stage26: bounded `task_world_object` plus `task_world_link` now persist inspectable task-world state, link temporal commitments and same-thread world objects explicitly, and hydrate same-thread ingress before heavier recall while Stage22 `world_coupling_signal` remains a compatibility projection
 - The next planned arc is:
-  - Stage27: long-horizon replay and promotion gates for task-world-aware behavior
-  - Online long-horizon canary is deferred until after Stage27 replay discipline lands
-  - Artifact/tool/outcome progress coupling is deferred beyond the current Stage26 milestone and should not be silently folded into Stage27
-  - Bounded subject programs are deferred beyond the current Stage26 task-world milestone
+  - Stage27: long-horizon blackbox soak, scorecard, replay-on-live-artifacts, and blind evaluation export for task-world-aware behavior
+  - Online long-horizon canary remains deferred beyond Stage27 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned
+  - Artifact/tool/outcome progress coupling is deferred beyond the current Stage27 milestone and should not be silently folded into this soak harness
+  - Bounded subject programs are deferred beyond the current Stage27 milestone
 - This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
@@ -193,9 +193,12 @@ These files change while Holo is alive. Do not treat them like static docs.
 - Stage22 online canary diagnostics:
   - `python3 -m holo_host show-online-canary`
   - `python3 -m holo_host show-blackbox-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+  - `python3 -m holo_host show-blackbox-scorecard --since-hours 168`
   - `python3 -m holo_host trace-canary-decision --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "still here?"`
   - `python3 -m holo_host set-canary-rollback --enabled true --reason manual_hold`
   - `python3 -m holo_host replay-live-artifacts --since-hours 24`
+  - `python3 -m holo_host export-blind-packets --since-hours 168`
+  - `python3 -m holo_host run-blackbox-soak --since-hours 168`
   - `python3 -m holo_host show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage23 release-parity acceptance:
   - `python3 -m holo_host accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
@@ -213,6 +216,8 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host trace-thread-object-links --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage26 task-world acceptance:
   - `python3 -m holo_host accept-stage26 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Stage27 long-horizon soak acceptance:
+  - `python3 -m holo_host accept-stage27 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -310,8 +315,11 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-online-canary`
 - `python3 -m holo_host show-blackbox-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host show-blackbox-scorecard --since-hours 168`
 - `python3 -m holo_host trace-canary-decision --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "still here?"`
 - `python3 -m holo_host replay-live-artifacts --since-hours 24`
+- `python3 -m holo_host export-blind-packets --since-hours 168`
+- `python3 -m holo_host run-blackbox-soak --since-hours 168`
 - `python3 -m holo_host show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage24 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-scene-state --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
@@ -320,6 +328,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host show-dense-working-set --channel wechat`
 - `python3 -m holo_host trace-thread-pulse --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host accept-stage26 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage27 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-task-world --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host trace-world-object --object-id <object_id>`
 - `python3 -m holo_host trace-thread-object-links --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
@@ -332,16 +341,17 @@ These files change while Holo is alive. Do not treat them like static docs.
   - Stage24 is implemented as the scene-state continuity layer
   - Stage25 is implemented as the dense continuity scheduler and working set
   - Stage26 is implemented as bounded task-world state
-  - Stage27 extends replay discipline and promotion gates to task-world-aware longer-horizon behavior
-  - Online long-horizon canary is deferred until after Stage27 replay discipline lands
+  - Stage27 adds an observational long-horizon blackbox soak, scorecard, blind review export, and replay-first follow-up eligibility reporting
+  - Online long-horizon canary remains deferred beyond Stage27
   - Bounded subject programs are deferred until a later explicit re-plan
-- Current verified baseline after Stage26:
+- Current verified baseline after Stage27:
   - `pytest -q` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage24 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage25 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage26 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
+  - `python3 -m holo_host --config .holo_host.example.toml accept-stage27 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
 
 ## Invariants
 - Do not silently change online transport modes

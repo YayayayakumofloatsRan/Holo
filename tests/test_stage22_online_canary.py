@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -66,6 +67,7 @@ class Stage22OnlineCanaryTests(unittest.TestCase):
                 metrics = service.show_blackbox_metrics(window_hours=24, thread_key="wechat:Nemoqi", channel="wechat")
                 traces = store.list_canary_traces(channel="wechat", thread_key="wechat:Nemoqi", limit=4)
                 artifact_exists = Path(result["stage22"]["artifact_path"]).exists()
+                artifact_payload = json.loads(Path(result["stage22"]["artifact_path"]).read_text(encoding="utf-8"))
             finally:
                 self._close(service, store, bridge)
 
@@ -80,7 +82,15 @@ class Stage22OnlineCanaryTests(unittest.TestCase):
         self.assertEqual(result["stage22"]["mode"], "shadow")
         self.assertGreaterEqual(runner.calls, 1)
         self.assertTrue(artifact_exists)
+        self.assertIn("stage24", artifact_payload["trace"])
+        self.assertIn("stage25", artifact_payload["trace"])
+        self.assertIn("stage26", artifact_payload["trace"])
+        self.assertIn("identity_snapshot", artifact_payload)
         self.assertEqual(len(traces), 1)
+        self.assertIn("stage24", traces[0]["metadata"]["trace"])
+        self.assertIn("stage25", traces[0]["metadata"]["trace"])
+        self.assertIn("stage26", traces[0]["metadata"]["trace"])
+        self.assertIn("identity_snapshot", traces[0]["metadata"])
         self.assertGreaterEqual(metrics["total_traces"], 1)
         self.assertIn("reflex_hit_rate", metrics)
         self.assertIn("latency_buckets_by_action_type", metrics)

@@ -2,11 +2,12 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage26-bounded-task-world-state`.
+- The live runtime milestone is now `stage27-long-horizon-blackbox-soak`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
 - Stage26 is implemented: bounded `task_world_object` plus `task_world_link` now persist inspectable task-world state across restarts, Stage22 `world_coupling_signal` is a compatibility projection over same-thread task-world visibility, and ingress can hydrate same-thread turns from bounded task-world state before heavier recall.
+- Stage27 is implemented: long-horizon blackbox soak runs, scorecards, replay-on-live-artifacts, and blind evaluation packet export now exist as bounded operational surfaces in `QueueStore` and artifact directories without mutating self-memory.
 - Verified on `2026-04-11`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed in sequential verification
@@ -14,7 +15,8 @@
   - `python -m holo_host --config .holo_host.example.toml accept-stage24 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage25 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage26 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
-- The next implementation focus is Stage27 replay and promotion gates on top of the live bounded task-world baseline.
+  - `python -m holo_host --config .holo_host.example.toml accept-stage27 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
+- The next implementation focus is post-Stage27 sequencing; long-horizon live canary remains deferred behind replay-first discipline.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 
 ## Non-Negotiable Contracts
@@ -32,8 +34,8 @@
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
-- `Active implementation priority`: Stage27 replay and promotion gates
-- `Current live runtime boundary`: Stage26 is implemented and live; Stage27 remains planned work
+- `Active implementation priority`: Stage27 soak-harness hardening and post-Stage27 re-plan
+- `Current live runtime boundary`: Stage27 is implemented and live; online long-horizon canary remains deferred
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains a large facade and is still the first structural slimming target for Stage25+.
@@ -48,4 +50,4 @@
 | `Stage24` | `implemented` | Turn predictive continuity into a bounded, inspectable per-thread `scene_state` layer that ordinary short turns can use before verbatim history. | Stage23 contract repair. | `pytest -q`; `accept-stage23`; `accept-stage24` green; `tests/test_stage24_scene_state.py`; `tests/test_stage17_realtime_runtime.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py`. | Do not regress Stage17 fast-lane behavior, explicit memory escalation, or bounded inspectability. | Ignore scene-state overlays and fall back to Stage23 predictive continuity if Stage24 continuity surfaces become unstable. |
 | `Stage25` | `implemented` | Keep a bounded hot-thread working set warm between turns using existing streams only and hydrate ingress from that dense continuity layer before heavier recall. | Stage24 scene-state layer. | `pytest -q`; `accept-stage24`; `accept-stage25`; `tests/test_stage25_dense_continuity.py`; `tests/test_stage19_attention_frontier.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage22_online_canary.py`. | Do not regress bounded ingress, explicit memory escalation, or stream-only scheduling. | Ignore dense continuity hydration and fall back to Stage24 scene-state ingress if Stage25 warmth or budget logic becomes unstable. |
 | `Stage26` | `implemented` | Replace cue-only world coupling with bounded task-world state that same-thread ingress can inspect and reuse before heavier recall. | Stage25 dense continuity baseline and existing Stage20/22/24 seams. | `pytest -q`; `accept-stage22`; `accept-stage25`; `accept-stage26`; `tests/test_stage26_task_world_state.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage14_replay.py`. | Do not regress Stage22 canary transport boundaries, Stage24/25 bounded ingress, or explicit recall escalation. | Ignore Stage26 task-world hydration and fall back to Stage25 dense+scene ingress while preserving inspectable task-world storage. |
-| `Stage27` | `planned` | Extend replay discipline and promotion gates to longer-horizon task-world behavior. | Stage26 bounded task-world baseline and Stage14 replay discipline. | Planned `accept-stage27`; planned Stage27 replay tests; `tests/test_stage14_replay.py`; Stage26 surfaces remain green. | Do not advance if replay cannot explain approval or rejection decisions for task-world-aware behavior. | Disable promotion of long-horizon overlays and keep replay observational only. |
+| `Stage27` | `implemented` | Add a long-horizon blackbox soak harness, scorecard, blind evaluation export, and replay-first eligibility reporting for task-world-aware behavior. | Stage26 bounded task-world baseline, Stage22 canary traces, and Stage14 replay discipline. | `pytest -q`; `accept-stage22`; `accept-stage25`; `accept-stage26`; `accept-stage27`; `tests/test_stage27_blackbox_soak.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py`. | Do not widen canary send rights, bypass replay or safety gates, or let observational evaluation mutate self-memory. | Keep Stage27 observational only, disable soak follow-up eligibility if replay evidence weakens, and defer any live long-horizon canary widening. |

@@ -184,6 +184,23 @@ class QueueStore:
             ON online_canary_traces(channel, thread_key, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_online_canary_created
             ON online_canary_traces(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS blackbox_soak_runs (
+                id INTEGER PRIMARY KEY,
+                stage TEXT NOT NULL DEFAULT 'stage27',
+                window_hours REAL NOT NULL DEFAULT 168.0,
+                since TEXT NOT NULL DEFAULT '',
+                trace_count INTEGER NOT NULL DEFAULT 0,
+                scorecard_json TEXT NOT NULL DEFAULT '{}',
+                replay_report_json TEXT NOT NULL DEFAULT '{}',
+                blind_export_json TEXT NOT NULL DEFAULT '{}',
+                gate_json TEXT NOT NULL DEFAULT '{}',
+                artifact_root TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_blackbox_soak_runs_created
+            ON blackbox_soak_runs(created_at DESC);
             """
         )
         self._ensure_column("contacts", "last_initiative_at", "TEXT")
@@ -1038,6 +1055,15 @@ class QueueStore:
         payload["metadata"] = QueueStore._decode_json_dict(payload.pop("metadata_json", "{}"))
         return payload
 
+    @staticmethod
+    def _blackbox_soak_run_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        payload["scorecard"] = QueueStore._decode_json_dict(payload.pop("scorecard_json", "{}"))
+        payload["replay_report"] = QueueStore._decode_json_dict(payload.pop("replay_report_json", "{}"))
+        payload["blind_export"] = QueueStore._decode_json_dict(payload.pop("blind_export_json", "{}"))
+        payload["gate"] = QueueStore._decode_json_dict(payload.pop("gate_json", "{}"))
+        return payload
+
     @_synchronized
     def record_canary_trace(
         self,
@@ -1151,6 +1177,53 @@ class QueueStore:
             tuple(args),
         ).fetchone()
         return int(row["count"]) if row else 0
+
+    @_synchronized
+    def record_blackbox_soak_run(
+        self,
+        *,
+        stage: str = "stage27",
+        window_hours: float,
+        since: str,
+        trace_count: int,
+        scorecard: dict[str, Any] | None = None,
+        replay_report: dict[str, Any] | None = None,
+        blind_export: dict[str, Any] | None = None,
+        gate: dict[str, Any] | None = None,
+        artifact_root: str = "",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO blackbox_soak_runs(
+                stage, window_hours, since, trace_count, scorecard_json,
+                replay_report_json, blind_export_json, gate_json, artifact_root, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(stage or "stage27").strip() or "stage27",
+                float(window_hours or 168.0),
+                str(since or "").strip(),
+                max(0, int(trace_count or 0)),
+                json_dumps(scorecard or {}),
+                json_dumps(replay_report or {}),
+                json_dumps(blind_export or {}),
+                json_dumps(gate or {}),
+                str(artifact_root or "").strip(),
+                now,
+            ),
+        )
+        self.conn.commit()
+        row = self._fetchone("SELECT * FROM blackbox_soak_runs WHERE id = ?", (int(cursor.lastrowid),)) or {}
+        return self._blackbox_soak_run_from_row(row) if row else {}
+
+    @_synchronized
+    def latest_blackbox_soak_run(self, *, stage: str = "stage27") -> dict[str, Any]:
+        row = self._fetchone(
+            "SELECT * FROM blackbox_soak_runs WHERE stage = ? ORDER BY id DESC LIMIT 1",
+            (str(stage or "stage27").strip() or "stage27",),
+        ) or {}
+        return self._blackbox_soak_run_from_row(row) if row else {}
 
     @_synchronized
     def has_pending_proactive(self, thread_id: int) -> bool:
