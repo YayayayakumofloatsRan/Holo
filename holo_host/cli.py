@@ -5957,6 +5957,53 @@ def _accept_stage22_payload(
             service.memory.graph.close()
 
 
+def _accept_stage23_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage23",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage23(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -6156,6 +6203,27 @@ def command_accept_stage22(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage22_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage23(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage23_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -7710,6 +7778,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage22_parser.add_argument("--channel", default="wechat")
     accept_stage22_parser.add_argument("--sender", default=None)
     accept_stage22_parser.add_argument("--artifact-dir", default=None)
+    accept_stage23_parser = subparsers.add_parser("accept-stage23", help="Run the Stage-23 kernel/shell orthogonalization and release parity gate")
+    accept_stage23_parser.add_argument("--thread-key", default=None)
+    accept_stage23_parser.add_argument("--chat-name", default=None)
+    accept_stage23_parser.add_argument("--channel", default="wechat")
+    accept_stage23_parser.add_argument("--sender", default=None)
+    accept_stage23_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -8436,6 +8510,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage22":
         return command_accept_stage22(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage23":
+        return command_accept_stage23(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

@@ -40,13 +40,14 @@ Stage22: bounded blackbox online canary
 - Records operational `online_canary_traces` and artifacts for daily Stage14 replay-on-live-artifacts.
 - Hydrates bounded Mind Graph `world_coupling_signal` cues as same-thread perception inputs only; cues do not select actions or trigger recall by themselves.
 
+Stage23: kernel/shell orthogonalization and release parity
+- Implemented as a semantic-versus-delivery split: Stage22 suppression no longer rewrites the subject action contract and instead only changes transport-facing `returned_action` plus delivery fields.
+- Restores full-green release parity by making artifact ingest backward-compatible again and by pushing replay gating onto raw metrics while rounded aggregates stay reporting-only.
+- Keeps Stage22 shadow-first safety boundaries, live-artifact replay, rollback, rate limits, and canary traces intact.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage22. It begins with Stage23 contract paydown before any new long-horizon capability work lands. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
-
-Stage23: contract repair and surface separation
-- Planned first milestone. Pays down Stage22 shell/core coupling, artifact-ingest compatibility drift, replay rounding drift, and acceptance/runtime mismatches.
-- Keeps Stage22 runtime behavior fixed while interfaces, validation surfaces, and docs are aligned.
+This planned arc starts after Stage23. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 
 Stage24: bounded subject programs
 - Planned. Adds bounded, inspectable subject-program records keyed by canonical thread plus program id.

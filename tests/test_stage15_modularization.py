@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 import holo_memory_library.rag_memory as rm
@@ -10,6 +11,10 @@ from tests.test_rag_memory import TempMemoryRepo
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "stage14"
+
+
+def _round4(value: float) -> float:
+    return float(Decimal(str(value)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
 
 class Stage15ModularizationTests(unittest.TestCase):
@@ -27,7 +32,14 @@ class Stage15ModularizationTests(unittest.TestCase):
                 bridge.graph.close()
 
         metrics = report["aggregate_metrics"]
+        raw_metrics = report["raw_aggregate_metrics"]
         self.assertEqual(report["fixture_count"], 4)
+        self.assertAlmostEqual(_round4(float(raw_metrics["risk_mae"])), float(metrics["risk_mae"]), places=4)
+        self.assertAlmostEqual(
+            _round4(float(raw_metrics["policy_regret_vs_best_available_action"])),
+            float(metrics["policy_regret_vs_best_available_action"]),
+            places=4,
+        )
         self.assertEqual(metrics["calibration_support_by_action_type"], {"defer_reply": 1, "reply_multi": 1, "reply_once": 1})
         self.assertAlmostEqual(float(metrics["response_quality_mae"]), 0.3011, places=4)
         self.assertAlmostEqual(float(metrics["relational_delta_mae"]), 0.1681, places=4)

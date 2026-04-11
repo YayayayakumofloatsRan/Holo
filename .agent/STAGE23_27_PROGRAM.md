@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27; Stage22 remains the live runtime milestone until Stage23 exits cleanly.
+- Use this document as the concrete execution spec for Stage23 through Stage27. Stage23 is now the live runtime milestone, and Stage24 is the next planned implementation focus.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -15,6 +15,13 @@
   - `artifact-ingest compatibility drift` between service code and test doubles
   - `replay rounding drift` between raw metrics and replay gate consumers
   - `acceptance/runtime mismatches` where Stage22 shadow defaults suppress behavior that baseline host tests still expect
+- Stage23 exit state on `2026-04-11`:
+  - `pytest -q` passed
+  - `python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
+  - `python -m holo_host --config .holo_host.example.toml accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
+  - semantic reply results now remain stable under Stage22 shadow/canary suppression, while delivery outcome is exposed separately through `returned_action` and delivery fields
+  - artifact ingest preserves richer metadata when supported and falls back cleanly for older or fake backends
+  - replay gates consume raw metrics while rounded aggregates remain reporting-only
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -31,12 +38,12 @@
 ## Milestones
 
 ### Stage23: Contract Repair And Surface Separation
-- `Status`: planned first milestone
+- `Status`: implemented on `2026-04-11`
 - `Goal`: pay down the four recorded Stage22 blockers before any new long-horizon runtime feature work
-- `Scope`: separate shell, HTTP, acceptance, artifact-ingest, and canary concerns from core reply/runtime surfaces at the planning level; define the artifact-ingest contract boundary; require raw replay metrics for replay gates; align acceptance with baseline runtime tests
-- `Validation`: `tests/test_stage22_online_canary.py` green, `tests/test_stage15_modularization.py` green, `tests/test_holo_host.py` green or every remaining failure explicitly carried as accepted debt, and `accept-stage22` still pass
+- `Scope`: separate semantic subject output from delivery or canary outcome, keep Stage22 host-side safety operational, restore artifact-ingest compatibility, require raw replay metrics for replay gates, and align acceptance with baseline runtime tests
+- `Validation`: `pytest -q` green; `accept-stage22` green; `accept-stage23` green
 - `Stop rule`: do not advance if Stage22 still requires shadow-mode behavior that generic host tests cannot represent cleanly
-- `Rollback rule`: freeze at Stage22 runtime plus doc-only program docs; do not widen canary or add new subject state
+- `Rollback rule`: fall back to Stage22 shell behavior only if semantic or delivery contract repair, artifact compatibility, or replay parity becomes unstable; do not widen canary or add new subject state
 
 ### Stage24: Bounded Subject Programs
 - `Status`: planned
@@ -73,7 +80,7 @@
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
-| `Stage23` | `accept-stage22`; `tests/test_stage22_online_canary.py`; `tests/test_stage15_modularization.py` | `tests/test_holo_host.py` green or a checked-in accepted-debt record for every remaining failure | The four Stage22 blockers are resolved or explicitly carried as accepted debt with evidence and stop rules. |
+| `Stage23` | `accept-stage22`; `tests/test_stage22_online_canary.py`; `tests/test_stage15_modularization.py` | `pytest -q`; `accept-stage23`; semantic or delivery split assertions in `tests/test_holo_host.py` | Completed on `2026-04-11`: the four Stage22 blockers were resolved without weakening canary safety boundaries. |
 | `Stage24` | All Stage23 surfaces | Planned `accept-stage24`; planned `tests/test_stage24_subject_programs.py`; `tests/test_stage14_replay.py` | Bounded subject programs are inspectable, restart-safe, and action-market-first. |
 | `Stage25` | All Stage24 surfaces | Planned `accept-stage25`; planned `tests/test_stage25_progress_coupling.py`; artifact-ingest compatibility checks across service and memory layers | Artifacts, tools, deferred replies, and world cues update the same bounded program surface without schema drift. |
 | `Stage26` | All Stage25 surfaces | Planned `accept-stage26`; planned `tests/test_stage26_long_horizon_replay.py`; `tests/test_stage14_replay.py` with raw-vs-rounded checks | Replay and promotion gates use raw metrics for decisions and keep rounded metrics as reporting only. |

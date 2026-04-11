@@ -39,11 +39,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 34. `docs/ENGINEERING_HANDOFF_STAGE21.md`
 35. `docs/STAGE22_BOUNDED_BLACKBOX_ONLINE_CANARY.md`
 36. `docs/ENGINEERING_HANDOFF_STAGE22.md`
-37. `HOLO_SYSTEM.md`
-38. `HOLO_HOST.md`
-39. `OPERATIONS.md`
-40. `holo_memory_library/MEMORY_LIBRARY.md`
-41. `windows_helper/README.md`
+37. `docs/STAGE23_KERNEL_SHELL_ORTHOGONALIZATION_AND_RELEASE_PARITY.md`
+38. `docs/ENGINEERING_HANDOFF_STAGE23.md`
+39. `HOLO_SYSTEM.md`
+40. `HOLO_HOST.md`
+41. `OPERATIONS.md`
+42. `holo_memory_library/MEMORY_LIBRARY.md`
+43. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -58,17 +60,17 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage22-bounded-blackbox-online-canary`.
+- The current milestone tag is `stage23-kernel-shell-orthogonalization-and-release-parity`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage23-27 bootstrap and Stage23 contract paydown: Stage22 remains the live runtime milestone, while the next arc is now tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
+- Current focus is Stage24 bounded subject programs planning on top of a green Stage23 release-parity baseline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
   - Stage20: temporal commitments and interruption recovery through queue + Mind Graph state is implemented
   - Stage21: reversible policy sedimentation and negotiated will as action-market bias is implemented
   - Stage22: host-side shadow/canary telemetry, live-artifact replay, rollback switch, and bounded world-coupling cues are implemented
+  - Stage23: semantic subject results are orthogonalized from delivery/canary suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics while rounded metrics remain reporting-only
 - The next planned arc is:
-  - Stage23: contract repair and surface separation
   - Stage24: bounded subject programs
   - Stage25: artifact/tool/outcome progress coupling
   - Stage26: long-horizon replay and promotion gates
@@ -186,6 +188,8 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host set-canary-rollback --enabled true --reason manual_hold`
   - `python3 -m holo_host replay-live-artifacts --since-hours 24`
   - `python3 -m holo_host show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- Stage23 release-parity acceptance:
+  - `python3 -m holo_host accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -221,10 +225,7 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host show-usage-ledger --limit 100`
 
 ## Current Weak Spots
-- Stage23 blocker paydown starts with `reply_api.py` shell/core coupling
-- artifact-ingest compatibility drift currently exists between service code and test doubles
-- replay gate logic still consumes rounded regret metrics in some paths instead of raw replay metrics
-- acceptance and runtime still diverge: `accept-stage22` passes while `tests/test_holo_host.py` still expects pre-shadow reply behavior
+- `reply_api.py` is still a large facade even after Stage23 orthogonalized semantic and delivery concerns; further structural slimming should happen only behind replay and acceptance coverage
 - `pyweixin_dialog` on `Weixin 4.1` is still the most fragile live layer
 - live WeChat trigger behavior still needs real-world hardening
 - image understanding is still artifact-first, not a fully native visual stack
@@ -236,7 +237,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - token accounting now exists, but some providers still rely on estimates rather than ground-truth usage
 - provider fallback behavior is standardized, but fallback paths still need more live soak time
 - replay coverage is now deterministic, but fixture breadth is still narrow and should grow only when it exposes a real blind spot
-- Stage15 helper-module extraction is in place, but façade files are still larger than ideal and should only be slimmed further behind replay checks
+- Stage15 helper-module extraction is in place, but facade files are still larger than ideal and should only be slimmed further behind replay checks
 
 - Stage18 `micro_fast` routing is intentionally conservative; do not broaden it without proving explicit memory/history escalation and action-market-first still hold
 - Stage20 temporal state is intentionally bounded and inspectable; do not let it create direct sends, unbounded scheduling, or a second decision layer
@@ -281,6 +282,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host trace-policy-influence --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "continue this carefully"`
 - `python3 -m holo_host rollback-policy --id <policy_id>`
 - `python3 -m holo_host accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
+- `python3 -m holo_host accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-online-canary`
 - `python3 -m holo_host show-blackbox-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host trace-canary-decision --thread-key Nemoqi --chat-name Nemoqi --channel wechat --query "still here?"`
@@ -292,14 +294,14 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `.agent/PLANS.md`
   - `.agent/STAGE23_27_PROGRAM.md`
 - Default sequencing:
-  - Stage23 pays down the recorded Stage22 blockers before any new long-horizon runtime behavior lands
   - Stage24 introduces bounded subject programs
   - Stage25 couples artifact, tool, and outcome progress into the same bounded program surface
   - Stage26 extends replay discipline and promotion gates to long-horizon behavior
   - Stage27 canaries program-aware long-horizon behavior online in host-side shadow-first mode
-- Baseline reality to preserve while Stage23 is being landed:
-  - `python3 -m holo_host accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
-  - `pytest -q tests/test_stage22_online_canary.py tests/test_stage15_modularization.py tests/test_holo_host.py` failed with `16` failures, all in `tests/test_holo_host.py`
+- Current verified baseline after Stage23:
+  - `pytest -q` passed on `2026-04-11`
+  - `python3 -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
+  - `python3 -m holo_host --config .holo_host.example.toml accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
 
 ## Invariants
 - Do not silently change online transport modes

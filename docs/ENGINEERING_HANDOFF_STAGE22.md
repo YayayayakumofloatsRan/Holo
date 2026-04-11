@@ -6,6 +6,8 @@ Stage22 is implemented as a host-side, shadow-first online canary layer. It reco
 
 It does not add a watcher decision path, processor lane, background loop, or hidden policy mutation.
 
+Stage23 later preserved the Stage22 shell while changing the shadow contract: semantic `action` and `reason` now remain intact, and delivery suppression is expressed through transport-facing fields such as `returned_action`, `delivery_verdict`, and `delivery_suppressed_by_canary`.
+
 ## Runtime Files Changed
 
 - `holo_host/config.py`
@@ -51,13 +53,13 @@ stage22_canary_rollback_file = ".holo_runtime/STAGE22_CANARY_ROLLBACK"
 
 ## Gate Contract
 
-The gate runs after MemoryBridge/action-market selection and before tool execution or generation.
+The gate runs after MemoryBridge/action-market selection and applies at the delivery layer.
 
 - `disabled`: record nothing, preserve current behavior.
-- `shadow`: record artifact + trace and return `action="silence"` with `stage22_shadow=true`.
+- `shadow`: record artifact + trace, preserve the semantic result, and set `returned_action="silence"` with `stage22_shadow=true` for delivery-capable actions.
 - `canary_live`: pass only if whitelisted, rollback is clear, per-thread and global hourly rates are open, and the existing reply path/policy still permits the selected behavior.
 
-The gate only blocks. It cannot choose a new action or set `send_allowed`.
+The gate only blocks. It cannot choose a new action or set `send_allowed`, and it no longer rewrites semantic `action` or `reason`.
 
 ## Tables
 

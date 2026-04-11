@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 import holo_memory_library.rag_memory as rm
@@ -10,6 +11,10 @@ from tests.test_rag_memory import TempMemoryRepo
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "stage14"
+
+
+def _round4(value: float) -> float:
+    return float(Decimal(str(value)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
 
 class Stage14ReplayTests(unittest.TestCase):
@@ -36,6 +41,12 @@ class Stage14ReplayTests(unittest.TestCase):
             self.assertEqual(first["aggregate_metrics"], second["aggregate_metrics"])
             self.assertIn("raw_aggregate_metrics", first)
             self.assertIn("risk_mae", first["raw_aggregate_metrics"])
+            self.assertAlmostEqual(_round4(float(first["raw_aggregate_metrics"]["risk_mae"])), float(first["aggregate_metrics"]["risk_mae"]), places=4)
+            self.assertAlmostEqual(
+                _round4(float(first["raw_aggregate_metrics"]["policy_regret_vs_best_available_action"])),
+                float(first["aggregate_metrics"]["policy_regret_vs_best_available_action"]),
+                places=4,
+            )
             self.assertEqual(len(before), len(after))
             self.assertEqual(first["fixture_count"], 4)
             self.assertGreater(first["aggregate_metrics"]["policy_regret_vs_best_available_action"], 0.0)

@@ -409,6 +409,17 @@ class Stage14ReplayHarness:
                 after_support = int(after_rows[0].get("support_count", 0) or 0) if after_rows else before_support
                 prediction_trace = isolated.graph.trace_action_prediction_error(channel=channel, thread_key=thread_key, chat_name=chat_name, action_type=selected_action, limit=6)
                 comparison = dict(list(prediction_trace.get("comparisons", []))[0]) if list(prediction_trace.get("comparisons", [])) else {}
+                raw_prediction_error = dict(comparison.get("raw_prediction_error", {})) if isinstance(comparison.get("raw_prediction_error", {}), dict) else {}
+                if not raw_prediction_error:
+                    raw_prediction_error = {
+                        "response_quality": float(realized.get("response_quality", realized.get("was_rewarding", 0.0)) or 0.0)
+                        - float(predicted_outcome.get("predicted_response_quality", realized.get("response_quality", realized.get("was_rewarding", 0.0))) or realized.get("response_quality", realized.get("was_rewarding", 0.0)) or 0.0),
+                        "relational_delta": float(realized.get("relational_delta", 0.0) or 0.0)
+                        - float(predicted_outcome.get("predicted_relational_delta", realized.get("relational_delta", 0.0)) or realized.get("relational_delta", 0.0) or 0.0),
+                        "risk": float(realized.get("risk", realized.get("was_ignored", 0.0)) or 0.0)
+                        - float(predicted_outcome.get("predicted_risk", realized.get("risk", realized.get("was_ignored", 0.0))) or realized.get("risk", realized.get("was_ignored", 0.0)) or 0.0),
+                    }
+                raw_policy_regret = max(0.0, float(best_simulation.get("score", 0.0) or 0.0) - float(selected_simulation.get("score", 0.0) or 0.0))
                 overlong_reply, stiffness_overflow = self.overflow_flags(realized, metadata, selected_action)
                 false_initiative_block = bool(
                     metadata.get("initiative_expected_open", False)
@@ -424,14 +435,22 @@ class Stage14ReplayHarness:
                     "scenario_tags": list(fixture.get("scenario_tags", [])),
                     "selected_action": selected_action,
                     "selected_action_score": self.metric_round(float(selected_simulation.get("score", 0.0) or 0.0)),
+                    "raw_selected_action_score": float(selected_simulation.get("score", 0.0) or 0.0),
                     "best_available_action": str(best_simulation.get("action_type", "") or selected_action),
                     "best_available_action_score": self.metric_round(float(best_simulation.get("score", 0.0) or 0.0)),
-                    "policy_regret_vs_best_available_action": self.metric_round(max(0.0, float(best_simulation.get("score", 0.0) or 0.0) - float(selected_simulation.get("score", 0.0) or 0.0))),
+                    "raw_best_available_action_score": float(best_simulation.get("score", 0.0) or 0.0),
+                    "policy_regret_vs_best_available_action": self.metric_round(raw_policy_regret),
+                    "raw_policy_regret_vs_best_available_action": raw_policy_regret,
                     "expected_best_action": str(fixture.get("expected_best_action", "") or ""),
                     "best_action_matches_fixture": str(best_simulation.get("action_type", "") or "") == str(fixture.get("expected_best_action", "") or ""),
                     "predicted_outcome": predicted_outcome,
                     "realized_outcome": realized,
-                    "prediction_error": dict(comparison.get("prediction_error", {})),
+                    "prediction_error": {
+                        "response_quality": self.metric_round(float(raw_prediction_error.get("response_quality", 0.0) or 0.0)),
+                        "relational_delta": self.metric_round(float(raw_prediction_error.get("relational_delta", 0.0) or 0.0)),
+                        "risk": self.metric_round(float(raw_prediction_error.get("risk", 0.0) or 0.0)),
+                    },
+                    "raw_prediction_error": raw_prediction_error,
                     "calibration_bucket": bucket,
                     "calibration_support_delta": max(0, after_support - before_support),
                     "calibration_row": dict(after_rows[0]) if after_rows else {},
@@ -449,9 +468,9 @@ class Stage14ReplayHarness:
                 isolated.graph.close()
 
     def aggregate(self, fixtures: list[dict[str, Any]]) -> dict[str, Any]:
-        response_errors = [abs(float(item.get("prediction_error", {}).get("response_quality", 0.0) or 0.0)) for item in fixtures]
-        relational_errors = [abs(float(item.get("prediction_error", {}).get("relational_delta", 0.0) or 0.0)) for item in fixtures]
-        risk_errors = [abs(float(item.get("prediction_error", {}).get("risk", 0.0) or 0.0)) for item in fixtures]
+        response_errors = [abs(float(item.get("raw_prediction_error", item.get("prediction_error", {})).get("response_quality", 0.0) or 0.0)) for item in fixtures]
+        relational_errors = [abs(float(item.get("raw_prediction_error", item.get("prediction_error", {})).get("relational_delta", 0.0) or 0.0)) for item in fixtures]
+        risk_errors = [abs(float(item.get("raw_prediction_error", item.get("prediction_error", {})).get("risk", 0.0) or 0.0)) for item in fixtures]
         successful_turns = [item for item in fixtures if bool(item.get("successful_turn", False))]
         support_counter: Counter[str] = Counter()
         for item in fixtures:
@@ -466,13 +485,13 @@ class Stage14ReplayHarness:
             "overlong_reply_rate": self.metric_round(sum(1 for item in fixtures if bool(item.get("overlong_reply", False))) / len(fixtures)) if fixtures else 0.0,
             "stiffness_overflow_rate": self.metric_round(sum(1 for item in fixtures if bool(item.get("stiffness_overflow", False))) / len(fixtures)) if fixtures else 0.0,
             "cost_per_successful_turn": self.metric_round(total_tokens / len(successful_turns)) if successful_turns else 0.0,
-            "policy_regret_vs_best_available_action": self.metric_round(sum(float(item.get("policy_regret_vs_best_available_action", 0.0) or 0.0) for item in fixtures) / len(fixtures)) if fixtures else 0.0,
+            "policy_regret_vs_best_available_action": self.metric_round(sum(float(item.get("raw_policy_regret_vs_best_available_action", item.get("policy_regret_vs_best_available_action", 0.0)) or 0.0) for item in fixtures) / len(fixtures)) if fixtures else 0.0,
         }
 
     def raw_aggregate(self, fixtures: list[dict[str, Any]]) -> dict[str, Any]:
-        response_errors = [abs(float(item.get("prediction_error", {}).get("response_quality", 0.0) or 0.0)) for item in fixtures]
-        relational_errors = [abs(float(item.get("prediction_error", {}).get("relational_delta", 0.0) or 0.0)) for item in fixtures]
-        risk_errors = [abs(float(item.get("prediction_error", {}).get("risk", 0.0) or 0.0)) for item in fixtures]
+        response_errors = [abs(float(item.get("raw_prediction_error", item.get("prediction_error", {})).get("response_quality", 0.0) or 0.0)) for item in fixtures]
+        relational_errors = [abs(float(item.get("raw_prediction_error", item.get("prediction_error", {})).get("relational_delta", 0.0) or 0.0)) for item in fixtures]
+        risk_errors = [abs(float(item.get("raw_prediction_error", item.get("prediction_error", {})).get("risk", 0.0) or 0.0)) for item in fixtures]
         successful_turns = [item for item in fixtures if bool(item.get("successful_turn", False))]
         total_tokens = sum(int(item.get("usage_total_tokens", 0) or 0) for item in fixtures)
         return {
@@ -483,7 +502,7 @@ class Stage14ReplayHarness:
             "overlong_reply_rate": sum(1 for item in fixtures if bool(item.get("overlong_reply", False))) / len(fixtures) if fixtures else 0.0,
             "stiffness_overflow_rate": sum(1 for item in fixtures if bool(item.get("stiffness_overflow", False))) / len(fixtures) if fixtures else 0.0,
             "cost_per_successful_turn": total_tokens / len(successful_turns) if successful_turns else 0.0,
-            "policy_regret_vs_best_available_action": sum(float(item.get("policy_regret_vs_best_available_action", 0.0) or 0.0) for item in fixtures) / len(fixtures) if fixtures else 0.0,
+            "policy_regret_vs_best_available_action": sum(float(item.get("raw_policy_regret_vs_best_available_action", item.get("policy_regret_vs_best_available_action", 0.0)) or 0.0) for item in fixtures) / len(fixtures) if fixtures else 0.0,
         }
 
     def write_artifact(self, report: dict[str, Any], *, artifact_dir: str | None = None) -> dict[str, Any]:

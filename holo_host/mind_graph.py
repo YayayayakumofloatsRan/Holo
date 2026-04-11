@@ -5188,22 +5188,28 @@ class MindGraph:
                 "relational_delta": float(row.get("relational_delta", 0.0) or 0.0),
                 "risk": float(metadata.get("observed_risk", metadata.get("was_ignored", 0.0)) or 0.0),
             }
+            raw_prediction_error = {
+                "response_quality": realized["response_quality"] - float(predicted.get("predicted_response_quality", realized["response_quality"]) or realized["response_quality"]),
+                "relational_delta": realized["relational_delta"] - float(predicted.get("predicted_relational_delta", realized["relational_delta"]) or realized["relational_delta"]),
+                "risk": realized["risk"] - float(predicted.get("predicted_risk", realized["risk"]) or realized["risk"]),
+            }
             comparison = {
                 "action_ref": str(row.get("action_ref", "") or ""),
                 "action_type": str(row.get("action_type", "") or ""),
                 "predicted_outcome": predicted,
                 "realized_outcome": realized,
+                "raw_prediction_error": raw_prediction_error,
                 "prediction_error": {
-                    "response_quality": round(realized["response_quality"] - float(predicted.get("predicted_response_quality", realized["response_quality"]) or realized["response_quality"]), 4),
-                    "relational_delta": round(realized["relational_delta"] - float(predicted.get("predicted_relational_delta", realized["relational_delta"]) or realized["relational_delta"]), 4),
-                    "risk": round(realized["risk"] - float(predicted.get("predicted_risk", realized["risk"]) or realized["risk"]), 4),
+                    "response_quality": round(raw_prediction_error["response_quality"], 4),
+                    "relational_delta": round(raw_prediction_error["relational_delta"], 4),
+                    "risk": round(raw_prediction_error["risk"], 4),
                 },
                 "created_at": str(row.get("created_at", "") or ""),
             }
             comparisons.append(comparison)
-            response_errors.append(abs(float(comparison["prediction_error"]["response_quality"])))
-            relational_errors.append(abs(float(comparison["prediction_error"]["relational_delta"])))
-            risk_errors.append(abs(float(comparison["prediction_error"]["risk"])))
+            response_errors.append(abs(float(raw_prediction_error["response_quality"])))
+            relational_errors.append(abs(float(raw_prediction_error["relational_delta"])))
+            risk_errors.append(abs(float(raw_prediction_error["risk"])))
         return {
             **history,
             "comparisons": comparisons,

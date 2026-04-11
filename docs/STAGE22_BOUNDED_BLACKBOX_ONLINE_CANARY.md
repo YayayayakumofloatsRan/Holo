@@ -4,6 +4,8 @@
 
 Stage22 moves Holo from self-shaping subject runtime toward bounded live blackbox approximation. The implementation is host-side and shadow-first: `/reply` still enters through MemoryBridge and the action market, but Stage22 can record would-have behavior, compute live metrics, and suppress live sends unless canary gates pass.
 
+As of Stage23, Stage22 suppression is delivery-layer only. The semantic reply contract stays intact while `returned_action` captures the transport-facing outcome.
+
 Default rollout is `shadow`. `canary_live` must be explicitly configured and still requires whitelist, rate limits, clear rollback switch, existing policy, and action-market-selected behavior.
 
 ## Boundary
@@ -48,15 +50,15 @@ Mind Graph owns bounded perception cues:
 
 ## Reply Gate
 
-The Stage22 gate runs after sidecar/action-market selection and before tool use, deferred jobs, history refresh, or generation.
+The Stage22 gate runs after sidecar/action-market selection and applies at the delivery layer.
 
 Modes:
 
 - `disabled`: preserves current behavior and records no Stage22 canary trace.
-- `shadow`: records canary artifact and returns a non-sendable `silence` response with `stage22_shadow=true`.
+- `shadow`: records canary artifact, preserves the semantic result, and sets transport-facing `returned_action="silence"` with `stage22_shadow=true` for delivery-capable actions.
 - `canary_live`: continues only when the canonical thread is whitelisted, hourly limits are open, rollback file is absent, and existing downstream policy still allows the selected behavior.
 
-The gate can block or suppress only. It never chooses a new action.
+The gate can block or suppress only. It never chooses a new action, and it does not rewrite semantic `action` or `reason`.
 
 ## Metrics
 
@@ -113,7 +115,7 @@ python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key
 
 The gate verifies:
 
-- shadow mode captures artifacts and suppresses live sends
+- shadow mode captures artifacts and suppresses live sends without mutating semantic actions
 - `canary_live` gates require whitelist, rate limits, and clear rollback switch
 - rollback switch is reversible
 - live artifacts feed Stage14 replay

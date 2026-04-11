@@ -69,10 +69,16 @@ class Stage22OnlineCanaryTests(unittest.TestCase):
             finally:
                 self._close(service, store, bridge)
 
-        self.assertEqual(result["action"], "silence")
+        self.assertNotEqual(result["action"], "silence")
+        self.assertEqual(result["semantic_action"], result["action"])
+        self.assertEqual(result["semantic_reason"], result["reason"])
+        self.assertEqual(result["returned_action"], "silence")
+        self.assertFalse(result["delivery_send_allowed"])
+        self.assertTrue(result["delivery_suppressed_by_canary"])
+        self.assertEqual(result["delivery_verdict"], "shadow_suppressed")
         self.assertTrue(result["stage22_shadow"])
         self.assertEqual(result["stage22"]["mode"], "shadow")
-        self.assertEqual(runner.calls, 0)
+        self.assertGreaterEqual(runner.calls, 1)
         self.assertTrue(artifact_exists)
         self.assertEqual(len(traces), 1)
         self.assertGreaterEqual(metrics["total_traces"], 1)

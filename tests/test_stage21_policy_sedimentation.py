@@ -79,7 +79,11 @@ class Stage21PolicySedimentationTests(unittest.TestCase):
             try:
                 defer_candidate = _seed_policy_evidence(bridge, prefix="approve")
                 counter_candidate = _seed_policy_evidence(bridge, action_type="counter_offer", prefix="reject")
-                replay_report = {"fixture_count": 1, "aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0}}
+                replay_report = {
+                    "fixture_count": 1,
+                    "aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0},
+                    "raw_aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0},
+                }
                 approved = bridge.graph.review_policy_candidate(
                     policy_id=str(defer_candidate["policy_id"]),
                     approved=True,
@@ -114,7 +118,11 @@ class Stage21PolicySedimentationTests(unittest.TestCase):
                 approved = bridge.graph.review_policy_candidate(
                     policy_id=str(candidate["policy_id"]),
                     approved=True,
-                    replay_report={"fixture_count": 1, "aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0}},
+                    replay_report={
+                        "fixture_count": 1,
+                        "aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0},
+                        "raw_aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0},
+                    },
                     reason="unit_ranking",
                 )
                 bridge.clear_packet_cache()
@@ -173,7 +181,11 @@ class Stage21PolicySedimentationTests(unittest.TestCase):
                 bridge.graph.review_policy_candidate(
                     policy_id=str(candidate["policy_id"]),
                     approved=True,
-                    replay_report={"fixture_count": 1, "aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0}},
+                    replay_report={
+                        "fixture_count": 1,
+                        "aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0},
+                        "raw_aggregate_metrics": {"policy_regret_vs_best_available_action": 0.0},
+                    },
                     reason="unit_scope",
                 )
                 bridge.clear_packet_cache()

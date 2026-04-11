@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -44,6 +46,7 @@ from .reply_service_parts.acceptance import (
     accept_stage20 as _accept_stage20,
     accept_stage21 as _accept_stage21,
     accept_stage22 as _accept_stage22,
+    accept_stage23 as _accept_stage23,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -685,19 +688,34 @@ class HoloReplyService:
             tags = []
         if not isinstance(tags, list):
             raise ValueError("`tags` must be a JSON array when provided")
+        base_kwargs = {
+            "note": str(payload.get("note", "")).strip() or None,
+            "source": str(payload.get("source", "holo_host.reply_api.artifact")).strip() or "holo_host.reply_api.artifact",
+            "tags": [str(tag) for tag in tags if str(tag).strip()],
+            "dry_run": bool(payload.get("dry_run", False)),
+        }
+        rich_kwargs = {
+            "channel": str(payload.get("channel", "")).strip(),
+            "thread_key": str(payload.get("thread_key", "")).strip(),
+            "chat_name": str(payload.get("chat_name", "")).strip(),
+            "world_cue_type": str(payload.get("world_cue_type", "")).strip(),
+            "due_at": str(payload.get("due_at", "")).strip(),
+        }
         with self._memory_lock:
-            return self.memory.ingest_artifact(
-                path,
-                note=str(payload.get("note", "")).strip() or None,
-                source=str(payload.get("source", "holo_host.reply_api.artifact")).strip() or "holo_host.reply_api.artifact",
-                tags=[str(tag) for tag in tags if str(tag).strip()],
-                dry_run=bool(payload.get("dry_run", False)),
-                channel=str(payload.get("channel", "")).strip(),
-                thread_key=str(payload.get("thread_key", "")).strip(),
-                chat_name=str(payload.get("chat_name", "")).strip(),
-                world_cue_type=str(payload.get("world_cue_type", "")).strip(),
-                due_at=str(payload.get("due_at", "")).strip(),
-            )
+            ingest = self.memory.ingest_artifact
+            try:
+                parameters = inspect.signature(ingest).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            supports_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+            supports_rich_kwargs = supports_var_kwargs or all(key in parameters for key in rich_kwargs)
+            if supports_rich_kwargs:
+                try:
+                    return ingest(path, **base_kwargs, **rich_kwargs)
+                except TypeError as exc:
+                    if "unexpected keyword argument" not in str(exc):
+                        raise
+            return ingest(path, **base_kwargs)
 
     def ingest_image(self, payload: dict[str, Any]) -> dict[str, Any]:
         path = _coerce_helper_artifact_path(payload.get("path", ""))
@@ -1112,6 +1130,13 @@ class HoloReplyService:
             return 0.0
         return round(max(0.0, min(1.0, float(numerator) / float(denominator))), 4)
 
+    @staticmethod
+    def _stage14_display_matches_raw(display: dict[str, Any], raw: dict[str, Any], key: str) -> bool:
+        if key not in display or key not in raw:
+            return False
+        rounded = float(Decimal(str(float(raw.get(key, 0.0) or 0.0))).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+        return rounded == round(float(display.get(key, 0.0) or 0.0), 4)
+
     def show_blackbox_metrics(
         self,
         *,
@@ -1161,7 +1186,12 @@ class HoloReplyService:
                 duplicate_followups += 1
             if bool(stage20.get("temporal_visible", False)) or bool(stage20.get("commitment_due", False)) or str(stage20.get("resume_cue", "")).strip():
                 resume_due += 1
-                if returned_action in {"reply", "defer_reply", "silence"} and str(row.get("verdict", "")) not in {"not_whitelisted", "rollback_enabled", "thread_rate_limited", "global_rate_limited"}:
+                result_meta = dict(metadata.get("result", {})) if isinstance(metadata.get("result", {}), dict) else {}
+                if (
+                    returned_action in {"reply", "defer_reply", "silence"}
+                    and str(row.get("verdict", "")) not in {"not_whitelisted", "rollback_enabled", "thread_rate_limited", "global_rate_limited"}
+                    and not bool(result_meta.get("delivery_suppressed_by_canary", False))
+                ):
                     resume_success += 1
         return {
             "stage": "stage22",
@@ -1406,6 +1436,24 @@ class HoloReplyService:
         artifact_dir: str | None = None,
     ) -> dict[str, Any]:
         return _accept_stage22(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def accept_stage23(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage23(
             self,
             thread_key=thread_key,
             chat_name=chat_name,
@@ -4303,8 +4351,8 @@ class HoloReplyService:
         before_defer = _action_row(before_packet, "defer_reply")
         after_defer = _action_row(after_packet, "defer_reply")
         rollback_defer = _action_row(rollback_packet, "defer_reply")
-        before_regret = float(dict(replay_before.get("aggregate_metrics", {})).get("policy_regret_vs_best_available_action", 0.0) or 0.0)
-        after_regret = float(dict(replay_after.get("aggregate_metrics", {})).get("policy_regret_vs_best_available_action", 0.0) or 0.0)
+        before_regret = float(dict(replay_before.get("raw_aggregate_metrics", replay_before.get("aggregate_metrics", {}))).get("policy_regret_vs_best_available_action", 0.0) or 0.0)
+        after_regret = float(dict(replay_after.get("raw_aggregate_metrics", replay_after.get("aggregate_metrics", {}))).get("policy_regret_vs_best_available_action", 0.0) or 0.0)
         hard_policy_decision = self.policy.outbound_decision(
             incoming_text="accept stage21 hard gate",
             reply_text="",
@@ -4385,7 +4433,7 @@ class HoloReplyService:
                     "thread_key": probe_thread_key,
                     "channel": normalized_channel,
                     "sender": str(sender or requested_chat_name),
-                    "text": "stage22 canary acceptance hello",
+                    "text": "later after lunch",
                     "message_id": f"accept-stage22-shadow-{run_id}",
                 }
             )
@@ -4484,7 +4532,10 @@ class HoloReplyService:
         }
         checks = {
             "shadow_mode_captures_and_suppresses_send": bool(shadow_result.get("stage22_shadow", False))
-            and str(shadow_result.get("action", "")) == "silence"
+            and self._stage23_is_delivery_capable_action(str(shadow_result.get("action", "")))
+            and str(shadow_result.get("semantic_action", "")) == str(shadow_result.get("action", ""))
+            and str(shadow_result.get("returned_action", "")) == "silence"
+            and bool(shadow_result.get("delivery_suppressed_by_canary", False))
             and str(dict(shadow_result.get("stage22", {})).get("mode", "")) == "shadow"
             and shadow_trace_id > 0,
             "artifact_capture_by_default": bool(artifact_path) and Path(artifact_path).exists(),
@@ -4529,6 +4580,96 @@ class HoloReplyService:
                 "fixture_dir": replay.get("fixture_dir"),
             },
             "stage21": {"status": stage21_report.get("status"), "checks": stage21_report.get("checks", {})},
+        }
+
+    def _accept_stage23_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        requested_chat_name = str(chat_name or "Nemoqi").strip()
+        requested_thread_key = str(thread_key or requested_chat_name).strip()
+        if normalized_channel == "wechat":
+            requested_thread_key = self._stage22_normalize_wechat_thread(requested_thread_key, requested_chat_name)
+        run_id = stable_digest(requested_thread_key, requested_chat_name, utc_now(), "stage23")[:12]
+        probe_chat_name = f"{requested_chat_name}-stage23-{run_id}"
+        probe_thread_key = f"wechat:{probe_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:{run_id}"
+        original_mode = getattr(self.config.autonomy, "stage22_canary_mode", "shadow")
+        original_whitelist = tuple(getattr(self.config.autonomy, "stage22_canary_whitelist_threads", ()))
+        stage22_report = self.accept_stage22(
+            thread_key=requested_thread_key,
+            chat_name=requested_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        fixture_dir = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "stage14"
+        replay_root = Path(artifact_dir).resolve() / "stage23-replay" if str(artifact_dir or "").strip() else None
+        self.set_canary_rollback(enabled=False, reason="accept_stage23_start")
+        try:
+            self.config.autonomy.stage22_canary_mode = "shadow"
+            self.config.autonomy.stage22_canary_whitelist_threads = (probe_thread_key,)
+            shadow_probe = self.handle_reply(
+                {
+                    "chat_name": probe_chat_name,
+                    "thread_key": probe_thread_key,
+                    "channel": normalized_channel,
+                    "sender": str(sender or requested_chat_name),
+                    "text": "later after lunch",
+                    "message_id": f"accept-stage23-shadow-{run_id}",
+                }
+            )
+            replay_report = self.replay_policy_regret(
+                source_type="synthetic_fixture",
+                fixture_path=str(fixture_dir),
+                channel="wechat",
+                limit=8,
+                artifact_dir=str(replay_root) if replay_root is not None else None,
+            )
+        finally:
+            self.set_canary_rollback(enabled=False, reason="accept_stage23_cleanup")
+            self.config.autonomy.stage22_canary_mode = original_mode
+            self.config.autonomy.stage22_canary_whitelist_threads = original_whitelist
+
+        aggregate = dict(replay_report.get("aggregate_metrics", {}))
+        raw = dict(replay_report.get("raw_aggregate_metrics", {}))
+        checks = {
+            "stage22_acceptance_green": str(stage22_report.get("status", "")) == "pass",
+            "shadow_preserves_semantic_action": str(shadow_probe.get("action", "")) == "defer_reply"
+            and str(shadow_probe.get("semantic_action", "")) == "defer_reply"
+            and str(shadow_probe.get("returned_action", "")) == "silence"
+            and not bool(shadow_probe.get("delivery_send_allowed", True))
+            and bool(shadow_probe.get("delivery_suppressed_by_canary", False))
+            and not bool(shadow_probe.get("job_id")),
+            "shadow_trace_preserves_stage22_shell": str(dict(shadow_probe.get("stage22", {})).get("mode", "")) == "shadow"
+            and str(dict(shadow_probe.get("stage22", {})).get("verdict", "")) == "shadow_suppressed",
+            "raw_replay_metrics_visible": {"risk_mae", "policy_regret_vs_best_available_action"}.issubset(set(raw.keys())),
+            "display_replay_metrics_visible": {"risk_mae", "policy_regret_vs_best_available_action"}.issubset(set(aggregate.keys())),
+            "raw_and_display_replay_are_consistent": self._stage14_display_matches_raw(aggregate, raw, "risk_mae")
+            and self._stage14_display_matches_raw(aggregate, raw, "policy_regret_vs_best_available_action"),
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "kernel-shell-orthogonalization-and-release-parity-stage23",
+            "checks": checks,
+            "thread_key": requested_thread_key,
+            "chat_name": requested_chat_name,
+            "channel": normalized_channel,
+            "probe_thread_key": probe_thread_key,
+            "shadow_probe": shadow_probe,
+            "stage22": {"status": stage22_report.get("status"), "checks": stage22_report.get("checks", {})},
+            "replay": {
+                "status": replay_report.get("status"),
+                "fixture_count": replay_report.get("fixture_count"),
+                "aggregate_metrics": aggregate,
+                "raw_aggregate_metrics": raw,
+                "artifact_dir": dict(replay_report.get("artifacts", {})).get("artifact_dir", ""),
+            },
         }
 
     def initiative_status(
@@ -4963,6 +5104,56 @@ class HoloReplyService:
             "trace": self._stage22_trace_from_sidecar(sidecar),
         }
 
+    @staticmethod
+    def _stage23_is_delivery_capable_action(action: str) -> bool:
+        return str(action or "").strip() in {"reply", "defer_reply"}
+
+    @classmethod
+    def _stage23_finalize_result_contract(
+        cls,
+        result: dict[str, Any],
+        *,
+        returned_action: str | None = None,
+        delivery_verdict: str = "",
+        delivery_send_allowed: bool | None = None,
+        delivery_suppressed_by_canary: bool | None = None,
+    ) -> dict[str, Any]:
+        semantic_action = str(result.get("semantic_action", result.get("action", "")) or "")
+        semantic_reason = str(result.get("semantic_reason", result.get("reason", "")) or "")
+        delivery_capable = cls._stage23_is_delivery_capable_action(semantic_action)
+        realized_action = str(returned_action or result.get("returned_action", semantic_action) or semantic_action)
+        if delivery_send_allowed is None:
+            delivery_send_allowed = delivery_capable and realized_action == semantic_action
+        if not delivery_verdict:
+            delivery_verdict = "allowed" if delivery_capable and delivery_send_allowed else "not_applicable"
+        if delivery_suppressed_by_canary is None:
+            delivery_suppressed_by_canary = (
+                delivery_capable
+                and not delivery_send_allowed
+                and realized_action != semantic_action
+                and str(delivery_verdict or "").strip() not in {"", "not_applicable"}
+            )
+        result["semantic_action"] = semantic_action
+        result["semantic_reason"] = semantic_reason
+        result["action"] = semantic_action
+        result["reason"] = semantic_reason
+        result["returned_action"] = realized_action
+        result["delivery_verdict"] = str(delivery_verdict or "not_applicable")
+        result["delivery_send_allowed"] = bool(delivery_send_allowed) if delivery_capable else False
+        result["delivery_suppressed_by_canary"] = bool(delivery_suppressed_by_canary)
+        result.setdefault("stage22_shadow", False)
+        return result
+
+    @classmethod
+    def _stage23_gate_for_result(cls, gate: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(gate)
+        semantic_action = str(result.get("semantic_action", result.get("action", "")) or "")
+        if cls._stage23_is_delivery_capable_action(semantic_action):
+            return normalized
+        normalized["allowed"] = True
+        normalized["verdict"] = "not_applicable"
+        return normalized
+
     def _stage22_shadow_result(
         self,
         *,
@@ -4970,41 +5161,42 @@ class HoloReplyService:
         incoming: IncomingMessage,
         event_row_id: int,
         selected_action: dict[str, Any],
-        sidecar: dict[str, Any],
+        result: dict[str, Any],
         gate: dict[str, Any],
-        started_at: float,
+        sidecar: dict[str, Any],
+        latency_ms: int,
     ) -> dict[str, Any]:
-        result = {
-            "action": "silence",
-            "reason": str(gate.get("verdict", "stage22_shadow") or "stage22_shadow"),
-            "stage22_shadow": str(gate.get("mode", "")) == "shadow",
-            "thread_key": incoming.thread_key,
-            "message_id": incoming.message_id,
-            "selected_action": dict(selected_action),
-            "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget", 0)) or 0),
-            "action_rationale": str(sidecar.get("action_rationale", "") or ""),
-            "deliberation_trace_id": str(sidecar.get("deliberation_trace_id", "") or ""),
-        }
-        result["stage22"] = self._record_stage22_canary(
+        shadow_result = self._stage23_finalize_result_contract(
+            dict(result),
+            returned_action="silence",
+            delivery_verdict=str(gate.get("verdict", "stage22_shadow") or "stage22_shadow"),
+            delivery_send_allowed=False,
+            delivery_suppressed_by_canary=self._stage23_is_delivery_capable_action(str(result.get("action", ""))),
+        )
+        shadow_result["stage22_shadow"] = bool(shadow_result.get("delivery_suppressed_by_canary")) and str(gate.get("mode", "")) == "shadow"
+        normalized_gate = self._stage23_gate_for_result(gate, shadow_result)
+        shadow_result["stage22"] = self._record_stage22_canary(
             turn=turn,
             incoming=incoming,
             event_row_id=event_row_id,
             selected_action=selected_action,
             sidecar=sidecar,
-            gate=gate,
-            result=result,
-            latency_ms=int((time.perf_counter() - started_at) * 1000),
+            gate=normalized_gate,
+            result=shadow_result,
+            latency_ms=latency_ms,
         )
-        self.store.update_event_result(event_row_id, status="silenced", result=result)
-        self._record_consciousness_entry(
-            turn=turn,
-            incoming=incoming,
-            event_row_id=event_row_id,
-            entry_type="stage22_canary_suppressed",
-            selected_action=str(selected_action.get("action_type", "") or ""),
-            payload=result,
-        )
-        return result
+        status = "silenced" if bool(shadow_result.get("delivery_suppressed_by_canary")) else "completed"
+        self.store.update_event_result(event_row_id, status=status, result=shadow_result)
+        if bool(shadow_result.get("delivery_suppressed_by_canary")):
+            self._record_consciousness_entry(
+                turn=turn,
+                incoming=incoming,
+                event_row_id=event_row_id,
+                entry_type="stage22_canary_suppressed",
+                selected_action=str(selected_action.get("action_type", "") or ""),
+                payload=shadow_result,
+            )
+        return shadow_result
 
     def _record_stage22_canary(
         self,
@@ -5035,9 +5227,16 @@ class HoloReplyService:
                 "attachments": list((turn.metadata or {}).get("attachments", []))[:4] if isinstance((turn.metadata or {}).get("attachments", []), list) else [],
             },
             "selected_action": dict(selected_action),
-            "returned_action": str(result.get("action", "") or ""),
+            "semantic_action": str(result.get("semantic_action", result.get("action", "")) or ""),
+            "returned_action": str(result.get("returned_action", result.get("action", "")) or ""),
             "result": {
                 "action": str(result.get("action", "") or ""),
+                "semantic_action": str(result.get("semantic_action", result.get("action", "")) or ""),
+                "semantic_reason": str(result.get("semantic_reason", result.get("reason", "")) or ""),
+                "returned_action": str(result.get("returned_action", result.get("action", "")) or ""),
+                "delivery_verdict": str(result.get("delivery_verdict", "") or ""),
+                "delivery_send_allowed": bool(result.get("delivery_send_allowed", False)),
+                "delivery_suppressed_by_canary": bool(result.get("delivery_suppressed_by_canary", False)),
                 "reason": str(result.get("reason", "") or ""),
                 "text": compact_text(str(result.get("text", "") or ""), 500),
                 "bubbles": [compact_text(str(item), 200) for item in list(result.get("bubbles", []))[:4]],
@@ -5051,7 +5250,7 @@ class HoloReplyService:
         }
         if bool(getattr(self.config.autonomy, "stage22_canary_artifact_capture", True)):
             root = self._stage22_artifact_root() / time.strftime("%Y%m%d")
-            filename = f"{int(event_row_id or 0)}-{stable_digest(incoming.thread_key, incoming.message_id, str(result.get('action', '')), limit=12)}.json"
+            filename = f"{int(event_row_id or 0)}-{stable_digest(incoming.thread_key, incoming.message_id, str(result.get('returned_action', result.get('action', ''))), limit=12)}.json"
             artifact = root / filename
             artifact.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(artifact, json.dumps(trace_payload, ensure_ascii=False, indent=2) + "\n")
@@ -5065,7 +5264,7 @@ class HoloReplyService:
             mode=str(gate.get("mode", "shadow") or "shadow"),
             verdict=str(gate.get("verdict", "") or ""),
             selected_action=str(selected_action.get("action_type", "") or ""),
-            returned_action=str(result.get("action", "") or ""),
+            returned_action=str(result.get("returned_action", result.get("action", "")) or ""),
             latency_ms=max(0, int(latency_ms or 0)),
             artifact_path=artifact_path,
             metadata={
@@ -5960,19 +6159,19 @@ class HoloReplyService:
         started_at = time.perf_counter()
         turn = self._parse_turn(payload)
         if not turn.text.strip():
-            return {"action": "ignore", "reason": "empty_text"}
+            return self._stage23_finalize_result_contract({"action": "ignore", "reason": "empty_text"})
         if any(hint in turn.text for hint in SYSTEM_EVENT_HINTS):
-            return {"action": "ignore", "reason": "system_event"}
+            return self._stage23_finalize_result_contract({"action": "ignore", "reason": "system_event"})
 
         incoming = turn.to_incoming_message()
         record = self.store.record_inbound(incoming)
         if record.get("duplicate") and not record.get("awaiting_reply"):
-            return {
+            return self._stage23_finalize_result_contract({
                 "action": "ignore",
                 "reason": "duplicate",
                 "message_id": incoming.message_id,
                 "thread_key": incoming.thread_key,
-            }
+            })
 
         history = list(reversed(self.store.recent_thread_messages(int(record["thread"]["id"]), self.config.memory.history_messages)))
         if turn.channel == "wechat" and _looks_like_recent_outbound_echo(turn.text, history, turn.metadata):
@@ -6060,19 +6259,9 @@ class HoloReplyService:
             selected_action=selected_action,
             sidecar=sidecar,
         )
-        if str(stage22_gate.get("mode", "")) != "disabled" and not bool(stage22_gate.get("allowed", False)):
-            return self._stage22_shadow_result(
-                turn=turn,
-                incoming=incoming,
-                event_row_id=event_row_id,
-                selected_action=selected_action,
-                sidecar=sidecar,
-                gate=stage22_gate,
-                started_at=started_at,
-            )
 
         if selected_action_type == "silence":
-            result = {
+            result = self._stage23_finalize_result_contract({
                 "action": "silence",
                 "reason": str(sidecar.get("silence_reason", "") or "silence_selected"),
                 "thread_key": incoming.thread_key,
@@ -6081,7 +6270,7 @@ class HoloReplyService:
                 "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
-            }
+            })
             result["outcome_appraisal"] = self._appraise_reply_path_action(
                 turn=turn,
                 incoming=incoming,
@@ -6129,20 +6318,22 @@ class HoloReplyService:
                 },
             )
             if str(stage22_gate.get("mode", "")) != "disabled":
+                normalized_gate = self._stage23_gate_for_result(stage22_gate, result)
                 result["stage22"] = self._record_stage22_canary(
                     turn=turn,
                     incoming=incoming,
                     event_row_id=event_row_id,
                     selected_action=selected_action,
                     sidecar=sidecar,
-                    gate=stage22_gate,
+                    gate=normalized_gate,
                     result=result,
                     latency_ms=int((time.perf_counter() - started_at) * 1000),
                 )
             return result
 
         if selected_action_type == "defer_reply":
-            deferred_job_id = self._schedule_deferred_reply(
+            delivery_suppressed = str(stage22_gate.get("mode", "")) != "disabled" and not bool(stage22_gate.get("allowed", False))
+            deferred_job_id = None if delivery_suppressed else self._schedule_deferred_reply(
                 thread=record["thread"],
                 contact=record["contact"],
                 stored_message=record["message"],
@@ -6151,7 +6342,7 @@ class HoloReplyService:
                 defer_reason=str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
                 event_row_id=event_row_id,
             )
-            result = {
+            result = self._stage23_finalize_result_contract({
                 "action": "defer_reply",
                 "reason": str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
                 "thread_key": incoming.thread_key,
@@ -6161,7 +6352,7 @@ class HoloReplyService:
                 "expression_budget": int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "deliberation_trace_id": deliberation_trace_id,
-            }
+            })
             result["outcome_appraisal"] = self._appraise_reply_path_action(
                 turn=turn,
                 incoming=incoming,
@@ -6172,15 +6363,6 @@ class HoloReplyService:
                 action_type="defer_reply",
                 action_ref=str(deferred_job_id or event_row_id or incoming.message_id),
                 source="reply_api.defer_reply",
-            )
-            self.store.update_event_result(event_row_id, status="deferred", result=result)
-            self._record_consciousness_entry(
-                turn=turn,
-                incoming=incoming,
-                event_row_id=event_row_id,
-                entry_type="selected_defer",
-                selected_action="defer_reply",
-                payload=result,
             )
             appraisal = self._appraise_action_outcome(
                 turn=turn,
@@ -6194,6 +6376,26 @@ class HoloReplyService:
             )
             if appraisal:
                 result["outcome_appraisal"] = appraisal
+            if delivery_suppressed:
+                return self._stage22_shadow_result(
+                    turn=turn,
+                    incoming=incoming,
+                    event_row_id=event_row_id,
+                    selected_action=selected_action,
+                    result=result,
+                    gate=stage22_gate,
+                    sidecar=sidecar,
+                    latency_ms=int((time.perf_counter() - started_at) * 1000),
+                )
+            self.store.update_event_result(event_row_id, status="deferred", result=result)
+            self._record_consciousness_entry(
+                turn=turn,
+                incoming=incoming,
+                event_row_id=event_row_id,
+                entry_type="selected_defer",
+                selected_action="defer_reply",
+                payload=result,
+            )
             result["active_thread_state"] = self._update_active_thread_state(
                 turn=turn,
                 incoming=incoming,
@@ -6209,13 +6411,14 @@ class HoloReplyService:
                 },
             )
             if str(stage22_gate.get("mode", "")) != "disabled":
+                normalized_gate = self._stage23_gate_for_result(stage22_gate, result)
                 result["stage22"] = self._record_stage22_canary(
                     turn=turn,
                     incoming=incoming,
                     event_row_id=event_row_id,
                     selected_action=selected_action,
                     sidecar=sidecar,
-                    gate=stage22_gate,
+                    gate=normalized_gate,
                     result=result,
                     latency_ms=int((time.perf_counter() - started_at) * 1000),
                 )
@@ -6322,7 +6525,11 @@ class HoloReplyService:
         payload["_stage6_capability_context"] = capability_context
         payload["_stage6_prebuilt_sidecar"] = sidecar
         payload["_stage6_selected_action"] = selected_action
+        payload["_stage23_delivery_send_allowed"] = bool(stage22_gate.get("allowed", False) or str(stage22_gate.get("mode", "")) == "disabled")
+        payload["_stage23_delivery_verdict"] = str(stage22_gate.get("verdict", "") or "")
         result = self._handle_reply_stage5_legacy(payload)
+        if str(stage22_gate.get("mode", "")) == "shadow" and bool(result.get("delivery_suppressed_by_canary", False)):
+            result["stage22_shadow"] = True
         if self._speech_action(selected_action_type):
             result["selected_action"] = dict(selected_action)
             result["expression_budget"] = int(sidecar.get("expression_budget_v4", sidecar.get("expression_budget_v3", sidecar.get("expression_budget_v2", sidecar.get("expression_budget", 0)))) or 0)
@@ -6339,7 +6546,11 @@ class HoloReplyService:
                 action_ref=str(result.get("remote_message_id", "") or result.get("outbound_message_id", "") or event_row_id or incoming.message_id),
                 source=f"reply_api.{selected_action_type}",
             )
-        self.store.update_event_result(event_row_id, status="completed", result=result)
+        self.store.update_event_result(
+            event_row_id,
+            status="silenced" if bool(result.get("delivery_suppressed_by_canary", False)) else "completed",
+            result=result,
+        )
         self._record_consciousness_entry(
             turn=turn,
             incoming=incoming,
@@ -6368,37 +6579,42 @@ class HoloReplyService:
         if appraisal:
             result["outcome_appraisal"] = appraisal
         if str(stage22_gate.get("mode", "")) != "disabled":
+            normalized_gate = self._stage23_gate_for_result(stage22_gate, result)
             result["stage22"] = self._record_stage22_canary(
                 turn=turn,
                 incoming=incoming,
                 event_row_id=event_row_id,
                 selected_action=selected_action,
                 sidecar=sidecar,
-                gate=stage22_gate,
+                gate=normalized_gate,
                 result=result,
                 latency_ms=int((time.perf_counter() - started_at) * 1000),
             )
-            self.store.update_event_result(event_row_id, status="completed", result=result)
+            self.store.update_event_result(
+                event_row_id,
+                status="silenced" if bool(result.get("delivery_suppressed_by_canary", False)) else "completed",
+                result=result,
+            )
         return result
 
     def _handle_reply_stage5_legacy(self, payload: dict[str, Any]) -> dict[str, Any]:
         started_at = time.perf_counter()
         turn = self._parse_turn(payload)
         if not turn.text.strip():
-            return {"action": "ignore", "reason": "empty_text"}
+            return self._stage23_finalize_result_contract({"action": "ignore", "reason": "empty_text"})
         if any(hint in turn.text for hint in SYSTEM_EVENT_HINTS):
-            return {"action": "ignore", "reason": "system_event"}
+            return self._stage23_finalize_result_contract({"action": "ignore", "reason": "system_event"})
 
         incoming = turn.to_incoming_message()
         decision = self.policy.incoming_decision(incoming)
         record = self.store.record_inbound(incoming)
         if record.get("duplicate") and not record.get("awaiting_reply"):
-            return {
+            return self._stage23_finalize_result_contract({
                 "action": "ignore",
                 "reason": "duplicate",
                 "message_id": incoming.message_id,
                 "thread_key": incoming.thread_key,
-            }
+            })
 
         thread = record["thread"]
         contact = record["contact"]
@@ -6412,12 +6628,12 @@ class HoloReplyService:
         }
 
         if turn.channel == "wechat" and _looks_like_recent_outbound_echo(turn.text, history, turn.metadata):
-            return {
+            return self._stage23_finalize_result_contract({
                 "action": "ignore",
                 "reason": "outbound_echo",
                 "thread_key": incoming.thread_key,
                 "message_id": incoming.message_id,
-            }
+            })
 
         mind_context = self._mind_context(
             turn=turn,
@@ -6523,13 +6739,13 @@ class HoloReplyService:
         last_action_selection = dict(sidecar.get("last_action_selection", {})) if isinstance(sidecar.get("last_action_selection", {}), dict) else {}
         if record.get("duplicate") and record.get("awaiting_reply"):
             if str(last_action_selection.get("message_id", "") or "") == incoming.message_id and selected_action_type in {"silence", "defer_reply"}:
-                return {
+                return self._stage23_finalize_result_contract({
                     "action": "ignore",
                     "reason": "already_decided",
                     "thread_key": incoming.thread_key,
                     "message_id": incoming.message_id,
                     "selected_action": selected_action_type,
-                }
+                })
         if not prebuilt_sidecar and selected_action_type == "history_refresh" and active_history_report is None and self._should_refresh_wechat_history(turn, sidecar):
             refresh_started_at = time.perf_counter()
             active_history_report = self.refresh_wechat_history(
@@ -6557,7 +6773,7 @@ class HoloReplyService:
                 incoming.message_id,
                 sidecar.get("silence_reason", ""),
             )
-            result = {
+            result = self._stage23_finalize_result_contract({
                 "action": "silence",
                 "reason": str(sidecar.get("silence_reason", "") or "silence_selected"),
                 "thread_key": incoming.thread_key,
@@ -6567,7 +6783,7 @@ class HoloReplyService:
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
-            }
+            })
             result["active_thread_state"] = self._update_active_thread_state(
                 turn=turn,
                 incoming=incoming,
@@ -6582,7 +6798,8 @@ class HoloReplyService:
             return result
 
         if selected_action_type == "defer_reply":
-            deferred_job_id = self._schedule_deferred_reply(
+            delivery_send_allowed = bool(payload.get("_stage23_delivery_send_allowed", True))
+            deferred_job_id = None if not delivery_send_allowed else self._schedule_deferred_reply(
                 thread=thread,
                 contact=contact,
                 stored_message=stored_message,
@@ -6598,7 +6815,8 @@ class HoloReplyService:
                 deferred_job_id,
                 sidecar.get("defer_reason", ""),
             )
-            result = {
+            result = self._stage23_finalize_result_contract(
+                {
                 "action": "defer_reply",
                 "reason": str(sidecar.get("defer_reason", "") or "defer_reply_selected"),
                 "thread_key": incoming.thread_key,
@@ -6609,18 +6827,24 @@ class HoloReplyService:
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
-            }
-            result["active_thread_state"] = self._update_active_thread_state(
-                turn=turn,
-                incoming=incoming,
-                direction="outbound",
-                event_row_id=int(payload.get("_stage6_event_row_id", 0) or 0) or None,
-                text="",
-                action_type="defer_reply",
-                selected_action=selected_action,
-                intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state", {}))),
-                metadata={"source": "reply_api.stage5_defer", "_stage17_history_lines_in_prompt": 0},
+                },
+                returned_action="defer_reply" if delivery_send_allowed else "silence",
+                delivery_verdict="allowed" if delivery_send_allowed else str(payload.get("_stage23_delivery_verdict", "") or "shadow_suppressed"),
+                delivery_send_allowed=delivery_send_allowed,
+                delivery_suppressed_by_canary=not delivery_send_allowed,
             )
+            if delivery_send_allowed:
+                result["active_thread_state"] = self._update_active_thread_state(
+                    turn=turn,
+                    incoming=incoming,
+                    direction="outbound",
+                    event_row_id=int(payload.get("_stage6_event_row_id", 0) or 0) or None,
+                    text="",
+                    action_type="defer_reply",
+                    selected_action=selected_action,
+                    intent_state=dict(sidecar.get("intent_state_v4", sidecar.get("intent_state", {}))),
+                    metadata={"source": "reply_api.stage5_defer", "_stage17_history_lines_in_prompt": 0},
+                )
             return result
 
         capability_started_at = time.perf_counter()
@@ -6646,12 +6870,12 @@ class HoloReplyService:
             reply_plan = self.processor.generate(turn_context, session_id=str(thread.get("codex_session_id", "")))
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("processor failure for %s: %s", turn.chat_name, exc)
-            return {
+            return self._stage23_finalize_result_contract({
                 "action": "ignore",
                 "reason": "processor_failure",
                 "thread_key": incoming.thread_key,
                 "detail": str(exc),
-            }
+            })
         sidecar = dict(turn_context.mind_packet or sidecar)
         processor_ms = int(reply_plan.timing_ms.get("processor_ms", 0))
 
@@ -6681,13 +6905,14 @@ class HoloReplyService:
             channel=turn.channel,
         )
         if not outbound.allowed:
-            return {
+            return self._stage23_finalize_result_contract({
                 "action": "ignore",
                 "reason": outbound.reason,
                 "thread_key": incoming.thread_key,
                 "risk_tags": outbound.risk_tags,
-            }
+            })
 
+        delivery_send_allowed = bool(payload.get("_stage23_delivery_send_allowed", True))
         remote_message_id = f"{turn.channel}-out-{stable_digest(turn.chat_name, final_reply, incoming.message_id)}"
         outgoing = OutgoingMessage(
             recipient_email=str(contact["email"]),
@@ -6820,37 +7045,43 @@ class HoloReplyService:
             total_ms,
             turn.chat_name,
         )
-        result = {
-            "action": "reply",
-            "text": final_reply,
-            "bubbles": [bubble.text for bubble in bubbles],
-            "cadence_ms": [bubble.delay_ms for bubble in bubbles],
-            "thread_key": incoming.thread_key,
-            "message_id": incoming.message_id,
-            "outbound_message_id": remote_message_id,
-            "session_id": reply_plan.session_id,
-            "reply_loop_outcome": repaired.get("outcome", ""),
-            "priority": decision.priority,
-            "chat_name": turn.chat_name,
-            "attention_state": (reply_plan.attention_state or attention_state).to_dict(),
-            "turn_plan": reply_plan.turn_plan.to_dict() if reply_plan.turn_plan else {},
-            "utterance_plan": dict(reply_plan.utterance_plan or turn_context.utterance_plan),
-            "emotion_state": dict(reply_plan.emotion_state or turn_context.emotion_state),
-            "processor": reply_plan.processor,
-            "route": reply_plan.route,
-            "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
-            "graph_confidence": float(sidecar.get("graph_confidence", 0.0) or 0.0),
-            "fallback_lanes": list(sidecar.get("fallback_lanes", [])),
-            "activation_trace_ids": list(sidecar.get("activation_trace_ids", [])),
-            "recall_reconstruction": dict(sidecar.get("recall_reconstruction", {})),
-            "mind_graph_sync": mind_graph_sync,
-            "timing_ms": timing_ms,
-            "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
-            "visual_ingest": visual_report or {},
-            "selected_action": dict(sidecar.get("selected_action", {})),
-            "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
-            "action_rationale": str(sidecar.get("action_rationale", "") or ""),
-        }
+        result = self._stage23_finalize_result_contract(
+            {
+                "action": "reply",
+                "text": final_reply,
+                "bubbles": [bubble.text for bubble in bubbles],
+                "cadence_ms": [bubble.delay_ms for bubble in bubbles],
+                "thread_key": incoming.thread_key,
+                "message_id": incoming.message_id,
+                "outbound_message_id": remote_message_id,
+                "session_id": reply_plan.session_id,
+                "reply_loop_outcome": repaired.get("outcome", ""),
+                "priority": decision.priority,
+                "chat_name": turn.chat_name,
+                "attention_state": (reply_plan.attention_state or attention_state).to_dict(),
+                "turn_plan": reply_plan.turn_plan.to_dict() if reply_plan.turn_plan else {},
+                "utterance_plan": dict(reply_plan.utterance_plan or turn_context.utterance_plan),
+                "emotion_state": dict(reply_plan.emotion_state or turn_context.emotion_state),
+                "processor": reply_plan.processor,
+                "route": reply_plan.route,
+                "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
+                "graph_confidence": float(sidecar.get("graph_confidence", 0.0) or 0.0),
+                "fallback_lanes": list(sidecar.get("fallback_lanes", [])),
+                "activation_trace_ids": list(sidecar.get("activation_trace_ids", [])),
+                "recall_reconstruction": dict(sidecar.get("recall_reconstruction", {})),
+                "mind_graph_sync": mind_graph_sync,
+                "timing_ms": timing_ms,
+                "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
+                "visual_ingest": visual_report or {},
+                "selected_action": dict(sidecar.get("selected_action", {})),
+                "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
+                "action_rationale": str(sidecar.get("action_rationale", "") or ""),
+            },
+            returned_action="reply" if delivery_send_allowed else "silence",
+            delivery_verdict="allowed" if delivery_send_allowed else str(payload.get("_stage23_delivery_verdict", "") or "shadow_suppressed"),
+            delivery_send_allowed=delivery_send_allowed,
+            delivery_suppressed_by_canary=not delivery_send_allowed,
+        )
         result["active_thread_state"] = self._update_active_thread_state(
             turn=turn,
             incoming=incoming,

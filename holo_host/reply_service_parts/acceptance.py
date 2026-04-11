@@ -47,6 +47,10 @@ def accept_stage22(self: Any, **kwargs: Any) -> dict[str, Any]:
     return _call_method(self, "_accept_stage22_impl", **kwargs)
 
 
+def accept_stage23(self: Any, **kwargs: Any) -> dict[str, Any]:
+    return _call_method(self, "_accept_stage23_impl", **kwargs)
+
+
 def _call_method(self: Any, method_name: str, **kwargs: Any) -> dict[str, Any]:
     method = getattr(self, method_name)
     return method(**kwargs)

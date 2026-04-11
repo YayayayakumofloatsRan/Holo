@@ -509,7 +509,7 @@ def review_policy_candidate(
         current = policy_sediment_from_row(dict(row))
         report = dict(replay_report or {})
         if approved is None:
-            metrics = dict(report.get("aggregate_metrics", {}))
+            metrics = dict(report.get("raw_aggregate_metrics", report.get("aggregate_metrics", {})))
             approved = bool(report.get("fixture_count", 0)) and float(metrics.get("policy_regret_vs_best_available_action", 1.0) or 1.0) <= float(dict(current.get("metadata", {})).get("baseline_policy_regret", metrics.get("policy_regret_vs_best_available_action", 1.0)) or 1.0) + 0.001
         replay_status = "approved" if bool(approved) else "rejected"
         next_status = str(current.get("status", "candidate") or "candidate")
@@ -523,6 +523,7 @@ def review_policy_candidate(
                 "status": replay_status,
                 "reason": compact_text(str(reason or "stage21_replay_gate"), 180),
                 "aggregate_metrics": dict(report.get("aggregate_metrics", {})),
+                "raw_aggregate_metrics": dict(report.get("raw_aggregate_metrics", {})),
                 "at": now,
             },
         }
