@@ -440,6 +440,19 @@ def _history_block(context: TurnContext, turn_plan: TurnPlan) -> str:
         summary = compact_text(str(active_state.get("continuity_summary", "") or ""), 140)
         if summary:
             lines.append(f"continuity_summary: {summary}")
+        scene = dict(active_state.get("scene_state", {})) if isinstance(active_state.get("scene_state", {}), dict) else {}
+        scene_shared = compact_text(str(scene.get("shared_frame", "") or ""), 140)
+        scene_sketch = compact_text(str(scene.get("response_sketch", "") or ""), 120)
+        scene_branches = [
+            compact_text(str(item).strip(), 64)
+            for item in scene.get("predicted_branches", [])
+            if str(item).strip()
+        ][:1]
+        if scene_shared:
+            lines.append(f"scene_state: {scene_shared}")
+        if scene_sketch or scene_branches:
+            sketch_text = scene_sketch or scene_branches[0]
+            lines.append(f"scene_next: {sketch_text}")
         last_action = dict(active_state.get("last_outbound_action", {}))
         action_type = str(last_action.get("action_type", "") or "").strip()
         if action_type:
@@ -460,14 +473,17 @@ def _history_block(context: TurnContext, turn_plan: TurnPlan) -> str:
         exchange_lines: list[str] = []
         if unresolved and packet_lines:
             exchange_lines.append(f"last_exchange: {compact_text(packet_lines[-1], 120)}")
-        selected = lines[:3] + exchange_lines[: max(0, min(1, int(turn_plan.history_window or 1)))]
+        active_lines = lines[:5]
+        selected = active_lines + exchange_lines[: max(0, min(1, int(turn_plan.history_window or 1)))]
         context.metadata["history_lines_in_prompt"] = len(exchange_lines[:1])
-        context.metadata["active_state_lines_in_prompt"] = len(lines[:3])
-        context.metadata["predictive_lines_in_prompt"] = 1 if any(line.startswith("predictive_continuity:") for line in lines[:3]) else 0
+        context.metadata["active_state_lines_in_prompt"] = len(active_lines)
+        context.metadata["scene_lines_in_prompt"] = len([line for line in active_lines if line.startswith("scene_")])
+        context.metadata["predictive_lines_in_prompt"] = 1 if any(line.startswith("predictive_continuity:") for line in active_lines) else 0
         if selected:
             return "\n".join(f"- {line}" for line in selected)
         context.metadata["history_lines_in_prompt"] = 0
         context.metadata["active_state_lines_in_prompt"] = 0
+        context.metadata["scene_lines_in_prompt"] = 0
         context.metadata["predictive_lines_in_prompt"] = 0
         return "- active thread state is warm; no verbatim recent history needed."
     packet_window = dict(context.mind_packet.get("recent_dialogue_window", {}))

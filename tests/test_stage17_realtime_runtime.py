@@ -85,8 +85,23 @@ class Stage17RealtimeRuntimeTests(unittest.TestCase):
             "memory_route": "active_thread",
             "active_thread_state": {
                 "continuity_summary": "user: 在吗",
+                "scene_state": {
+                    "shared_frame": "we are still inside the same light check-in",
+                    "topic_stack": ["check-in"],
+                    "salient_objects": ["chat:Nemoqi"],
+                    "latent_questions": [],
+                    "predicted_branches": ["user:low_signal_ping_or_ack"],
+                    "relationship_trajectory": "light_continuation",
+                    "response_sketch": "reply once and keep the same thread warm",
+                    "scene_confidence": 0.74,
+                    "freshness_at": "2026-04-11T00:00:00Z",
+                },
                 "last_outbound_action": {"action_type": "reply_once"},
                 "unresolved_references": [],
+                "predictive_continuity": {
+                    "predicted_next_user_act": "low_signal_ping_or_ack",
+                    "likely_reference_targets": ["chat:Nemoqi"],
+                },
             },
             "recent_dialogue_window": {
                 "lines": ["old line one", "old line two", "old line three", "old line four"],
@@ -121,6 +136,15 @@ class Stage17RealtimeRuntimeTests(unittest.TestCase):
         self.assertEqual(turn_plan.history_window, 1)
         self.assertLessEqual(int(context.metadata.get("history_lines_in_prompt", 0)), 1)
         self.assertIn("continuity_summary", prompt)
+        self.assertIn("scene_state", prompt)
+        self.assertIn("scene_next", prompt)
+        self.assertIn("predictive_continuity", prompt)
+        self.assertGreaterEqual(int(context.metadata.get("scene_lines_in_prompt", 0)), 2)
+        self.assertEqual(int(context.metadata.get("predictive_lines_in_prompt", 0)), 1)
+        self.assertLess(prompt.index("continuity_summary"), prompt.index("scene_state"))
+        self.assertLess(prompt.index("scene_state"), prompt.index("scene_next"))
+        self.assertLess(prompt.index("scene_next"), prompt.index("last_outbound_action"))
+        self.assertLess(prompt.index("last_outbound_action"), prompt.index("predictive_continuity"))
         self.assertNotIn("old line two", prompt)
         self.assertNotIn("old line three", prompt)
 

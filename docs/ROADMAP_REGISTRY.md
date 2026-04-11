@@ -45,16 +45,17 @@ Stage23: kernel/shell orthogonalization and release parity
 - Restores full-green release parity by making artifact ingest backward-compatible again and by pushing replay gating onto raw metrics while rounded aggregates stay reporting-only.
 - Keeps Stage22 shadow-first safety boundaries, live-artifact replay, rollback, rate limits, and canary traces intact.
 
+Stage24: scene-state continuity layer
+- Implemented as a bounded per-thread `scene_state` stored inside `active_thread_state`.
+- Makes ordinary short turns prefer compact scene summaries and response sketches before verbatim history while keeping explicit memory/history/factual turns on escalation paths.
+- Adds inspectable scene diagnostics and bounded scene deltas in action-market scoring without introducing a second brain or a new always-on loop.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage23. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
-
-Stage24: bounded subject programs
-- Planned. Adds bounded, inspectable subject-program records keyed by canonical thread plus program id.
-- Program hydration stays same-thread and action-market-first; no second brain and no send-right expansion.
+This planned arc starts after Stage24. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 
 Stage25: artifact/tool/outcome progress coupling
-- Planned. Routes artifact, tool, deferred-reply, and world-cue outcomes into the same bounded program surface.
+- Planned. Routes artifact, tool, deferred-reply, and world-cue outcomes into the same bounded scene-state surface.
 - Requires dedupe, evidence refs, and canonical-thread scoping across service, memory, and validation layers.
 
 Stage26: long-horizon replay and promotion gates
@@ -64,6 +65,9 @@ Stage26: long-horizon replay and promotion gates
 Stage27: online long-horizon canary
 - Planned. Canaries program-aware long-horizon behavior online in host-side shadow-first mode.
 - Must stay whitelist-bound, rate-limited, rollback-safe, replay-disciplined, and action-market-first.
+
+Bounded subject programs
+- Deferred. This is no longer the live Stage24 scope and should not be treated as implemented or active-planning default without an explicit re-plan.
 
 ## Parked Hypotheses
 - broader multi-agent social world

@@ -41,11 +41,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 36. `docs/ENGINEERING_HANDOFF_STAGE22.md`
 37. `docs/STAGE23_KERNEL_SHELL_ORTHOGONALIZATION_AND_RELEASE_PARITY.md`
 38. `docs/ENGINEERING_HANDOFF_STAGE23.md`
-39. `HOLO_SYSTEM.md`
-40. `HOLO_HOST.md`
-41. `OPERATIONS.md`
-42. `holo_memory_library/MEMORY_LIBRARY.md`
-43. `windows_helper/README.md`
+39. `docs/STAGE24_SCENE_STATE_CONTINUITY_LAYER.md`
+40. `docs/ENGINEERING_HANDOFF_STAGE24.md`
+41. `HOLO_SYSTEM.md`
+42. `HOLO_HOST.md`
+43. `OPERATIONS.md`
+44. `holo_memory_library/MEMORY_LIBRARY.md`
+45. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -60,9 +62,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage23-kernel-shell-orthogonalization-and-release-parity`.
+- The current milestone tag is `stage24-scene-state-continuity-layer`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage24 bounded subject programs planning on top of a green Stage23 release-parity baseline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
+- Current focus is Stage25 artifact/tool/outcome progress coupling on top of a green Stage24 scene-state baseline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -70,11 +72,12 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage21: reversible policy sedimentation and negotiated will as action-market bias is implemented
   - Stage22: host-side shadow/canary telemetry, live-artifact replay, rollback switch, and bounded world-coupling cues are implemented
   - Stage23: semantic subject results are orthogonalized from delivery/canary suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics while rounded metrics remain reporting-only
+  - Stage24: per-thread `scene_state` is now persisted, inspectable, prompt-visible before verbatim history, and action-market-visible as bounded scene deltas
 - The next planned arc is:
-  - Stage24: bounded subject programs
   - Stage25: artifact/tool/outcome progress coupling
   - Stage26: long-horizon replay and promotion gates
   - Stage27: online long-horizon canary
+  - Bounded subject programs are deferred beyond the current Stage24 scene-state milestone
 - This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
@@ -294,14 +297,16 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `.agent/PLANS.md`
   - `.agent/STAGE23_27_PROGRAM.md`
 - Default sequencing:
-  - Stage24 introduces bounded subject programs
-  - Stage25 couples artifact, tool, and outcome progress into the same bounded program surface
-  - Stage26 extends replay discipline and promotion gates to long-horizon behavior
-  - Stage27 canaries program-aware long-horizon behavior online in host-side shadow-first mode
-- Current verified baseline after Stage23:
+  - Stage24 is implemented as the scene-state continuity layer
+  - Stage25 couples artifact, tool, and outcome progress into the same bounded scene-state surface
+  - Stage26 extends replay discipline and promotion gates to longer-horizon behavior
+  - Stage27 canaries longer-horizon behavior online in host-side shadow-first mode
+  - Bounded subject programs are deferred until a later explicit re-plan
+- Current verified baseline after Stage24:
   - `pytest -q` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage23 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
+  - `python3 -m holo_host --config .holo_host.example.toml accept-stage24 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
 
 ## Invariants
 - Do not silently change online transport modes

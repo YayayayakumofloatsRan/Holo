@@ -27,7 +27,7 @@ from .common import atomic_write_text, compact_text, stable_digest, utc_now
 from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
-from .models import AttentionState, IncomingMessage, OutgoingMessage, ReplyBubble, TurnContext
+from .models import AttentionState, IncomingMessage, OutgoingMessage, ProcessorTaskRequest, ReplyBubble, TurnContext
 from .operator_bus import build_engineering_snapshot, build_homeostasis_state
 from .operator_bus import operator_probe as run_operator_probe
 from .operator_bus import refresh_self_model, run_operator_cycle
@@ -47,6 +47,7 @@ from .reply_service_parts.acceptance import (
     accept_stage21 as _accept_stage21,
     accept_stage22 as _accept_stage22,
     accept_stage23 as _accept_stage23,
+    accept_stage24 as _accept_stage24,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -1454,6 +1455,24 @@ class HoloReplyService:
         artifact_dir: str | None = None,
     ) -> dict[str, Any]:
         return _accept_stage23(
+            self,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def accept_stage24(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return _accept_stage24(
             self,
             thread_key=thread_key,
             chat_name=chat_name,
@@ -3429,6 +3448,33 @@ class HoloReplyService:
     ) -> dict[str, Any]:
         return self.memory.predictive_continuity(thread_key=thread_key, chat_name=chat_name, channel=channel)
 
+    def show_scene_state(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.scene_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def trace_predicted_branches(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.trace_predicted_branches(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
+    def trace_scene_compression(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        return self.memory.trace_scene_compression(thread_key=thread_key, chat_name=chat_name, channel=channel)
+
     def trace_reflex_routing(
         self,
         *,
@@ -3448,8 +3494,10 @@ class HoloReplyService:
             "memory_route": trace.get("memory_route", ""),
             "active_thread_state": {
                 "predictive_continuity": dict(trace.get("predictive_continuity", {})),
+                "scene_state": dict(trace.get("scene_state", {})),
             },
             "stage18": dict(trace.get("stage18", {})),
+            "stage24": dict(trace.get("stage24", {})),
             "selected_action": dict(trace.get("selected_action", {})),
         }
         turn_context = TurnContext(
@@ -4672,6 +4720,164 @@ class HoloReplyService:
             },
         }
 
+    def _accept_stage24_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        requested_chat_name = str(chat_name or "Nemoqi").strip()
+        requested_thread_key = str(thread_key or requested_chat_name).strip()
+        if normalized_channel == "wechat":
+            requested_thread_key = self._stage22_normalize_wechat_thread(requested_thread_key, requested_chat_name)
+        stage23_report = self.accept_stage23(
+            thread_key=requested_thread_key,
+            chat_name=requested_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        run_id = stable_digest(requested_thread_key, requested_chat_name, utc_now(), "stage24")[:12]
+        probe_chat_name = f"{requested_chat_name}-stage24-{run_id}"
+        probe_thread_key = f"wechat:{probe_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:{run_id}"
+        probe_turn = ChatTurn(
+            chat_name=probe_chat_name,
+            text="lunch tomorrow?",
+            sender=str(sender or requested_chat_name),
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            message_id=f"accept-stage24-inbound-{run_id}",
+            metadata={},
+        )
+        incoming = probe_turn.to_incoming_message()
+        inbound_state = self._update_active_thread_state(
+            turn=probe_turn,
+            incoming=incoming,
+            direction="inbound",
+            event_row_id=2401,
+            text=probe_turn.text,
+            metadata={"source": "accept-stage24", "_stage24_force_scene_hint": True},
+        )
+        context = {
+            "channel": normalized_channel,
+            "thread_key": probe_thread_key,
+            "incoming_thread_key": probe_thread_key,
+            "message_id": incoming.message_id,
+            "chat_name": probe_chat_name,
+            "sender": str(sender or requested_chat_name),
+            "recent_history": [
+                {"direction": "inbound", "body_text": "old line one"},
+                {"direction": "outbound", "body_text": "old line two"},
+                {"direction": "inbound", "body_text": "old line three"},
+            ],
+            "attachments": [],
+            "active_thread_state": inbound_state,
+            "event_id": "2401",
+        }
+        fast_packet = self.memory.sidecar_packet(probe_turn.text, context=context)
+        fast_turn_context = TurnContext(
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            sender=str(sender or requested_chat_name),
+            user_text=probe_turn.text,
+            sidecar=fast_packet,
+            mind_packet=fast_packet,
+            attention_state=build_attention_state(probe_turn.text, channel=normalized_channel, metadata={}),
+            emotion_state=dict(fast_packet.get("state", {}).get("emotion_state", {})),
+            history=list(context["recent_history"]),
+            metadata={},
+            capability_context={},
+        )
+        fast_turn_plan = build_turn_plan(fast_turn_context, self.config)
+        fast_prompt = render_chat_prompt(fast_turn_context, turn_plan=fast_turn_plan)
+        scene_diag = self.show_scene_state(thread_key=probe_thread_key, chat_name=probe_chat_name, channel=normalized_channel)
+        branch_trace = self.trace_predicted_branches(thread_key=probe_thread_key, chat_name=probe_chat_name, channel=normalized_channel)
+        compression_trace = self.trace_scene_compression(thread_key=probe_thread_key, chat_name=probe_chat_name, channel=normalized_channel)
+        outbound_state = self._update_active_thread_state(
+            turn=probe_turn,
+            incoming=incoming,
+            direction="outbound",
+            event_row_id=2402,
+            text="later after lunch works, we can keep tomorrow in view",
+            action_type="reply_once",
+            selected_action={"action_type": "reply_once", "score": 0.72},
+            metadata={"source": "accept-stage24"},
+        )
+        reloaded_state = self.memory.active_thread_state(channel=normalized_channel, thread_key=probe_thread_key, chat_name=probe_chat_name)
+        recall_packet = self.memory.sidecar_packet(
+            "remember previous history",
+            context={**context, "message_id": f"accept-stage24-recall-{run_id}", "active_thread_state": inbound_state, "event_id": "2403"},
+        )
+        action_market = self.memory.action_market(
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            query=probe_turn.text,
+            limit=6,
+        )
+        scene_state = dict(reloaded_state.get("scene_state", {}))
+        checks = {
+            "stage23_acceptance_green": str(stage23_report.get("status", "")) == "pass",
+            "scene_fields_visible": all(
+                key in scene_state
+                for key in (
+                    "shared_frame",
+                    "topic_stack",
+                    "salient_objects",
+                    "latent_questions",
+                    "predicted_branches",
+                    "relationship_trajectory",
+                    "response_sketch",
+                    "scene_confidence",
+                    "freshness_at",
+                )
+            ),
+            "scene_state_persisted": bool(scene_state.get("freshness_at")) and bool(reloaded_state.get("present", False)),
+            "ordinary_short_turn_uses_scene_before_history": "scene_state:" in fast_prompt
+            and "scene_next:" in fast_prompt
+            and "old line two" not in fast_prompt
+            and int(fast_turn_context.metadata.get("history_lines_in_prompt", 0) or 0) <= 1,
+            "explicit_memory_query_still_escalates": str(recall_packet.get("tier", "")).strip() in {"recall", "deep_recall"}
+            and str(recall_packet.get("recall_reason", "")).startswith("stage17:"),
+            "action_market_scene_overlay_visible": bool(action_market.get("action_market"))
+            and all("scene_delta" in item and "scene_rationale" in item for item in action_market.get("action_market", [])),
+            "scene_diagnostics_visible": bool(scene_diag.get("scene_state")) and "compression_mode" in compression_trace,
+            "outbound_scene_updates_state": bool(dict(outbound_state.get("scene_state", {})).get("response_sketch", "") or scene_state.get("response_sketch", "")),
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "scene-state-continuity-layer-stage24",
+            "checks": checks,
+            "thread_key": requested_thread_key,
+            "chat_name": requested_chat_name,
+            "channel": normalized_channel,
+            "probe_thread_key": probe_thread_key,
+            "stage23": {"status": stage23_report.get("status"), "checks": stage23_report.get("checks", {})},
+            "scene_state": scene_diag,
+            "predicted_branches": branch_trace,
+            "scene_compression": compression_trace,
+            "fast_packet": {
+                "tier": fast_packet.get("tier"),
+                "memory_route": fast_packet.get("memory_route"),
+                "stage24": dict(fast_packet.get("stage24", {})),
+                "history_lines_in_prompt": int(fast_turn_context.metadata.get("history_lines_in_prompt", 0) or 0),
+                "scene_lines_in_prompt": int(fast_turn_context.metadata.get("scene_lines_in_prompt", 0) or 0),
+                "prompt_excerpt": compact_text(fast_prompt, 360),
+            },
+            "recall_probe": {
+                "tier": recall_packet.get("tier"),
+                "recall_reason": recall_packet.get("recall_reason"),
+                "memory_route": recall_packet.get("memory_route"),
+            },
+            "action_market": action_market,
+            "reloaded_state": reloaded_state,
+        }
+
     def initiative_status(
         self,
         *,
@@ -5761,6 +5967,59 @@ class HoloReplyService:
             return "curiosity"
         return attention_focus or "ordinary"
 
+    def _stage24_scene_compression_hint(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        direction: str,
+        text: str,
+        action_type: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_text = " ".join(str(text or "").strip().split())
+        lowered = normalized_text.lower()
+        turn_metadata = dict(turn.metadata) if isinstance(turn.metadata, dict) else {}
+        if not normalized_text:
+            return {}
+        if list((metadata or {}).get("attachments", []) or turn_metadata.get("attachments", []) or []):
+            return {}
+        if any(hint in lowered for hint in ("remember", "history", "earlier", "previous", "search", "look up", "latest", "official", "image", "photo", "picture")):
+            return {}
+        if len(normalized_text) < 180 and (normalized_text.count("?") + normalized_text.count("？")) < 2:
+            return {}
+        prompt = (
+            "Return JSON only with keys shared_frame, topic_stack, salient_objects, latent_questions, "
+            "predicted_branches, relationship_trajectory, response_sketch, scene_confidence.\n"
+            f"direction={direction}\n"
+            f"channel={turn.channel}\n"
+            f"thread_key={incoming.thread_key}\n"
+            f"chat_name={turn.chat_name}\n"
+            f"action_type={action_type}\n"
+            f"text={normalized_text}\n"
+            "Constraints: compact summaries only, topic_stack<=4, salient_objects<=4, latent_questions<=3, "
+            "predicted_branches<=3, scene_confidence in [0,1], no raw history dump."
+        )
+        try:
+            result = self.runner.run_task(
+                ProcessorTaskRequest(
+                    task_type="reflect",
+                    prompt=prompt,
+                    output_schema="json",
+                    budget_tag="scene_state",
+                    max_output_tokens=320,
+                    metadata={"raw_prompt": True, "stage": "stage24", "thread_key": incoming.thread_key},
+                )
+            )
+            if int(result.returncode or 0) != 0:
+                return {"mode": "heuristic_fallback", "reason": "processor_returncode", "detail": str(result.stderr or result.stdout or "")}
+            parsed = json.loads(str(result.text or "{}"))
+            if not isinstance(parsed, dict):
+                raise ValueError("scene compression payload must be a dict")
+            return {"mode": "processor", "reason": "processor_scene_compression", "scene_state": parsed}
+        except Exception as exc:  # noqa: BLE001
+            return {"mode": "heuristic_fallback", "reason": "processor_unavailable", "detail": str(exc)}
+
     def _update_active_thread_state(
         self,
         *,
@@ -5777,6 +6036,19 @@ class HoloReplyService:
         if not hasattr(self.memory, "update_active_thread_state"):
             return {"status": "skipped", "reason": "active_thread_state_unavailable"}
         attention = build_attention_state(text or turn.text, channel=turn.channel, metadata=turn.metadata)
+        scene_hint = self._stage24_scene_compression_hint(
+            turn=turn,
+            incoming=incoming,
+            direction=direction,
+            text=text or turn.text,
+            action_type=action_type or str((selected_action or {}).get("action_type", "") or ""),
+            metadata=metadata,
+        )
+        extra_metadata = dict(metadata or {})
+        if scene_hint:
+            extra_metadata["_stage24_scene_compression"] = {key: value for key, value in scene_hint.items() if key != "scene_state"}
+            if isinstance(scene_hint.get("scene_state"), dict):
+                extra_metadata["_stage24_scene_hint"] = dict(scene_hint.get("scene_state", {}))
         try:
             with self._memory_lock:
                 return self.memory.update_active_thread_state(
@@ -5794,7 +6066,7 @@ class HoloReplyService:
                     active_affect_hint=self._stage17_affect_hint(text or turn.text, attention_focus=attention.primary_focus),
                     relationship_tension=0.0 if attention.pressure_level != "high" else 0.72,
                     unresolved_references=self._stage17_unresolved_references(text or turn.text),
-                    metadata=metadata or {},
+                    metadata=extra_metadata,
                 )
         except Exception as exc:  # noqa: BLE001
             self.logger.debug("active thread state update skipped for %s: %s", turn.chat_name, exc)
@@ -7496,6 +7768,33 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/predictive-continuity":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.show_predictive_continuity(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/scene-state":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_scene_state(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/predicted-branches":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_predicted_branches(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/scene-compression":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_scene_compression(
                         thread_key=params.get("thread_key", [None])[0],
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],

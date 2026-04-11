@@ -94,3 +94,60 @@ def apply_policy_sedimentation_overlay(
             annotated["score"] = round(float(annotated.get("score", 0.0) or 0.0) + delta, 4)
         updated_market.append(annotated)
     return sorted(updated_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+
+
+def apply_scene_state_overlay(
+    self: Any,
+    *,
+    action_market: list[dict[str, Any]],
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    active_state = dict(context.get("active_thread_state", {})) if isinstance(context.get("active_thread_state", {}), dict) else {}
+    scene = dict(active_state.get("scene_state", {})) if isinstance(active_state.get("scene_state", {}), dict) else {}
+    predictive = dict(active_state.get("predictive_continuity", {})) if isinstance(active_state.get("predictive_continuity", {}), dict) else {}
+    shared_frame = str(scene.get("shared_frame", "") or "").strip()
+    response_sketch = str(scene.get("response_sketch", "") or "").strip()
+    topic_stack = [str(item).strip() for item in scene.get("topic_stack", []) if str(item).strip()]
+    latent_questions = [str(item).strip() for item in scene.get("latent_questions", []) if str(item).strip()]
+    predicted_branches = [str(item).strip() for item in scene.get("predicted_branches", []) if str(item).strip()]
+    trajectory = str(scene.get("relationship_trajectory", "") or "").strip()
+    try:
+        scene_confidence = float(scene.get("scene_confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        scene_confidence = 0.0
+    if not (shared_frame or topic_stack or latent_questions or predicted_branches):
+        return [
+            {
+                **dict(candidate),
+                "scene_delta": 0.0,
+                "scene_rationale": "",
+            }
+            for candidate in action_market
+        ]
+    recall_reason = str(context.get("recall_escalation_reason", "") or "").strip()
+    hard_block = recall_reason in {"explicit_memory_query", "factual_lookup_need"} or bool(context.get("attachments", []))
+    updated_market: list[dict[str, Any]] = []
+    for candidate in action_market:
+        annotated = dict(candidate)
+        action_type = str(annotated.get("action_type", "") or "")
+        delta = 0.0
+        rationale_parts: list[str] = []
+        if not hard_block:
+            if action_type == "reply_once" and shared_frame and response_sketch:
+                delta += 0.06 + min(0.03, scene_confidence * 0.04)
+                rationale_parts.append("scene says a compact continuation is available")
+            if action_type == "reply_multi" and (len(predicted_branches) >= 2 or len(topic_stack) >= 2):
+                delta += 0.04 + min(0.03, len(predicted_branches) * 0.01)
+                rationale_parts.append("scene shows real unfolding pressure")
+            if action_type == "defer_reply" and latent_questions and scene_confidence < 0.58:
+                delta += 0.05
+                rationale_parts.append("scene still has unresolved branches with low confidence")
+            if action_type == "silence" and latent_questions and trajectory in {"supportive_continuation", "light_continuation", "ordinary_continuation"}:
+                delta -= 0.06
+                rationale_parts.append("scene still carries unanswered continuity pressure")
+        delta = round(max(-0.12, min(0.12, delta)), 4)
+        annotated["scene_delta"] = delta
+        annotated["scene_rationale"] = compact_text(" | ".join(rationale_parts), 180) if rationale_parts else ""
+        annotated["score"] = round(float(annotated.get("score", 0.0) or 0.0) + delta, 4)
+        updated_market.append(annotated)
+    return sorted(updated_market, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)

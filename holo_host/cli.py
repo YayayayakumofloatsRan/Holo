@@ -804,6 +804,96 @@ def _predictive_continuity_payload(
             service.memory.graph.close()
 
 
+def _scene_state_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/scene-state",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.show_scene_state(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _predicted_branches_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/predicted-branches",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_predicted_branches(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _scene_compression_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/scene-compression",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_scene_compression(thread_key=thread_key, chat_name=chat_name, channel=channel), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _attention_frontier_payload(
     config_path: str | None,
     *,
@@ -4283,6 +4373,57 @@ def command_show_predictive_continuity(
     return 0
 
 
+def command_show_scene_state(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _scene_state_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_predicted_branches(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _predicted_branches_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_scene_compression(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+) -> int:
+    payload, _transport = _scene_compression_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_attention_frontier(
     config_path: str | None,
     *,
@@ -6004,6 +6145,53 @@ def _accept_stage23_payload(
             service.memory.graph.close()
 
 
+def _accept_stage24_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage24",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage24(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -6224,6 +6412,27 @@ def command_accept_stage23(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage23_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage24(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage24_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -7409,6 +7618,18 @@ def main(argv: list[str] | None = None) -> int:
     predictive_parser.add_argument("--thread-key", default=None)
     predictive_parser.add_argument("--chat-name", default=None)
     predictive_parser.add_argument("--channel", default="wechat")
+    scene_parser = subparsers.add_parser("show-scene-state", help="Show Stage-24 scene state for one active thread")
+    scene_parser.add_argument("--thread-key", default=None)
+    scene_parser.add_argument("--chat-name", default=None)
+    scene_parser.add_argument("--channel", default="wechat")
+    predicted_branches_parser = subparsers.add_parser("trace-predicted-branches", help="Show Stage-24 predicted branches for one active thread")
+    predicted_branches_parser.add_argument("--thread-key", default=None)
+    predicted_branches_parser.add_argument("--chat-name", default=None)
+    predicted_branches_parser.add_argument("--channel", default="wechat")
+    scene_compression_parser = subparsers.add_parser("trace-scene-compression", help="Show Stage-24 scene compression and truncation diagnostics")
+    scene_compression_parser.add_argument("--thread-key", default=None)
+    scene_compression_parser.add_argument("--chat-name", default=None)
+    scene_compression_parser.add_argument("--channel", default="wechat")
     attention_frontier_parser = subparsers.add_parser("show-attention-frontier", help="Show Stage-19 bounded attention frontier entries")
     attention_frontier_parser.add_argument("--channel", default=None)
     attention_frontier_parser.add_argument("--limit", type=int, default=8)
@@ -7784,6 +8005,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage23_parser.add_argument("--channel", default="wechat")
     accept_stage23_parser.add_argument("--sender", default=None)
     accept_stage23_parser.add_argument("--artifact-dir", default=None)
+    accept_stage24_parser = subparsers.add_parser("accept-stage24", help="Run the Stage-24 scene-state continuity layer gate")
+    accept_stage24_parser.add_argument("--thread-key", default=None)
+    accept_stage24_parser.add_argument("--chat-name", default=None)
+    accept_stage24_parser.add_argument("--channel", default="wechat")
+    accept_stage24_parser.add_argument("--sender", default=None)
+    accept_stage24_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -7977,6 +8204,27 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "show-predictive-continuity":
         return command_show_predictive_continuity(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "show-scene-state":
+        return command_show_scene_state(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "trace-predicted-branches":
+        return command_trace_predicted_branches(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "trace-scene-compression":
+        return command_trace_scene_compression(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,
@@ -8519,6 +8767,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage23":
         return command_accept_stage23(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage24":
+        return command_accept_stage24(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

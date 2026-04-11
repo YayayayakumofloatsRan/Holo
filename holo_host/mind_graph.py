@@ -764,6 +764,7 @@ class MindGraph:
                 cache_warmth TEXT NOT NULL DEFAULT 'cold',
                 recent_turn_ids_json TEXT NOT NULL DEFAULT '[]',
                 predictive_continuity_json TEXT NOT NULL DEFAULT '{}',
+                scene_state_json TEXT NOT NULL DEFAULT '{}',
                 metrics_json TEXT NOT NULL DEFAULT '{}',
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT '',
@@ -1125,6 +1126,8 @@ class MindGraph:
             }
             if "predictive_continuity_json" not in active_columns:
                 self.conn.execute("ALTER TABLE active_thread_state ADD COLUMN predictive_continuity_json TEXT NOT NULL DEFAULT '{}'")
+            if "scene_state_json" not in active_columns:
+                self.conn.execute("ALTER TABLE active_thread_state ADD COLUMN scene_state_json TEXT NOT NULL DEFAULT '{}'")
             for stream_name, payload in self.stream_cadences.items():
                 self.conn.execute(
                     """
@@ -1246,6 +1249,20 @@ class MindGraph:
             "active_prediction_confidence": 0.0,
         }
 
+    @staticmethod
+    def _default_scene_state(*, now: str = "") -> dict[str, Any]:
+        return {
+            "shared_frame": "",
+            "topic_stack": [],
+            "salient_objects": [],
+            "latent_questions": [],
+            "predicted_branches": [],
+            "relationship_trajectory": "",
+            "response_sketch": "",
+            "scene_confidence": 0.0,
+            "freshness_at": str(now or ""),
+        }
+
     def _normalize_predictive_continuity(self, raw: Any, *, now: str = "") -> dict[str, Any]:
         payload = self._default_predictive_continuity(now=now)
         if isinstance(raw, dict):
@@ -1267,12 +1284,55 @@ class MindGraph:
         payload["active_prediction_confidence"] = self._clamp(current.get("active_prediction_confidence", 0.0), default=0.0)
         return payload
 
+    def _normalize_scene_state(self, raw: Any, *, now: str = "") -> dict[str, Any]:
+        payload = self._default_scene_state(now=now)
+        current = dict(raw) if isinstance(raw, dict) else _safe_json_dict(raw)
+        payload["shared_frame"] = compact_text(str(current.get("shared_frame", "") or ""), 160)
+        payload["topic_stack"] = _dedupe_strings(
+            compact_text(str(item).strip(), 48)
+            for item in current.get("topic_stack", [])
+            if str(item).strip()
+        )[:4]
+        payload["salient_objects"] = _dedupe_strings(
+            compact_text(str(item).strip(), 64)
+            for item in current.get("salient_objects", [])
+            if str(item).strip()
+        )[:4]
+        payload["latent_questions"] = _dedupe_strings(
+            compact_text(str(item).strip(), 96)
+            for item in current.get("latent_questions", [])
+            if str(item).strip()
+        )[:3]
+        payload["predicted_branches"] = _dedupe_strings(
+            compact_text(str(item).strip(), 96)
+            for item in current.get("predicted_branches", [])
+            if str(item).strip()
+        )[:3]
+        payload["relationship_trajectory"] = compact_text(str(current.get("relationship_trajectory", "") or ""), 96)
+        payload["response_sketch"] = compact_text(str(current.get("response_sketch", "") or ""), 140)
+        payload["scene_confidence"] = self._clamp(current.get("scene_confidence", 0.0), default=0.0)
+        payload["freshness_at"] = str(current.get("freshness_at", "") or now or "")
+        return payload
+
     def _apply_predictive_aliases(self, payload: dict[str, Any]) -> dict[str, Any]:
         predictive = self._normalize_predictive_continuity(payload.get("predictive_continuity", {}))
         payload["predictive_continuity"] = predictive
         for key, value in predictive.items():
             payload[key] = value
         return payload
+
+    @staticmethod
+    def _scene_clauses(text: str, *, limit: int = 4, max_len: int = 72) -> list[str]:
+        raw = str(text or "").strip()
+        if not raw:
+            return []
+        parts = re.split(r"[\r\n]+|[。！？!?；;，,|]+", raw)
+        cleaned = [
+            compact_text(" ".join(str(part).strip().split()), max_len)
+            for part in parts
+            if str(part).strip()
+        ]
+        return _dedupe_strings(cleaned)[: max(1, int(limit or 1))]
 
     @staticmethod
     def _predictive_signal(text: str) -> dict[str, Any]:
@@ -1421,6 +1481,193 @@ class MindGraph:
             "active_prediction_confidence": confidence,
         }
 
+    def _derive_scene_state(
+        self,
+        *,
+        current: dict[str, Any],
+        direction: str,
+        text: str,
+        chat_name: str,
+        selected_action: dict[str, Any],
+        intent_state: dict[str, Any],
+        attention_focus: str,
+        relationship_tension: float,
+        unresolved_references: list[str],
+        predictive: dict[str, Any],
+        event_ref: str,
+        now: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        previous = self._normalize_scene_state(current.get("scene_state", {}), now=now)
+        signal = self._predictive_signal(text)
+        normalized_direction = str(direction or "").strip() or "event"
+        normalized_action_type = str(selected_action.get("action_type", "") or "").strip()
+        clauses = self._scene_clauses(text, limit=4, max_len=72)
+        weak_turn = (
+            int(signal.get("meaningful", 0) or 0) <= 4
+            and not bool(signal.get("question_like", False))
+            and not bool(signal.get("reference_like", False))
+            and not clauses
+            and not list(unresolved_references or [])
+        )
+        scene_meta = dict(metadata or {})
+        compression = dict(scene_meta.get("_stage24_scene_compression", {}))
+        hint = self._normalize_scene_state(scene_meta.get("_stage24_scene_hint", {}), now=now)
+        hint_mode = str(compression.get("mode", "") or "").strip()
+        hint_has_content = bool(
+            hint.get("shared_frame")
+            or hint.get("topic_stack")
+            or hint.get("salient_objects")
+            or hint.get("latent_questions")
+            or hint.get("predicted_branches")
+            or hint.get("relationship_trajectory")
+            or hint.get("response_sketch")
+        )
+        if weak_turn and previous.get("freshness_at"):
+            scene = dict(previous)
+            scene["freshness_at"] = now
+            scene["scene_confidence"] = self._clamp(
+                max(float(scene.get("scene_confidence", 0.0) or 0.0), float(predictive.get("active_prediction_confidence", 0.0) or 0.0)) * 0.96,
+                default=0.0,
+            )
+            return scene, {
+                "last_direction": normalized_direction,
+                "last_event_ref": str(event_ref or ""),
+                "compression_mode": hint_mode or "heuristic",
+                "compression_reason": str(compression.get("reason", "weak_turn_reused_previous") or "weak_turn_reused_previous"),
+                "source_turn_refs": _dedupe_strings(list(current.get("recent_turn_ids", [])) + [str(event_ref or "")])[-4:],
+                "truncation": {"weak_turn_reused_previous": True},
+                "updated_at": now,
+            }
+
+        predicted_next = compact_text(str(predictive.get("predicted_next_user_act", "") or ""), 64)
+        valence = compact_text(str(predictive.get("expected_social_valence", "") or "neutral"), 40) or "neutral"
+        last_intent = compact_text(str(current.get("last_user_intent", "") or ""), 96)
+        base_topics = _dedupe_strings(
+            [
+                compact_text(str(intent_state.get("query_focus", "") or ""), 48),
+                compact_text(str(attention_focus or ""), 48),
+                *clauses[:2],
+                *list(previous.get("topic_stack", [])),
+            ]
+        )
+        topic_stack = base_topics[:4]
+        raw_salient = _dedupe_strings(
+            list(unresolved_references or [])
+            + list(predictive.get("likely_reference_targets", []))
+            + list(previous.get("salient_objects", []))
+            + ([f"chat:{chat_name}"] if str(chat_name or "").strip() else [])
+        )
+        salient_objects = raw_salient[:4]
+        latent_questions = list(previous.get("latent_questions", []))
+        if normalized_direction == "inbound" and (
+            bool(signal.get("question_like", False))
+            or bool(signal.get("explicit_memory", False))
+            or bool(signal.get("factual", False))
+            or bool(signal.get("reference_like", False))
+        ):
+            latent_questions = _dedupe_strings([compact_text(clauses[0] if clauses else text, 96)] + latent_questions)[:3]
+        elif normalized_direction == "outbound" and normalized_action_type in {"reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}:
+            latent_questions = latent_questions[:1]
+        else:
+            latent_questions = latent_questions[:2]
+        raw_branches = _dedupe_strings(
+            [
+                f"user:{predicted_next}" if predicted_next else "",
+                f"reference:{salient_objects[0]}" if salient_objects else "",
+                "answer_then_continue" if bool(signal.get("question_like", False)) else "",
+                "continue_same_frame" if topic_stack else "",
+                "wait_for_followup" if normalized_action_type == "defer_reply" else "",
+                "boundary_negotiation" if normalized_action_type in {"push_back", "counter_offer", "continuity_defense"} else "",
+                "soft_ack" if normalized_action_type in {"reply_once", "reply_multi"} else "",
+                *list(previous.get("predicted_branches", [])),
+            ]
+        )
+        predicted_branches = raw_branches[:3]
+        if relationship_tension >= 0.58:
+            relationship_trajectory = "strained_negotiation"
+        elif normalized_action_type == "defer_reply":
+            relationship_trajectory = "holding_open_loop"
+        elif valence == "supportive":
+            relationship_trajectory = "supportive_continuation"
+        elif valence == "playful":
+            relationship_trajectory = "playful_unfolding"
+        elif predicted_next in {"low_signal_ping_or_ack", "user_continuation_or_ack"}:
+            relationship_trajectory = "light_continuation"
+        else:
+            relationship_trajectory = "ordinary_continuation"
+        if normalized_direction == "outbound" and str(text or "").strip():
+            response_sketch = compact_text(text, 140)
+        elif normalized_action_type:
+            response_sketch = compact_text(
+                f"{normalized_action_type} about {topic_stack[0] if topic_stack else attention_focus or predicted_next or 'the thread'}",
+                140,
+            )
+        elif latent_questions:
+            response_sketch = compact_text(f"address {latent_questions[0]}", 140)
+        elif topic_stack:
+            response_sketch = compact_text(f"continue around {topic_stack[0]}", 140)
+        else:
+            response_sketch = compact_text(f"continue {predicted_next or 'the interaction'}", 140)
+        if hint_has_content and hint_mode == "processor":
+            shared_frame = hint.get("shared_frame") or previous.get("shared_frame", "")
+            topic_stack = hint.get("topic_stack") or topic_stack
+            salient_objects = hint.get("salient_objects") or salient_objects
+            latent_questions = hint.get("latent_questions") or latent_questions
+            predicted_branches = hint.get("predicted_branches") or predicted_branches
+            relationship_trajectory = hint.get("relationship_trajectory") or relationship_trajectory
+            response_sketch = hint.get("response_sketch") or response_sketch
+            confidence = hint.get("scene_confidence", 0.0)
+        else:
+            if normalized_direction == "outbound":
+                shared_frame = compact_text(
+                    f"holo is {normalized_action_type or 'responding'} around {topic_stack[0] if topic_stack else last_intent or predicted_next or 'the same thread'}",
+                    160,
+                )
+            elif clauses:
+                shared_frame = compact_text(f"user is steering toward {clauses[0]}", 160)
+            elif last_intent:
+                shared_frame = compact_text(last_intent, 160)
+            else:
+                shared_frame = compact_text(str(previous.get("shared_frame", "") or ""), 160)
+            confidence = (
+                0.44
+                + (0.14 if topic_stack else 0.0)
+                + (0.12 if shared_frame else 0.0)
+                + (0.08 if response_sketch else 0.0)
+                + float(predictive.get("active_prediction_confidence", 0.0) or 0.0) * 0.22
+                - (0.16 if bool(signal.get("explicit_memory", False) or signal.get("factual", False) or signal.get("search_or_visual", False)) else 0.0)
+                - float(relationship_tension or 0.0) * 0.12
+            )
+        scene = self._normalize_scene_state(
+            {
+                "shared_frame": shared_frame,
+                "topic_stack": topic_stack,
+                "salient_objects": salient_objects,
+                "latent_questions": latent_questions,
+                "predicted_branches": predicted_branches,
+                "relationship_trajectory": relationship_trajectory,
+                "response_sketch": response_sketch,
+                "scene_confidence": confidence,
+                "freshness_at": now,
+            },
+            now=now,
+        )
+        return scene, {
+            "last_direction": normalized_direction,
+            "last_event_ref": str(event_ref or ""),
+            "compression_mode": hint_mode or "heuristic",
+            "compression_reason": str(compression.get("reason", "heuristic_scene_reducer") or "heuristic_scene_reducer"),
+            "source_turn_refs": _dedupe_strings(list(current.get("recent_turn_ids", [])) + [str(event_ref or "")])[-4:],
+            "truncation": {
+                "topic_stack": max(0, len(base_topics) - len(topic_stack)),
+                "salient_objects": max(0, len(raw_salient) - len(salient_objects)),
+                "latent_questions": max(0, len(list(previous.get("latent_questions", []))) + (1 if normalized_direction == "inbound" and (bool(signal.get("question_like", False)) or bool(signal.get("explicit_memory", False)) or bool(signal.get("factual", False)) or bool(signal.get("reference_like", False))) else 0) - len(latent_questions)),
+                "predicted_branches": max(0, len(raw_branches) - len(predicted_branches)),
+            },
+            "updated_at": now,
+        }
+
     def _active_thread_state_from_row(
         self,
         row: dict[str, Any] | None,
@@ -1444,6 +1691,7 @@ class MindGraph:
                 "attention_focus": "",
                 "cache_warmth": "cold",
                 "recent_turn_ids": [],
+                "scene_state": self._default_scene_state(),
                 "metrics": {},
                 "metadata": {},
                 "created_at": "",
@@ -1474,6 +1722,7 @@ class MindGraph:
                 if str(item).strip()
             ],
             "predictive_continuity": self._normalize_predictive_continuity(row.get("predictive_continuity_json", "{}")),
+            "scene_state": self._normalize_scene_state(row.get("scene_state_json", "{}")),
             "metrics": _safe_json_dict(row.get("metrics_json", "{}")),
             "metadata": _safe_json_dict(row.get("metadata_json", "{}")),
             "created_at": str(row.get("created_at", "") or ""),
@@ -1526,6 +1775,14 @@ class MindGraph:
                     payload["relationship_tension"] = self._clamp(metadata.get("pressure_level", 0.0), default=0.0)
                     payload["tempo_state"] = {"last_event_at": str(thread_row["last_message_at"] or "")}
                     payload["cache_warmth"] = "seeded" if payload["continuity_summary"] else "cold"
+                    payload["scene_state"] = self._normalize_scene_state(
+                        {
+                            "shared_frame": payload["continuity_summary"],
+                            "relationship_trajectory": "seeded_from_thread_summary" if payload["continuity_summary"] else "",
+                            "scene_confidence": 0.36 if payload["continuity_summary"] else 0.0,
+                            "freshness_at": str(thread_row["last_message_at"] or ""),
+                        }
+                    )
         return payload
 
     def update_active_thread_state(
@@ -1655,6 +1912,24 @@ class MindGraph:
                 event_ref=event_ref,
                 now=now,
             )
+            scene_state, stage24 = self._derive_scene_state(
+                current=current,
+                direction=str(direction or "").strip() or "event",
+                text=str(text or ""),
+                chat_name=normalized_chat_name,
+                selected_action=selected if str(direction or "").strip() == "outbound" or selected else {},
+                intent_state=intent,
+                attention_focus=active_focus,
+                relationship_tension=tension,
+                unresolved_references=refs,
+                predictive=predictive,
+                event_ref=event_ref,
+                now=now,
+                metadata=meta,
+            )
+            meta.pop("_stage24_scene_compression", None)
+            meta.pop("_stage24_scene_hint", None)
+            meta["stage24_scene"] = stage24
             payload = {
                 "channel": normalized_channel,
                 "thread_key": normalized_thread_key,
@@ -1670,6 +1945,7 @@ class MindGraph:
                 "cache_warmth": warmth,
                 "recent_turn_ids_json": json.dumps(recent_turn_ids, ensure_ascii=False, sort_keys=True),
                 "predictive_continuity_json": json.dumps(predictive, ensure_ascii=False, sort_keys=True),
+                "scene_state_json": json.dumps(scene_state, ensure_ascii=False, sort_keys=True),
                 "metrics_json": json.dumps(metrics, ensure_ascii=False, sort_keys=True),
                 "metadata_json": json.dumps(meta, ensure_ascii=False, sort_keys=True),
                 "created_at": str(current.get("created_at", "") or now),
@@ -1680,12 +1956,12 @@ class MindGraph:
                 INSERT INTO active_thread_state(
                     channel, thread_key, chat_name, continuity_summary, last_user_intent, last_outbound_action_json,
                     unresolved_references_json, active_affect_hint, relationship_tension, tempo_state_json,
-                    attention_focus, cache_warmth, recent_turn_ids_json, predictive_continuity_json,
+                    attention_focus, cache_warmth, recent_turn_ids_json, predictive_continuity_json, scene_state_json,
                     metrics_json, metadata_json, created_at, updated_at
                 ) VALUES (
                     :channel, :thread_key, :chat_name, :continuity_summary, :last_user_intent, :last_outbound_action_json,
                     :unresolved_references_json, :active_affect_hint, :relationship_tension, :tempo_state_json,
-                    :attention_focus, :cache_warmth, :recent_turn_ids_json, :predictive_continuity_json,
+                    :attention_focus, :cache_warmth, :recent_turn_ids_json, :predictive_continuity_json, :scene_state_json,
                     :metrics_json, :metadata_json, :created_at, :updated_at
                 )
                 ON CONFLICT(channel, thread_key) DO UPDATE SET
@@ -1701,6 +1977,7 @@ class MindGraph:
                     cache_warmth = excluded.cache_warmth,
                     recent_turn_ids_json = excluded.recent_turn_ids_json,
                     predictive_continuity_json = excluded.predictive_continuity_json,
+                    scene_state_json = excluded.scene_state_json,
                     metrics_json = excluded.metrics_json,
                     metadata_json = excluded.metadata_json,
                     updated_at = excluded.updated_at
@@ -4622,7 +4899,7 @@ class MindGraph:
                 now = utc_now()
                 self.conn.execute(
                     """
-                    INSERT INTO subject_state(
+                    INSERT OR IGNORE INTO subject_state(
                         channel, thread_key, chat_name, affect_json, drive_json, value_json, conflict_json, world_json,
                         resistance_json, initiative_json, outcome_json, metadata_json, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

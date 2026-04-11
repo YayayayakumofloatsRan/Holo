@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27. Stage23 is now the live runtime milestone, and Stage24 is the next planned implementation focus.
+- Use this document as the concrete execution spec for Stage23 through Stage27. Stage24 is now the live runtime milestone, and Stage25 is the next planned implementation focus.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -22,6 +22,12 @@
   - semantic reply results now remain stable under Stage22 shadow/canary suppression, while delivery outcome is exposed separately through `returned_action` and delivery fields
   - artifact ingest preserves richer metadata when supported and falls back cleanly for older or fake backends
   - replay gates consume raw metrics while rounded aggregates remain reporting-only
+- Stage24 exit state on `2026-04-11`:
+  - `pytest -q` passed
+  - `python -m holo_host --config .holo_host.example.toml accept-stage24 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed
+  - bounded per-thread `scene_state` persists inside `active_thread_state` and survives reload or restart
+  - fast-lane prompt composition now reads continuity summary, scene state, scene sketch, last outbound action, and predictive continuity before any optional verbatim history line
+  - action-market candidates expose bounded `scene_delta` and `scene_rationale` overlays without bypassing explicit memory/history escalation or existing hard gates
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -33,6 +39,7 @@
 - Keep canonical ordinary WeChat direct-message identity as `wechat:<name>`.
 - Treat Stage22 runtime behavior as fixed during this bootstrap; Stage23 pays down blockers before Stage24-27 add new behavior.
 - From Stage23 onward, use raw replay metrics for gating decisions and rounded replay metrics for reporting only.
+- Bounded subject programs are deferred beyond the current Stage24 implementation; do not treat them as live scope without an explicit re-plan.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
 ## Milestones
@@ -45,21 +52,21 @@
 - `Stop rule`: do not advance if Stage22 still requires shadow-mode behavior that generic host tests cannot represent cleanly
 - `Rollback rule`: fall back to Stage22 shell behavior only if semantic or delivery contract repair, artifact compatibility, or replay parity becomes unstable; do not widen canary or add new subject state
 
-### Stage24: Bounded Subject Programs
-- `Status`: planned
-- `Goal`: introduce the long-horizon unit as a bounded, inspectable subject-program surface rather than a hidden planner
-- `Scope`: define program records keyed by canonical thread plus bounded program id, carrying objective, current step, blocker, due window, evidence refs, and last outcome; hydration must stay same-thread and action-market-first
-- `Validation`: explicit program packet fields, restart-safe persistence, no send permission change, no recall trigger by program state alone, and canonical-thread isolation
-- `Stop rule`: do not advance if the design starts acting like a second brain or requires a new always-on loop
-- `Rollback rule`: degrade the program surface to empty or ignored state without changing Stage23 behavior
+### Stage24: Scene-State Continuity Layer
+- `Status`: implemented on `2026-04-11`
+- `Goal`: turn Stage18 predictive continuity into a richer but still bounded, inspectable per-thread `scene_state` layer that makes ordinary interaction feel less like isolated turns
+- `Scope`: persist `scene_state` inside `active_thread_state`; update it on inbound, inspect, and outbound reducers only; keep deterministic bounded heuristics as the default reducer; allow processor-backed compression only off the ordinary short-turn hot path; expose scene state to fast-lane prompts, action-market scoring, and diagnostics without bypassing recall escalation or send gates
+- `Validation`: `pytest -q` green; `accept-stage23` green; `accept-stage24` green; `tests/test_stage24_scene_state.py`; `tests/test_stage17_realtime_runtime.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py`
+- `Stop rule`: do not regress Stage17 fast-lane latency or behavior, explicit memory/history/factual escalation, bounded inspectability, or action-market-first deliberation
+- `Rollback rule`: ignore Stage24 scene overlays and fall back to Stage23 predictive continuity surfaces without changing Stage23 semantic/delivery behavior
 
 ### Stage25: Artifact/Tool/Outcome Progress Coupling
 - `Status`: planned
-- `Goal`: make artifacts, tool outcomes, deferred replies, and world cues update the same bounded long-horizon program surface
-- `Scope`: unify artifact, task, schedule, file, image, and lookup outcomes as bounded progress reducers with dedupe and evidence refs; no transport-side decisions and no direct execution rights
+- `Goal`: make artifacts, tool outcomes, deferred replies, and world cues update the same bounded scene-state continuity surface
+- `Scope`: unify artifact, task, schedule, file, image, and lookup outcomes as bounded same-thread scene reducers with dedupe and evidence refs; no transport-side decisions and no direct execution rights
 - `Validation`: same-thread progress updates, cross-thread leakage blocked, explicit memory/history requests still escalate, and artifact-ingest contracts remain compatible across service code, memory bridge, and tests
 - `Stop rule`: do not advance if ingest surfaces fork into incompatible schemas again
-- `Rollback rule`: disable progress reducers while preserving Stage24 program read surfaces
+- `Rollback rule`: disable progress reducers while preserving Stage24 scene-state read surfaces
 
 ### Stage26: Long-Horizon Replay And Promotion Gates
 - `Status`: planned
@@ -81,8 +88,8 @@
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
 | `Stage23` | `accept-stage22`; `tests/test_stage22_online_canary.py`; `tests/test_stage15_modularization.py` | `pytest -q`; `accept-stage23`; semantic or delivery split assertions in `tests/test_holo_host.py` | Completed on `2026-04-11`: the four Stage22 blockers were resolved without weakening canary safety boundaries. |
-| `Stage24` | All Stage23 surfaces | Planned `accept-stage24`; planned `tests/test_stage24_subject_programs.py`; `tests/test_stage14_replay.py` | Bounded subject programs are inspectable, restart-safe, and action-market-first. |
-| `Stage25` | All Stage24 surfaces | Planned `accept-stage25`; planned `tests/test_stage25_progress_coupling.py`; artifact-ingest compatibility checks across service and memory layers | Artifacts, tools, deferred replies, and world cues update the same bounded program surface without schema drift. |
+| `Stage24` | All Stage23 surfaces | `accept-stage24`; `tests/test_stage24_scene_state.py`; `tests/test_stage17_realtime_runtime.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py` | Scene state is inspectable, restart-safe, prompt-visible before verbatim history, and action-market-first. |
+| `Stage25` | All Stage24 surfaces | Planned `accept-stage25`; planned `tests/test_stage25_progress_coupling.py`; artifact-ingest compatibility checks across service and memory layers | Artifacts, tools, deferred replies, and world cues update the same bounded scene-state surface without schema drift. |
 | `Stage26` | All Stage25 surfaces | Planned `accept-stage26`; planned `tests/test_stage26_long_horizon_replay.py`; `tests/test_stage14_replay.py` with raw-vs-rounded checks | Replay and promotion gates use raw metrics for decisions and keep rounded metrics as reporting only. |
 | `Stage27` | All Stage26 surfaces | Planned `accept-stage27`; planned `tests/test_stage27_long_horizon_canary.py`; `replay-live-artifacts` remains usable on program-aware traces | Program-aware long-horizon online canary remains host-side, shadow-first, bounded, reversible, and replay-disciplined. |
 

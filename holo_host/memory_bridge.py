@@ -17,7 +17,7 @@ from .mind_graph import MindGraph
 from .models import ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state
 from .policies import MEMORY_BRIDGE_POLICY
-from .policy_runtime.action_market import apply_policy_sedimentation_overlay, apply_simulation_overlay
+from .policy_runtime.action_market import apply_policy_sedimentation_overlay, apply_scene_state_overlay, apply_simulation_overlay
 from .policy_runtime.action_simulation import simulate_action_candidate as _simulate_action_candidate_impl
 from .policy_runtime.counterfactuals import fast_counterfactual_set as _fast_counterfactual_set_impl
 from .policy_runtime.world_calibration_trace import expression_budget_summary
@@ -1209,6 +1209,11 @@ class MemoryBridge:
             simulation_by_action=simulation_by_action,
             world_thread=world_thread,
         )
+        action_market = apply_scene_state_overlay(
+            self,
+            action_market=action_market,
+            context=context,
+        )
         action_market = apply_policy_sedimentation_overlay(
             self,
             action_market=action_market,
@@ -2182,6 +2187,92 @@ class MemoryBridge:
             return "cold_thread_insufficient_active_state"
         return ""
 
+    def _hydrate_scene_state_from_runtime_context(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> dict[str, Any]:
+        hydrated = dict(active_state)
+        predictive = dict(hydrated.get("predictive_continuity", {})) if isinstance(hydrated.get("predictive_continuity", {}), dict) else {}
+        scene = dict(hydrated.get("scene_state", {})) if isinstance(hydrated.get("scene_state", {}), dict) else {}
+        metadata = dict(hydrated.get("metadata", {})) if isinstance(hydrated.get("metadata", {}), dict) else {}
+        stage24_meta = dict(metadata.get("stage24_scene", {})) if isinstance(metadata.get("stage24_scene", {}), dict) else {}
+        stage19 = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {}
+        stage20 = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else {}
+        stage22 = dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else {}
+        scene_topics = self._unique_strings(
+            list(scene.get("topic_stack", []))
+            + [str(hydrated.get("attention_focus", "") or ""), str(stage19.get("wake_reason", "") or ""), str(stage20.get("resume_cue", "") or ""), str(stage22.get("cue_summary", "") or "")]
+        )[:4]
+        scene_objects = self._unique_strings(
+            list(scene.get("salient_objects", []))
+            + list(predictive.get("likely_reference_targets", []))
+            + list(stage20.get("due_followup_keys", []))
+        )[:4]
+        scene_branches = self._unique_strings(
+            list(scene.get("predicted_branches", []))
+            + ([f"user:{str(predictive.get('predicted_next_user_act', '') or '').strip()}"] if str(predictive.get("predicted_next_user_act", "") or "").strip() else [])
+            + ([f"frontier:{str(stage19.get('anticipated_next_turn', '') or '').strip()}"] if str(stage19.get("anticipated_next_turn", "") or "").strip() else [])
+            + (["resume_then_continue"] if bool(stage20.get("temporal_visible", False)) else [])
+            + (["follow_world_cue"] if bool(stage22.get("world_coupling_visible", False)) else [])
+        )[:3]
+        shared_frame = compact_text(
+            str(scene.get("shared_frame", "") or str(hydrated.get("continuity_summary", "") or "") or str(stage22.get("cue_summary", "") or "") or str(stage20.get("resume_cue", "") or "")),
+            160,
+        )
+        response_sketch = compact_text(
+            str(scene.get("response_sketch", "") or (f"continue around {scene_topics[0]}" if scene_topics else f"continue {str(predictive.get('predicted_next_user_act', '') or 'the thread')}")),
+            140,
+        )
+        scene.update(
+            {
+                "shared_frame": shared_frame,
+                "topic_stack": scene_topics,
+                "salient_objects": scene_objects,
+                "latent_questions": list(scene.get("latent_questions", []))[:3],
+                "predicted_branches": scene_branches,
+                "relationship_trajectory": compact_text(str(scene.get("relationship_trajectory", "") or ("holding_open_loop" if bool(stage20.get("temporal_visible", False)) else "ordinary_continuation")), 96),
+                "response_sketch": response_sketch,
+                "scene_confidence": round(
+                    min(
+                        1.0,
+                        max(float(scene.get("scene_confidence", 0.0) or 0.0), float(predictive.get("active_prediction_confidence", 0.0) or 0.0) * 0.96),
+                    ),
+                    4,
+                ),
+                "freshness_at": str(scene.get("freshness_at", "") or predictive.get("freshness_at", "") or stage24_meta.get("updated_at", "")),
+            }
+        )
+        hydrated["scene_state"] = scene
+        stage24_meta.setdefault("compression_mode", "heuristic")
+        stage24_meta.setdefault("compression_reason", "active_state_scene_hydration")
+        stage24_meta.setdefault("last_direction", str(dict(hydrated.get("tempo_state", {})).get("last_direction", "") or "inspect"))
+        stage24_meta.setdefault("source_turn_refs", list(hydrated.get("recent_turn_ids", []))[-4:])
+        stage24_meta.setdefault("updated_at", str(scene.get("freshness_at", "") or ""))
+        metadata["stage24_scene"] = stage24_meta
+        hydrated["metadata"] = metadata
+        return hydrated
+
+    def _stage24_scene_packet(self, active_state: dict[str, Any]) -> dict[str, Any]:
+        scene = dict(active_state.get("scene_state", {})) if isinstance(active_state.get("scene_state", {}), dict) else {}
+        metadata = dict(active_state.get("metadata", {})) if isinstance(active_state.get("metadata", {}), dict) else {}
+        trace = dict(metadata.get("stage24_scene", {})) if isinstance(metadata.get("stage24_scene", {}), dict) else {}
+        return {
+            "scene_visible": bool(scene.get("shared_frame") or scene.get("topic_stack") or scene.get("predicted_branches")),
+            "shared_frame": str(scene.get("shared_frame", "") or ""),
+            "topic_stack": list(scene.get("topic_stack", []))[:4],
+            "predicted_branches": list(scene.get("predicted_branches", []))[:3],
+            "relationship_trajectory": str(scene.get("relationship_trajectory", "") or ""),
+            "response_sketch": str(scene.get("response_sketch", "") or ""),
+            "scene_confidence": float(scene.get("scene_confidence", 0.0) or 0.0),
+            "freshness_at": str(scene.get("freshness_at", "") or ""),
+            "compression_mode": str(trace.get("compression_mode", "heuristic") or "heuristic"),
+            "compression_reason": str(trace.get("compression_reason", "") or ""),
+        }
+
     def _active_fast_lane_eligible(
         self,
         query: str,
@@ -2328,9 +2419,11 @@ class MemoryBridge:
             "micro_fast_candidate": True,
             "micro_fast_reason": "active_thread_reflex_candidate",
         }
+        packet["stage24"] = self._stage24_scene_packet(active_state)
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
         packet["stage22"] = dict(stage22_world_coupling)
+        packet.setdefault("retrieval_trace", {}).setdefault("stage24", dict(packet["stage24"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage18", dict(packet["stage18"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
@@ -2945,6 +3038,13 @@ class MemoryBridge:
             active_state=active_state,
             signal=signal,
         )
+        normalized_context["stage22_world_coupling"] = dict(stage22_world_coupling)
+        active_state = self._hydrate_scene_state_from_runtime_context(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+        )
         recall_escalation_reason = self._recall_escalation_reason(
             query,
             context=normalized_context,
@@ -2952,7 +3052,6 @@ class MemoryBridge:
             signal=signal,
         )
         normalized_context["active_thread_state"] = dict(active_state)
-        normalized_context["stage22_world_coupling"] = dict(stage22_world_coupling)
         normalized_context["recall_escalation_reason"] = recall_escalation_reason
         if self._active_fast_lane_eligible(
             query,
@@ -3085,9 +3184,11 @@ class MemoryBridge:
             "micro_fast_candidate": False,
             "micro_fast_reason": recall_escalation_reason or "not_active_thread_fast",
         }
+        packet["stage24"] = self._stage24_scene_packet(active_state)
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
         packet["stage22"] = dict(stage22_world_coupling)
+        packet.setdefault("retrieval_trace", {}).setdefault("stage24", dict(packet["stage24"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage22", dict(packet["stage22"]))
@@ -3128,6 +3229,8 @@ class MemoryBridge:
             "visual_memory": dict(packet.get("visual_memory", {})),
             "active_thread_state": dict(packet.get("active_thread_state", {})),
             "stage17": dict(packet.get("stage17", {})),
+            "stage18": dict(packet.get("stage18", {})),
+            "stage24": dict(packet.get("stage24", {})),
             "stage19": dict(packet.get("stage19", {})),
             "stage20": dict(packet.get("stage20", {})),
             "stage22": dict(packet.get("stage22", {})),
@@ -3161,6 +3264,7 @@ class MemoryBridge:
             "reflex_eligibility": bool(predictive.get("reflex_eligibility", False)),
             "active_prediction_confidence": float(predictive.get("active_prediction_confidence", 0.0) or 0.0),
             "predicted_reply_pressure": float(predictive.get("predicted_reply_pressure", 0.0) or 0.0),
+            "scene_confidence": float(dict(active_state.get("scene_state", {})).get("scene_confidence", 0.0) or 0.0),
             "freshness_at": str(predictive.get("freshness_at", "") or ""),
         }
 
@@ -3180,6 +3284,74 @@ class MemoryBridge:
             "present": bool(active_state.get("present", False)),
             "predictive_continuity": predictive,
             "active_thread_state": active_state,
+        }
+
+    def scene_state(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        scene = dict(active_state.get("scene_state", {})) if isinstance(active_state.get("scene_state", {}), dict) else {}
+        return {
+            "thread_key": active_state.get("thread_key", str(thread_key or "")),
+            "chat_name": active_state.get("chat_name", str(chat_name or "")),
+            "channel": active_state.get("channel", channel),
+            "present": bool(active_state.get("present", False)),
+            "scene_state": scene,
+            "predictive_continuity": dict(active_state.get("predictive_continuity", {})),
+            "active_thread_state": active_state,
+            "stage24": self._stage24_scene_packet(active_state),
+        }
+
+    def trace_predicted_branches(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        scene = dict(active_state.get("scene_state", {})) if isinstance(active_state.get("scene_state", {}), dict) else {}
+        return {
+            "thread_key": active_state.get("thread_key", str(thread_key or "")),
+            "chat_name": active_state.get("chat_name", str(chat_name or "")),
+            "channel": active_state.get("channel", channel),
+            "present": bool(active_state.get("present", False)),
+            "predicted_branches": list(scene.get("predicted_branches", []))[:3],
+            "scene_confidence": float(scene.get("scene_confidence", 0.0) or 0.0),
+            "relationship_trajectory": str(scene.get("relationship_trajectory", "") or ""),
+            "response_sketch": str(scene.get("response_sketch", "") or ""),
+            "predictive_continuity": dict(active_state.get("predictive_continuity", {})),
+            "stage24": self._stage24_scene_packet(active_state),
+        }
+
+    def trace_scene_compression(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+    ) -> dict[str, Any]:
+        active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        metadata = dict(active_state.get("metadata", {})) if isinstance(active_state.get("metadata", {}), dict) else {}
+        stage24 = dict(metadata.get("stage24_scene", {})) if isinstance(metadata.get("stage24_scene", {}), dict) else {}
+        return {
+            "thread_key": active_state.get("thread_key", str(thread_key or "")),
+            "chat_name": active_state.get("chat_name", str(chat_name or "")),
+            "channel": active_state.get("channel", channel),
+            "present": bool(active_state.get("present", False)),
+            "scene_state": dict(active_state.get("scene_state", {})),
+            "predictive_continuity": dict(active_state.get("predictive_continuity", {})),
+            "last_reducer_direction": str(stage24.get("last_direction", "") or ""),
+            "last_reducer_at": str(stage24.get("updated_at", "") or ""),
+            "compression_mode": str(stage24.get("compression_mode", "heuristic") or "heuristic"),
+            "compression_reason": str(stage24.get("compression_reason", "") or ""),
+            "bounded_truncation": dict(stage24.get("truncation", {})) if isinstance(stage24.get("truncation", {}), dict) else {},
+            "source_turn_refs": list(stage24.get("source_turn_refs", []))[:4] if isinstance(stage24.get("source_turn_refs", []), list) else [],
+            "stage24": self._stage24_scene_packet(active_state),
         }
 
     def trace_reflex_routing(
@@ -3227,10 +3399,12 @@ class MemoryBridge:
             "selected_action": dict(packet.get("selected_action", {})),
             "stage17": dict(packet.get("stage17", {})),
             "stage18": dict(packet.get("stage18", {})),
+            "stage24": dict(packet.get("stage24", {})),
             "stage19": dict(packet.get("stage19", {})),
             "stage20": dict(packet.get("stage20", {})),
             "stage22": dict(packet.get("stage22", {})),
             "predictive_continuity": dict(packet_active_state.get("predictive_continuity", {})),
+            "scene_state": dict(packet_active_state.get("scene_state", {})),
         }
 
     def attention_frontier(
