@@ -1510,6 +1510,23 @@ class HoloReplyService:
             artifact_dir=artifact_dir,
         )
 
+    def accept_stage26(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self._accept_stage26_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
         with self._memory_lock:
             return self.memory.affect_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
@@ -3518,6 +3535,41 @@ class HoloReplyService:
     ) -> dict[str, Any]:
         return self.memory.show_dense_working_set(channel=channel)
 
+    def show_task_world(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        return self.memory.show_task_world(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            include_inactive=include_inactive,
+        )
+
+    def trace_world_object(self, *, object_id: str) -> dict[str, Any]:
+        return self.memory.trace_world_object(object_id=object_id)
+
+    def trace_thread_object_links(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        return self.memory.trace_thread_object_links(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+        )
+
     def trace_thread_pulse(
         self,
         *,
@@ -5151,6 +5203,310 @@ class HoloReplyService:
             },
             "reloaded_dense_working_set": reloaded_dense,
             "inbound_state": inbound_state,
+        }
+
+    def _accept_stage26_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_channel = str(channel or "wechat").strip() or "wechat"
+        requested_chat_name = str(chat_name or "Nemoqi").strip()
+        requested_thread_key = str(thread_key or requested_chat_name).strip()
+        if normalized_channel == "wechat":
+            requested_thread_key = self._stage22_normalize_wechat_thread(requested_thread_key, requested_chat_name)
+        stage25_report = self.accept_stage25(
+            thread_key=requested_thread_key,
+            chat_name=requested_chat_name,
+            channel=normalized_channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        run_id = stable_digest(requested_thread_key, requested_chat_name, utc_now(), "stage26")[:12]
+        probe_chat_name = f"{requested_chat_name}-stage26-{run_id}"
+        probe_thread_key = f"wechat:{probe_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:{run_id}"
+        other_chat_name = f"{probe_chat_name}-other"
+        other_thread_key = f"wechat:{other_chat_name}" if normalized_channel == "wechat" else f"{requested_thread_key}:other:{run_id}"
+        artifact_root = Path(artifact_dir).resolve() / "stage26-task-world" if str(artifact_dir or "").strip() else Path(tempfile.mkdtemp(prefix="holo-stage26-"))
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        sample_file = artifact_root / "stage26-note.txt"
+        atomic_write_text(sample_file, "deliver the thread-local task-world summary\n")
+        sample_schedule = artifact_root / "stage26-schedule.txt"
+        atomic_write_text(sample_schedule, "follow up tomorrow afternoon\n")
+
+        file_artifact = self.memory.ingest_artifact(
+            str(sample_file),
+            note="thread-local file object for stage26",
+            source="accept_stage26.file",
+            tags=["stage26", "file"],
+            dry_run=False,
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            world_cue_type="file_artifact",
+        )
+        schedule_artifact = self.memory.ingest_artifact(
+            str(sample_schedule),
+            note="thread-local schedule object for stage26",
+            source="accept_stage26.schedule",
+            tags=["stage26", "schedule"],
+            dry_run=False,
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            world_cue_type="schedule_cue",
+            due_at="2099-01-01T00:00:00Z",
+        )
+        task_object = self.memory.upsert_task_world_object(
+            object_type="task",
+            summary="send the stage26 task-world summary back into the same thread",
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            source_ref="accept_stage26:task",
+            confidence=0.76,
+            metadata={"source": "accept_stage26", "family": "task"},
+        )
+        person_object = self.memory.upsert_task_world_object(
+            object_type="person",
+            summary="Mika is the external reviewer waiting for the same-thread update",
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            source_ref="accept_stage26:person:Mika",
+            confidence=0.72,
+            metadata={"source": "accept_stage26", "family": "person"},
+        )
+        image_object = self.memory.upsert_task_world_object(
+            object_type="image_summary",
+            summary="screenshot summary shows the shared draft title and due date",
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            source_ref="accept_stage26:image",
+            confidence=0.7,
+            metadata={"source": "accept_stage26", "family": "image_summary"},
+        )
+        commitment = self.memory.graph.upsert_temporal_item(
+            item_type="commitment",
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            confidence=0.74,
+            source_event_id=f"accept-stage26-commitment-{run_id}",
+            source_action_ref=f"stage26-task-{run_id}",
+            source_action_type="defer_reply",
+            due_at="2099-01-01T00:00:00Z",
+            revisit_after="2099-01-01T00:00:00Z",
+            resume_cue="send the promised task-world followup",
+            dedupe_key=f"accept-stage26-commitment-{run_id}",
+            status="scheduled",
+            metadata={"source": "accept_stage26", "evidence_refs": [f"accept_stage26:{run_id}:commitment"]},
+        )
+        shared_task = self.memory.upsert_task_world_object(
+            object_type="task",
+            summary="shared deliverable visible in more than one thread",
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            source_ref="accept_stage26:shared",
+            confidence=0.69,
+            linked_commitments=[str(commitment.get("dedupe_key", "") or "")],
+            metadata={"source": "accept_stage26", "family": "shared_task"},
+        )
+        shared_task_other = self.memory.upsert_task_world_object(
+            object_type="task",
+            summary="shared deliverable visible in more than one thread",
+            thread_key=other_thread_key,
+            chat_name=other_chat_name,
+            channel=normalized_channel,
+            source_ref="accept_stage26:shared",
+            confidence=0.69,
+            metadata={"source": "accept_stage26", "family": "shared_task"},
+        )
+
+        task_world = self.show_task_world(
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            limit=8,
+            include_inactive=True,
+        )
+        object_trace = self.trace_world_object(object_id=str(shared_task.get("object_id", "") or str(task_object.get("object_id", "") or "")))
+        link_trace = self.trace_thread_object_links(
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            limit=8,
+        )
+        world_coupling = self.show_world_coupling(
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            channel=normalized_channel,
+            limit=8,
+            include_inactive=True,
+        )
+
+        with self.memory.graph._lock:
+            self.memory.graph.conn.execute(
+                "UPDATE attention_frontier SET stale_after = ? WHERE channel = ? AND canonical_thread_key = ?",
+                ("2000-01-01T00:00:00Z", normalized_channel, probe_thread_key),
+            )
+            self.memory.graph.conn.execute(
+                "DELETE FROM active_thread_state WHERE channel = ? AND thread_key = ?",
+                (normalized_channel, probe_thread_key),
+            )
+            self.memory.graph.conn.commit()
+        self.memory.clear_packet_cache()
+        warm_context = {
+            "channel": normalized_channel,
+            "thread_key": probe_thread_key,
+            "incoming_thread_key": probe_thread_key,
+            "message_id": f"accept-stage26-warm-{run_id}",
+            "chat_name": probe_chat_name,
+            "sender": str(sender or requested_chat_name),
+            "attachments": [],
+            "recent_history": [
+                {"direction": "inbound", "body_text": "old line one"},
+                {"direction": "outbound", "body_text": "old line two"},
+                {"direction": "inbound", "body_text": "old line three"},
+            ],
+            "event_id": "2601",
+        }
+        warm_packet = self.memory.sidecar_packet("still here?", context=warm_context)
+        warm_turn_context = TurnContext(
+            channel=normalized_channel,
+            thread_key=probe_thread_key,
+            chat_name=probe_chat_name,
+            sender=str(sender or requested_chat_name),
+            user_text="still here?",
+            sidecar=warm_packet,
+            mind_packet=warm_packet,
+            attention_state=build_attention_state("still here?", channel=normalized_channel, metadata={}),
+            emotion_state=dict(warm_packet.get("state", {}).get("emotion_state", {})),
+            history=list(warm_context["recent_history"]),
+            metadata={},
+            capability_context={},
+        )
+        warm_turn_plan = build_turn_plan(warm_turn_context, self.config)
+        warm_prompt = render_chat_prompt(warm_turn_context, turn_plan=warm_turn_plan)
+        explicit_packet = self.memory.sidecar_packet(
+            "remember previous history",
+            context={**warm_context, "message_id": f"accept-stage26-recall-{run_id}", "event_id": "2602"},
+        )
+
+        reloaded_task_world = {}
+        reopened = MemoryBridge(
+            self.config.runtime.repo_root,
+            top_k=self.config.memory.prompt_top_k,
+            graph_db_path=self.config.memory.mind_graph_db_path,
+            stream_cadences=stream_cadences_from_config(self.config),
+            graph_led_reply=self.config.memory.graph_led_reply,
+            graph_fallback=self.config.memory.graph_fallback,
+            deep_recall_on_memory_queries=self.config.memory.deep_recall_on_memory_queries,
+            active_wechat_history_enabled=self.config.memory.active_wechat_history_enabled,
+            vector_backend=self.config.memory.vector_backend,
+            milvus_uri=self.config.memory.milvus_uri,
+            milvus_collection_prefix=self.config.memory.milvus_collection_prefix,
+            activation_cache_enabled=self.config.memory.activation_cache_enabled,
+            private_memory_sync_enabled=self.config.memory.private_memory_sync_enabled,
+            private_memory_repo_path=self.config.memory.private_memory_repo_path,
+            stage25_max_hot_threads_per_cycle=self.config.memory.stage25_max_hot_threads_per_cycle,
+            stage25_per_thread_pulse_budget=self.config.memory.stage25_per_thread_pulse_budget,
+            stage25_skip_cold_without_pressure=self.config.memory.stage25_skip_cold_without_pressure,
+            stage25_max_dense_working_set_threads=self.config.memory.stage25_max_dense_working_set_threads,
+            stage25_cooldown_seconds_by_stream={
+                "maintenance_stream": self.config.memory.stage25_maintenance_stream_cooldown_seconds,
+                "association_stream": self.config.memory.stage25_association_stream_cooldown_seconds,
+                "social_stream": self.config.memory.stage25_social_stream_cooldown_seconds,
+                "deep_dream_cycle": self.config.memory.stage25_deep_dream_cycle_cooldown_seconds,
+            },
+            rag=self.memory.rag,
+        )
+        try:
+            reloaded_task_world = reopened.show_task_world(
+                thread_key=probe_thread_key,
+                chat_name=probe_chat_name,
+                channel=normalized_channel,
+                limit=8,
+                include_inactive=True,
+            )
+        finally:
+            reopened.activation.close()
+            reopened.graph.close()
+
+        task_world_objects = list(task_world.get("objects", []))
+        task_world_types = {str(item.get("object_type", "") or "") for item in task_world_objects}
+        reloaded_objects = list(reloaded_task_world.get("objects", []))
+        checks = {
+            "stage25_acceptance_green": str(stage25_report.get("status", "")) == "pass",
+            "task_world_persisted_across_restart": bool(reloaded_task_world.get("present", False))
+            and len(reloaded_objects) >= 4
+            and {"file", "task", "schedule", "image_summary", "person"}.issubset(
+                {str(item.get("object_type", "") or "") for item in reloaded_objects}
+            ),
+            "required_object_families_visible": {"file", "task", "schedule", "image_summary", "person"}.issubset(task_world_types),
+            "thread_and_commitment_links_are_inspectable": bool(link_trace.get("objects"))
+            and any(list(item.get("linked_commitments", [])) for item in list(link_trace.get("objects", [])))
+            and int(link_trace.get("cross_thread_object_count", 0) or 0) >= 1,
+            "same_thread_reentry_uses_task_world_without_deep_recall": str(warm_packet.get("memory_route", "") or "") == "active_thread"
+            and str(warm_packet.get("retrieval_mode", "") or "") == "active-thread-fast"
+            and bool(dict(warm_packet.get("stage26", {})).get("task_world_used_for_thread", False))
+            and str(warm_packet.get("tier", "") or "") != "deep_recall",
+            "explicit_memory_query_still_escalates": str(explicit_packet.get("tier", "")).strip() in {"recall", "deep_recall"}
+            and str(explicit_packet.get("recall_reason", "")).startswith("stage17:"),
+            "stage22_compatibility_view_still_works": int(world_coupling.get("count", 0) or 0) >= 1
+            and any(str(item.get("cue_type", "") or "") in {"file_artifact", "task_cue", "schedule_cue", "image_summary"} for item in list(world_coupling.get("items", []))),
+            "prompt_remains_history_light": int(warm_turn_context.metadata.get("history_lines_in_prompt", 0) or 0) <= 1
+            and "old line two" not in warm_prompt,
+            "stage26_packet_visible": bool(dict(warm_packet.get("stage26", {})).get("task_world_visible", False))
+            and bool(dict(warm_packet.get("stage26", {})).get("summary", "")),
+            "object_trace_visible": bool(dict(object_trace.get("object", {})).get("object_id", "")),
+        }
+        return {
+            "status": "pass" if all(checks.values()) else "fail",
+            "stage": "bounded-task-world-state-stage26",
+            "checks": checks,
+            "thread_key": requested_thread_key,
+            "chat_name": requested_chat_name,
+            "channel": normalized_channel,
+            "probe_thread_key": probe_thread_key,
+            "stage25": {"status": stage25_report.get("status"), "checks": stage25_report.get("checks", {})},
+            "file_artifact": file_artifact,
+            "schedule_artifact": schedule_artifact,
+            "task_world": task_world,
+            "world_object": object_trace,
+            "thread_object_links": link_trace,
+            "world_coupling": world_coupling,
+            "warm_packet": {
+                "tier": warm_packet.get("tier"),
+                "memory_route": warm_packet.get("memory_route"),
+                "retrieval_mode": warm_packet.get("retrieval_mode"),
+                "stage20": dict(warm_packet.get("stage20", {})),
+                "stage24": dict(warm_packet.get("stage24", {})),
+                "stage25": dict(warm_packet.get("stage25", {})),
+                "stage26": dict(warm_packet.get("stage26", {})),
+                "history_lines_in_prompt": int(warm_turn_context.metadata.get("history_lines_in_prompt", 0) or 0),
+                "prompt_excerpt": compact_text(warm_prompt, 360),
+            },
+            "explicit_recall_probe": {
+                "tier": explicit_packet.get("tier"),
+                "recall_reason": explicit_packet.get("recall_reason"),
+                "memory_route": explicit_packet.get("memory_route"),
+            },
+            "reloaded_task_world": reloaded_task_world,
+            "objects_created": {
+                "task": task_object,
+                "person": person_object,
+                "image_summary": image_object,
+                "commitment": commitment,
+                "shared_task": shared_task,
+                "shared_task_other": shared_task_other,
+            },
         }
 
     def initiative_status(
@@ -8073,6 +8429,34 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         thread_key=params.get("thread_key", [None])[0],
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/task-world":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_task_world(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["12"])[0] or 12),
+                        include_inactive=str(params.get("include_inactive", ["false"])[0]).strip().lower() in {"1", "true", "yes"},
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/world-object":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_world_object(
+                        object_id=params.get("object_id", [""])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/thread-object-links":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.trace_thread_object_links(
+                        thread_key=params.get("thread_key", [None])[0],
+                        chat_name=params.get("chat_name", [None])[0],
+                        channel=params.get("channel", ["wechat"])[0],
+                        limit=int(params.get("limit", ["12"])[0] or 12),
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return

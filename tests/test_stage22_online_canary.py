@@ -200,6 +200,12 @@ class Stage22OnlineCanaryTests(unittest.TestCase):
                     "still here?",
                     context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi", "message_id": "stage22-cue-a"},
                 )
+                task_world = bridge.show_task_world(
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    channel="wechat",
+                    include_inactive=True,
+                )
                 other_packet = bridge.sidecar_packet(
                     "still here?",
                     context={"channel": "wechat", "thread_key": "Other", "chat_name": "Other", "message_id": "stage22-cue-b"},
@@ -211,6 +217,9 @@ class Stage22OnlineCanaryTests(unittest.TestCase):
         self.assertTrue(signal["present"])
         self.assertTrue(packet["stage22"]["world_coupling_visible"])
         self.assertTrue(packet["stage22"]["world_coupling_used_for_thread"])
+        self.assertTrue(task_world["present"])
+        self.assertTrue(any(item["object_type"] == "task" for item in task_world["objects"]))
+        self.assertTrue(packet["stage26"]["task_world_visible"])
         self.assertNotEqual(packet["tier"], "deep_recall")
         self.assertFalse(other_packet["stage22"]["world_coupling_visible"])
 

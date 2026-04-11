@@ -894,6 +894,120 @@ def _scene_compression_payload(
             service.memory.graph.close()
 
 
+def _task_world_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    include_inactive: bool,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/task-world",
+        params={
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "channel": channel,
+            "limit": limit,
+            "include_inactive": include_inactive,
+        },
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.show_task_world(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+                include_inactive=include_inactive,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _world_object_payload(
+    config_path: str | None,
+    *,
+    object_id: str,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/world-object",
+        params={"object_id": object_id},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return service.trace_world_object(object_id=object_id), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _thread_object_links_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="GET",
+        path="/thread-object-links",
+        params={"thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
+        timeout=30.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.trace_thread_object_links(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=limit,
+            ),
+            "local_process",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _continuity_budget_payload(
     config_path: str | None,
     *,
@@ -4511,6 +4625,59 @@ def command_trace_scene_compression(
     return 0
 
 
+def command_show_task_world(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    include_inactive: bool,
+) -> int:
+    payload, _transport = _task_world_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+        include_inactive=include_inactive,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_world_object(
+    config_path: str | None,
+    *,
+    object_id: str,
+) -> int:
+    payload, _transport = _world_object_payload(
+        config_path,
+        object_id=object_id,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_thread_object_links(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> int:
+    payload, _transport = _thread_object_links_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_continuity_budget(
     config_path: str | None,
     *,
@@ -6371,6 +6538,53 @@ def _accept_stage25_payload(
             service.memory.graph.close()
 
 
+def _accept_stage26_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+    allow_local_fallback: bool = True,
+) -> tuple[dict, str]:
+    live_payload = _live_api_request(
+        config_path,
+        method="POST",
+        path="/accept-stage26",
+        payload={
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "channel": channel,
+            "sender": sender or "",
+            "artifact_dir": artifact_dir or "",
+        },
+        timeout=900.0,
+    )
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    service = HoloReplyService(load_config(config_path=config_path))
+    try:
+        return (
+            service.accept_stage26(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                artifact_dir=artifact_dir,
+            ),
+            "local_service",
+        )
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def command_accept_stage10(
     config_path: str | None,
     *,
@@ -6633,6 +6847,27 @@ def command_accept_stage25(
     artifact_dir: str | None,
 ) -> int:
     payload, _transport = _accept_stage25_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        artifact_dir=artifact_dir,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_accept_stage26(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    artifact_dir: str | None,
+) -> int:
+    payload, _transport = _accept_stage26_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -7830,6 +8065,19 @@ def main(argv: list[str] | None = None) -> int:
     scene_compression_parser.add_argument("--thread-key", default=None)
     scene_compression_parser.add_argument("--chat-name", default=None)
     scene_compression_parser.add_argument("--channel", default="wechat")
+    task_world_parser = subparsers.add_parser("show-task-world", help="Show Stage-26 bounded task-world objects for one thread")
+    task_world_parser.add_argument("--thread-key", default=None)
+    task_world_parser.add_argument("--chat-name", default=None)
+    task_world_parser.add_argument("--channel", default="wechat")
+    task_world_parser.add_argument("--limit", type=int, default=12)
+    task_world_parser.add_argument("--include-inactive", action="store_true")
+    world_object_parser = subparsers.add_parser("trace-world-object", help="Show one Stage-26 task-world object by object id")
+    world_object_parser.add_argument("--object-id", required=True)
+    thread_object_links_parser = subparsers.add_parser("trace-thread-object-links", help="Show Stage-26 task-world links for one thread")
+    thread_object_links_parser.add_argument("--thread-key", default=None)
+    thread_object_links_parser.add_argument("--chat-name", default=None)
+    thread_object_links_parser.add_argument("--channel", default="wechat")
+    thread_object_links_parser.add_argument("--limit", type=int, default=12)
     continuity_budget_parser = subparsers.add_parser("show-continuity-budget", help="Show the Stage-25 dense continuity budget")
     continuity_budget_parser.add_argument("--channel", default="wechat")
     dense_working_set_parser = subparsers.add_parser("show-dense-working-set", help="Show the Stage-25 dense working set")
@@ -8226,6 +8474,12 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage25_parser.add_argument("--channel", default="wechat")
     accept_stage25_parser.add_argument("--sender", default=None)
     accept_stage25_parser.add_argument("--artifact-dir", default=None)
+    accept_stage26_parser = subparsers.add_parser("accept-stage26", help="Run the Stage-26 bounded task-world state gate")
+    accept_stage26_parser.add_argument("--thread-key", default=None)
+    accept_stage26_parser.add_argument("--chat-name", default=None)
+    accept_stage26_parser.add_argument("--channel", default="wechat")
+    accept_stage26_parser.add_argument("--sender", default=None)
+    accept_stage26_parser.add_argument("--artifact-dir", default=None)
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -8444,6 +8698,28 @@ def main(argv: list[str] | None = None) -> int:
             thread_key=args.thread_key,
             chat_name=args.chat_name,
             channel=args.channel,
+        )
+    if args.command == "show-task-world":
+        return command_show_task_world(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+            include_inactive=args.include_inactive,
+        )
+    if args.command == "trace-world-object":
+        return command_trace_world_object(
+            args.config,
+            object_id=args.object_id,
+        )
+    if args.command == "trace-thread-object-links":
+        return command_trace_thread_object_links(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
         )
     if args.command == "show-continuity-budget":
         return command_show_continuity_budget(
@@ -9018,6 +9294,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage25":
         return command_accept_stage25(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage26":
+        return command_accept_stage26(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

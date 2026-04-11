@@ -418,6 +418,40 @@ class Stage20TemporalCommitmentsTests(unittest.TestCase):
             finally:
                 self._close_bridge(bridge)
 
+    def test_temporal_commitments_link_into_task_world_state(self) -> None:
+        with TempMemoryRepo() as temp:
+            bridge = self._bridge(temp)
+            try:
+                commitment = bridge.graph.upsert_temporal_item(
+                    item_type="commitment",
+                    channel="wechat",
+                    thread_key="Nemoqi",
+                    chat_name="Nemoqi",
+                    confidence=0.74,
+                    source_event_id="stage20-task-world",
+                    source_action_ref="stage20-task-world",
+                    source_action_type="defer_reply",
+                    due_at="2099-01-01T00:00:00Z",
+                    revisit_after="2099-01-01T00:00:00Z",
+                    resume_cue="send the promised task-world followup",
+                    dedupe_key="stage20-task-world",
+                    status="scheduled",
+                    metadata={"evidence_refs": ["unit:stage20:task_world"]},
+                )
+                task_world = bridge.show_task_world(thread_key="Nemoqi", chat_name="Nemoqi", channel="wechat", include_inactive=True)
+                packet = bridge.sidecar_packet(
+                    "still here?",
+                    context={"channel": "wechat", "thread_key": "Nemoqi", "chat_name": "Nemoqi", "attachments": []},
+                )
+
+                self.assertTrue(task_world["present"])
+                self.assertTrue(any("stage20-task-world" in item["linked_commitments"] for item in task_world["objects"]))
+                self.assertTrue(packet["stage26"]["task_world_visible"])
+                self.assertIn("stage20-task-world", packet["stage26"]["linked_commitments"])
+                self.assertEqual(commitment["task_world_object_id"][:7], "tworld_")
+            finally:
+                self._close_bridge(bridge)
+
 
 if __name__ == "__main__":
     unittest.main()

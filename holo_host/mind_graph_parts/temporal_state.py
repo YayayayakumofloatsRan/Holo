@@ -292,6 +292,27 @@ def upsert_temporal_item(
             (normalized_channel, normalized_thread_key, key, normalized_type),
         ).fetchone()
     item = temporal_item_from_row(self, dict(row) if row else None, now=now)
+    if item.get("upserted") is None and hasattr(self, "upsert_task_world_object") and normalized_type in {"commitment", "resume_candidate", "deferred_intention"} and cue:
+        object_type = "schedule" if str(due_at or revisit_after or "").strip() else "task"
+        task_world = self.upsert_task_world_object(
+            object_type=object_type,
+            summary=cue,
+            source_ref=event_id or action_ref or f"temporal:{key}",
+            confidence=max(0.62, float(item.get("confidence", 0.0) or 0.0)),
+            stale_after=str(revisit_before or due_at or ""),
+            linked_threads=[normalized_thread_key],
+            linked_commitments=[key],
+            status="live" if normalized_status in TEMPORAL_LIVE_STATUSES else "done",
+            metadata={
+                "source": "temporal_subject_state",
+                "temporal_item_type": normalized_type,
+                "temporal_dedupe_key": key,
+                "source_action_type": str(source_action_type or "").strip(),
+                "evidence_refs": list(next_metadata.get("evidence_refs", [])),
+            },
+        )
+        if task_world.get("present", False):
+            item["task_world_object_id"] = str(task_world.get("object_id", "") or "")
     item["upserted"] = True
     return item
 

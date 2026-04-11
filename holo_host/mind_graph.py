@@ -261,6 +261,22 @@ ATTENTION_FRONTIER_HEAT_DELTA = {
 DENSE_CONTINUITY_ALLOWED_STREAMS = set(ATTENTION_FRONTIER_ALLOWED_STREAMS)
 DENSE_WORKING_SET_MAX_ENTRIES = 8
 THREAD_PULSE_TRACE_KEEP_PER_THREAD = 12
+TASK_WORLD_OBJECT_TYPES = {"file", "task", "schedule", "image_summary", "person"}
+TASK_WORLD_CUE_TO_OBJECT = {
+    "file_artifact": "file",
+    "task_cue": "task",
+    "schedule_cue": "schedule",
+    "image_summary": "image_summary",
+}
+TASK_WORLD_OBJECT_TO_CUE = {
+    "file": "file_artifact",
+    "task": "task_cue",
+    "schedule": "schedule_cue",
+    "image_summary": "image_summary",
+}
+TASK_WORLD_VISIBLE_MAX = 4
+TASK_WORLD_LINKED_THREADS_MAX = 4
+TASK_WORLD_LINKED_COMMITMENTS_MAX = 6
 
 
 def _tokenize(text: str) -> list[str]:
@@ -287,6 +303,18 @@ def _tokenize(text: str) -> list[str]:
             seen.add(current)
             tokens.append(current)
     return tokens
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    rows: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        current = str(value or "").strip()
+        if not current or current in seen:
+            continue
+        seen.add(current)
+        rows.append(current)
+    return rows
 
 
 def _semantic_tokens(text: str) -> list[str]:
@@ -1021,6 +1049,36 @@ class MindGraph:
             );
             CREATE INDEX IF NOT EXISTS idx_world_coupling_thread
             ON world_coupling_signal(channel, thread_key, status, stale_after, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS task_world_object (
+                object_id TEXT PRIMARY KEY,
+                object_type TEXT NOT NULL DEFAULT 'task',
+                summary TEXT NOT NULL DEFAULT '',
+                source_ref TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0.0,
+                stale_after TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'live',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS task_world_link (
+                id INTEGER PRIMARY KEY,
+                object_id TEXT NOT NULL,
+                link_type TEXT NOT NULL DEFAULT '',
+                target_channel TEXT NOT NULL DEFAULT '',
+                target_ref TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(object_id, link_type, target_channel, target_ref),
+                FOREIGN KEY(object_id) REFERENCES task_world_object(object_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_world_object_updated
+            ON task_world_object(status, stale_after, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_task_world_link_lookup
+            ON task_world_link(link_type, target_channel, target_ref, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_task_world_link_object
+            ON task_world_link(object_id, link_type, updated_at DESC);
             CREATE TABLE IF NOT EXISTS subject_state (
                 id INTEGER PRIMARY KEY,
                 channel TEXT NOT NULL DEFAULT '',
@@ -3762,6 +3820,394 @@ class MindGraph:
             )
         return items
 
+    @staticmethod
+    def _normalize_task_world_object_type(raw: Any) -> str:
+        current = str(raw or "").strip().lower()
+        return current if current in TASK_WORLD_OBJECT_TYPES else "task"
+
+    @staticmethod
+    def _normalize_task_world_status(raw: Any) -> str:
+        current = str(raw or "").strip().lower()
+        return current if current in {"live", "done", "stale", "archived", "blocked"} else "live"
+
+    def _task_world_object_id(
+        self,
+        *,
+        object_type: str,
+        source_ref: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        payload = dict(metadata or {})
+        explicit = compact_text(str(payload.get("object_id", "") or ""), 64)
+        if explicit:
+            return explicit
+        digest_seed = compact_text(str(payload.get("artifact_digest", "") or payload.get("digest", "") or ""), 64)
+        if digest_seed:
+            return f"tworld_{stable_digest(object_type, digest_seed)[:24]}"
+        return f"tworld_{stable_digest(object_type, source_ref, summary)[:24]}"
+
+    def _task_world_link_rows_locked(self, *, object_id: str, link_type: str) -> list[dict[str, Any]]:
+        return [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT *
+                FROM task_world_link
+                WHERE object_id = ? AND link_type = ?
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (object_id, link_type),
+            ).fetchall()
+        ]
+
+    def _sync_task_world_links_locked(
+        self,
+        *,
+        object_id: str,
+        link_type: str,
+        target_channel: str,
+        values: list[str],
+        limit: int,
+    ) -> None:
+        unique_values = _unique_strings(values)[: max(1, int(limit))]
+        now = utc_now()
+        existing_rows = self._task_world_link_rows_locked(object_id=object_id, link_type=link_type)
+        existing_values = {
+            str(row.get("target_ref", "") or "")
+            for row in existing_rows
+            if str(row.get("target_channel", "") or "") == str(target_channel or "")
+        }
+        for target_ref in unique_values:
+            self.conn.execute(
+                """
+                INSERT INTO task_world_link(
+                    object_id, link_type, target_channel, target_ref, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(object_id, link_type, target_channel, target_ref) DO UPDATE SET
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    object_id,
+                    link_type,
+                    str(target_channel or ""),
+                    target_ref,
+                    "{}",
+                    now,
+                    now,
+                ),
+            )
+        removable = existing_values - set(unique_values)
+        if removable:
+            self.conn.executemany(
+                """
+                DELETE FROM task_world_link
+                WHERE object_id = ? AND link_type = ? AND target_channel = ? AND target_ref = ?
+                """,
+                [
+                    (
+                        object_id,
+                        link_type,
+                        str(target_channel or ""),
+                        target_ref,
+                    )
+                    for target_ref in removable
+                ],
+            )
+        rows = self._task_world_link_rows_locked(object_id=object_id, link_type=link_type)
+        for row in rows[max(1, int(limit)) :]:
+            self.conn.execute("DELETE FROM task_world_link WHERE id = ?", (int(row["id"]),))
+
+    def _task_world_links_for_object_locked(self, *, object_id: str, link_type: str, limit: int) -> list[str]:
+        values: list[str] = []
+        for row in self._task_world_link_rows_locked(object_id=object_id, link_type=link_type):
+            target = str(row.get("target_ref", "") or "").strip()
+            if not target or target in values:
+                continue
+            values.append(target)
+            if len(values) >= max(1, int(limit)):
+                break
+        return values
+
+    def _task_world_object_from_row(self, row: dict[str, Any] | None, *, now: str | None = None) -> dict[str, Any]:
+        if not row:
+            return {"present": False}
+        current_now = now or utc_now()
+        stale_after = str(row.get("stale_after", "") or "")
+        status = self._normalize_task_world_status(row.get("status", "live"))
+        stale = bool(stale_after and stale_after <= current_now)
+        metadata = dict(_safe_json_dict(row.get("metadata_json", "{}")))
+        object_id = str(row.get("object_id", "") or "")
+        with self._lock:
+            linked_threads = self._task_world_links_for_object_locked(
+                object_id=object_id,
+                link_type="thread",
+                limit=TASK_WORLD_LINKED_THREADS_MAX,
+            )
+            linked_commitments = self._task_world_links_for_object_locked(
+                object_id=object_id,
+                link_type="commitment",
+                limit=TASK_WORLD_LINKED_COMMITMENTS_MAX,
+            )
+        return {
+            "present": True,
+            "object_id": object_id,
+            "object_type": self._normalize_task_world_object_type(row.get("object_type", "task")),
+            "summary": str(row.get("summary", "") or ""),
+            "source_ref": str(row.get("source_ref", "") or ""),
+            "confidence": float(row.get("confidence", 0.0) or 0.0),
+            "stale_after": stale_after,
+            "linked_threads": linked_threads,
+            "linked_commitments": linked_commitments,
+            "status": "stale" if stale and status == "live" else status,
+            "stale": stale,
+            "metadata": metadata,
+            "created_at": str(row.get("created_at", "") or ""),
+            "updated_at": str(row.get("updated_at", "") or ""),
+        }
+
+    def upsert_task_world_object(
+        self,
+        *,
+        object_type: str,
+        summary: str,
+        source_ref: str = "",
+        confidence: float = 0.62,
+        stale_after: str = "",
+        linked_threads: list[str] | None = None,
+        linked_commitments: list[str] | None = None,
+        status: str = "live",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_type = self._normalize_task_world_object_type(object_type)
+        compact_summary = compact_text(str(summary or "").strip(), 240)
+        if not compact_summary:
+            return {"status": "skipped", "reason": "empty_summary", "present": False}
+        normalized_status = self._normalize_task_world_status(status)
+        normalized_source = compact_text(str(source_ref or "").strip(), 500)
+        next_metadata = dict(metadata or {})
+        object_id = self._task_world_object_id(
+            object_type=normalized_type,
+            source_ref=normalized_source,
+            summary=compact_summary,
+            metadata=next_metadata,
+        )
+        now = utc_now()
+        if not str(stale_after or "").strip():
+            stale_after = (
+                datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=7)
+            ).isoformat().replace("+00:00", "Z")
+        thread_links = [str(item).strip() for item in list(linked_threads or []) if str(item).strip()]
+        commitment_links = [str(item).strip() for item in list(linked_commitments or []) if str(item).strip()]
+        with self._lock:
+            existing_thread_links: list[str] = []
+            existing_commitment_links: list[str] = []
+            current_row = self.conn.execute(
+                "SELECT object_id FROM task_world_object WHERE object_id = ?",
+                (object_id,),
+            ).fetchone()
+            if current_row is not None:
+                existing_thread_links = self._task_world_links_for_object_locked(
+                    object_id=object_id,
+                    link_type="thread",
+                    limit=TASK_WORLD_LINKED_THREADS_MAX,
+                )
+                existing_commitment_links = self._task_world_links_for_object_locked(
+                    object_id=object_id,
+                    link_type="commitment",
+                    limit=TASK_WORLD_LINKED_COMMITMENTS_MAX,
+                )
+            self.conn.execute(
+                """
+                INSERT INTO task_world_object(
+                    object_id, object_type, summary, source_ref, confidence, stale_after, status, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(object_id) DO UPDATE SET
+                    object_type = excluded.object_type,
+                    summary = excluded.summary,
+                    source_ref = excluded.source_ref,
+                    confidence = excluded.confidence,
+                    stale_after = excluded.stale_after,
+                    status = excluded.status,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    object_id,
+                    normalized_type,
+                    compact_summary,
+                    normalized_source,
+                    self._clamp(confidence, default=0.62),
+                    str(stale_after or "").strip(),
+                    normalized_status,
+                    json.dumps(next_metadata, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+            self._sync_task_world_links_locked(
+                object_id=object_id,
+                link_type="thread",
+                target_channel="thread",
+                values=_unique_strings(existing_thread_links + thread_links),
+                limit=TASK_WORLD_LINKED_THREADS_MAX,
+            )
+            self._sync_task_world_links_locked(
+                object_id=object_id,
+                link_type="commitment",
+                target_channel="commitment",
+                values=_unique_strings(existing_commitment_links + commitment_links),
+                limit=TASK_WORLD_LINKED_COMMITMENTS_MAX,
+            )
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT * FROM task_world_object WHERE object_id = ?",
+                (object_id,),
+            ).fetchone()
+        return self._task_world_object_from_row(dict(row) if row else None, now=now)
+
+    def task_world_object(self, *, object_id: str) -> dict[str, Any]:
+        normalized_object_id = str(object_id or "").strip()
+        if not normalized_object_id:
+            return {"status": "missing_object_id", "present": False}
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM task_world_object WHERE object_id = ?",
+                (normalized_object_id,),
+            ).fetchone()
+        payload = self._task_world_object_from_row(dict(row) if row else None)
+        return {
+            "status": "ok" if payload.get("present", False) else "missing",
+            "present": bool(payload.get("present", False)),
+            "object": payload if payload.get("present", False) else {},
+        }
+
+    def task_world_objects_for_thread(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = TASK_WORLD_VISIBLE_MAX,
+        include_inactive: bool = False,
+    ) -> list[dict[str, Any]]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        now = utc_now()
+        clauses = ["l.link_type = 'thread'", "l.target_channel = 'thread'", "l.target_ref = ?"]
+        args: list[Any] = [normalized_thread_key]
+        if not include_inactive:
+            clauses.append("o.status = 'live'")
+            clauses.append("(o.stale_after = '' OR o.stale_after > ?)")
+            args.append(now)
+        args.append(max(1, int(limit)))
+        with self._lock:
+            rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    f"""
+                    SELECT o.*
+                    FROM task_world_object o
+                    JOIN task_world_link l ON l.object_id = o.object_id
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY o.updated_at DESC, o.object_id DESC
+                    LIMIT ?
+                    """,
+                    tuple(args),
+                ).fetchall()
+            ]
+        return [self._task_world_object_from_row(row, now=now) for row in rows]
+
+    def show_task_world(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        objects = self.task_world_objects_for_thread(
+            thread_key=normalized_thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            include_inactive=include_inactive,
+        )
+        return {
+            "status": "ok",
+            "thread_key": normalized_thread_key,
+            "chat_name": str(chat_name or normalized_thread_key),
+            "channel": str(channel or "wechat"),
+            "present": bool(objects),
+            "count": len(objects),
+            "objects": objects,
+        }
+
+    def trace_thread_object_links(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
+        objects = self.task_world_objects_for_thread(
+            thread_key=normalized_thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            include_inactive=True,
+        )
+        return {
+            "status": "ok",
+            "thread_key": normalized_thread_key,
+            "chat_name": str(chat_name or normalized_thread_key),
+            "channel": str(channel or "wechat"),
+            "count": len(objects),
+            "objects": objects,
+            "cross_thread_object_count": sum(
+                1
+                for item in objects
+                if any(str(linked or "") != normalized_thread_key for linked in list(item.get("linked_threads", [])))
+            ),
+        }
+
+    def _task_world_object_to_world_coupling_signal(
+        self,
+        item: dict[str, Any],
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+    ) -> dict[str, Any]:
+        cue_type = str(TASK_WORLD_OBJECT_TO_CUE.get(str(item.get("object_type", "") or ""), "task_cue"))
+        return {
+            "id": f"task-world:{str(item.get('object_id', '') or '')}",
+            "present": True,
+            "channel": str(channel or "wechat"),
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or thread_key),
+            "cue_type": cue_type,
+            "summary": str(item.get("summary", "") or ""),
+            "source_ref": str(item.get("source_ref", "") or ""),
+            "confidence": float(item.get("confidence", 0.0) or 0.0),
+            "stale_after": str(item.get("stale_after", "") or ""),
+            "status": str(item.get("status", "") or "live"),
+            "stale": bool(item.get("stale", False)),
+            "evidence_refs": self._decode_json_array(dict(item.get("metadata", {})).get("evidence_refs", []))[:4]
+            if isinstance(dict(item.get("metadata", {})).get("evidence_refs", []), list)
+            else [],
+            "metadata": {
+                **dict(item.get("metadata", {})),
+                "task_world_backed": True,
+                "object_id": str(item.get("object_id", "") or ""),
+            },
+            "created_at": str(item.get("created_at", "") or ""),
+            "updated_at": str(item.get("updated_at", "") or ""),
+        }
+
     def upsert_world_coupling_signal(
         self,
         *,
@@ -3792,6 +4238,26 @@ class MindGraph:
         refs = [str(item).strip() for item in list(evidence_refs or []) if str(item).strip()][:4]
         source = compact_text(str(source_ref or "").strip(), 500)
         record_id = stable_digest(normalized_channel, normalized_thread_key, normalized_type, source, compact_summary, limit=24)
+        task_world_payload = {}
+        if hasattr(self, "upsert_task_world_object"):
+            task_world_payload = self.upsert_task_world_object(
+                object_type=TASK_WORLD_CUE_TO_OBJECT.get(normalized_type, "task"),
+                summary=compact_summary,
+                source_ref=source,
+                confidence=self._clamp(confidence, default=0.62),
+                stale_after=str(stale_after or "").strip(),
+                linked_threads=[normalized_thread_key],
+                linked_commitments=_unique_strings(
+                    [str(item).strip() for item in list((metadata or {}).get("linked_commitments", [])) if str(item).strip()]
+                )[:TASK_WORLD_LINKED_COMMITMENTS_MAX],
+                status=str(status or "live").strip() or "live",
+                metadata={
+                    **dict(metadata or {}),
+                    "world_coupling_signal_id": record_id,
+                    "world_coupling_cue_type": normalized_type,
+                    "evidence_refs": refs,
+                },
+            )
         with self._lock:
             self.conn.execute(
                 """
@@ -3829,7 +4295,10 @@ class MindGraph:
             )
             self.conn.commit()
             row = self.conn.execute("SELECT * FROM world_coupling_signal WHERE id = ?", (record_id,)).fetchone()
-        return self._world_coupling_signal_from_row(dict(row) if row else None, now=now)
+        payload = self._world_coupling_signal_from_row(dict(row) if row else None, now=now)
+        if task_world_payload:
+            payload["task_world_object"] = task_world_payload
+        return payload
 
     def _world_coupling_signal_from_row(self, row: dict[str, Any] | None, *, now: str) -> dict[str, Any]:
         if not row:
@@ -3867,6 +4336,23 @@ class MindGraph:
     ) -> list[dict[str, Any]]:
         normalized_thread_key = _normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())
         now = utc_now()
+        task_world_items = self.task_world_objects_for_thread(
+            thread_key=normalized_thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            include_inactive=include_inactive,
+        )
+        if task_world_items:
+            return [
+                self._task_world_object_to_world_coupling_signal(
+                    item,
+                    channel=channel,
+                    thread_key=normalized_thread_key,
+                    chat_name=str(chat_name or normalized_thread_key),
+                )
+                for item in task_world_items[: max(1, int(limit))]
+            ]
         clauses = ["channel = ?", "thread_key = ?"]
         args: list[Any] = [str(channel or "wechat").strip() or "wechat", normalized_thread_key]
         if not include_inactive:

@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 from .activation_state import ActivationStateStore
 from .common import compact_text, utc_now
-from .mind_graph import MindGraph
+from .mind_graph import MindGraph, TASK_WORLD_CUE_TO_OBJECT, _normalize_thread_key
 from .models import ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state
 from .policies import MEMORY_BRIDGE_POLICY
@@ -1547,6 +1547,7 @@ class MemoryBridge:
         packet.setdefault("stage17", {})
         packet.setdefault("stage19", dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {})
         packet.setdefault("stage20", dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else {})
+        packet.setdefault("stage26", dict(context.get("stage26_task_world", {})) if isinstance(context.get("stage26_task_world", {}), dict) else {})
         packet.setdefault("stage22", dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else {})
         packet["stage21"] = stage21_policy
         packet["action_market"] = action_market
@@ -1625,6 +1626,7 @@ class MemoryBridge:
         packet["state"]["stage17"] = dict(packet.get("stage17", {}))
         packet["state"]["stage19"] = dict(packet.get("stage19", {}))
         packet["state"]["stage20"] = dict(packet.get("stage20", {}))
+        packet["state"]["stage26"] = dict(packet.get("stage26", {}))
         packet["state"]["stage21"] = dict(packet.get("stage21", {}))
         packet["state"]["stage22"] = dict(packet.get("stage22", {}))
         packet["state"]["action_market"] = list(action_market)
@@ -2094,6 +2096,136 @@ class MemoryBridge:
             "hard_gate_preserved": True,
         }
 
+    @staticmethod
+    def _stage26_task_world_empty(*, channel: str, thread_key: str, chat_name: str) -> dict[str, Any]:
+        return {
+            "task_world_visible": False,
+            "task_world_used_for_thread": False,
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "channel": str(channel or "wechat"),
+            "object_ids": [],
+            "object_types": [],
+            "summary": "",
+            "linked_commitments": [],
+            "cross_thread_links_visible": False,
+            "hard_gate_preserved": True,
+        }
+
+    def _stage26_task_world_payload(
+        self,
+        objects: list[dict[str, Any]],
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        used: bool,
+    ) -> dict[str, Any]:
+        items = [dict(item) for item in list(objects or []) if isinstance(item, dict) and bool(item.get("present", False))][:4]
+        summary = compact_text(
+            " | ".join(
+                self._unique_strings([str(item.get("summary", "") or "") for item in items])
+            ),
+            360,
+        )
+        linked_commitments = self._unique_strings(
+            [
+                str(commitment).strip()
+                for item in items
+                for commitment in list(item.get("linked_commitments", []))
+                if str(commitment).strip()
+            ]
+        )[:6]
+        return {
+            "task_world_visible": bool(items),
+            "task_world_used_for_thread": bool(used and items),
+            "thread_key": str(thread_key or ""),
+            "chat_name": str(chat_name or ""),
+            "channel": str(channel or "wechat"),
+            "object_ids": [str(item.get("object_id", "") or "") for item in items if str(item.get("object_id", "")).strip()][:4],
+            "object_types": self._unique_strings([str(item.get("object_type", "") or "") for item in items])[:4],
+            "summary": summary,
+            "linked_commitments": linked_commitments,
+            "cross_thread_links_visible": any(
+                any(str(linked or "") != str(thread_key or "") for linked in list(item.get("linked_threads", [])))
+                for item in items
+            ),
+            "hard_gate_preserved": True,
+            "objects": items,
+        }
+
+    def _hydrate_active_state_from_task_world(
+        self,
+        query: str,
+        *,
+        context: dict[str, Any],
+        active_state: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        channel = str(context.get("channel", "wechat") or "wechat")
+        thread_key = str(context.get("thread_key", "") or "")
+        chat_name = str(context.get("chat_name", "") or "")
+        if not hasattr(self.graph, "task_world_objects_for_thread"):
+            return active_state, self._stage26_task_world_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        objects = self.graph.task_world_objects_for_thread(channel=channel, thread_key=thread_key, chat_name=chat_name, limit=4)
+        stage26 = self._stage26_task_world_payload(objects, channel=channel, thread_key=thread_key, chat_name=chat_name, used=True)
+        if not bool(stage26.get("task_world_visible", False)):
+            return active_state, stage26
+
+        hydrated = dict(active_state)
+        metadata = dict(hydrated.get("metadata", {})) if isinstance(hydrated.get("metadata", {}), dict) else {}
+        metadata["stage26_task_world"] = {
+            "summary": stage26["summary"],
+            "object_ids": list(stage26["object_ids"])[:4],
+            "object_types": list(stage26["object_types"])[:4],
+            "linked_commitments": list(stage26["linked_commitments"])[:6],
+            "cross_thread_links_visible": bool(stage26["cross_thread_links_visible"]),
+        }
+        hydrated["metadata"] = metadata
+        hydrated["present"] = True
+        hydrated["channel"] = channel
+        hydrated["thread_key"] = str(thread_key or chat_name)
+        hydrated["chat_name"] = str(chat_name or thread_key)
+        if stage26["summary"] and not str(hydrated.get("continuity_summary", "") or "").strip():
+            hydrated["continuity_summary"] = compact_text(f"task_world: {stage26['summary']}", 220)
+        if not str(hydrated.get("attention_focus", "") or "").strip():
+            hydrated["attention_focus"] = "task_world_state"
+        if str(hydrated.get("cache_warmth", "") or "") in {"", "cold", "seeded"}:
+            hydrated["cache_warmth"] = "world_warm"
+
+        predictive = dict(hydrated.get("predictive_continuity", {})) if isinstance(hydrated.get("predictive_continuity", {}), dict) else {}
+        blockers = bool(
+            signal.get("local_memory_requested", False)
+            or signal.get("factual_lookup", False)
+            or signal.get("search_requested", False)
+            or signal.get("visual_requested", False)
+        )
+        meaningful = self._meaningful_char_count(query)
+        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        confidence = max(float(predictive.get("active_prediction_confidence", 0.0) or 0.0), 0.56 + min(0.18, len(stage26["object_ids"]) * 0.04))
+        if not reflex_eligible:
+            confidence = min(confidence, 0.54)
+        predictive.update(
+            {
+                "predicted_next_user_act": str(predictive.get("predicted_next_user_act", "") or "continue_with_task_world"),
+                "likely_reference_targets": self._unique_strings(
+                    list(predictive.get("likely_reference_targets", []))
+                    + [str(item.get("summary", "") or "") for item in list(stage26.get("objects", []))]
+                )[:3],
+                "reflex_eligibility": bool(reflex_eligible),
+                "turn_rhythm": {
+                    **(dict(predictive.get("turn_rhythm", {})) if isinstance(predictive.get("turn_rhythm", {}), dict) else {}),
+                    "task_world_hydrated": True,
+                },
+                "freshness_at": str((stage26.get("objects", [{}])[0] if list(stage26.get("objects", [])) else {}).get("updated_at", predictive.get("freshness_at", "")) or predictive.get("freshness_at", "")),
+                "active_prediction_confidence": self._clamp(confidence),
+            }
+        )
+        hydrated["predictive_continuity"] = predictive
+        for key, value in predictive.items():
+            hydrated[key] = value
+        return hydrated, stage26
+
     def _stage22_world_coupling_payload(
         self,
         signals: list[dict[str, Any]],
@@ -2224,14 +2356,22 @@ class MemoryBridge:
         stage24_meta = dict(metadata.get("stage24_scene", {})) if isinstance(metadata.get("stage24_scene", {}), dict) else {}
         stage19 = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else {}
         stage20 = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else {}
+        stage26 = dict(context.get("stage26_task_world", {})) if isinstance(context.get("stage26_task_world", {}), dict) else {}
         stage22 = dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else {}
         scene_topics = self._unique_strings(
             list(scene.get("topic_stack", []))
-            + [str(hydrated.get("attention_focus", "") or ""), str(stage19.get("wake_reason", "") or ""), str(stage20.get("resume_cue", "") or ""), str(stage22.get("cue_summary", "") or "")]
+            + [
+                str(hydrated.get("attention_focus", "") or ""),
+                str(stage19.get("wake_reason", "") or ""),
+                str(stage20.get("resume_cue", "") or ""),
+                str(stage26.get("summary", "") or ""),
+                str(stage22.get("cue_summary", "") or ""),
+            ]
         )[:4]
         scene_objects = self._unique_strings(
             list(scene.get("salient_objects", []))
             + list(predictive.get("likely_reference_targets", []))
+            + [str(item.get("summary", "") or "") for item in list(stage26.get("objects", []))]
             + list(stage20.get("due_followup_keys", []))
         )[:4]
         scene_branches = self._unique_strings(
@@ -2239,22 +2379,31 @@ class MemoryBridge:
             + ([f"user:{str(predictive.get('predicted_next_user_act', '') or '').strip()}"] if str(predictive.get("predicted_next_user_act", "") or "").strip() else [])
             + ([f"frontier:{str(stage19.get('anticipated_next_turn', '') or '').strip()}"] if str(stage19.get("anticipated_next_turn", "") or "").strip() else [])
             + (["resume_then_continue"] if bool(stage20.get("temporal_visible", False)) else [])
+            + (["follow_task_world"] if bool(stage26.get("task_world_visible", False)) else [])
             + (["follow_world_cue"] if bool(stage22.get("world_coupling_visible", False)) else [])
         )[:3]
         shared_frame = compact_text(
-            str(scene.get("shared_frame", "") or str(hydrated.get("continuity_summary", "") or "") or str(stage22.get("cue_summary", "") or "") or str(stage20.get("resume_cue", "") or "")),
+            str(scene.get("shared_frame", "") or str(hydrated.get("continuity_summary", "") or "") or str(stage26.get("summary", "") or "") or str(stage22.get("cue_summary", "") or "") or str(stage20.get("resume_cue", "") or "")),
             160,
         )
         response_sketch = compact_text(
             str(scene.get("response_sketch", "") or (f"continue around {scene_topics[0]}" if scene_topics else f"continue {str(predictive.get('predicted_next_user_act', '') or 'the thread')}")),
             140,
         )
+        latent_questions = self._unique_strings(
+            list(scene.get("latent_questions", []))
+            + [
+                str(item.get("summary", "") or "")
+                for item in list(stage26.get("objects", []))
+                if str(item.get("object_type", "") or "") in {"task", "schedule"} and str(item.get("status", "") or "") == "live"
+            ]
+        )[:3]
         scene.update(
             {
                 "shared_frame": shared_frame,
                 "topic_stack": scene_topics,
                 "salient_objects": scene_objects,
-                "latent_questions": list(scene.get("latent_questions", []))[:3],
+                "latent_questions": latent_questions,
                 "predicted_branches": scene_branches,
                 "relationship_trajectory": compact_text(str(scene.get("relationship_trajectory", "") or ("holding_open_loop" if bool(stage20.get("temporal_visible", False)) else "ordinary_continuation")), 96),
                 "response_sketch": response_sketch,
@@ -2487,7 +2636,7 @@ class MemoryBridge:
             return False
         if bool(signal.get("low_signal", False)) or meaningful <= 18:
             return True
-        if bool(active_state.get("present", False)) and str(active_state.get("cache_warmth", "") or "") in {"warm", "seeded", "frontier_warm", "temporal_warm"}:
+        if bool(active_state.get("present", False)) and str(active_state.get("cache_warmth", "") or "") in {"warm", "seeded", "frontier_warm", "temporal_warm", "world_warm"}:
             return meaningful <= 36
         return meaningful <= 24 and not bool(signal.get("question_like", False))
 
@@ -2504,6 +2653,7 @@ class MemoryBridge:
         chat_name = str(context.get("chat_name", "") or "")
         stage19_frontier = dict(context.get("stage19_attention_frontier", {})) if isinstance(context.get("stage19_attention_frontier", {}), dict) else self._stage19_frontier_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         stage20_temporal = dict(context.get("stage20_temporal_state", {})) if isinstance(context.get("stage20_temporal_state", {}), dict) else self._stage20_temporal_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        stage26_task_world = dict(context.get("stage26_task_world", {})) if isinstance(context.get("stage26_task_world", {}), dict) else self._stage26_task_world_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         stage22_world_coupling = dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else self._stage22_world_coupling_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         stage25_dense = dict(context.get("stage25_dense_working_set", {})) if isinstance(context.get("stage25_dense_working_set", {}), dict) else self._stage25_dense_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         limits = self._mind_limits(context, fast=True)
@@ -2547,6 +2697,7 @@ class MemoryBridge:
                         str(active_state.get("attention_focus", "") or ""),
                         str(stage19_frontier.get("wake_reason", "") or ""),
                         str(stage20_temporal.get("resume_cue", "") or ""),
+                        str(stage26_task_world.get("summary", "") or ""),
                         str(stage22_world_coupling.get("cue_summary", "") or ""),
                     ]
                 )[:4],
@@ -2554,6 +2705,7 @@ class MemoryBridge:
                 "contributor_counts": {
                     **({"attention_frontier": 1} if bool(stage19_frontier.get("frontier_used_for_thread", False)) else {}),
                     **({"temporal_state": 1} if bool(stage20_temporal.get("temporal_used_for_thread", False)) else {}),
+                    **({"task_world": 1} if bool(stage26_task_world.get("task_world_used_for_thread", False)) else {}),
                     **({"world_coupling": 1} if bool(stage22_world_coupling.get("world_coupling_used_for_thread", False)) else {}),
                     **({"dense_working_set": 1} if bool(stage25_dense.get("working_set_used_for_thread", False)) else {}),
                 },
@@ -2598,12 +2750,14 @@ class MemoryBridge:
         packet["stage24"] = self._stage24_scene_packet(active_state)
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
+        packet["stage26"] = dict(stage26_task_world)
         packet["stage22"] = dict(stage22_world_coupling)
         packet["stage25"] = dict(stage25_dense)
         packet.setdefault("retrieval_trace", {}).setdefault("stage24", dict(packet["stage24"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage18", dict(packet["stage18"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage26", dict(packet["stage26"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage22", dict(packet["stage22"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage25", dict(packet["stage25"]))
         result = self._finalize_stage2_packet(packet, query=query, context=context)
@@ -3210,6 +3364,13 @@ class MemoryBridge:
             signal=signal,
         )
         normalized_context["stage20_temporal_state"] = dict(stage20_temporal)
+        active_state, stage26_task_world = self._hydrate_active_state_from_task_world(
+            query,
+            context=normalized_context,
+            active_state=active_state,
+            signal=signal,
+        )
+        normalized_context["stage26_task_world"] = dict(stage26_task_world)
         active_state, stage22_world_coupling = self._hydrate_active_state_from_world_coupling(
             query,
             context=normalized_context,
@@ -3372,11 +3533,13 @@ class MemoryBridge:
         packet["stage24"] = self._stage24_scene_packet(active_state)
         packet["stage19"] = dict(stage19_frontier)
         packet["stage20"] = dict(stage20_temporal)
+        packet["stage26"] = dict(stage26_task_world)
         packet["stage22"] = dict(stage22_world_coupling)
         packet["stage25"] = dict(stage25_dense)
         packet.setdefault("retrieval_trace", {}).setdefault("stage24", dict(packet["stage24"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage19", dict(packet["stage19"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage20", dict(packet["stage20"]))
+        packet.setdefault("retrieval_trace", {}).setdefault("stage26", dict(packet["stage26"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage22", dict(packet["stage22"]))
         packet.setdefault("retrieval_trace", {}).setdefault("stage25", dict(packet["stage25"]))
         return self._finalize_stage2_packet(packet, query=query, context=normalized_context)
@@ -3568,6 +3731,93 @@ class MemoryBridge:
                 used=False,
             ),
         }
+
+    def upsert_task_world_object(
+        self,
+        *,
+        object_type: str,
+        summary: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        source_ref: str = "",
+        confidence: float = 0.62,
+        stale_after: str = "",
+        linked_commitments: list[str] | None = None,
+        status: str = "live",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "upsert_task_world_object"):
+            return {"status": "unavailable", "present": False}
+        payload = self.graph.upsert_task_world_object(
+            object_type=object_type,
+            summary=summary,
+            source_ref=source_ref,
+            confidence=confidence,
+            stale_after=stale_after,
+            linked_threads=[_normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())],
+            linked_commitments=linked_commitments or [],
+            status=status,
+            metadata=metadata or {},
+        )
+        self.clear_packet_cache()
+        return payload
+
+    def show_task_world(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+        include_inactive: bool = False,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "show_task_world"):
+            return {"status": "unavailable", "present": False, "objects": []}
+        payload = self.graph.show_task_world(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+            include_inactive=include_inactive,
+        )
+        active_state = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        payload["active_thread_state"] = active_state
+        payload["stage24"] = self._stage24_scene_packet(active_state)
+        payload["stage25"] = self._stage25_dense_payload(
+            self.graph.dense_working_set_thread_hint(channel=channel, thread_key=thread_key, chat_name=chat_name)
+            if hasattr(self.graph, "dense_working_set_thread_hint")
+            else {},
+            channel=channel,
+            thread_key=str(active_state.get("thread_key", str(thread_key or ""))),
+            chat_name=str(active_state.get("chat_name", str(chat_name or ""))),
+            used=False,
+        )
+        return payload
+
+    def trace_world_object(self, *, object_id: str) -> dict[str, Any]:
+        if not hasattr(self.graph, "task_world_object"):
+            return {"status": "unavailable", "present": False, "object": {}}
+        return self.graph.task_world_object(object_id=object_id)
+
+    def trace_thread_object_links(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        if not hasattr(self.graph, "trace_thread_object_links"):
+            return {"status": "unavailable", "thread_key": str(thread_key or ""), "chat_name": str(chat_name or ""), "channel": channel, "objects": []}
+        payload = self.graph.trace_thread_object_links(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=limit,
+        )
+        payload["active_thread_state"] = self.active_thread_state(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        return payload
 
     def show_continuity_budget(self, *, channel: str = "wechat") -> dict[str, Any]:
         snapshot = self.graph.dense_working_set(channel=channel) if hasattr(self.graph, "dense_working_set") else {"dense_working_set": {}}
@@ -5178,6 +5428,37 @@ class MemoryBridge:
     ) -> dict[str, Any]:
         artifact = self.rag.ingest_artifact_result(path, note=note, source=source, tags=tags, dry_run=dry_run)
         cue_type = str(world_cue_type or "").strip()
+        task_world_object = {}
+        if not dry_run and hasattr(self.graph, "upsert_task_world_object"):
+            artifact_metadata = dict(artifact.get("metadata", {})) if isinstance(artifact.get("metadata", {}), dict) else {}
+            object_type = (
+                "schedule"
+                if str(due_at or "").strip()
+                else TASK_WORLD_CUE_TO_OBJECT.get(cue_type, "file")
+            )
+            task_world_object = self.graph.upsert_task_world_object(
+                object_type=object_type,
+                summary=compact_text(
+                    str(artifact.get("summary_text", "") or artifact.get("extracted_excerpt", "") or note or path),
+                    240,
+                ),
+                source_ref=str(path),
+                confidence=0.64,
+                stale_after=str(due_at or "").strip(),
+                linked_threads=[_normalize_thread_key(channel or "wechat", str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())],
+                linked_commitments=[],
+                status="live",
+                metadata={
+                    "artifact": artifact,
+                    "note": note or "",
+                    "source": source,
+                    "tags": list(tags),
+                    **({"artifact_digest": str(artifact_metadata.get("artifact_digest", "") or "")} if str(artifact_metadata.get("artifact_digest", "") or "").strip() else {}),
+                    **({"due_at": str(due_at or "").strip()} if str(due_at or "").strip() else {}),
+                },
+            )
+            if task_world_object.get("present", False):
+                artifact["task_world_object"] = task_world_object
         if cue_type and not dry_run and hasattr(self.graph, "upsert_world_coupling_signal"):
             cue_summary = compact_text(
                 str(artifact.get("summary_text", "") or artifact.get("extracted_excerpt", "") or note or path),
@@ -5201,6 +5482,8 @@ class MemoryBridge:
                 evidence_refs=[f"artifact:{str(artifact_metadata.get('artifact_digest', '') or stable_digest(str(path), cue_summary))}"],
                 metadata=metadata,
             )
+        if not dry_run and (task_world_object or cue_type):
+            self.clear_packet_cache()
         return artifact
 
     def record_world_coupling_signal(
@@ -5384,6 +5667,19 @@ class MemoryBridge:
                 evidence_refs=[f"visual_memory:{upsert.get('id', '')}"],
                 metadata={"visual_memory": visual_payload, "artifact": artifact, "source": source},
             )
+        task_world_object = {}
+        if hasattr(self.graph, "upsert_task_world_object"):
+            task_world_object = self.graph.upsert_task_world_object(
+                object_type="image_summary",
+                summary=visual_payload["scene_summary"] or visual_payload["text_ocr"] or str(note or path),
+                source_ref=str(path),
+                confidence=float(visual_payload.get("thread_relevance", 0.62) or 0.62),
+                stale_after="",
+                linked_threads=[_normalize_thread_key(channel, str(thread_key or "").strip(), chat_name=str(chat_name or "").strip())],
+                linked_commitments=[],
+                status="live",
+                metadata={"visual_memory": visual_payload, "artifact": artifact, "source": source},
+            )
         vector_sync = self.vector.upsert_documents(
             self._visual_vector_documents(
                 record_id=str(upsert.get("id", "")),
@@ -5403,12 +5699,14 @@ class MemoryBridge:
             payload={"path": str(path), "source": source, "sync": bool(sync)},
             heat_delta=0.18,
         )
+        self.clear_packet_cache()
         return {
             "status": "ok",
             "artifact": artifact,
             "visual_memory": visual_payload,
             "graph_sync": upsert,
             "world_coupling_signal": world_signal,
+            "task_world_object": task_world_object,
             "vector_sync": vector_sync,
             "activation_sync": activation_sync,
         }

@@ -55,20 +55,25 @@ Stage25: dense continuity scheduler and working set
 - Keeps a small hot-thread working set warm between turns, applies inspectable per-thread pulse budgets and cooldowns, and hydrates ingress before heavier recall.
 - Does not add a new loop family, watcher-side decision logic, or background heavy recall.
 
+Stage26: bounded task-world state
+- Implemented as bounded Mind Graph `task_world_object` plus `task_world_link` storage for file, task, schedule, image-summary, and person objects.
+- Keeps Stage22 `world_coupling_signal` as a compatibility projection while same-thread ingress hydrates from explicit task-world objects before heavier recall.
+- Links temporal commitments and resume pressure into inspectable task-world state without adding a new decision layer or heavy-recall trigger.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage25. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
+This planned arc starts after Stage26. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 
-Stage26: long-horizon replay and promotion gates
-- Planned. Extends replay discipline from short-turn calibration to multi-step program quality.
+Stage27: long-horizon replay and promotion gates
+- Planned. Extends replay discipline from short-turn calibration to task-world-aware longer-horizon behavior.
 - Gating must use raw replay metrics, while rounded metrics stay reporting-only.
 
-Stage27: online long-horizon canary
-- Planned. Canaries program-aware long-horizon behavior online in host-side shadow-first mode.
-- Must stay whitelist-bound, rate-limited, rollback-safe, replay-disciplined, and action-market-first.
+Online long-horizon canary
+- Deferred until after Stage27 replay discipline lands.
+- Any future rollout must stay host-side, shadow-first, whitelist-bound, rate-limited, rollback-safe, replay-disciplined, and action-market-first.
 
 Artifact/tool/outcome progress coupling
-- Deferred. This older Stage25 placeholder was explicitly superseded by the dense continuity scheduler milestone and should not be silently folded into Stage26.
+- Deferred. This older Stage25 placeholder was explicitly superseded by the dense continuity scheduler milestone and should not be silently folded into Stage27.
 
 Bounded subject programs
 - Deferred. This is no longer the live Stage24 or Stage25 scope and should not be treated as implemented or active-planning default without an explicit re-plan.
