@@ -11,7 +11,7 @@ This registry exists so Holo planning does not collapse into a single forced cho
 - richer desire shaping
 - stronger negotiated will
 
-## Next Subject-Runtime Arc
+## Implemented Subject-Runtime Arc
 
 This arc follows Stage17 thread-resident realtime runtime. Its purpose is to make Holo more continuous without turning continuity into a second brain or an unbounded loop.
 
@@ -39,6 +39,30 @@ Stage22: bounded blackbox online canary
 - Implemented as host-side `shadow` by default with `canary_live` behind whitelist, rate limits, rollback switch, and existing outbound policy.
 - Records operational `online_canary_traces` and artifacts for daily Stage14 replay-on-live-artifacts.
 - Hydrates bounded Mind Graph `world_coupling_signal` cues as same-thread perception inputs only; cues do not select actions or trigger recall by themselves.
+
+## Next Program Arc (Planned)
+
+This planned arc starts after Stage22. It begins with Stage23 contract paydown before any new long-horizon capability work lands. The durable execution sources of truth are `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
+
+Stage23: contract repair and surface separation
+- Planned first milestone. Pays down Stage22 shell/core coupling, artifact-ingest compatibility drift, replay rounding drift, and acceptance/runtime mismatches.
+- Keeps Stage22 runtime behavior fixed while interfaces, validation surfaces, and docs are aligned.
+
+Stage24: bounded subject programs
+- Planned. Adds bounded, inspectable subject-program records keyed by canonical thread plus program id.
+- Program hydration stays same-thread and action-market-first; no second brain and no send-right expansion.
+
+Stage25: artifact/tool/outcome progress coupling
+- Planned. Routes artifact, tool, deferred-reply, and world-cue outcomes into the same bounded program surface.
+- Requires dedupe, evidence refs, and canonical-thread scoping across service, memory, and validation layers.
+
+Stage26: long-horizon replay and promotion gates
+- Planned. Extends replay discipline from short-turn calibration to multi-step program quality.
+- Gating must use raw replay metrics, while rounded metrics stay reporting-only.
+
+Stage27: online long-horizon canary
+- Planned. Canaries program-aware long-horizon behavior online in host-side shadow-first mode.
+- Must stay whitelist-bound, rate-limited, rollback-safe, replay-disciplined, and action-market-first.
 
 ## Parked Hypotheses
 - broader multi-agent social world

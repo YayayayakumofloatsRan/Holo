@@ -5,42 +5,45 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## Read This First
 1. `HOLO_HANDOFF.md`
 2. `docs/HANDOFF_CHECKLIST.md`
-3. `docs/HOLO_ARCHITECTURE_MAP.md`
-4. `docs/WHEEL_CATALOG.md`
-5. `docs/PROCESSOR_ROUTING_AND_COST_POLICY.md`
-6. `docs/PROVIDER_COMPATIBILITY_CONTRACT.md`
-7. `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
-8. `docs/STAGE9_INTELLIGENCE_AND_CODEX_COST.md`
-9. `docs/ENGINEERING_HANDOFF_STAGE9.md`
-10. `docs/STAGE10_ENGINEERING_AWARENESS_AND_CODEX_COST.md`
-11. `docs/ENGINEERING_HANDOFF_STAGE10.md`
-12. `docs/STAGE12_OUTCOME_CLOSURE_AND_CANONICAL_IDENTITY.md`
-13. `docs/ENGINEERING_HANDOFF_STAGE12.md`
-14. `docs/STAGE13_EMPIRICAL_ACTION_CALIBRATION.md`
-15. `docs/ENGINEERING_HANDOFF_STAGE13.md`
-16. `docs/STAGE14_OFFLINE_REPLAY_AND_POLICY_EVAL.md`
-17. `docs/ENGINEERING_HANDOFF_STAGE14.md`
-18. `docs/STAGE15_KERNEL_MODULARIZATION.md`
-19. `docs/ENGINEERING_HANDOFF_STAGE15.md`
-20. `docs/STAGE16_RELEASE_HARDENING_AND_ONLINE_SHADOW_LAUNCH.md`
-21. `docs/ENGINEERING_HANDOFF_STAGE16.md`
-22. `docs/STAGE17_THREAD_RESIDENT_REALTIME_RUNTIME.md`
-23. `docs/ENGINEERING_HANDOFF_STAGE17.md`
-24. `docs/STAGE18_DUAL_SPEED_REFLEX_AND_PREDICTIVE_CONTINUITY.md`
-25. `docs/ENGINEERING_HANDOFF_STAGE18.md`
-26. `docs/STAGE19_BOUNDED_BACKGROUND_CONTINUITY_AND_ATTENTION_FRONTIER.md`
-27. `docs/ENGINEERING_HANDOFF_STAGE19.md`
-28. `docs/STAGE20_TEMPORAL_COMMITMENTS_AND_INTERRUPTION_RECOVERY.md`
-29. `docs/ENGINEERING_HANDOFF_STAGE20.md`
-30. `docs/STAGE21_POLICY_SEDIMENTATION_AND_NEGOTIATED_WILL.md`
-31. `docs/ENGINEERING_HANDOFF_STAGE21.md`
-32. `docs/STAGE22_BOUNDED_BLACKBOX_ONLINE_CANARY.md`
-33. `docs/ENGINEERING_HANDOFF_STAGE22.md`
-34. `HOLO_SYSTEM.md`
-35. `HOLO_HOST.md`
-36. `OPERATIONS.md`
-37. `holo_memory_library/MEMORY_LIBRARY.md`
-38. `windows_helper/README.md`
+3. `docs/ROADMAP_REGISTRY.md`
+4. `.agent/PLANS.md`
+5. `.agent/STAGE23_27_PROGRAM.md`
+6. `docs/HOLO_ARCHITECTURE_MAP.md`
+7. `docs/WHEEL_CATALOG.md`
+8. `docs/PROCESSOR_ROUTING_AND_COST_POLICY.md`
+9. `docs/PROVIDER_COMPATIBILITY_CONTRACT.md`
+10. `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
+11. `docs/STAGE9_INTELLIGENCE_AND_CODEX_COST.md`
+12. `docs/ENGINEERING_HANDOFF_STAGE9.md`
+13. `docs/STAGE10_ENGINEERING_AWARENESS_AND_CODEX_COST.md`
+14. `docs/ENGINEERING_HANDOFF_STAGE10.md`
+15. `docs/STAGE12_OUTCOME_CLOSURE_AND_CANONICAL_IDENTITY.md`
+16. `docs/ENGINEERING_HANDOFF_STAGE12.md`
+17. `docs/STAGE13_EMPIRICAL_ACTION_CALIBRATION.md`
+18. `docs/ENGINEERING_HANDOFF_STAGE13.md`
+19. `docs/STAGE14_OFFLINE_REPLAY_AND_POLICY_EVAL.md`
+20. `docs/ENGINEERING_HANDOFF_STAGE14.md`
+21. `docs/STAGE15_KERNEL_MODULARIZATION.md`
+22. `docs/ENGINEERING_HANDOFF_STAGE15.md`
+23. `docs/STAGE16_RELEASE_HARDENING_AND_ONLINE_SHADOW_LAUNCH.md`
+24. `docs/ENGINEERING_HANDOFF_STAGE16.md`
+25. `docs/STAGE17_THREAD_RESIDENT_REALTIME_RUNTIME.md`
+26. `docs/ENGINEERING_HANDOFF_STAGE17.md`
+27. `docs/STAGE18_DUAL_SPEED_REFLEX_AND_PREDICTIVE_CONTINUITY.md`
+28. `docs/ENGINEERING_HANDOFF_STAGE18.md`
+29. `docs/STAGE19_BOUNDED_BACKGROUND_CONTINUITY_AND_ATTENTION_FRONTIER.md`
+30. `docs/ENGINEERING_HANDOFF_STAGE19.md`
+31. `docs/STAGE20_TEMPORAL_COMMITMENTS_AND_INTERRUPTION_RECOVERY.md`
+32. `docs/ENGINEERING_HANDOFF_STAGE20.md`
+33. `docs/STAGE21_POLICY_SEDIMENTATION_AND_NEGOTIATED_WILL.md`
+34. `docs/ENGINEERING_HANDOFF_STAGE21.md`
+35. `docs/STAGE22_BOUNDED_BLACKBOX_ONLINE_CANARY.md`
+36. `docs/ENGINEERING_HANDOFF_STAGE22.md`
+37. `HOLO_SYSTEM.md`
+38. `HOLO_HOST.md`
+39. `OPERATIONS.md`
+40. `holo_memory_library/MEMORY_LIBRARY.md`
+41. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -57,13 +60,19 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - transports are eyes and hands
 - The current milestone tag is `stage22-bounded-blackbox-online-canary`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage22 bounded blackbox online canary: `/reply` is host-side shadow-first by default, canary telemetry feeds Stage14 replay, and bounded world-coupling cues hydrate subject state without making the watcher a decision layer.
+- Current focus is Stage23-27 bootstrap and Stage23 contract paydown: Stage22 remains the live runtime milestone, while the next arc is now tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md`.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
   - Stage20: temporal commitments and interruption recovery through queue + Mind Graph state is implemented
   - Stage21: reversible policy sedimentation and negotiated will as action-market bias is implemented
   - Stage22: host-side shadow/canary telemetry, live-artifact replay, rollback switch, and bounded world-coupling cues are implemented
+- The next planned arc is:
+  - Stage23: contract repair and surface separation
+  - Stage24: bounded subject programs
+  - Stage25: artifact/tool/outcome progress coupling
+  - Stage26: long-horizon replay and promotion gates
+  - Stage27: online long-horizon canary
 - This arc must not add a second brain, a new unbounded always-on loop, or transport-side decision logic.
 
 ## Source Of Truth
@@ -212,6 +221,10 @@ These files change while Holo is alive. Do not treat them like static docs.
   - `python3 -m holo_host show-usage-ledger --limit 100`
 
 ## Current Weak Spots
+- Stage23 blocker paydown starts with `reply_api.py` shell/core coupling
+- artifact-ingest compatibility drift currently exists between service code and test doubles
+- replay gate logic still consumes rounded regret metrics in some paths instead of raw replay metrics
+- acceptance and runtime still diverge: `accept-stage22` passes while `tests/test_holo_host.py` still expects pre-shadow reply behavior
 - `pyweixin_dialog` on `Weixin 4.1` is still the most fragile live layer
 - live WeChat trigger behavior still needs real-world hardening
 - image understanding is still artifact-first, not a fully native visual stack
@@ -249,7 +262,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host accept-stage8 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
-## Next Subject-Runtime Arc Commands
+## Implemented Subject-Runtime Arc Commands
 - `python3 -m holo_host accept-stage18 --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-fast-path-metrics --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 - `python3 -m holo_host show-predictive-continuity --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
@@ -274,6 +287,20 @@ These files change while Holo is alive. Do not treat them like static docs.
 - `python3 -m holo_host replay-live-artifacts --since-hours 24`
 - `python3 -m holo_host show-world-coupling --thread-key Nemoqi --chat-name Nemoqi --channel wechat`
 
+## Next Arc Program
+- Durable Stage23-27 sources of truth:
+  - `.agent/PLANS.md`
+  - `.agent/STAGE23_27_PROGRAM.md`
+- Default sequencing:
+  - Stage23 pays down the recorded Stage22 blockers before any new long-horizon runtime behavior lands
+  - Stage24 introduces bounded subject programs
+  - Stage25 couples artifact, tool, and outcome progress into the same bounded program surface
+  - Stage26 extends replay discipline and promotion gates to long-horizon behavior
+  - Stage27 canaries program-aware long-horizon behavior online in host-side shadow-first mode
+- Baseline reality to preserve while Stage23 is being landed:
+  - `python3 -m holo_host accept-stage22 --thread-key Nemoqi --chat-name Nemoqi --channel wechat` passed on `2026-04-11`
+  - `pytest -q tests/test_stage22_online_canary.py tests/test_stage15_modularization.py tests/test_holo_host.py` failed with `16` failures, all in `tests/test_holo_host.py`
+
 ## Invariants
 - Do not silently change online transport modes
 - Do not touch the watcher path without reading `docs/WECHAT_WATCHER_INTERFACE_CONTRACT.md`
@@ -293,6 +320,7 @@ These files change while Holo is alive. Do not treat them like static docs.
 - tests pass
 - state is observable
 - docs are updated
+- when Stage23-27 planning or runtime sequencing changes, update `.agent/PLANS.md`, `.agent/STAGE23_27_PROGRAM.md`, `HOLO_HANDOFF.md`, and `docs/ROADMAP_REGISTRY.md` together
 - another thread can continue from disk without hidden oral context
 - when `accept-stage9` is available, run it before and after any gate-mode transition
 - when model routing, provider fallback, or token policy changes, run `accept-processor-fabric`
