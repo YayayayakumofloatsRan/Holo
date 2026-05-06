@@ -1,0 +1,91 @@
+{
+  "fixture_id": "cold-initiative-window",
+  "channel": "wechat",
+  "thread_key": "wechat:ColdWindow",
+  "chat_name": "ColdWindow",
+  "query": "just checking if you are around",
+  "expected_best_action": "proactive_ping",
+  "scenario_tags": ["cold_initiative_window", "initiative"],
+  "candidate_actions": ["proactive_ping", "defer_reply", "silence", "reply_once"],
+  "prior_state": {
+    "intent_state": {
+      "reply_pull": 0.22,
+      "resistance_pull": 0.12,
+      "continuity_pull": 0.16,
+      "internal_pressure": 0.58,
+      "expansion_pressure": 0.08,
+      "low_signal": false,
+      "question_like": false,
+      "defer_requested": false
+    },
+    "relationship_state": {
+      "continuity_score": 0.44
+    },
+    "game_state": {
+      "pressure_level": 0.08,
+      "initiative_window": 0.84,
+      "trust_score": 0.74
+    },
+    "affect_state": {
+      "attachment_pull": {"value": 0.72, "confidence": 0.76},
+      "curiosity": {"value": 0.32, "confidence": 0.61}
+    },
+    "drive_state": {
+      "seek_contact": 0.78,
+      "seek_continuity": 0.28,
+      "seek_play": 0.16,
+      "avoid_risk": 0.08
+    },
+    "value_state": {
+      "relational_priority": 0.74,
+      "identity_priority": 0.28,
+      "stability_priority": 0.22
+    },
+    "conflict_state": {
+      "contact_vs_risk": 0.12,
+      "resistance_vs_harmony": 0.08
+    },
+    "world_state": {
+      "contact_models": {
+        "ColdWindow": {
+          "reply_likelihood": 0.48,
+          "initiative_receptivity": {"value": 0.91, "confidence": 0.82},
+          "delay_tolerance": 0.42,
+          "continuity_sensitivity": 0.34,
+          "conflict_fragility": 0.1
+        }
+      },
+      "thread_models": {
+        "wechat:ColdWindow": {
+          "risk_level": 0.08,
+          "opportunity_level": 0.62,
+          "unfinished_pull": 0.16
+        }
+      }
+    }
+  },
+  "realized_evidence": {
+    "selected_action": "defer_reply",
+    "realized_outcome": {
+      "response_quality": 0.22,
+      "relational_delta": -0.18,
+      "identity_delta": 0.02,
+      "risk": 0.58,
+      "reply_latency_seconds": 4200.0,
+      "correction_count": 0,
+      "initiative_success": 0.0,
+      "was_ignored": 0.72,
+      "was_rewarding": 0.22,
+      "future_initiative_bias": 0.06,
+      "future_resistance_bias": 0.34,
+      "success": false
+    },
+    "usage_total_tokens": 180,
+    "evidence_refs": ["fixture:cold-initiative-window"],
+    "metadata": {
+      "initiative_expected_open": true,
+      "overlong_reply": false,
+      "stiffness_overflow": false
+    }
+  }
+}

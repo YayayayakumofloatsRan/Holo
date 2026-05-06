@@ -1,0 +1,257 @@
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "codex_cli"
+poll_interval_seconds = 60
+max_jobs_per_cycle = 4
+codex_binary = "codex"
+# For unattended Windows runs, these extra args avoid approval/sandbox stalls.
+# codex_extra_args = ["--dangerously-bypass-approvals-and-sandbox"]
+# If Python cannot launch `codex` directly on Windows, pin the PowerShell wrapper:
+# codex_command_prefix = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/<you>/AppData/Roaming/npm/codex.ps1"]
+codex_model = "gpt-5.4"
+codex_reasoning_effort = "low"
+fast_model = "gpt-5.4-mini"
+fast_reasoning_effort = "low"
+fast_history_messages = 3
+responses_model = "gpt-5.4"
+responses_fast_model = "gpt-5.4-mini"
+network_enabled = true
+image_enabled = true
+codex_timeout_seconds = 900
+resume_sessions = true
+dry_run = false
+api_bind_host = "127.0.0.1"
+api_port = 8000
+
+# Legacy runtime aliases kept for compatibility:
+# - codex_model
+# - codex_reasoning_effort
+# - fast_model
+# - fast_reasoning_effort
+# - responses_model
+# The authoritative processor fabric lives in the blocks below.
+
+[processor_fabric]
+openai_compatible_base_url = ""
+openai_compatible_api_key_env = "OPENAI_API_KEY"
+responses_api_key_env = "OPENAI_API_KEY"
+
+[provider_backends.kernel_xhigh]
+primary_provider = "codex_cli"
+backup_provider = "responses"
+model = "gpt-5.4"
+reasoning_effort = "xhigh"
+max_output_tokens = 2400
+
+[provider_backends.subject_main]
+primary_provider = "codex_cli"
+backup_provider = "responses"
+model = "gpt-5.4"
+reasoning_effort = "medium"
+max_output_tokens = 1600
+
+[provider_backends.micro_fast]
+primary_provider = "codex_cli"
+backup_provider = "responses"
+model = "gpt-5.4-mini"
+reasoning_effort = "low"
+max_output_tokens = 900
+
+[processor_routing.reply]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "chat_reply"
+upgrade_to_lane = "kernel_xhigh"
+uncertainty_threshold = 0.72
+high_conflict_actions = ["push_back", "counter_offer", "continuity_defense"]
+
+[processor_routing.recall_reconstruct]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "recall_reconstruct"
+
+[processor_routing.goal_arbitration]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "goal_arbitration"
+
+[processor_routing.autobiographical_consolidation]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "autobiographical_consolidation"
+
+[processor_routing.world_calibration]
+lane = "subject_main"
+fallback_lane = "micro_fast"
+budget_tag = "world_calibration"
+
+[processor_routing.image_understand]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "image_understand"
+
+[processor_routing.self_model_observe]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "self_model_observe"
+
+[processor_routing.initiative_probe]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "initiative_probe"
+
+[processor_routing.affect_reflect]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "affect_reflect"
+
+[processor_routing.drive_plan]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "drive_plan"
+
+[processor_routing.value_integrate]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "value_integrate"
+
+[processor_routing.conflict_arbitrate]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "conflict_arbitrate"
+
+[processor_routing.outcome_appraise]
+lane = "micro_fast"
+fallback_lane = "subject_main"
+budget_tag = "outcome_appraise"
+
+[processor_routing.deep_simulation]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "deep_simulation"
+
+[processor_routing.operator_plan]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "operator_plan"
+
+[processor_routing.operator_review]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "operator_review"
+
+[processor_routing.self_revision_plan]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "self_revision_plan"
+
+[processor_routing.self_revision_review]
+lane = "kernel_xhigh"
+fallback_lane = "subject_main"
+budget_tag = "self_revision_review"
+
+[mail]
+transport = "maildir"
+poll_limit = 10
+maildir_inbox = ".holo_runtime/mail/inbox"
+maildir_processed = ".holo_runtime/mail/processed"
+maildir_outbox = ".holo_runtime/mail/outbox"
+
+# To use real email instead, switch the transport and fill these:
+# transport = "imap_smtp"
+# imap_host = "imap.example.com"
+# imap_port = 993
+# smtp_host = "smtp.example.com"
+# smtp_port = 587
+# username = "you@example.com"
+# sent_from = "you@example.com"
+# password_env = "HOLO_MAIL_PASSWORD"
+
+[memory]
+prompt_top_k = 4
+mind_graph_db_path = ".holo_runtime/mind_graph.sqlite3"
+graph_led_reply = true
+graph_fallback = true
+deep_recall_on_memory_queries = true
+recall_reconstruct_enabled = true
+vector_backend = "milvus"
+milvus_uri = ".holo_runtime/milvus/memory_fabric.db"
+milvus_collection_prefix = "holo_memory"
+activation_cache_enabled = true
+private_memory_sync_enabled = false
+# private_memory_repo_path = "/home/holo/Holo-memory-private"
+auto_observe = true
+recall_trigger_mode = "adaptive"
+promote_batch_size = 8
+promote_interval_seconds = 300
+maintenance_stream_interval_seconds = 60
+thought_interval_seconds = 900
+reflection_interval_seconds = 1800
+dream_interval_seconds = 1800
+initiative_interval_seconds = 1800
+association_stream_interval_seconds = 180
+social_stream_interval_seconds = 300
+deep_dream_cycle_interval_seconds = 3600
+dream_sample_size = 6
+thought_sample_size = 4
+reflection_window_hours = 12.0
+history_messages = 8
+fast_history_messages = 4
+recall_history_messages = 8
+fast_episodic_k = 2
+recall_episodic_k = 4
+fast_consciousness_k = 1
+recall_consciousness_k = 2
+active_wechat_history_enabled = true
+active_wechat_history_limit = 40
+active_wechat_history_page_turns = 8
+active_wechat_history_cooldown_seconds = 180
+active_wechat_history_timeout_seconds = 180
+active_wechat_history_include_visible = true
+active_wechat_history_include_captures = false
+brain_mode_default = "full_brain"
+heartbeat_interval_seconds = 1
+attention_tick_interval_seconds = 3
+dream_idle_threshold_seconds = 900
+self_model_refresh_interval_seconds = 600
+homeostasis_tick_interval_seconds = 120
+operator_planning_interval_seconds = 600
+operator_shadow_cycle_interval_seconds = 300
+visual_ingest_cycle_interval_seconds = 90
+visual_sync_max_size_mb = 8
+visual_sync_max_count = 1
+operator_shadow_root = ".holo_runtime/operator_shadow"
+self_revision_interval_seconds = 1800
+self_revision_enabled = true
+self_revision_min_evidence = 3
+
+[autonomy]
+auto_send_mode = "full_auto"
+allow_proactive_existing_threads = true
+allow_initiative_whitelist_contacts = true
+proactive_after_hours = 72
+initiative_cooldown_hours = 12
+initiative_gate_mode = "conservative"
+main_brain_override_enabled = true
+main_brain_override_min_score = 0.58
+initiative_soft_allow_threshold = 0.62
+initiative_soft_override_floor = 0.48
+initiative_soft_trust_weight = 0.26
+initiative_soft_window_weight = 0.28
+initiative_soft_pressure_weight = 0.18
+initiative_soft_drive_weight = 0.28
+wechat_helper_config_path = "windows_helper/wechat_helper.live.json"
+# Optional: pin the Windows checkout if the WSL live repo lives elsewhere.
+# wechat_helper_windows_repo_root = "D:/Holo/holo"
+max_auto_replies_per_contact_per_hour = 120
+initiative_probe_enabled = true
+game_state_enabled = true
+stage22_canary_mode = "shadow"
+stage22_canary_whitelist_threads = []
+stage22_canary_max_replies_per_thread_per_hour = 12
+stage22_canary_max_replies_global_per_hour = 30
+stage22_canary_artifact_capture = true
+stage22_canary_artifact_root = "artifacts/canary/stage22"
+stage22_canary_rollback_file = ".holo_runtime/STAGE22_CANARY_ROLLBACK"

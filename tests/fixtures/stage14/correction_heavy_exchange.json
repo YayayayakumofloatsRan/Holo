@@ -1,0 +1,98 @@
+{
+  "fixture_id": "correction-heavy-exchange",
+  "channel": "wechat",
+  "thread_key": "wechat:CorrectionHeavy",
+  "chat_name": "CorrectionHeavy",
+  "query": "give the long version and be very precise",
+  "expected_best_action": "reply_once",
+  "scenario_tags": ["correction_heavy", "expression"],
+  "candidate_actions": ["reply_multi", "reply_once", "defer_reply", "push_back"],
+  "prior_state": {
+    "intent_state": {
+      "reply_pull": 0.68,
+      "resistance_pull": 0.2,
+      "continuity_pull": 0.26,
+      "internal_pressure": 0.24,
+      "expansion_pressure": 0.72,
+      "low_signal": false,
+      "question_like": true,
+      "defer_requested": false
+    },
+    "relationship_state": {
+      "continuity_score": 0.51
+    },
+    "game_state": {
+      "pressure_level": 0.42,
+      "initiative_window": 0.28,
+      "trust_score": 0.56
+    },
+    "affect_state": {
+      "attachment_pull": {"value": 0.46, "confidence": 0.68},
+      "curiosity": {"value": 0.52, "confidence": 0.66},
+      "frustration": {"value": 0.31, "confidence": 0.58}
+    },
+    "drive_state": {
+      "seek_contact": 0.62,
+      "seek_continuity": 0.34,
+      "seek_play": 0.14,
+      "avoid_risk": 0.24
+    },
+    "value_state": {
+      "relational_priority": 0.58,
+      "identity_priority": 0.4,
+      "stability_priority": 0.36,
+      "play_priority": 0.22
+    },
+    "conflict_state": {
+      "contact_vs_risk": 0.18,
+      "resistance_vs_harmony": 0.24
+    },
+    "world_state": {
+      "expression_calibration_signals": {
+        "reply_budget_fit": {"value": 0.34, "confidence": 0.72},
+        "stiffness_risk": {"value": 0.68, "confidence": 0.79}
+      },
+      "contact_models": {
+        "CorrectionHeavy": {
+          "reply_likelihood": 0.52,
+          "initiative_receptivity": {"value": 0.32, "confidence": 0.62},
+          "delay_tolerance": 0.24,
+          "continuity_sensitivity": 0.54,
+          "conflict_fragility": 0.42
+        }
+      },
+      "thread_models": {
+        "wechat:CorrectionHeavy": {
+          "risk_level": 0.38,
+          "opportunity_level": 0.42,
+          "unfinished_pull": 0.24
+        }
+      }
+    }
+  },
+  "realized_evidence": {
+    "selected_action": "reply_multi",
+    "realized_outcome": {
+      "response_quality": 0.18,
+      "relational_delta": -0.12,
+      "identity_delta": -0.04,
+      "risk": 0.74,
+      "reply_latency_seconds": 120.0,
+      "correction_count": 3,
+      "initiative_success": 0.0,
+      "was_ignored": 0.48,
+      "was_rewarding": 0.18,
+      "future_initiative_bias": 0.04,
+      "future_resistance_bias": 0.52,
+      "success": false,
+      "reply_length": 4
+    },
+    "usage_total_tokens": 980,
+    "evidence_refs": ["fixture:correction-heavy-exchange"],
+    "metadata": {
+      "initiative_expected_open": false,
+      "overlong_reply": true,
+      "stiffness_overflow": true
+    }
+  }
+}

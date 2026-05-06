@@ -1,0 +1,72 @@
+{
+  "fixture_id": "canonical-identity-edge",
+  "channel": "wechat",
+  "thread_key": "TestUser",
+  "chat_name": "TestUser",
+  "query": "keep the same thread key all the way through",
+  "expected_best_action": "reply_once",
+  "scenario_tags": ["canonical_identity", "wechat_dm"],
+  "candidate_actions": ["reply_once", "defer_reply", "reply_multi"],
+  "prior_state": {
+    "intent_state": {
+      "reply_pull": 0.58,
+      "resistance_pull": 0.12,
+      "continuity_pull": 0.52,
+      "internal_pressure": 0.18,
+      "expansion_pressure": 0.16,
+      "low_signal": false,
+      "question_like": false,
+      "defer_requested": false
+    },
+    "relationship_state": {
+      "continuity_score": 0.72
+    },
+    "game_state": {
+      "pressure_level": 0.1,
+      "initiative_window": 0.42,
+      "trust_score": 0.74
+    },
+    "affect_state": {
+      "attachment_pull": {"value": 0.66, "confidence": 0.78},
+      "curiosity": {"value": 0.24, "confidence": 0.58}
+    },
+    "drive_state": {
+      "seek_contact": 0.62,
+      "seek_continuity": 0.68,
+      "avoid_risk": 0.14
+    },
+    "value_state": {
+      "relational_priority": 0.72,
+      "identity_priority": 0.3,
+      "stability_priority": 0.32
+    },
+    "conflict_state": {
+      "contact_vs_risk": 0.12,
+      "resistance_vs_harmony": 0.08
+    }
+  },
+  "realized_evidence": {
+    "selected_action": "reply_once",
+    "realized_outcome": {
+      "response_quality": 0.78,
+      "relational_delta": 0.18,
+      "identity_delta": 0.08,
+      "risk": 0.16,
+      "reply_latency_seconds": 95.0,
+      "correction_count": 0,
+      "initiative_success": 0.0,
+      "was_ignored": 0.04,
+      "was_rewarding": 0.78,
+      "future_initiative_bias": 0.36,
+      "future_resistance_bias": 0.08,
+      "success": true
+    },
+    "usage_total_tokens": 210,
+    "evidence_refs": ["fixture:canonical-identity-edge"],
+    "metadata": {
+      "initiative_expected_open": false,
+      "overlong_reply": false,
+      "stiffness_overflow": false
+    }
+  }
+}
