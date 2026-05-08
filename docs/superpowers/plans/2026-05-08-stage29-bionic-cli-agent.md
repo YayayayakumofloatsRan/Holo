@@ -6,7 +6,7 @@ This plan was the initial Stage29 plan. It is superseded in naming and adapter b
 
 **Goal:** Build Holo into a testable bionic subject kernel with a CLI adapter, bounded bionic turn-capsule workflow, DeepSeek V4 provider support, and inspectable explainability metrics.
 
-**Architecture:** Stage29 adds a CLI-facing agent layer over the existing MemoryBridge, processor fabric, action-market, and Stage28 situational surfaces. The new layer does not add a second brain, does not start WeChat, and does not bypass action-market-first deliberation; it exposes one bounded perception-action capsule per CLI turn. DeepSeek support is a processor provider capability inside `CodexRunner`, not a raw model call from the agent workflow.
+**Architecture:** Stage29 adds an adapter-neutral bionic subject-kernel layer over the existing MemoryBridge, processor fabric, action-market, and Stage28 situational surfaces. The new layer does not add a second brain, does not start WeChat, and does not bypass action-market-first deliberation; it exposes one bounded perception-action capsule per adapter turn. DeepSeek support is a processor provider capability inside `CodexRunner`, not a raw model call from the agent workflow.
 
 **Tech Stack:** Python stdlib, existing Holo `holo_host` modules, SQLite `QueueStore`, processor fabric, pytest, existing CLI argparse.
 
@@ -189,7 +189,7 @@ Expected: fails on missing `accept_stage29`.
 
 Rules:
 - Do not claim Stage29 starts Holo online.
-- Document Stage29 as CLI-agent substrate and bionic workflow hardening.
+- Document Stage29 as bionic subject-kernel substrate and workflow hardening.
 - Preserve memory-is-self, processor-replaceable, transport-eyes-hands, action-market-first.
 
 - [x] **Step 4: Run Stage29 acceptance**
@@ -228,4 +228,4 @@ Review:
 
 - [ ] **Step 5: Commit**
 
-Commit message: `feat: add stage29 bionic cli agent substrate`
+Commit message: `feat: unify stage29 bionic kernel`

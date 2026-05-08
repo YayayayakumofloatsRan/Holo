@@ -55,7 +55,7 @@ class _FakeRunner:
         self.calls.append(request.to_dict())
         return ProcessorTaskResult(
             task_type=request.task_type,
-            text="Bionic CLI reply",
+            text="Bionic kernel reply",
             returncode=0,
             metadata={
                 "provider": "deepseek",
@@ -91,6 +91,15 @@ class _NoisyMemory(_FakeMemory):
             "confidence": 0.64,
             "large_unused_payload": "y" * 4000,
         }
+        return payload
+
+
+class _NoisySituationalMemory(_FakeMemory):
+    def sidecar_packet(self, query, *, context=None):
+        payload = super().sidecar_packet(query, context=context)
+        payload["situational_field"]["large_note"] = "x" * 5000
+        payload["situational_field"]["large_list"] = [f"item-{index}" for index in range(80)]
+        payload["stage28"]["large_stage28_note"] = "y" * 5000
         return payload
 
 
@@ -161,6 +170,10 @@ class Stage29BionicCapsuleTests(unittest.TestCase):
                     adapter="cli",
                     record=False,
                     metadata={
+                        "channel": "wechat",
+                        "thread_key": "wechat:spoof",
+                        "chat_name": "Spoof",
+                        "sender": "Spoof",
                         "transport_decision_authority": True,
                         "transport_is_interface": False,
                         "stage29_kernel": False,
@@ -170,11 +183,35 @@ class Stage29BionicCapsuleTests(unittest.TestCase):
 
         self.assertEqual(len(memory.contexts), 1)
         captured_context = memory.contexts[0]
+        self.assertEqual(captured_context["channel"], "cli")
+        self.assertEqual(captured_context["thread_key"], "cli:contract")
+        self.assertEqual(captured_context["chat_name"], "Contract")
+        self.assertEqual(captured_context["sender"], "Contract")
         self.assertTrue(captured_context["stage29_kernel"])
         self.assertTrue(captured_context["transport_is_interface"])
         self.assertFalse(captured_context["transport_decision_authority"])
         self.assertTrue(result["capsule"]["interface_contract"]["transport_is_interface"])
         self.assertFalse(result["capsule"]["interface_contract"]["transport_decision_authority"])
+
+    def test_wechat_thread_key_is_canonicalized_inside_capsule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(repo_root=Path(tmpdir))
+            kernel = BionicKernel(config=config, memory=_FakeMemory(), runner=None)
+
+            result = kernel.run_request(
+                BionicTurnRequest(
+                    query="canonicalize ordinary wechat dm",
+                    thread_key="Unit",
+                    chat_name="Unit",
+                    channel="wechat",
+                    adapter="wechat",
+                    record=False,
+                )
+            )
+
+        capsule = result["capsule"]
+        self.assertEqual(capsule["thread_key"], "wechat:Unit")
+        self.assertEqual(capsule["perception"]["thread_key"], "wechat:Unit")
 
     def test_turn_capsule_exposes_bionic_phases_and_inhibition(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -197,7 +234,7 @@ class Stage29BionicCapsuleTests(unittest.TestCase):
             ["perception", "working_field", "attention", "inhibition", "action_market", "generation", "outcome"],
         )
         self.assertEqual(capsule["selected_action"]["action_type"], "reply_once")
-        self.assertEqual(capsule["generation"]["text"], "Bionic CLI reply")
+        self.assertEqual(capsule["generation"]["text"], "Bionic kernel reply")
         self.assertFalse(capsule["inhibition"]["send_bypassed_transport"])
         self.assertIn("no_history_reread", capsule["inhibition"]["reasons"])
         self.assertGreater(capsule["metrics"]["working_field_density"], 0)
@@ -259,6 +296,25 @@ class Stage29BionicCapsuleTests(unittest.TestCase):
         self.assertNotIn("policy_sedimentation", candidate)
         self.assertNotIn("large_unused_payload", candidate["predicted_outcome"])
         self.assertLess(len(json.dumps(candidate)), 900)
+
+    def test_capsule_bounds_noisy_situational_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(repo_root=Path(tmpdir))
+            agent = BionicAgent(config=config, memory=_NoisySituationalMemory(), runner=None)
+
+            result = agent.run_turn(
+                query="bound the situational payload",
+                thread_key="cli:situational",
+                chat_name="Situational",
+                channel="cli",
+                record=False,
+            )
+
+        capsule_json = json.dumps(result["capsule"], ensure_ascii=False)
+        self.assertLess(len(result["capsule"]["perception"]["situational_field"]["large_note"]), 400)
+        self.assertLessEqual(len(result["capsule"]["perception"]["situational_field"]["large_list"]), 12)
+        self.assertLess(len(result["capsule"]["perception"]["stage28"]["large_stage28_note"]), 400)
+        self.assertLess(len(capsule_json), 9000)
 
     def test_sidecar_failure_is_visible_and_uses_heuristic_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

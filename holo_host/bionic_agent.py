@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 from .common import compact_text, utc_now
 from .config import HostConfig
 from .models import ProcessorTaskRequest
+from .store import QueueStore
 
 
 STAGE29_NAME = "stage29-bionic-subject-kernel"
@@ -56,6 +58,76 @@ def _compact(value: Any, *, limit: int = 320) -> str:
     return compact_text(str(value or ""), limit=limit)
 
 
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _bounded_value(
+    value: Any,
+    *,
+    depth: int = 2,
+    str_limit: int = 360,
+    list_limit: int = 12,
+    dict_limit: int = 32,
+) -> Any:
+    if isinstance(value, str):
+        return _compact(value, limit=str_limit)
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0.0
+    if depth <= 0:
+        return _compact(value, limit=str_limit)
+    if isinstance(value, dict):
+        bounded: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= dict_limit:
+                bounded["_truncated_keys"] = max(0, len(value) - dict_limit)
+                break
+            bounded[_compact(key, limit=96)] = _bounded_value(
+                item,
+                depth=depth - 1,
+                str_limit=str_limit,
+                list_limit=list_limit,
+                dict_limit=dict_limit,
+            )
+        return bounded
+    if isinstance(value, (list, tuple)):
+        return [
+            _bounded_value(
+                item,
+                depth=depth - 1,
+                str_limit=str_limit,
+                list_limit=list_limit,
+                dict_limit=dict_limit,
+            )
+            for item in value[:list_limit]
+        ]
+    if isinstance(value, set):
+        return [
+            _bounded_value(
+                item,
+                depth=depth - 1,
+                str_limit=str_limit,
+                list_limit=list_limit,
+                dict_limit=dict_limit,
+            )
+            for item in sorted(value, key=lambda item: str(item))[:list_limit]
+        ]
+    return _compact(value, limit=str_limit)
+
+
+def _bounded_dict(value: Any, *, depth: int = 2) -> dict[str, Any]:
+    bounded = _bounded_value(value, depth=depth)
+    return bounded if isinstance(bounded, dict) else {}
+
+
 def _bounded_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     bounded: dict[str, Any] = {}
     for key in BOUNDED_CANDIDATE_KEYS:
@@ -67,7 +139,7 @@ def _bounded_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         else:
             bounded[key] = value
     bounded["action_type"] = str(bounded.get("action_type", "") or "reply_once")
-    bounded["score"] = float(bounded.get("score", 0.0) or 0.0)
+    bounded["score"] = _safe_float(bounded.get("score", 0.0))
     grounding_order = candidate.get("stage28_grounding_order", [])
     if isinstance(grounding_order, list):
         bounded["stage28_grounding_order"] = [str(item)[:80] for item in grounding_order[:6]]
@@ -226,31 +298,41 @@ class BionicKernel:
 
     def run_request(self, request: BionicTurnRequest) -> dict[str, Any]:
         query = str(request.query or "")
-        thread_key = str(request.thread_key or "")
         chat_name = str(request.chat_name or "")
         channel = str(request.channel or "cli").strip() or "cli"
         adapter = str(request.adapter or channel).strip() or channel
+        thread_key = QueueStore._normalize_wechat_thread_key(
+            channel,
+            str(request.thread_key or ""),
+            subject=chat_name,
+            display_name=chat_name,
+        )
         record = bool(request.record)
-        context = {
+        context = dict(request.metadata or {})
+        context.update({
             "channel": channel,
             "thread_key": thread_key,
             "chat_name": chat_name,
             "sender": chat_name or thread_key,
-        }
-        context.update(dict(request.metadata or {}))
-        context.update({
             "stage29_kernel": True,
             "stage29_adapter": adapter,
             "transport_is_interface": True,
             "transport_decision_authority": False,
         })
         packet = self._sidecar_packet(query, context=context)
-        situational_field = _as_dict(packet.get("situational_field", {}))
-        stage28 = _as_dict(packet.get("stage28", {}))
+        situational_field = _bounded_dict(packet.get("situational_field", {}), depth=3)
+        stage28 = _bounded_dict(packet.get("stage28", {}), depth=3)
         action_market = self._action_market(packet)
         selected_action = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
         inhibition = self._inhibition(packet=packet, selected_action=selected_action, situational_field=situational_field)
-        generation = self._generation(query=query, packet=packet, selected_action=selected_action, channel=channel)
+        generation = self._generation(
+            query=query,
+            packet=packet,
+            selected_action=selected_action,
+            channel=channel,
+            adapter=adapter,
+            thread_key=thread_key,
+        )
         metrics = self._metrics(
             query=query,
             packet=packet,
@@ -280,7 +362,7 @@ class BionicKernel:
         attention = {
             "selected_grounding": _clip_list(working_field.get("grounding_order", []), limit=4),
             "selected_action_type": str(selected_action.get("action_type", "") or ""),
-            "top_score": float(selected_action.get("score", 0.0) or 0.0),
+            "top_score": _safe_float(selected_action.get("score", 0.0)),
         }
         outcome = {
             "transport": adapter,
@@ -379,14 +461,14 @@ class BionicKernel:
                 continue
             candidate = _bounded_candidate(dict(item))
             candidate["action_type"] = str(candidate.get("action_type", "") or "reply_once")
-            candidate["score"] = float(candidate.get("score", 0.0) or 0.0)
+            candidate["score"] = _safe_float(candidate.get("score", 0.0))
             candidates.append(candidate)
         if not candidates:
             candidates = [
-                {"action_type": "reply_once", "score": 0.5, "reason": "fallback CLI reply candidate"},
+                {"action_type": "reply_once", "score": 0.5, "reason": "fallback adapter reply candidate"},
                 {"action_type": "silence", "score": 0.0, "reason": "fallback non-reply candidate"},
             ]
-        return sorted(candidates, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)[:6]
+        return sorted(candidates, key=lambda item: _safe_float(item.get("score", 0.0)), reverse=True)[:6]
 
     def _inhibition(
         self,
@@ -418,6 +500,8 @@ class BionicKernel:
         packet: dict[str, Any],
         selected_action: dict[str, Any],
         channel: str,
+        adapter: str,
+        thread_key: str,
     ) -> dict[str, Any]:
         action_type = str(selected_action.get("action_type", "") or "")
         if action_type not in SPEECH_ACTIONS:
@@ -447,10 +531,10 @@ class BionicKernel:
             task_type="reply",
             prompt=prompt,
             provider_hint=str(self.config.runtime.processor_backend or ""),
-            metadata={"stage": STAGE29_NAME, "channel": channel},
+            metadata={"stage": STAGE29_NAME, "channel": channel, "adapter": adapter, "thread_key": thread_key},
         )
         result = self.runner.run_task(request)
-        metadata = dict(result.metadata or {})
+        metadata = _bounded_dict(result.metadata or {}, depth=3)
         return {
             "mode": "processor_fabric",
             "text": str(result.text or ""),
@@ -474,7 +558,7 @@ class BionicKernel:
             *list(situational_field.get("modalities", []) if isinstance(situational_field.get("modalities", []), list) else []),
             *list(situational_field.get("open_questions", []) if isinstance(situational_field.get("open_questions", []), list) else []),
         ]
-        scores = [float(item.get("score", 0.0) or 0.0) for item in action_market[:2]]
+        scores = [_safe_float(item.get("score", 0.0)) for item in action_market[:2]]
         top_margin = scores[0] - scores[1] if len(scores) >= 2 else (scores[0] if scores else 0.0)
         generation_text = str(generation.get("text", "") or "")
         template_markers = (
