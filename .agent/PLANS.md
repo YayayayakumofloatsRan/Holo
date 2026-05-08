@@ -2,13 +2,14 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage28-multimodal-homeostatic-kernel`.
+- The live runtime milestone is now `stage29-bionic-subject-kernel`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
 - Stage26 is implemented: bounded `task_world_object` plus `task_world_link` now persist inspectable task-world state across restarts, Stage22 `world_coupling_signal` is a compatibility projection over same-thread task-world visibility, and ingress can hydrate same-thread turns from bounded task-world state before heavier recall.
 - Stage27 is implemented: long-horizon blackbox soak runs, scorecards, replay-on-live-artifacts, and blind evaluation packet export now exist as bounded operational surfaces in `QueueStore` and artifact directories without mutating self-memory.
 - Stage28 is implemented as a bounded vertical slice: mind packets now expose `visual_field`, `situational_field`, and `stage28`; visual ingest preserves spatial/uncertainty metadata; prompt ordering uses situational fields before verbatim history; and action-market candidates expose inspectable Stage28 deltas.
+- Stage29 is implemented as a unified bionic subject kernel with CLI as the first adapter: one bounded adapter turn produces an inspectable bionic capsule, records operational `bionic_agent_traces`, exposes bionic metrics, validates a synthetic WeChat adapter path, and can use DeepSeek through the processor fabric.
 - Verified Stage23-27 on `2026-04-11`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key TestUser --chat-name TestUser --channel wechat` passed in sequential verification
@@ -20,7 +21,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is post-Stage28 sequencing; Holo remains offline until the larger kernel reform plan explicitly decides restart and transport validation.
+- The next implementation focus is post-Stage29 bionic workflow hardening and broader provider/API compatibility; Holo remains offline until restart and transport validation are explicitly approved.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 
@@ -40,8 +41,8 @@
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage28 multimodal situational-field hardening and post-Stage28 re-plan
-- `Current live runtime boundary`: Stage28 is implemented in code; Holo should remain offline until restart is explicitly approved
+- `Active implementation priority`: Stage29 bionic subject-kernel validation, provider compatibility, adapter hardening, and post-Stage29 re-plan
+- `Current live runtime boundary`: Stage29 is implemented in code as an offline adapter-validated bionic subject kernel; Holo should remain offline until restart is explicitly approved
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains a large facade and is still the first structural slimming target for Stage25+.
@@ -58,6 +59,7 @@
 | `Stage26` | `implemented` | Replace cue-only world coupling with bounded task-world state that same-thread ingress can inspect and reuse before heavier recall. | Stage25 dense continuity baseline and existing Stage20/22/24 seams. | `pytest -q`; `accept-stage22`; `accept-stage25`; `accept-stage26`; `tests/test_stage26_task_world_state.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage14_replay.py`. | Do not regress Stage22 canary transport boundaries, Stage24/25 bounded ingress, or explicit recall escalation. | Ignore Stage26 task-world hydration and fall back to Stage25 dense+scene ingress while preserving inspectable task-world storage. |
 | `Stage27` | `implemented` | Add a long-horizon blackbox soak harness, scorecard, blind evaluation export, and replay-first eligibility reporting for task-world-aware behavior. | Stage26 bounded task-world baseline, Stage22 canary traces, and Stage14 replay discipline. | `pytest -q`; `accept-stage22`; `accept-stage25`; `accept-stage26`; `accept-stage27`; `tests/test_stage27_blackbox_soak.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py`. | Do not widen canary send rights, bypass replay or safety gates, or let observational evaluation mutate self-memory. | Keep Stage27 observational only, disable soak follow-up eligibility if replay evidence weakens, and defer any live long-horizon canary widening. |
 | `Stage28` | `implemented` | Add a bounded multimodal situational-field layer so ordinary turns can ground inquiry in visual, scene, task-world, dense-continuity, temporal, and homeostatic state before verbatim history. | Stage27 observational baseline, Stage24 scene state, Stage25 dense continuity, Stage26 task-world state, and visual memory. | `pytest -q`; `accept-stage27`; `accept-stage28`; `tests/test_stage28_multimodal_homeostatic_kernel.py`. | Do not add a second brain, new loop family, transport decision logic, or provider call outside processor fabric. | Ignore Stage28 situational overlays and fall back to Stage27/26 packet surfaces while preserving visual-memory metadata and diagnostics. |
+| `Stage29` | `implemented` | Add a unified bionic subject kernel with CLI as the first adapter, synthetic WeChat adapter validation, operational trace persistence, bionic metrics, DeepSeek provider support, and local acceptance without restarting Holo. | Stage28 situational fields, processor fabric, QueueStore operational storage. | `pytest -q`; `accept-stage29`; `tests/test_stage29_bionic_cli_agent.py`; `tests/test_processor_fabric.py`. | Do not start WeChat, add a second brain, bypass action-market-first, give adapters decision authority, or add raw provider calls outside processor fabric. | Ignore bionic trace surfaces and fall back to Stage28 runtime; keep DeepSeek as an optional provider only. |
 
 ## Release Hygiene Ledger
 | Surface | Status | Rule | Validation |

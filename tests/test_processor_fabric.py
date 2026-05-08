@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from holo_host.config import load_config
 from holo_host.codex_runner import CodexRunner
@@ -54,6 +56,36 @@ high_conflict_actions = ["push_back"]
             self.assertEqual(config.processor_fabric.provider_backends["micro_fast"].max_output_tokens, 512)
             self.assertEqual(config.processor_fabric.processor_routing["reply"].lane, "kernel_xhigh")
             self.assertEqual(config.processor_fabric.processor_routing["reply"].budget_tag, "reply_override")
+
+    def test_load_config_supports_deepseek_provider_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_api_key_env = "TEST_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+deepseek_fast_model = "deepseek-v4-flash"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(str(config_path), repo_root=root)
+
+            self.assertEqual(config.processor_fabric.deepseek_base_url, "https://api.deepseek.com")
+            self.assertEqual(config.processor_fabric.deepseek_api_key_env, "TEST_DEEPSEEK_KEY")
+            self.assertEqual(config.processor_fabric.deepseek_model, "deepseek-v4-pro")
+            self.assertEqual(config.processor_fabric.deepseek_fast_model, "deepseek-v4-flash")
+            self.assertEqual(config.processor_fabric.provider_backends["subject_main"].primary_provider, "deepseek")
+            self.assertEqual(config.processor_fabric.provider_backends["micro_fast"].model, "deepseek-v4-flash")
 
 
 class ProcessorUsageLedgerTests(unittest.TestCase):
@@ -127,3 +159,57 @@ class CodexRunnerRoutingTests(unittest.TestCase):
 
         self.assertEqual(dispatch["lane"], "kernel_xhigh")
         self.assertIn("codex_cli", dispatch["providers"])
+
+    def test_deepseek_provider_returns_standardized_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_api_key_env = "TEST_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+deepseek_fast_model = "deepseek-v4-flash"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+
+            class _FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def read(self):
+                    return json.dumps(
+                        {
+                            "choices": [{"message": {"content": "agent reply"}}],
+                            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                        }
+                    ).encode("utf-8")
+
+            with patch.dict(os.environ, {"TEST_DEEPSEEK_KEY": "unit-key"}), patch(
+                "holo_host.codex_runner.urlopen",
+                return_value=_FakeResponse(),
+            ) as fake_urlopen:
+                result = runner.run_task(
+                    ProcessorTaskRequest(task_type="reply", prompt="hello", provider_hint="deepseek")
+                )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.text, "agent reply")
+            self.assertEqual(result.metadata["provider"], "deepseek")
+            self.assertEqual(result.metadata["model"], "deepseek-v4-pro")
+            self.assertEqual(result.metadata["usage"]["total_tokens"], 10)
+            self.assertEqual(result.metadata["capabilities"]["thinking_mode"], True)
+            request = fake_urlopen.call_args.args[0]
+            self.assertTrue(request.full_url.endswith("/chat/completions"))

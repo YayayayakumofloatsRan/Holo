@@ -82,6 +82,10 @@ class ProcessorFabricConfig:
     openai_compatible_base_url: str = ""
     openai_compatible_api_key_env: str = "OPENAI_COMPATIBLE_API_KEY"
     responses_api_key_env: str = "OPENAI_API_KEY"
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_api_key_env: str = "DEEPSEEK_API_KEY"
+    deepseek_model: str = "deepseek-v4-pro"
+    deepseek_fast_model: str = "deepseek-v4-flash"
 
 
 # Backward-compatible alias for earlier imports and type hints.
@@ -242,9 +246,12 @@ def _resolve_path(repo_root: Path, state_dir: Path, raw: str | None, fallback: s
     return path
 
 
-def _default_provider_backends(runtime: RuntimeConfig) -> dict[str, ProviderLaneConfig]:
+def _default_provider_backends(
+    runtime: RuntimeConfig,
+    processor_fabric_data: dict[str, Any] | None = None,
+) -> dict[str, ProviderLaneConfig]:
     preferred = (runtime.processor_backend or "codex_cli").strip().lower()
-    if preferred not in {"codex_cli", "responses", "openai_compatible"}:
+    if preferred not in {"codex_cli", "responses", "openai_compatible", "deepseek"}:
         preferred = "codex_cli"
     if preferred == "codex_cli":
         subject_backup = "responses"
@@ -254,29 +261,38 @@ def _default_provider_backends(runtime: RuntimeConfig) -> dict[str, ProviderLane
         subject_backup = "codex_cli"
         kernel_backup = "codex_cli"
         micro_backup = "codex_cli"
+    elif preferred == "openai_compatible":
+        subject_backup = "responses"
+        kernel_backup = "responses"
+        micro_backup = "responses"
     else:
         subject_backup = "responses"
         kernel_backup = "responses"
         micro_backup = "responses"
+    fabric = processor_fabric_data if isinstance(processor_fabric_data, dict) else {}
+    main_model = str(fabric.get("deepseek_model", "deepseek-v4-pro")).strip() or "deepseek-v4-pro"
+    fast_model = str(fabric.get("deepseek_fast_model", "deepseek-v4-flash")).strip() or "deepseek-v4-flash"
+    default_main_model = main_model if preferred == "deepseek" else str(runtime.codex_model or runtime.responses_model or "gpt-5.4")
+    default_fast_model = fast_model if preferred == "deepseek" else str(runtime.fast_model or runtime.responses_fast_model or "gpt-5.4-mini")
     return {
         "kernel_xhigh": ProviderLaneConfig(
             primary_provider=preferred,
             backup_provider=kernel_backup,
-            model=str(runtime.codex_model or runtime.responses_model or "gpt-5.4"),
+            model=default_main_model,
             reasoning_effort="xhigh",
             max_output_tokens=2400,
         ),
         "subject_main": ProviderLaneConfig(
             primary_provider=preferred,
             backup_provider=subject_backup,
-            model=str(runtime.codex_model or runtime.responses_model or "gpt-5.4"),
+            model=default_main_model,
             reasoning_effort="medium",
             max_output_tokens=1800,
         ),
         "micro_fast": ProviderLaneConfig(
             primary_provider=preferred,
             backup_provider=micro_backup,
-            model=str(runtime.fast_model or runtime.responses_fast_model or "gpt-5.4-mini"),
+            model=default_fast_model,
             reasoning_effort=str(runtime.fast_reasoning_effort or "low"),
             max_output_tokens=900,
         ),
@@ -313,8 +329,12 @@ def _default_processor_routing() -> dict[str, TaskRoutingConfig]:
     }
 
 
-def _load_provider_backends(raw: dict[str, Any], runtime: RuntimeConfig) -> dict[str, ProviderLaneConfig]:
-    defaults = _default_provider_backends(runtime)
+def _load_provider_backends(
+    raw: dict[str, Any],
+    runtime: RuntimeConfig,
+    processor_fabric_data: dict[str, Any] | None = None,
+) -> dict[str, ProviderLaneConfig]:
+    defaults = _default_provider_backends(runtime, processor_fabric_data)
     if not isinstance(raw, dict):
         return defaults
     resolved: dict[str, ProviderLaneConfig] = {}
@@ -556,7 +576,7 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
 
     processor_fabric_data = data.get("processor_fabric", {})
     processor_fabric = ProcessorFabricConfig(
-        provider_backends=_load_provider_backends(data.get("provider_backends", {}), runtime),
+        provider_backends=_load_provider_backends(data.get("provider_backends", {}), runtime, processor_fabric_data),
         processor_routing=_load_processor_routing(data.get("processor_routing", {})),
         openai_compatible_base_url=str(
             processor_fabric_data.get("openai_compatible_base_url", os.environ.get("OPENAI_COMPATIBLE_BASE_URL", ""))
@@ -567,6 +587,16 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         or "OPENAI_COMPATIBLE_API_KEY",
         responses_api_key_env=str(processor_fabric_data.get("responses_api_key_env", "OPENAI_API_KEY")).strip()
         or "OPENAI_API_KEY",
+        deepseek_base_url=str(
+            processor_fabric_data.get("deepseek_base_url", os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+        ).strip()
+        or "https://api.deepseek.com",
+        deepseek_api_key_env=str(processor_fabric_data.get("deepseek_api_key_env", "DEEPSEEK_API_KEY")).strip()
+        or "DEEPSEEK_API_KEY",
+        deepseek_model=str(processor_fabric_data.get("deepseek_model", "deepseek-v4-pro")).strip()
+        or "deepseek-v4-pro",
+        deepseek_fast_model=str(processor_fabric_data.get("deepseek_fast_model", "deepseek-v4-flash")).strip()
+        or "deepseek-v4-flash",
     )
 
     ensure_directory(runtime.state_dir)

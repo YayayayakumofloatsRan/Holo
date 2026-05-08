@@ -201,10 +201,31 @@ class QueueStore:
 
             CREATE INDEX IF NOT EXISTS idx_blackbox_soak_runs_created
             ON blackbox_soak_runs(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS bionic_agent_traces (
+                id INTEGER PRIMARY KEY,
+                stage TEXT NOT NULL DEFAULT 'stage29-bionic-subject-kernel',
+                adapter TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                query_text TEXT NOT NULL DEFAULT '',
+                selected_action TEXT NOT NULL DEFAULT '',
+                generation_mode TEXT NOT NULL DEFAULT '',
+                metrics_json TEXT NOT NULL DEFAULT '{}',
+                capsule_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_bionic_agent_traces_thread
+            ON bionic_agent_traces(channel, thread_key, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_bionic_agent_traces_created
+            ON bionic_agent_traces(created_at DESC);
             """
         )
         self._ensure_column("contacts", "last_initiative_at", "TEXT")
         self._ensure_column("contacts", "initiative_note", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column("bionic_agent_traces", "adapter", "TEXT NOT NULL DEFAULT ''")
         self._normalize_wechat_aliases()
         self.conn.commit()
 
@@ -1224,6 +1245,100 @@ class QueueStore:
             (str(stage or "stage27").strip() or "stage27",),
         ) or {}
         return self._blackbox_soak_run_from_row(row) if row else {}
+
+    @_synchronized
+    def record_bionic_agent_trace(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        query_text: str,
+        capsule: dict[str, Any],
+        metrics: dict[str, Any] | None = None,
+        stage: str = "stage29-bionic-subject-kernel",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        normalized_thread_key = self._normalize_wechat_thread_key(channel, thread_key, subject=chat_name, display_name=chat_name)
+        selected_action = QueueStore._decode_json_dict(capsule.get("selected_action", {})).get("action_type", "")
+        generation_mode = QueueStore._decode_json_dict(capsule.get("generation", {})).get("mode", "")
+        adapter = str(capsule.get("adapter", "") or channel or "").strip()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO bionic_agent_traces(
+                stage, adapter, channel, thread_key, chat_name, query_text,
+                selected_action, generation_mode, metrics_json, capsule_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(stage or "stage29-bionic-subject-kernel").strip() or "stage29-bionic-subject-kernel",
+                adapter,
+                str(channel or "").strip(),
+                normalized_thread_key,
+                str(chat_name or normalized_thread_key).strip(),
+                str(query_text or ""),
+                str(selected_action or ""),
+                str(generation_mode or ""),
+                json_dumps(metrics or {}),
+                json_dumps(capsule or {}),
+                now,
+            ),
+        )
+        self.conn.commit()
+        return self._fetchone("SELECT * FROM bionic_agent_traces WHERE id = ?", (int(cursor.lastrowid),)) or {}
+
+    @_synchronized
+    def list_bionic_agent_traces(
+        self,
+        *,
+        limit: int = 50,
+        channel: str | None = None,
+        thread_key: str | None = None,
+        trace_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["1=1"]
+        args: list[Any] = []
+        if trace_id is not None:
+            clauses.append("id = ?")
+            args.append(int(trace_id))
+        if str(channel or "").strip():
+            clauses.append("channel = ?")
+            args.append(str(channel).strip())
+        if str(thread_key or "").strip():
+            normalized = self._normalize_wechat_thread_key(str(channel or "cli").strip() or "cli", str(thread_key).strip())
+            clauses.append("thread_key = ?")
+            args.append(normalized)
+        args.append(max(1, int(limit)))
+        return self._fetchall(
+            f"""
+            SELECT * FROM bionic_agent_traces
+            WHERE {' AND '.join(clauses)}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(args),
+        )
+
+    @_synchronized
+    def latest_bionic_metrics(self, *, limit: int = 100) -> dict[str, Any]:
+        rows = self.list_bionic_agent_traces(limit=limit)
+        densities: list[float] = []
+        margins: list[float] = []
+        inhibition_count = 0
+        for row in rows:
+            metrics = self._decode_json_dict(row.get("metrics_json", "{}"))
+            densities.append(float(metrics.get("working_field_density", 0.0) or 0.0))
+            margins.append(float(metrics.get("action_market_top_margin", 0.0) or 0.0))
+            inhibition_count += int(metrics.get("inhibition_count", 0) or 0)
+        trace_count = len(rows)
+        return {
+            "stage": "stage29-bionic-subject-kernel",
+            "trace_count": trace_count,
+            "average_working_field_density": round(sum(densities) / trace_count, 4) if trace_count else 0.0,
+            "average_action_market_top_margin": round(sum(margins) / trace_count, 4) if trace_count else 0.0,
+            "total_inhibition_count": inhibition_count,
+            "latest_trace_id": int(rows[0]["id"]) if rows else 0,
+        }
 
     @_synchronized
     def has_pending_proactive(self, thread_id: int) -> bool:

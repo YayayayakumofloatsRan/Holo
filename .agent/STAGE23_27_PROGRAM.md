@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus the post-Stage27 Stage28 addendum. Stage28 is now the current implemented runtime milestone, and Stage29+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage29 is now the current implemented offline CLI substrate milestone, and Stage30+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -53,6 +53,11 @@
   - visual ingest preserves `spatial_refs`, `uncertainty_markers`, `revisit_needed`, and `perceptual_density`
   - ordinary hot-path prompts render `Situational Field:` before any recent-history block
   - action-market candidates expose `stage28_delta`, `stage28_rationale`, and `stage28_grounding_order`
+- Stage29 exit state on `2026-05-08`:
+  - `BionicKernel` produces bounded adapter capsules with perception, working-field, attention, inhibition, action-market, generation, and outcome phases; `BionicAgent` remains a compatibility wrapper
+  - `QueueStore` persists operational `bionic_agent_traces` and aggregate bionic metrics without mutating Mind Graph self-memory
+  - DeepSeek appears as a processor-fabric provider with text/json chat-completions support and no image support claim
+  - `agent-run`, `agent-trace`, `show-bionic-metrics`, `export-bionic-trace`, and `accept-stage29` are available
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -68,6 +73,7 @@
 - The older Stage25 artifact/tool/outcome progress-coupling scope is deferred and must not be silently folded into Stage26 or Stage27.
 - The older online long-horizon canary milestone remains deferred beyond Stage28 and must not be treated as current-arc scope.
 - Stage28 visual and situational work must stay inside existing MemoryBridge, Mind Graph, processor-fabric, and action-market seams; do not add raw API adapters in the runtime hot path.
+- Stage29 bionic subject-kernel work must stay local, bounded, operational, adapter-safe, and processor-fabric-safe; it must not start WeChat, mutate self-memory, give adapters decision authority, or add a new always-on loop.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -121,6 +127,14 @@
 - `Stop rule`: do not add a second brain, a new loop family, transport-side decision logic, or direct provider calls outside processor fabric
 - `Rollback rule`: ignore Stage28 situational overlays and fall back to Stage27/26 packet surfaces while preserving visual-memory metadata and diagnostics
 
+### Stage29: Bionic Subject Kernel
+- `Status`: implemented on `2026-05-08`
+- `Goal`: create a unified bionic subject kernel with CLI as the first adapter, inspectable bionic turn workflow, and provider-compatible generation path
+- `Scope`: add bounded bionic capsules, explicit inhibition metrics, adapter provenance, synthetic WeChat adapter validation, operational trace persistence/export, DeepSeek provider compatibility, and `accept-stage29`
+- `Validation`: `pytest -q`; `accept-stage29`; `tests/test_stage29_bionic_cli_agent.py`; `tests/test_processor_fabric.py`; `tests/test_stage28_multimodal_homeostatic_kernel.py`
+- `Stop rule`: do not start transport, add a second brain, mutate self-memory, give adapters decision authority, bypass action-market-first, or add raw provider calls outside processor fabric
+- `Rollback rule`: ignore Stage29 bionic traces and fall back to Stage28 runtime surfaces while keeping DeepSeek optional
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -130,6 +144,7 @@
 | `Stage26` | All Stage25 surfaces | `accept-stage26`; `tests/test_stage26_task_world_state.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage20_temporal_commitments.py`; `tests/test_stage14_replay.py` | Task-world state is restart-safe, bounded, same-thread-first, and visible before heavier recall without regressing Stage22/24/25. |
 | `Stage27` | All Stage26 surfaces | `accept-stage27`; `tests/test_stage27_blackbox_soak.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py` | Long-horizon scorecards, blind review export, and replay-first soak eligibility remain bounded, inspectable, and operational-only. |
 | `Stage28` | All Stage27 surfaces | `accept-stage28`; `tests/test_stage28_multimodal_homeostatic_kernel.py`; Stage28 diagnostics | Multimodal situational fields are bounded, prompt-visible before history, action-market-inspectable, and self-memory-neutral. |
+| `Stage29` | All Stage28 surfaces | `accept-stage29`; `tests/test_stage29_bionic_cli_agent.py`; `tests/test_processor_fabric.py` | Bionic subject-kernel capsules, adapter provenance, synthetic WeChat adapter validation, and DeepSeek provider compatibility are bounded, operational-only, processor-fabric-safe, and live-transport-free. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

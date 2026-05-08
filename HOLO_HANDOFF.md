@@ -51,12 +51,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 46. `docs/ENGINEERING_HANDOFF_STAGE27.md`
 47. `docs/STAGE28_MULTIMODAL_HOMEOSTATIC_KERNEL.md`
 48. `docs/ENGINEERING_HANDOFF_STAGE28.md`
-49. `HOLO_SYSTEM.md`
-50. `HOLO_HOST.md`
-51. `OPERATIONS.md`
-52. `docs/PUBLIC_RELEASE_HYGIENE.md`
-53. `holo_memory_library/MEMORY_LIBRARY.md`
-54. `windows_helper/README.md`
+49. `docs/STAGE29_BIONIC_SUBJECT_KERNEL.md`
+50. `docs/ENGINEERING_HANDOFF_STAGE29.md`
+51. `HOLO_SYSTEM.md`
+52. `HOLO_HOST.md`
+53. `OPERATIONS.md`
+54. `docs/PUBLIC_RELEASE_HYGIENE.md`
+55. `holo_memory_library/MEMORY_LIBRARY.md`
+56. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -71,9 +73,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage28-multimodal-homeostatic-kernel`.
+- The current milestone tag is `stage29-bionic-subject-kernel`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage28 multimodal situational-field hardening while Holo remains offline for broader kernel reform. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces it.
+- Current focus is Stage29 bionic subject-kernel validation and post-Stage29 adapter hardening while Holo remains offline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage30+ program replaces it.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -86,8 +88,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage26: bounded `task_world_object` plus `task_world_link` now persist inspectable task-world state, link temporal commitments and same-thread world objects explicitly, and hydrate same-thread ingress before heavier recall while Stage22 `world_coupling_signal` remains a compatibility projection
   - Stage27: observational long-horizon blackbox soak, scorecards, replay-on-live-artifacts, and blind evaluation export are implemented as operational-only surfaces
   - Stage28: multimodal situational fields now fuse visual memory, scene state, dense continuity, task-world state, temporal pressure, and homeostatic pressure before prompt history, with inspectable action-market deltas
+  - Stage29: a unified bionic subject kernel, CLI adapter, synthetic WeChat adapter validation, operational trace persistence, bionic metrics, trace export, and DeepSeek provider compatibility are implemented without starting WeChat or mutating self-memory
 - The next planned arc is:
-  - Stage29+: explicit re-plan for broader provider/API compatibility, visual-provider hardening, and less template-shaped autonomous inquiry
+  - Stage30+: explicit re-plan for broader provider/API compatibility, visual-provider hardening, and less template-shaped autonomous inquiry
   - Online long-horizon canary remains deferred beyond Stage28 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned
   - Artifact/tool/outcome progress coupling remains deferred and should not be silently folded into Stage28 or a future canary
   - Bounded subject programs remain deferred beyond the current Stage28 milestone
@@ -116,6 +119,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 
 ## Current Runtime Truth
 - Primary provider path: `codex_cli`
+- Optional low-cost text provider path: `deepseek` through the processor fabric
 - Processor fabric is active with three lanes:
   - `kernel_xhigh`
   - `subject_main`
@@ -237,6 +241,12 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host trace-inquiry-shaping --thread-key TestUser --chat-name TestUser --channel wechat --query "continue"`
 - Stage28 multimodal kernel acceptance:
   - `python3 -m holo_host accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat`
+- Stage29 bionic subject-kernel diagnostics:
+  - `python3 -m holo_host agent-run --query "continue" --thread-key cli:TestUser --chat-name TestUser --channel cli --offline`
+  - `python3 -m holo_host show-bionic-metrics`
+  - `python3 -m holo_host agent-trace --trace-id <trace_id>`
+- Stage29 bionic subject-kernel acceptance:
+  - `python3 -m holo_host accept-stage29 --thread-key TestUser --chat-name TestUser --channel cli`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 

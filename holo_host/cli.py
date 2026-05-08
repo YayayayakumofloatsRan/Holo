@@ -12,6 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .bionic_agent import BionicKernel, BionicTurnRequest, KERNEL_NAME, STAGE29_NAME
 from .config import load_config
 from .daemon import build_daemon
 from .models import ProcessorTaskRequest
@@ -356,6 +357,167 @@ def _usage_ledger_payload(
             service.memory.activation.close()
         if hasattr(service.memory, "graph"):
             service.memory.graph.close()
+
+
+def _close_reply_service(service: HoloReplyService) -> None:
+    service.store.close()
+    if hasattr(service.memory, "activation"):
+        service.memory.activation.close()
+    if hasattr(service.memory, "graph"):
+        service.memory.graph.close()
+
+
+def _bionic_agent_payload(
+    config_path: str | None,
+    *,
+    query: str,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    offline: bool,
+    record: bool,
+) -> tuple[dict, str]:
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    runner = None if offline else service.runner
+    try:
+        kernel = BionicKernel(config=config, store=service.store, memory=service.memory, runner=runner)
+        return kernel.run_request(
+            BionicTurnRequest(
+                query=query,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                adapter="cli",
+                record=record,
+            )
+        ), "local_process"
+    finally:
+        _close_reply_service(service)
+
+
+def _bionic_trace_payload(config_path: str | None, *, trace_id: int) -> tuple[dict, str]:
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        rows = store.list_bionic_agent_traces(limit=1, trace_id=trace_id)
+        if not rows:
+            return {"ok": False, "stage": STAGE29_NAME, "trace_id": trace_id, "error": "trace_not_found"}, "local_process"
+        row = dict(rows[0])
+        try:
+            row["capsule"] = json.loads(str(row.get("capsule_json", "{}") or "{}"))
+        except json.JSONDecodeError:
+            row["capsule"] = {}
+        try:
+            row["metrics"] = json.loads(str(row.get("metrics_json", "{}") or "{}"))
+        except json.JSONDecodeError:
+            row["metrics"] = {}
+        return {"ok": True, "stage": STAGE29_NAME, "trace": row}, "local_process"
+    finally:
+        store.close()
+
+
+def _bionic_metrics_payload(config_path: str | None, *, limit: int = 100) -> tuple[dict, str]:
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        return store.latest_bionic_metrics(limit=limit), "local_process"
+    finally:
+        store.close()
+
+
+def _export_bionic_trace_payload(config_path: str | None, *, trace_id: int, output: str) -> tuple[dict, str]:
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        kernel = BionicKernel(config=config, store=store)
+        return kernel.export_trace(trace_id=trace_id, output=output), "local_process"
+    finally:
+        store.close()
+
+
+def _accept_stage29_payload(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+) -> tuple[dict, str]:
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    before_metrics = service.store.latest_bionic_metrics()
+    provider_status = service.provider_status()
+    agent = BionicKernel(config=config, store=service.store, memory=service.memory, runner=None)
+    try:
+        turn = agent.run_turn(
+            query="accept stage29 bounded bionic cli turn",
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            record=True,
+        )
+        synthetic_wechat = agent.run_request(
+            BionicTurnRequest(
+                query="accept stage29 synthetic wechat adapter turn",
+                thread_key="wechat:Stage29Accept",
+                chat_name="Stage29Accept",
+                channel="wechat",
+                adapter="wechat",
+                record=False,
+            )
+        )
+        trace_id = int(turn.get("trace_id", 0) or 0)
+        trace_rows = service.store.list_bionic_agent_traces(limit=1, trace_id=trace_id)
+        after_metrics = service.store.latest_bionic_metrics()
+    finally:
+        _close_reply_service(service)
+    capsule = dict(turn.get("capsule", {}))
+    wechat_capsule = dict(synthetic_wechat.get("capsule", {}))
+    phase_names = [str(phase.get("name", "") or "") for phase in list(capsule.get("phases", []))]
+    interface_contract = dict(capsule.get("interface_contract", {}))
+    wechat_interface_contract = dict(wechat_capsule.get("interface_contract", {}))
+    checks = {
+        "stage28_available": bool(dict(capsule.get("perception", {})).get("stage28", {}).get("situational_field_visible", False)),
+        "deepseek_provider_visible": "deepseek" in dict(provider_status.get("providers", {})),
+        "kernel_first_contract": capsule.get("kernel") == KERNEL_NAME and wechat_capsule.get("kernel") == KERNEL_NAME,
+        "adapter_provenance_visible": capsule.get("adapter") == str(channel or "cli").strip() and wechat_capsule.get("adapter") == "wechat",
+        "transport_interface_only": (
+            interface_contract.get("transport_is_interface") is True
+            and interface_contract.get("transport_decision_authority") is False
+            and wechat_interface_contract.get("transport_is_interface") is True
+            and wechat_interface_contract.get("transport_decision_authority") is False
+        ),
+        "synthetic_wechat_uses_same_kernel": (
+            wechat_capsule.get("channel") == "wechat"
+            and dict(wechat_capsule.get("outcome", {})).get("wechat_transport_used") is False
+        ),
+        "full_capsule_phases": phase_names == [
+            "perception",
+            "working_field",
+            "attention",
+            "inhibition",
+            "action_market",
+            "generation",
+            "outcome",
+        ],
+        "trace_persistence_works": trace_id > 0 and len(trace_rows) == 1,
+        "metrics_visible": int(after_metrics.get("trace_count", 0) or 0) >= int(before_metrics.get("trace_count", 0) or 0) + 1,
+        "wechat_transport_not_required": bool(dict(capsule.get("outcome", {})).get("wechat_transport_used") is False),
+    }
+    return {
+        "ok": all(checks.values()),
+        "stage": STAGE29_NAME,
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "trace_id": trace_id,
+        "metrics": after_metrics,
+        "provider_status": provider_status,
+        "capsule": capsule,
+        "synthetic_wechat_capsule": wechat_capsule,
+    }, "local_process"
 
 
 def _accept_processor_fabric_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
@@ -7830,6 +7992,58 @@ def command_show_usage_ledger(
     return 0
 
 
+def command_agent_run(
+    config_path: str | None,
+    *,
+    query: str,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    offline: bool,
+    record: bool,
+) -> int:
+    payload, _transport = _bionic_agent_payload(
+        config_path,
+        query=query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        offline=offline,
+        record=record,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_agent_trace(config_path: str | None, *, trace_id: int) -> int:
+    payload, _transport = _bionic_trace_payload(config_path, trace_id=trace_id)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_show_bionic_metrics(config_path: str | None, *, limit: int) -> int:
+    payload, _transport = _bionic_metrics_payload(config_path, limit=limit)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_export_bionic_trace(config_path: str | None, *, trace_id: int, output: str) -> int:
+    payload, _transport = _export_bionic_trace_payload(config_path, trace_id=trace_id, output=output)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_accept_stage29(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = _accept_stage29_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_show_processor_mesh(config_path: str | None) -> int:
     daemon = build_daemon(config_path)
     try:
@@ -8744,6 +8958,20 @@ def main(argv: list[str] | None = None) -> int:
     usage_ledger_parser.add_argument("--task-type", default=None)
     usage_ledger_parser.add_argument("--lane", default=None)
     usage_ledger_parser.add_argument("--provider", default=None)
+    agent_run_parser = subparsers.add_parser("agent-run", help="Run one Stage-29 bounded bionic kernel turn through the CLI adapter")
+    agent_run_parser.add_argument("--query", required=True)
+    agent_run_parser.add_argument("--thread-key", required=True)
+    agent_run_parser.add_argument("--chat-name", default="")
+    agent_run_parser.add_argument("--channel", default="cli")
+    agent_run_parser.add_argument("--offline", action="store_true")
+    agent_run_parser.add_argument("--no-record", action="store_true")
+    agent_trace_parser = subparsers.add_parser("agent-trace", help="Show one Stage-29 bionic kernel trace")
+    agent_trace_parser.add_argument("--trace-id", type=int, required=True)
+    bionic_metrics_parser = subparsers.add_parser("show-bionic-metrics", help="Show Stage-29 bionic kernel capsule metrics")
+    bionic_metrics_parser.add_argument("--limit", type=int, default=100)
+    export_bionic_parser = subparsers.add_parser("export-bionic-trace", help="Export one Stage-29 bionic trace capsule JSON")
+    export_bionic_parser.add_argument("--trace-id", type=int, required=True)
+    export_bionic_parser.add_argument("--output", required=True)
     stream_tick_parser = subparsers.add_parser("stream-tick", help="Run one explicit background stream tick and record its influence")
     stream_tick_parser.add_argument("--stream-name", required=True, choices=("maintenance_stream", "association_stream", "social_stream", "deep_dream_cycle"))
     stream_tick_parser.add_argument("--dry-run", action="store_true")
@@ -8949,6 +9177,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage28_parser.add_argument("--channel", default="wechat")
     accept_stage28_parser.add_argument("--sender", default=None)
     accept_stage28_parser.add_argument("--artifact-dir", default=None)
+    accept_stage29_parser = subparsers.add_parser("accept-stage29", help="Run the Stage-29 bionic subject kernel gate")
+    accept_stage29_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage29_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage29_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -9131,6 +9363,22 @@ def main(argv: list[str] | None = None) -> int:
             lane=args.lane,
             provider=args.provider,
         )
+    if args.command == "agent-run":
+        return command_agent_run(
+            args.config,
+            query=args.query,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name or args.thread_key,
+            channel=args.channel,
+            offline=args.offline,
+            record=not bool(args.no_record),
+        )
+    if args.command == "agent-trace":
+        return command_agent_trace(args.config, trace_id=args.trace_id)
+    if args.command == "show-bionic-metrics":
+        return command_show_bionic_metrics(args.config, limit=args.limit)
+    if args.command == "export-bionic-trace":
+        return command_export_bionic_trace(args.config, trace_id=args.trace_id, output=args.output)
     if args.command == "show-affect-state":
         return command_show_affect_state(
             args.config,
@@ -9842,6 +10090,13 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             sender=args.sender,
             artifact_dir=args.artifact_dir,
+        )
+    if args.command == "accept-stage29":
+        return command_accept_stage29(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
         )
     if args.command == "show-processor-mesh":
         return command_show_processor_mesh(args.config)

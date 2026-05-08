@@ -48,6 +48,19 @@ Use when:
 - a compatible HTTP backend is configured
 - previous providers are unavailable
 
+### `DeepSeekProvider`
+
+Role:
+- low-cost text provider option exposed through the same processor fabric
+
+Use when:
+- `processor_backend = "deepseek"` is configured
+- a DeepSeek-compatible chat-completions endpoint and API key are available
+
+Limits:
+- text/json requests only
+- image support is false until an image-capable provider contract is added
+
 ## 3. Fallback Order
 
 Per lane:
@@ -99,6 +112,12 @@ Use:
 - `processor_fabric`
 - `provider_backends`
 - `processor_routing`
+
+DeepSeek keys:
+- `processor_fabric.deepseek_base_url`
+- `processor_fabric.deepseek_api_key_env`
+- `processor_fabric.deepseek_model`
+- `processor_fabric.deepseek_fast_model`
 
 Do not treat:
 - `codex_model`
