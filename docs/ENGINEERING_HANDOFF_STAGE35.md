@@ -39,4 +39,4 @@ git diff --check
 ```
 
 ## Next Work
-The next code-bearing work should target one explicit remaining debt at a time: autonomous inquiry quality, real image-provider integration, provider latency/cache soak, or a replay-backed `reply_api.py` facade split. Do not restart WeChat or widen live transport without a separate operator-approved live-soak plan.
+Stage36 has now closed the autonomous inquiry formatting debt with an offline bionic-kernel gate. The next code-bearing work should target one explicit remaining debt at a time: real image-provider integration, provider latency/cache soak, replay-fixture breadth from a concrete regression, or a replay-backed `reply_api.py` facade split. Do not restart WeChat or widen live transport without a separate operator-approved live-soak plan.

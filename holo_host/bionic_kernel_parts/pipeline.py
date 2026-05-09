@@ -126,12 +126,29 @@ class BionicPipeline:
             adapter_contract=adapter_contract,
         )
         phases = [
-            BionicPhase("perception", "bounded input and situational field captured", perception),
+            BionicPhase(
+                "perception",
+                "bounded input and situational field captured",
+                {
+                    "query_chars": len(turn.query),
+                    "situational_keys": sorted(str(key) for key in situational_field.keys())[:8],
+                    "stage28_visible": stage28.get("situational_field_visible") is True,
+                },
+            ),
             BionicPhase("working_field", "compact field assembled before generation", working_field),
             BionicPhase("attention", "attention narrowed through action-market candidates", attention),
             BionicPhase("inhibition", "non-required recall/tool/send/history paths inhibited", inhibition),
             BionicPhase("action_market", "selected action comes from action market", {"candidates": action_market}),
-            BionicPhase("generation", "language generation is downstream of selected action", generation),
+            BionicPhase(
+                "generation",
+                "language generation is downstream of selected action",
+                {
+                    "mode": generation.get("mode", ""),
+                    "shape": generation.get("shape", ""),
+                    "generated": bool(str(generation.get("text", "") or "").strip()),
+                    "inquiry_quality_score": metrics.get("inquiry_quality_score", 0.0),
+                },
+            ),
             BionicPhase("outcome", "adapter outcome recorded without transport side effects", outcome),
         ]
         capsule = BionicCapsule(

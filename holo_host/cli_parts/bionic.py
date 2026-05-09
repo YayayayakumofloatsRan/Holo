@@ -11,11 +11,42 @@ from ..store import QueueStore
 
 STAGE31_NAME = "stage31-debt-burndown"
 STAGE32_NAME = "stage32-response-shaping"
+STAGE36_NAME = "stage36-autonomous-inquiry-quality"
 STAGE32_TEMPLATE_MARKERS = (
     "stage29 bionic capsule reply:",
     "i read this as a bounded holo turn:",
     "answer as a bounded holo bionic kernel turn",
 )
+STAGE36_LABEL_MARKERS = ("next:", "basis:", "open:", "context:")
+
+
+class _Stage36InquiryMemory:
+    def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
+        return {
+            "tier": "stage36-local",
+            "memory_route": "stage36_acceptance_probe",
+            "continuity_summary": "Holo is closing remaining technical debt while keeping WeChat transport offline.",
+            "situational_field": {
+                "situational_field_visible": True,
+                "modalities": ["text", "scene", "task_world"],
+                "grounding_order": ["query", "continuity_summary", "open_questions"],
+                "open_questions": ["which remaining offline debt has the highest leverage?"],
+                "inquiry_style": "grounded_continuation",
+                "history_reliance": "low",
+            },
+            "stage28": {
+                "situational_field_visible": True,
+                "hard_gate_preserved": True,
+            },
+            "action_market": [
+                {
+                    "action_type": "reply_once",
+                    "score": 0.82,
+                    "reason": "continue debt repair without reopening live transport",
+                },
+                {"action_type": "silence", "score": 0.05, "reason": "not appropriate for the requested repair"},
+            ],
+        }
 
 
 def close_reply_service(service: HoloReplyService) -> None:
@@ -331,5 +362,62 @@ def accept_stage32_payload(
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
         "stage31": stage31_payload,
+        "capsule": capsule,
+    }, transport
+
+
+def accept_stage36_payload(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+) -> tuple[dict, str]:
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        stage35_payload = service.accept_stage35()
+    finally:
+        close_reply_service(service)
+    kernel = BionicKernel(config=config, memory=_Stage36InquiryMemory(), runner=None)
+    turn_payload = kernel.run_request(
+        BionicTurnRequest(
+            query="clear the remaining technical debt without reopening live transport",
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            adapter=channel or "cli",
+            record=False,
+        )
+    )
+    transport = "local_process"
+    capsule = dict(turn_payload.get("capsule", {}))
+    generation = dict(capsule.get("generation", {}))
+    metrics = dict(capsule.get("metrics", {}))
+    selected_action = dict(capsule.get("selected_action", {}))
+    generation_text = str(generation.get("text", "") or "")
+    inquiry_quality = dict(generation.get("inquiry_quality", {})) if isinstance(generation.get("inquiry_quality", {}), dict) else {}
+    question_count = int(metrics.get("question_count", inquiry_quality.get("question_count", 99)) or 0)
+    label_count = int(inquiry_quality.get("label_marker_count", 99) or 0)
+    text_lower = generation_text.lower()
+    checks = {
+        "stage35_gate_passed": bool(stage35_payload.get("ok", False)),
+        "deterministic_fallback_visible": generation.get("mode") == "deterministic_fallback",
+        "inquiry_quality_metric_visible": float(metrics.get("inquiry_quality_score", 0.0) or 0.0) >= 0.75,
+        "label_template_removed": label_count == 0 and not any(marker in text_lower for marker in STAGE36_LABEL_MARKERS),
+        "single_grounded_question": question_count <= 1 and bool(inquiry_quality.get("grounded_question", "")),
+        "action_market_first_preserved": (
+            bool(selected_action)
+            and list(dict(capsule.get("subject_loop", {})).get("phase_order", []))[:6]
+            == ["perception", "working_field", "attention", "inhibition", "action_market", "generation"]
+        ),
+        "transport_interface_only": dict(capsule.get("interface_contract", {})).get("transport_decision_authority") is False,
+    }
+    return {
+        "ok": all(checks.values()),
+        "stage": STAGE36_NAME,
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "stage35": stage35_payload,
         "capsule": capsule,
     }, transport

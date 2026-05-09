@@ -46,6 +46,18 @@ class _FakeVectorMemory:
 
 
 class MemoryFabricTests(unittest.TestCase):
+    def test_persona_blend_ignores_malformed_self_revision_patch(self) -> None:
+        bridge = object.__new__(MemoryBridge)
+        blend = bridge._persona_blend(
+            query="continue",
+            relationship_state={},
+            game_state={},
+            self_revision_state={"applied_patch": {"persona_blend": 0.64}},
+        )
+
+        self.assertIn("playfulness", blend)
+        self.assertTrue(all(0.0 <= float(value) <= 1.0 for value in blend.values()))
+
     def test_goal_state_merge_dedupes_by_goal_id(self) -> None:
         with TempMemoryRepo() as temp:
             bridge = MemoryBridge(

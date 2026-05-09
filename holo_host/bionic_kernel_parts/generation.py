@@ -42,10 +42,12 @@ class BionicGeneration:
                 "model": "",
                 "shape": shaped["shape"],
                 "context_refs": shaped["context_refs"],
+                "inquiry_quality": shaped["inquiry_quality"],
             }
         prompt = "\n".join(
             [
-                "Answer as a bounded Holo bionic kernel turn.",
+                "Answer as a bounded Holo bionic kernel turn without label-template prefixes.",
+                "If asking, ask at most one grounded question tied to the current continuity.",
                 f"Selected action: {selected_action.get('action_type', 'reply_once')}",
                 f"Continuity: {compact(packet.get('continuity_summary', ''), limit=280)}",
                 f"User query: {query}",

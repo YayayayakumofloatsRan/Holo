@@ -27,13 +27,27 @@ def compute_bionic_metrics(
         "i read this as a bounded holo turn:",
         "answer as a bounded holo bionic kernel turn",
     )
+    formatting_markers = (
+        "next:",
+        "basis:",
+        "open:",
+        "context:",
+    )
     marker_hits = sum(1 for marker in template_markers if marker in generation_text.lower())
     template_pressure = min(1.0, marker_hits / max(1, len(template_markers)))
+    formatting_hits = sum(1 for marker in formatting_markers if marker in generation_text.lower())
+    formatting_pressure = min(1.0, formatting_hits / max(1, len(formatting_markers)))
     context_refs = clip_list(generation.get("context_refs", []), limit=8)
     context_shaping_units = len([item for item in context_refs if str(item or "").strip()])
     if str(generation.get("shape", "") or "").strip():
         context_shaping_units += 1
     context_shaping = min(1.0, context_shaping_units / 6.0)
+    inquiry_quality = generation.get("inquiry_quality", {})
+    inquiry_quality_score = 0.0
+    question_count = generation_text.count("?") + generation_text.count("？")
+    if isinstance(inquiry_quality, dict):
+        inquiry_quality_score = safe_float(inquiry_quality.get("score", 0.0))
+        question_count = int(safe_float(inquiry_quality.get("question_count", question_count)))
     return {
         "working_field_density": round(min(1.0, sum(1 for item in field_units if str(item or "").strip()) / 8.0), 4),
         "inhibition_count": len(list(inhibition.get("reasons", []))),
@@ -41,6 +55,9 @@ def compute_bionic_metrics(
         "history_reread_avoided": bool(inhibition.get("history_reread_inhibited", False)),
         "action_market_top_margin": round(top_margin, 4),
         "template_pressure_score": round(template_pressure, 4),
+        "formatting_pressure_score": round(formatting_pressure, 4),
         "context_shaping_score": round(context_shaping, 4),
+        "inquiry_quality_score": round(inquiry_quality_score, 4),
+        "question_count": question_count,
         "query_chars": len(str(query or "")),
     }

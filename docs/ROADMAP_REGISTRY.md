@@ -104,9 +104,14 @@ Stage35: internal runtime readiness
 - Adds `show-internal-runtime-readiness` and `accept-stage35` to verify DeepSeek primary lanes, redacted env-key presence, local config secret hygiene, and no-WeChat transport quiescence.
 - Keeps Stage35 acceptance offline with respect to model calls and live transport; it does not start WeChat, mutate self-memory, or widen autonomy.
 
+Stage36: autonomous inquiry quality
+- Implemented an offline bionic-kernel gate for grounded autonomous inquiry quality.
+- Removes deterministic label-template inquiry output, caps fallback inquiry to at most one grounded question, and exposes `inquiry_quality_score`, `formatting_pressure_score`, and `question_count`.
+- Keeps action-market-first generation, transport-as-interface, no self-memory mutation, and no new planner or loop.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage35. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage36+ program replaces them.
+This planned arc starts after Stage36. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage37+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, and Stage34 visual-readiness gating.
@@ -114,7 +119,8 @@ Provider/API compatibility breadth
 - Visual-provider hardening should validate real configured `image_understand` lanes before WeChat or live transport is restarted; Stage34 only proves the offline contract does not overclaim image support.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, and Stage35 internal readiness. Future work should improve autonomous inquiry shape without adding a second brain.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, and Stage36 inquiry-quality gating.
+- Future work should improve real-world inquiry quality only through bounded kernel evidence and acceptance gates, without adding a second brain.
 
 Online long-horizon canary
 - Deferred until after a new explicit re-plan approves any live widening.

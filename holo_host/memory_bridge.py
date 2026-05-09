@@ -402,8 +402,11 @@ class MemoryBridge:
 
     def _persona_blend(self, *, query: str, relationship_state: dict[str, Any], game_state: dict[str, Any], self_revision_state: dict[str, Any]) -> dict[str, float]:
         blend = dict(DEFAULT_PERSONA_BLEND)
-        applied_patch = dict(self_revision_state.get("applied_patch", {}))
-        for key, value in dict(applied_patch.get("persona_blend", {})).items():
+        applied_patch_raw = self_revision_state.get("applied_patch", {}) if isinstance(self_revision_state, dict) else {}
+        applied_patch = dict(applied_patch_raw) if isinstance(applied_patch_raw, dict) else {}
+        persona_patch_raw = applied_patch.get("persona_blend", {})
+        persona_patch = dict(persona_patch_raw) if isinstance(persona_patch_raw, dict) else {}
+        for key, value in persona_patch.items():
             if key in blend:
                 blend[key] = self._clamp(value, default=blend[key])
         tone_tendency = str(relationship_state.get("tone_tendency", "") or "").strip()

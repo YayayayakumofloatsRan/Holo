@@ -76,6 +76,7 @@ python -m holo_host show-visual-provider-readiness
 python -m holo_host show-debt-registry
 python -m holo_host show-internal-runtime-readiness
 python -m holo_host accept-stage35
+python -m holo_host accept-stage36 --thread-key cli:TestUser --chat-name TestUser --channel cli
 ```
 
-These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage35 checks provider API contracts, visual-readiness boundaries, classified technical debt, DeepSeek lane readiness, redacted env-key presence, and local config secret hygiene without making live model calls.
+These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage35 checks provider API contracts, visual-readiness boundaries, classified technical debt, DeepSeek lane readiness, redacted env-key presence, and local config secret hygiene without making live model calls. Stage36 checks that deterministic autonomous inquiry stays grounded, non-template, action-market-first, and transport-free.

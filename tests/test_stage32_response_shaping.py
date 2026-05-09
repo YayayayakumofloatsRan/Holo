@@ -77,7 +77,8 @@ class Stage32ResponseShapingTests(unittest.TestCase):
             )
 
         text = result["capsule"]["generation"]["text"]
-        self.assertIn("Next", text)
+        self.assertIn("I would continue with continue implementation", text)
+        self.assertNotIn("Next:", text)
         self.assertNotIn("which technical debt should be closed first?", text)
 
     def test_accept_stage32_checks_response_shaping_contract(self) -> None:
