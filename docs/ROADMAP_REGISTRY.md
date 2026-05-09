@@ -84,9 +84,14 @@ Stage31: debt burn-down and diagnostics
 - Implemented adapter registry, controlled state-update gate, subject-loop trace/metrics diagnostics, bionic CLI helper extraction, and `accept-stage31`.
 - Keeps all new surfaces offline and operational-only, with no live transport start and no self-memory, policy, or Mind Graph writes from the subject-loop path.
 
+Stage32: response shaping and template pressure
+- Implemented bounded deterministic fallback response shaping for the offline bionic kernel.
+- Replaces the fixed fallback phrase with query/action/continuity/situational context, exposes `shape` and `context_refs`, and adds `context_shaping_score`.
+- Keeps the change offline, processor-fabric-safe, and self-memory-neutral.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage31. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage32+ program replaces them.
+This planned arc starts after Stage32. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage33+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support and Stage31 adapter registry.
@@ -94,7 +99,7 @@ Provider/API compatibility breadth
 - Visual-provider hardening should validate real configured `image_understand` lanes before Holo is restarted.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants and Stage31 subject-loop diagnostics. Future work should reduce template pressure and improve autonomous inquiry shape without adding a second brain.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, and Stage32 response shaping. Future work should improve autonomous inquiry shape without adding a second brain.
 
 Online long-horizon canary
 - Deferred until after a new explicit re-plan approves any live widening.

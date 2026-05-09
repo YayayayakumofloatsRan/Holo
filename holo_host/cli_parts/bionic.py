@@ -10,6 +10,12 @@ from ..store import QueueStore
 
 
 STAGE31_NAME = "stage31-debt-burndown"
+STAGE32_NAME = "stage32-response-shaping"
+STAGE32_TEMPLATE_MARKERS = (
+    "stage29 bionic capsule reply:",
+    "i read this as a bounded holo turn:",
+    "answer as a bounded holo bionic kernel turn",
+)
 
 
 def close_reply_service(service: HoloReplyService) -> None:
@@ -121,7 +127,6 @@ def accept_stage29_payload(
 ) -> tuple[dict, str]:
     config = load_config(config_path=config_path)
     service = HoloReplyService(config)
-    before_metrics = service.store.latest_bionic_metrics()
     provider_status = service.provider_status()
     agent = BionicKernel(config=config, store=service.store, memory=service.memory, runner=None)
     try:
@@ -152,6 +157,7 @@ def accept_stage29_payload(
     phase_names = [str(phase.get("name", "") or "") for phase in list(capsule.get("phases", []))]
     interface_contract = dict(capsule.get("interface_contract", {}))
     wechat_interface_contract = dict(wechat_capsule.get("interface_contract", {}))
+    latest_trace_id = int(after_metrics.get("latest_trace_id", 0) or 0)
     checks = {
         "stage28_available": bool(dict(capsule.get("perception", {})).get("stage28", {}).get("situational_field_visible", False)),
         "deepseek_provider_visible": "deepseek" in dict(provider_status.get("providers", {})),
@@ -177,7 +183,7 @@ def accept_stage29_payload(
             "outcome",
         ],
         "trace_persistence_works": trace_id > 0 and len(trace_rows) == 1,
-        "metrics_visible": int(after_metrics.get("trace_count", 0) or 0) >= int(before_metrics.get("trace_count", 0) or 0) + 1,
+        "metrics_visible": latest_trace_id >= trace_id > 0,
         "wechat_transport_not_required": bool(dict(capsule.get("outcome", {})).get("wechat_transport_used") is False),
     }
     return {
@@ -278,4 +284,52 @@ def accept_stage31_payload(
         "subject_loop_trace": trace_payload,
         "subject_loop_metrics": metrics_payload,
         "adapter_contract": adapter_spec.to_contract(),
+    }, transport
+
+
+def accept_stage32_payload(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+) -> tuple[dict, str]:
+    stage31_payload, transport = accept_stage31_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    turn_payload, _ = bionic_agent_payload(
+        config_path,
+        query="continue the bionic implementation and close response-shaping debt",
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        offline=True,
+        record=False,
+    )
+    capsule = dict(turn_payload.get("capsule", {}))
+    generation = dict(capsule.get("generation", {}))
+    metrics = dict(capsule.get("metrics", {}))
+    generation_text = str(generation.get("text", "") or "")
+    generation_text_lower = generation_text.lower()
+    context_refs = list(generation.get("context_refs", [])) if isinstance(generation.get("context_refs", []), list) else []
+    context_shaping_score = float(metrics.get("context_shaping_score", 0.0) or 0.0)
+    template_pressure_score = float(metrics.get("template_pressure_score", 0.0) or 0.0)
+    checks = {
+        "stage31_gate_passed": bool(stage31_payload.get("ok", False)),
+        "deterministic_fallback_visible": generation.get("mode") == "deterministic_fallback",
+        "fixed_template_removed": not any(marker in generation_text_lower for marker in STAGE32_TEMPLATE_MARKERS),
+        "context_shaping_metadata_visible": bool(generation.get("shape")) and len(context_refs) >= 2,
+        "context_shaping_metric_visible": context_shaping_score > 0.0,
+        "template_pressure_zero": template_pressure_score == 0.0,
+    }
+    return {
+        "ok": all(checks.values()),
+        "stage": STAGE32_NAME,
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "stage31": stage31_payload,
+        "capsule": capsule,
     }, transport

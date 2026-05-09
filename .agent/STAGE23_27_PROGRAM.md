@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage31 is now the current implemented offline debt-burn-down milestone, and Stage32+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage32 is now the current implemented offline response-shaping milestone, and Stage33+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -67,6 +67,11 @@
   - controlled state-update gate rejects self-memory, policy, Mind Graph, transport, scheduler, and second-brain writes from the offline subject loop
   - `trace-subject-loop`, `show-subject-loop-metrics`, and `accept-stage31` are available
   - bionic CLI payload helpers now live under `holo_host/cli_parts/bionic.py`
+- Stage32 exit state on `2026-05-09`:
+  - deterministic offline fallback generation no longer uses the fixed `I read this as a bounded Holo turn` template
+  - fallback generation now exposes bounded `shape` and `context_refs` metadata
+  - bionic metrics now expose `context_shaping_score` beside `template_pressure_score`
+  - `accept-stage32` is available and reuses Stage31 without starting transport
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -84,6 +89,7 @@
 - Stage28 visual and situational work must stay inside existing MemoryBridge, Mind Graph, processor-fabric, and action-market seams; do not add raw API adapters in the runtime hot path.
 - Stage29 bionic subject-kernel work must stay local, bounded, operational, adapter-safe, and processor-fabric-safe; it must not start WeChat, mutate self-memory, give adapters decision authority, or add a new always-on loop.
 - Stage30 subject-loop work must stay a bounded contract over existing bionic-kernel data; it must not become a hidden planner, mutate self-memory, or create a new scheduler.
+- Stage32 response-shaping work must remain a bounded fallback-generation improvement; it must not add a hidden planner, bypass processor fabric, or turn fallback text into self-memory.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -145,6 +151,30 @@
 - `Stop rule`: do not start transport, add a second brain, mutate self-memory, give adapters decision authority, bypass action-market-first, or add raw provider calls outside processor fabric
 - `Rollback rule`: ignore Stage29 bionic traces and fall back to Stage28 runtime surfaces while keeping DeepSeek optional
 
+### Stage30: Unified Subject Loop
+- `Status`: implemented on `2026-05-09`
+- `Goal`: expose the bionic workflow as one bounded subject-loop contract from perception through state update
+- `Scope`: add inspectable loop phases and invariants without new self-memory, policy, Mind Graph, transport, or scheduler writes
+- `Validation`: `pytest -q`; `accept-stage30`; `tests/test_stage30_subject_loop.py`
+- `Stop rule`: do not let subject-loop payloads become a hidden planner or state mutation authority
+- `Rollback rule`: ignore `subject_loop` payloads and fall back to Stage29 capsule semantics
+
+### Stage31: Debt Burn-Down And Diagnostics
+- `Status`: implemented on `2026-05-09`
+- `Goal`: burn down immediate Stage29/30 architecture debt behind offline diagnostics
+- `Scope`: add adapter registry, controlled state-update gate, subject-loop trace/metrics diagnostics, and bionic CLI helper extraction
+- `Validation`: `pytest -q`; `accept-stage31`; `tests/test_stage31_debt_burndown.py`
+- `Stop rule`: do not add live transport, self-memory writes, raw provider calls, or unbounded loop behavior
+- `Rollback rule`: fall back to Stage30 subject-loop payloads and keep adapter registry observational only
+
+### Stage32: Response Shaping And Template Pressure
+- `Status`: implemented on `2026-05-09`
+- `Goal`: reduce fixed-template pressure in deterministic offline fallback generation
+- `Scope`: shape fallback replies from bounded query, selected-action reason, continuity, modalities, and open-question context; expose `shape`, `context_refs`, and `context_shaping_score`
+- `Validation`: `pytest -q`; `accept-stage32`; `tests/test_stage32_response_shaping.py`
+- `Stop rule`: do not add live transport, self-memory writes, raw provider calls, a hidden planner, or a new loop
+- `Rollback rule`: fall back to Stage31 fallback generation if response-shaping metrics or deterministic stability regress
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -155,6 +185,9 @@
 | `Stage27` | All Stage26 surfaces | `accept-stage27`; `tests/test_stage27_blackbox_soak.py`; `tests/test_stage22_online_canary.py`; `tests/test_stage14_replay.py` | Long-horizon scorecards, blind review export, and replay-first soak eligibility remain bounded, inspectable, and operational-only. |
 | `Stage28` | All Stage27 surfaces | `accept-stage28`; `tests/test_stage28_multimodal_homeostatic_kernel.py`; Stage28 diagnostics | Multimodal situational fields are bounded, prompt-visible before history, action-market-inspectable, and self-memory-neutral. |
 | `Stage29` | All Stage28 surfaces | `accept-stage29`; `tests/test_stage29_bionic_cli_agent.py`; `tests/test_processor_fabric.py` | Bionic subject-kernel capsules, adapter provenance, synthetic WeChat adapter validation, and DeepSeek provider compatibility are bounded, operational-only, processor-fabric-safe, and live-transport-free. |
+| `Stage30` | All Stage29 surfaces | `accept-stage30`; `tests/test_stage30_subject_loop.py` | Subject-loop payloads expose hard invariants without adding mutation authority. |
+| `Stage31` | All Stage30 surfaces | `accept-stage31`; `tests/test_stage31_debt_burndown.py` | Adapter registry, state-update gate, and subject-loop diagnostics are visible and offline-only. |
+| `Stage32` | All Stage31 surfaces | `accept-stage32`; `tests/test_stage32_response_shaping.py` | Deterministic fallback generation is context-shaped, fixed-template markers are absent, and response-shaping metrics are visible. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

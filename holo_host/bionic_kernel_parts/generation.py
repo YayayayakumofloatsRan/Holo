@@ -6,6 +6,7 @@ from ..config import HostConfig
 from ..models import ProcessorTaskRequest
 from .bounded_payload import bounded_dict, compact
 from .contracts import SPEECH_ACTIONS, STAGE29_NAME
+from .response_shaping import shape_deterministic_reply
 
 
 class BionicGeneration:
@@ -33,11 +34,14 @@ class BionicGeneration:
                 "reason": f"selected action {action_type or '<unknown>'} is not a speech action",
             }
         if self.runner is None:
+            shaped = shape_deterministic_reply(query=query, packet=packet, selected_action=selected_action)
             return {
                 "mode": "deterministic_fallback",
-                "text": f"I read this as a bounded Holo turn: {compact(query, limit=220)}",
+                "text": shaped["text"],
                 "provider": "deterministic",
                 "model": "",
+                "shape": shaped["shape"],
+                "context_refs": shaped["context_refs"],
             }
         prompt = "\n".join(
             [

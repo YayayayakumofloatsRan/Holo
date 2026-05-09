@@ -2,7 +2,7 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage31-debt-burndown`.
+- The live runtime milestone is now `stage32-response-shaping`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
@@ -12,6 +12,7 @@
 - Stage29 is implemented as a unified bionic subject kernel with CLI as the first adapter: one bounded adapter turn produces an inspectable bionic capsule, records operational `bionic_agent_traces`, exposes bionic metrics, validates a synthetic WeChat adapter path, can use DeepSeek through the processor fabric, and now keeps internals split under `holo_host/bionic_kernel_parts/` behind the stable `holo_host.bionic_agent` facade.
 - Stage30 is implemented as an explicit unified `subject_loop` contract over the bionic capsule: perception, working field, attention, inhibition, action market, generation, outcome appraisal, and state update are now visible in one bounded loop with hard invariants and no self-memory or policy mutation.
 - Stage31 is implemented as an offline debt burn-down slice: adapter registry, controlled state-update gate, subject-loop trace/metrics diagnostics, bionic CLI helper extraction, and `accept-stage31`.
+- Stage32 is implemented as an offline response-shaping slice: deterministic fallback generation now uses bounded query/action/continuity/situational context instead of a fixed template, exposes context-shaping metadata, and validates through `accept-stage32`.
 - Verified Stage23-27 on `2026-04-11`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key TestUser --chat-name TestUser --channel wechat` passed in sequential verification
@@ -23,7 +24,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is provider hardening, API compatibility over the adapter registry, and template-pressure reduction; Holo remains offline until restart and transport validation are explicitly approved.
+- The next implementation focus is provider hardening, API compatibility over the adapter registry, and deeper autonomous inquiry quality; Holo remains offline until restart and transport validation are explicitly approved.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 
@@ -43,8 +44,8 @@
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: provider compatibility, API surfaces over the adapter registry, and template-pressure reduction
-- `Current live runtime boundary`: Stage31 is implemented in code as an offline debt burn-down and diagnostics slice; Holo should remain offline until restart is explicitly approved
+- `Active implementation priority`: provider compatibility, API surfaces over the adapter registry, and deeper autonomous inquiry quality
+- `Current live runtime boundary`: Stage32 is implemented in code as an offline response-shaping slice; Holo should remain offline until restart is explicitly approved
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains a large facade and is still the first structural slimming target for Stage25+.
@@ -64,6 +65,7 @@
 | `Stage29` | `implemented` | Add a unified bionic subject kernel with CLI as the first adapter, synthetic WeChat adapter validation, operational trace persistence, bionic metrics, DeepSeek provider support, and local acceptance without restarting Holo. | Stage28 situational fields, processor fabric, QueueStore operational storage. | `pytest -q`; `accept-stage29`; `tests/test_stage29_bionic_cli_agent.py`; `tests/test_processor_fabric.py`. | Do not start WeChat, add a second brain, bypass action-market-first, give adapters decision authority, or add raw provider calls outside processor fabric. | Ignore bionic trace surfaces and fall back to Stage28 runtime; keep DeepSeek as an optional provider only. |
 | `Stage30` | `implemented` | Add an explicit unified subject-loop contract over the bionic capsule, from perception through state update. | Stage29 bionic kernel and adapter-safe capsule pipeline. | `pytest -q`; `accept-stage30`; `tests/test_stage30_subject_loop.py`. | Do not let the loop mutate self-memory, policy sediment, Mind Graph, transport, or scheduler state. | Ignore `subject_loop` payloads and fall back to Stage29 capsule semantics. |
 | `Stage31` | `implemented` | Burn down immediate Stage29/30 architecture debt: adapter registry, controlled state-update gate, subject-loop diagnostics, and bionic CLI helper extraction. | Stage30 subject-loop contract. | `pytest -q`; `accept-stage31`; `tests/test_stage31_debt_burndown.py`. | Do not add live transport, self-memory writes, raw provider calls, or unbounded loop behavior. | Fall back to Stage30 subject-loop payloads and keep adapter registry observational only. |
+| `Stage32` | `implemented` | Burn down immediate template-pressure debt by replacing the fixed deterministic fallback phrase with bounded context-shaped response generation. | Stage31 adapter and state-gate baseline. | `pytest -q`; `accept-stage32`; `tests/test_stage32_response_shaping.py`. | Do not add live transport, self-memory writes, raw provider calls, or a hidden planner. | Fall back to Stage31 generation behavior only if response-shaping metrics or deterministic fallback stability regress. |
 
 ## Release Hygiene Ledger
 | Surface | Status | Rule | Validation |

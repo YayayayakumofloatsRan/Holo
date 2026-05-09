@@ -7917,6 +7917,17 @@ def command_accept_stage31(config_path: str | None, *, thread_key: str, chat_nam
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_accept_stage32(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = bionic_cli.accept_stage32_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_show_processor_mesh(config_path: str | None) -> int:
     daemon = build_daemon(config_path)
     try:
@@ -9066,6 +9077,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage31_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage31_parser.add_argument("--chat-name", default="TestUser")
     accept_stage31_parser.add_argument("--channel", default="cli")
+    accept_stage32_parser = subparsers.add_parser("accept-stage32", help="Run the Stage-32 response-shaping gate")
+    accept_stage32_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage32_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage32_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -9996,6 +10011,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage31":
         return command_accept_stage31(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage32":
+        return command_accept_stage32(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

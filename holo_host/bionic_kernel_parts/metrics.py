@@ -29,6 +29,11 @@ def compute_bionic_metrics(
     )
     marker_hits = sum(1 for marker in template_markers if marker in generation_text.lower())
     template_pressure = min(1.0, marker_hits / max(1, len(template_markers)))
+    context_refs = clip_list(generation.get("context_refs", []), limit=8)
+    context_shaping_units = len([item for item in context_refs if str(item or "").strip()])
+    if str(generation.get("shape", "") or "").strip():
+        context_shaping_units += 1
+    context_shaping = min(1.0, context_shaping_units / 6.0)
     return {
         "working_field_density": round(min(1.0, sum(1 for item in field_units if str(item or "").strip()) / 8.0), 4),
         "inhibition_count": len(list(inhibition.get("reasons", []))),
@@ -36,5 +41,6 @@ def compute_bionic_metrics(
         "history_reread_avoided": bool(inhibition.get("history_reread_inhibited", False)),
         "action_market_top_margin": round(top_margin, 4),
         "template_pressure_score": round(template_pressure, 4),
+        "context_shaping_score": round(context_shaping, 4),
         "query_chars": len(str(query or "")),
     }
