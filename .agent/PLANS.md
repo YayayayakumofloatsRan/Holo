@@ -2,7 +2,7 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage38-visual-provider-bridge`.
+- The live runtime milestone is now `stage39-bionic-turing-benchmark`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
@@ -19,6 +19,7 @@
 - Stage36 is implemented as an autonomous-inquiry quality slice: deterministic bionic fallback text no longer uses label-template prefixes, asks at most one grounded question, exposes inquiry-quality metrics, and validates through `accept-stage36` without starting WeChat.
 - Stage37 is implemented as a bionic self-eval and capability-honesty slice: same-thread bionic trace continuity is prompt-visible, text-provider image overclaiming is guarded, non-executable self-eval actions fall back to speech candidates, and provider-backed output is question/markdown bounded.
 - Stage38 is implemented as a visual-provider bridge slice: explicit bionic CLI image input routes through `image_understand`, image-capable provider metadata is persisted with visual memory, and text-only generation consumes visual summaries without overclaiming direct raw image access.
+- Stage39 is implemented as a bionic Turing benchmark slice: internal CLI probes now score continuity reference, mechanism-leakage prevention, naturalness, question bounds, context grounding, and non-empty speech without starting WeChat.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -44,6 +45,13 @@
   - `pytest -q` passed with `301` tests
   - `python scripts/check_public_release_hygiene.py` passed
   - `git diff --check` reported no whitespace errors
+- Verified Stage39 on `2026-05-10`:
+  - `pytest -q tests/test_stage39_bionic_turing_benchmark.py tests/test_stage38_visual_provider_bridge.py tests/test_stage37_bionic_self_eval.py tests/test_stage36_inquiry_quality.py tests/test_stage32_response_shaping.py tests/test_stage29_bionic_cli_agent.py` passed
+  - `python -m holo_host --config .holo_host.toml accept-stage39 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed
+  - `python -m holo_host --config .holo_host.toml show-bionic-turing-scorecard --thread-key cli:TestUser --chat-name TestUser --channel cli` passed with scorecard status `pass`
+  - `pytest -q` passed with `306` tests
+  - `python scripts/check_public_release_hygiene.py` passed
+  - `git diff --check` reported no whitespace errors
 - Verified Stage23-27 on `2026-04-11`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key TestUser --chat-name TestUser --channel wechat` passed in sequential verification
@@ -55,7 +63,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is explicit Stage39+ planning for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening; Holo remains WeChat-offline until live transport validation is explicitly approved.
+- The next implementation focus is explicit Stage40+ planning for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening; Holo remains WeChat-offline until live transport validation is explicitly approved.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 
@@ -75,8 +83,8 @@
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage39+ targeted debt repair for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening
-- `Current live runtime boundary`: Stage38 is implemented in code as an internal bionic visual-provider bridge; no live transport, transport authority change, or provider call outside processor fabric was added
+- `Active implementation priority`: Stage40+ targeted debt repair for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening
+- `Current live runtime boundary`: Stage39 is implemented in code as an internal bionic Turing benchmark; no live transport, transport authority change, self-memory mutation, or second decision layer was added
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.
@@ -103,6 +111,7 @@
 | `Stage36` | `implemented` | Close autonomous-inquiry formatting debt in the offline bionic kernel while preserving action-market-first generation. | Stage35 internal runtime readiness and Stage32 response shaping. | `pytest -q`; `accept-stage36`; `tests/test_stage36_inquiry_quality.py`. | Do not reintroduce label-template inquiry, ask multiple ungrounded questions, start transport, or add a hidden planner. | Fall back to Stage35 internal readiness and Stage32 shaping; keep inquiry debt visible until Stage36 passes again. |
 | `Stage37` | `implemented` | Repair observed bionic self-eval failures around context continuity, capability honesty, and non-speech empty replies. | Stage36 inquiry quality and Stage35 internal readiness. | `pytest -q`; `accept-stage37`; `tests/test_stage37_bionic_self_eval.py`. | Do not invent continuity, overclaim image support, bypass action-market-first, start transport, or add a hidden planner. | Fall back to Stage36 inquiry quality and keep capability-honesty failures visible until Stage37 passes again. |
 | `Stage38` | `implemented` | Route explicit bionic CLI image input through image-capable `image_understand` and consume visual-memory summaries without text-provider overclaiming. | Stage37 capability honesty and Stage28 visual memory. | `pytest -q`; `accept-stage38`; `tests/test_stage38_visual_provider_bridge.py`. | Do not start WeChat, add transport authority, bypass processor fabric, or claim direct image reading from text-only providers. | Fall back to Stage37 honesty guard and require explicit `ingest-image`/visual-memory before visual claims. |
+| `Stage39` | `implemented` | Add an internal bionic Turing scorecard and use it to reduce mechanism leakage, continuity reset, formulaic fallback text, and theatrical prompt pressure. | Stage38 visual-provider bridge and Stage37 capability honesty. | `pytest -q`; `accept-stage39`; `tests/test_stage39_bionic_turing_benchmark.py`. | Do not treat the scorecard as live human validation, add transport authority, mutate self-memory, or create a second decision layer. | Fall back to Stage38 visual-provider bridge and keep Stage39 scoring disabled until the benchmark is repaired. |
 
 ## Release Hygiene Ledger
 | Surface | Status | Rule | Validation |

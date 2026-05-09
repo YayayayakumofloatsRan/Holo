@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .bounded_payload import clip_list, safe_float
+from .turing_eval import score_bionic_turing_probe_set
 
 
 def compute_bionic_metrics(
@@ -48,6 +49,21 @@ def compute_bionic_metrics(
     if isinstance(inquiry_quality, dict):
         inquiry_quality_score = safe_float(inquiry_quality.get("score", 0.0))
         question_count = int(safe_float(inquiry_quality.get("question_count", question_count)))
+    turing_score = score_bionic_turing_probe_set(
+        [
+            {
+                "probe_id": "current_turn",
+                "text": generation_text,
+                "capsule": {
+                    "generation": {"context_refs": context_refs},
+                    "metrics": {
+                        "template_pressure_score": template_pressure,
+                    },
+                },
+                "expected_anchor": str(packet.get("continuity_summary", "") or ""),
+            }
+        ]
+    )
     return {
         "working_field_density": round(min(1.0, sum(1 for item in field_units if str(item or "").strip()) / 8.0), 4),
         "inhibition_count": len(list(inhibition.get("reasons", []))),
@@ -58,6 +74,8 @@ def compute_bionic_metrics(
         "formatting_pressure_score": round(formatting_pressure, 4),
         "context_shaping_score": round(context_shaping, 4),
         "inquiry_quality_score": round(inquiry_quality_score, 4),
+        "bionic_turing_score": round(safe_float(turing_score.get("overall_score", 0.0)), 4),
+        "bionic_turing_pass_threshold": round(safe_float(turing_score.get("pass_threshold", 0.82)), 4),
         "question_count": question_count,
         "query_chars": len(str(query or "")),
     }

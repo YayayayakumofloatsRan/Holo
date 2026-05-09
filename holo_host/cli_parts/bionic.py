@@ -8,6 +8,7 @@ from pathlib import Path
 import holo_memory_library.rag_memory as rm
 from ..adapter_registry import adapter_registry
 from ..bionic_agent import BionicKernel, BionicTurnRequest, KERNEL_NAME, STAGE29_NAME, STAGE30_NAME, SUBJECT_LOOP_PHASES
+from ..bionic_kernel_parts.turing_eval import STAGE39_NAME, score_bionic_turing_probe_set
 from ..config import load_config
 from ..memory_bridge import MemoryBridge
 from ..models import ProcessorTaskResult
@@ -148,6 +149,32 @@ class _Stage38ImageRunner:
             output_schema=request.output_schema,
             metadata=metadata,
         )
+
+
+class _Stage39TuringMemory:
+    def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
+        return {
+            "tier": "stage39-local",
+            "memory_route": "stage39_turing_probe",
+            "continuity_summary": "We were comparing the screenshot bridge and deciding how to make the CLI replies feel less mechanical.",
+            "situational_field": {
+                "situational_field_visible": True,
+                "modalities": ["text", "scene", "visual"],
+                "grounding_order": ["continuity_summary", "scene_state", "query"],
+                "open_questions": [],
+                "inquiry_style": "natural_continuation",
+                "history_reliance": "low",
+            },
+            "stage28": {"situational_field_visible": True, "hard_gate_preserved": True},
+            "action_market": [
+                {
+                    "action_type": "reply_once",
+                    "score": 0.78,
+                    "reason": "answer as a grounded continuation without exposing internal machinery",
+                },
+                {"action_type": "silence", "score": 0.04, "reason": "the user asked for continuity"},
+            ],
+        }
 
 
 def close_reply_service(service: HoloReplyService) -> None:
@@ -759,6 +786,120 @@ def accept_stage38_payload(
             "no_wechat_transport_start": True,
             "processor_fabric_only": True,
             "text_provider_no_direct_image_overclaim": True,
+            "transport_interface_only": True,
+        },
+    }, transport
+
+
+def bionic_turing_benchmark_payload(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+) -> tuple[dict, str]:
+    config = load_config(config_path=config_path)
+    kernel = BionicKernel(config=config, memory=_Stage39TuringMemory(), runner=None)
+    probe_specs = [
+        {
+            "probe_id": "resume_after_pause",
+            "query": "where were we before I paused?",
+            "expected_anchor": "screenshot bridge",
+        },
+        {
+            "probe_id": "natural_next_step",
+            "query": "say the next step without sounding like a harness",
+            "expected_anchor": "less mechanical",
+        },
+    ]
+    turns: list[dict] = []
+    score_inputs: list[dict] = []
+    for spec in probe_specs:
+        turn = kernel.run_request(
+            BionicTurnRequest(
+                query=str(spec["query"]),
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                adapter=channel or "cli",
+                record=False,
+            )
+        )
+        capsule = dict(turn.get("capsule", {}))
+        text = str(dict(capsule.get("generation", {})).get("text", "") or "")
+        turns.append(turn)
+        score_inputs.append(
+            {
+                "probe_id": spec["probe_id"],
+                "text": text,
+                "capsule": capsule,
+                "expected_anchor": spec["expected_anchor"],
+            }
+        )
+    scorecard = score_bionic_turing_probe_set(score_inputs)
+    return {
+        "ok": bool(scorecard.get("passed", False)),
+        "stage": STAGE39_NAME,
+        "status": "pass" if bool(scorecard.get("passed", False)) else "fail",
+        "scorecard": scorecard,
+        "turns": turns,
+        "hard_boundaries": {
+            "no_wechat_transport_start": True,
+            "processor_fabric_only": True,
+            "transport_interface_only": True,
+            "observational_benchmark_only": True,
+        },
+    }, "local_process"
+
+
+def accept_stage39_payload(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+) -> tuple[dict, str]:
+    stage38_payload, transport = accept_stage38_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    benchmark, _ = bionic_turing_benchmark_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    scorecard = dict(benchmark.get("scorecard", {}))
+    metrics = dict(scorecard.get("metrics", {}))
+    first_turn = dict(list(benchmark.get("turns", [{}]))[0]) if isinstance(benchmark.get("turns", []), list) else {}
+    capsule = dict(first_turn.get("capsule", {})) if isinstance(first_turn.get("capsule", {}), dict) else {}
+    first_text = str(dict(capsule.get("generation", {})).get("text", "") or "")
+    lower_text = first_text.lower()
+    checks = {
+        "stage38_gate_passed": bool(stage38_payload.get("ok", False)),
+        "scorecard_passed": bool(scorecard.get("passed", False)) and float(scorecard.get("overall_score", 0.0) or 0.0) >= 0.82,
+        "mechanism_leakage_blocked": (
+            "action-market" not in lower_text
+            and "capsule" not in lower_text
+            and "bionic kernel" not in lower_text
+            and float(metrics.get("mechanism_leakage_score", 0.0) or 0.0) >= 0.9
+        ),
+        "continuity_anchor_visible": "screenshot bridge" in lower_text and float(metrics.get("continuity_reference_score", 0.0) or 0.0) >= 0.7,
+        "transport_interface_only": dict(capsule.get("interface_contract", {})).get("transport_decision_authority") is False,
+    }
+    return {
+        "ok": all(checks.values()),
+        "stage": STAGE39_NAME,
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "stage38": stage38_payload,
+        "benchmark": benchmark,
+        "hard_boundaries": {
+            "no_wechat_transport_start": True,
+            "no_second_brain": True,
+            "no_unbounded_loop": True,
             "transport_interface_only": True,
         },
     }, transport

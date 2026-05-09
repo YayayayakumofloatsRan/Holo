@@ -39,6 +39,16 @@ def _finish_question(text: str) -> str:
     return value if value.endswith(("?", "？")) else f"{value}?"
 
 
+def _continuity_sentence(continuity: str) -> str:
+    value = str(continuity or "").strip()
+    if not value:
+        return ""
+    lowered = value.lower()
+    if lowered.startswith(("we were ", "we are ", "we had ", "we just ", "you asked ", "the last ")):
+        return _finish_sentence(value)
+    return _finish_sentence(f"We were at {value}")
+
+
 def _quality_payload(*, text: str, context_refs: list[str], grounded_question: str) -> dict[str, Any]:
     question_count = _question_count(text)
     label_marker_count = _label_marker_count(text)
@@ -97,12 +107,18 @@ def shape_deterministic_reply(
             parts.append(_finish_sentence(f"This follows {continuity}"))
     else:
         shape = "next_step"
-        parts = [
-            _finish_sentence(f"I would continue with {query_text}"),
-            _finish_sentence(f"The action-market basis is {reason}"),
-        ]
+        if continuity:
+            parts = [
+                _continuity_sentence(continuity),
+                _finish_sentence(f"The next useful move is {reason}"),
+            ]
+        else:
+            parts = [
+                _finish_sentence(f"I would keep this focused on {query_text}"),
+                _finish_sentence(f"The useful next move is {reason}"),
+            ]
     if continuity and not open_questions:
-        parts.append(_finish_sentence(f"This follows {continuity}"))
+        parts.append(_finish_sentence(f"That keeps the reply tied to the visible thread"))
     text = compact(" ".join(part for part in parts if part), limit=360)
 
     return {

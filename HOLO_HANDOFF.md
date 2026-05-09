@@ -71,12 +71,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 66. `docs/ENGINEERING_HANDOFF_STAGE37.md`
 67. `docs/STAGE38_VISUAL_PROVIDER_BRIDGE.md`
 68. `docs/ENGINEERING_HANDOFF_STAGE38.md`
-69. `HOLO_SYSTEM.md`
-70. `HOLO_HOST.md`
-71. `OPERATIONS.md`
-72. `docs/PUBLIC_RELEASE_HYGIENE.md`
-73. `holo_memory_library/MEMORY_LIBRARY.md`
-74. `windows_helper/README.md`
+69. `docs/STAGE39_BIONIC_TURING_BENCHMARK.md`
+70. `docs/ENGINEERING_HANDOFF_STAGE39.md`
+71. `HOLO_SYSTEM.md`
+72. `HOLO_HOST.md`
+73. `OPERATIONS.md`
+74. `docs/PUBLIC_RELEASE_HYGIENE.md`
+75. `holo_memory_library/MEMORY_LIBRARY.md`
+76. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -91,9 +93,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage38-visual-provider-bridge`.
+- The current milestone tag is `stage39-bionic-turing-benchmark`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is post-Stage38 targeted debt repair: provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth from concrete regressions, or operator-approved live WeChat hardening. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
+- Current focus is post-Stage39 targeted debt repair: provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth from concrete regressions, or operator-approved live WeChat hardening. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -116,8 +118,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage36: autonomous inquiry formatting debt is closed in the offline bionic kernel; deterministic fallback asks at most one grounded question, exposes inquiry-quality metrics, and preserves action-market-first generation without starting WeChat
   - Stage37: internal bionic self-evaluation now guards provider-backed generation against empty-continuity hallucination, text-provider image overclaiming, excessive question/markdown pressure, and non-speech CLI self-eval empty replies
   - Stage38: explicit bionic CLI image input now routes through `image_understand`, stores image-capable provider metadata in visual memory, and grounds text-only generation in visual summaries without claiming direct raw image access
+  - Stage39: internal bionic Turing scoring now gates CLI continuity, naturalness, mechanism-leakage prevention, question bounds, and context grounding
 - The next planned arc is:
-  - Stage39+: explicit re-plan for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live transport hardening
+  - Stage40+: explicit re-plan for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live transport hardening
   - Online long-horizon canary remains deferred beyond Stage28 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned
   - Artifact/tool/outcome progress coupling remains deferred and should not be silently folded into Stage28 or a future canary
   - Bounded subject programs remain deferred beyond the current Stage28 milestone
@@ -302,6 +305,10 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host accept-stage37 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - Stage38 visual-provider bridge acceptance:
   - `python3 -m holo_host accept-stage38 --thread-key cli:TestUser --chat-name TestUser --channel cli`
+- Stage39 bionic Turing benchmark:
+  - `python3 -m holo_host show-bionic-turing-scorecard --thread-key cli:TestUser --chat-name TestUser --channel cli`
+- Stage39 bionic Turing benchmark acceptance:
+  - `python3 -m holo_host accept-stage39 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -338,6 +345,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host show-visual-provider-readiness`
   - `python3 -m holo_host show-debt-registry`
   - `python3 -m holo_host show-internal-runtime-readiness`
+  - `python3 -m holo_host show-bionic-turing-scorecard --thread-key cli:TestUser --chat-name TestUser --channel cli`
   - `python3 -m holo_host show-usage-ledger --limit 100`
 
 ## Current Weak Spots
@@ -346,6 +354,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - Autonomous inquiry formatting debt is now bounded by `python3 -m holo_host accept-stage36`; do not reintroduce label-template inquiry or multiple ungrounded questions.
 - Bionic self-evaluation and capability honesty are now bounded by `python3 -m holo_host accept-stage37`; do not let provider-backed CLI replies invent missing continuity, overclaim image ability, or return empty text for self-eval probes.
 - Internal visual-provider bridging is now bounded by `python3 -m holo_host accept-stage38`; explicit CLI images must go through `image_understand`, and text-only generation may describe only visual-memory summaries.
+- Internal bionic Turing quality is now bounded by `python3 -m holo_host accept-stage39`; do not let ordinary CLI replies expose internal machinery, reset continuity, or pass scores through formulaic/theatrical phrasing.
 - `reply_api.py` remains bounded structural debt. Further slimming must happen only behind dedicated compatibility tests, replay checks, and acceptance gates.
 - `pyweixin_dialog`, live WeChat trigger behavior, latency/cache/provider-fallback soak, and live visual-provider soak are external-precondition debts while Holo remains WeChat-offline.
 - Visual-provider readiness is now bounded by `show-visual-provider-readiness` plus `accept-stage38`: text APIs must not overclaim image support, and explicit CLI image input must preserve image-capable provider metadata.
@@ -434,6 +443,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - `python3 -m holo_host accept-stage36 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - `python3 -m holo_host accept-stage37 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - `python3 -m holo_host accept-stage38 --thread-key cli:TestUser --chat-name TestUser --channel cli`
+- `python3 -m holo_host accept-stage39 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 
 ## Next Arc Program
 - Durable Stage23-27 sources of truth:
@@ -455,9 +465,10 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage36 is implemented as autonomous inquiry quality hardening
   - Stage37 is implemented as bionic self-eval and capability-honesty hardening
   - Stage38 is implemented as the internal visual-provider bridge
+  - Stage39 is implemented as the internal bionic Turing benchmark
   - Online long-horizon canary remains deferred beyond Stage28
   - Bounded subject programs remain deferred until a later explicit re-plan
-- Current verified baseline after Stage38:
+- Current verified baseline after Stage39:
   - `pytest -q` passed on `2026-04-11` for the Stage23-27 baseline
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed on `2026-04-28`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
@@ -467,13 +478,17 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage26 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage27 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-28`
-  - `pytest -q` passed with `301` tests on `2026-05-10`
+  - `pytest -q` passed with `301` tests on `2026-05-10` before Stage39
   - `python -m holo_host --config .holo_host.toml accept-stage36 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-09`
   - `python -m holo_host --config .holo_host.toml accept-stage37 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-09`
   - `python -m holo_host --config .holo_host.toml accept-stage38 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-10`
+  - `pytest -q tests/test_stage39_bionic_turing_benchmark.py tests/test_stage38_visual_provider_bridge.py tests/test_stage37_bionic_self_eval.py tests/test_stage36_inquiry_quality.py tests/test_stage32_response_shaping.py tests/test_stage29_bionic_cli_agent.py` passed on `2026-05-10`
+  - `python -m holo_host --config .holo_host.toml accept-stage39 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-10`
+  - `python -m holo_host --config .holo_host.toml show-bionic-turing-scorecard --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-10`
+  - `pytest -q` passed with `306` tests on `2026-05-10` after Stage39
   - `python scripts/check_public_release_hygiene.py` passed on `2026-05-10`
   - `git diff --check` reported no whitespace errors on `2026-05-10`
-  - Stage29 through Stage38 are offline/internal bionic-kernel/provider/runtime-readiness/inquiry-quality/capability-honesty/visual-provider milestones; run the local verification commands in the Stage38 handoff before claiming current green status
+  - Stage29 through Stage39 are offline/internal bionic-kernel/provider/runtime-readiness/inquiry-quality/capability-honesty/visual-provider/bionic-Turing milestones; run the local verification commands in the Stage39 handoff before claiming current green status
 
 ## Invariants
 - Do not silently change online transport modes

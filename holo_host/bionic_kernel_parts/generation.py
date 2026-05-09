@@ -96,21 +96,23 @@ class BionicGeneration:
         continuity = compact(packet.get("continuity_summary", ""), limit=280)
         stage38 = bounded_dict(packet.get("stage38", {}), depth=3)
         visual_grounding = compact(stage38.get("visual_summary", ""), limit=280)
-        capability_line = "Provider capability boundary: image_support is unknown before provider return; do not claim direct image reading unless image_support=true."
+        capability_line = "Capability boundary: do not claim direct image reading unless image_support=true."
         visual_line = (
             f"Visual grounding from image_understand: {visual_grounding}. Use only this summary; do not claim raw image access in this generation step."
             if visual_grounding
-            else "Visual grounding from image_understand: none visible in this capsule."
+            else "Visual grounding from image_understand: none visible for this turn."
         )
         prompt = "\n".join(
             [
-                "Answer as a bounded Holo bionic kernel turn without label-template prefixes.",
+                "Reply as Holo in one compact natural turn without label-template prefixes.",
+                "Do not expose internal machinery, scoring terms, or debug labels in the user-facing reply.",
+                "Keep the wording plain and concrete; avoid theatrical metaphors or test-harness phrasing.",
                 "If asking, ask at most one grounded question tied to the current continuity.",
-                "Do not invent prior work. If continuity is empty, say the prior turn is not visible in this capsule.",
+                "Do not invent prior work. If continuity is empty, say the prior turn is not visible here.",
                 capability_line,
                 visual_line,
-                f"Selected action: {selected_action.get('action_type', 'reply_once')}",
-                f"Action basis: {compact(selected_action.get('reason') or selected_action.get('why_now') or '', limit=220)}",
+                f"Reply intent: {selected_action.get('action_type', 'reply_once')}",
+                f"Grounding basis: {compact(selected_action.get('reason') or selected_action.get('why_now') or '', limit=220)}",
                 f"Continuity: {continuity}",
                 f"User query: {query}",
             ]
@@ -178,7 +180,7 @@ class BionicGeneration:
         if continuity_query and not continuity.strip():
             visible_query = compact(query_text, limit=120)
             return _strip_markdown_emphasis(
-                "这条内部 capsule 没拿到可验证的上一轮连续摘要，我不能安全地编造刚才做了什么。"
-                f"当前可见请求是：{visible_query}"
+                "The previous turn is not visible in this context, so I should not invent where we left off. "
+                f"The visible request is: {visible_query}"
             )
         return _bound_questions(_strip_markdown_emphasis(str(text or "")), limit=1)

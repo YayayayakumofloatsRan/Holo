@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage38 is now the current implemented visual-provider bridge milestone, and Stage39+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage39 is now the current implemented bionic Turing benchmark milestone, and Stage40+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -104,6 +104,11 @@
   - visual-memory records preserve the image-capable provider metadata used to produce the summary
   - bionic generation consumes visual-memory summaries and does not claim text-only providers directly read raw images
   - `accept-stage38` composes Stage37 and verifies the visual-provider bridge without starting WeChat
+- Stage39 exit state on `2026-05-10`:
+  - internal bionic replies are now checked by a bounded, deterministic Turing-style scorecard focused on continuity, mechanism non-leakage, naturalness, question bounds, template pressure, and context use
+  - deterministic fallback response shaping no longer emits `I would continue with`, `action-market`, `capsule`, or similar internal mechanism phrasing in user-facing replies
+  - provider-backed bionic generation receives plain-language prompt guards against debug labels, theatrical metaphors, unsupported continuity invention, and capability overclaiming
+  - `show-bionic-turing-scorecard` and `accept-stage39` are available for internal CLI/API validation without starting WeChat or mutating self-memory
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -127,6 +132,7 @@
 - Stage36 autonomous-inquiry work must stay inside the bionic kernel, preserve action-market-first generation, and avoid label-template output, multiple ungrounded questions, second-brain planning, or live transport.
 - Stage37 self-eval work must not invent missing continuity, overclaim unsupported image reading, execute internal operator actions from CLI dialogue, or add any planner/loop beyond the existing bionic kernel.
 - Stage38 visual-provider work must route raw image input through `image_understand`, keep text-only generation honest, and preserve transport-as-interface.
+- Stage39 bionic Turing benchmark work is an internal engineering benchmark only; it must not claim a real human Turing-test pass, start transport, create a hidden evaluator loop, mutate self-memory, or become a runtime decision layer.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -260,6 +266,14 @@
 - `Stop rule`: do not start WeChat, give transport decision authority, bypass processor fabric, or let text-only providers claim direct raw image access
 - `Rollback rule`: fall back to Stage37 capability honesty and refuse unsupported visual claims until Stage38 is green again
 
+### Stage39: Bionic Turing Benchmark
+- `Status`: implemented on `2026-05-10`
+- `Goal`: make bionic dialogue quality machine-checkable against the project's internal standard for continuity, non-mechanical phrasing, context discipline, and mechanism non-leakage
+- `Scope`: add deterministic Turing-style scorecard metrics, tighten deterministic fallback phrasing, harden provider generation prompts, expose `show-bionic-turing-scorecard`, and add `accept-stage39`
+- `Validation`: `pytest -q`; `accept-stage39`; `tests/test_stage39_bionic_turing_benchmark.py`; `tests/test_stage38_visual_provider_bridge.py`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage36_inquiry_quality.py`; `tests/test_stage32_response_shaping.py`; `tests/test_stage29_bionic_cli_agent.py`
+- `Stop rule`: do not claim a real external Turing-test pass, leak internal mechanism labels, invent missing continuity, start WeChat, mutate self-memory, or add evaluator-driven runtime autonomy
+- `Rollback rule`: fall back to Stage38 visual-provider bridge and keep the Stage39 scorecard as an observational diagnostic until naturalness and continuity regressions are repaired
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -279,6 +293,7 @@
 | `Stage36` | All Stage35 surfaces | `accept-stage36`; `tests/test_stage36_inquiry_quality.py`; `tests/test_stage32_response_shaping.py`; `tests/test_stage29_bionic_cli_agent.py` | Autonomous inquiry is grounded, non-template, bounded to at most one question, action-market-first, and transport-free. |
 | `Stage37` | All Stage36 surfaces | `accept-stage37`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage29_bionic_cli_agent.py` | Bionic self-eval uses same-thread continuity when available, stays honest about provider image support, produces speech for CLI self-eval, and remains transport-free. |
 | `Stage38` | All Stage37 and Stage28 visual-memory surfaces | `accept-stage38`; `tests/test_stage38_visual_provider_bridge.py`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage28_multimodal_homeostatic_kernel.py` | Explicit CLI image input routes through image-capable `image_understand`, visual-memory stores provider metadata, and text-only generation stays honest. |
+| `Stage39` | All Stage38 bionic and visual-provider surfaces | `accept-stage39`; `show-bionic-turing-scorecard`; `tests/test_stage39_bionic_turing_benchmark.py`; `tests/test_stage32_response_shaping.py` | Internal bionic replies pass the bounded Turing-style scorecard, avoid mechanism leakage and template pressure, and preserve transport-free self-memory neutrality. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

@@ -77,7 +77,9 @@ class Stage32ResponseShapingTests(unittest.TestCase):
             )
 
         text = result["capsule"]["generation"]["text"]
-        self.assertIn("I would continue with continue implementation", text)
+        self.assertIn("The next useful move is answer directly without reopening history", text)
+        self.assertNotIn("I would continue with", text)
+        self.assertNotIn("action-market", text.lower())
         self.assertNotIn("Next:", text)
         self.assertNotIn("which technical debt should be closed first?", text)
 

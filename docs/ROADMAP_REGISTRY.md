@@ -119,9 +119,14 @@ Stage38: visual provider bridge
 - Routes raw image understanding through the processor fabric `image_understand` task and stores image-capable provider metadata with visual memory.
 - Lets bionic text generation consume visual-memory summaries while keeping DeepSeek and other text-only providers honest about not directly reading raw image pixels.
 
+Stage39: bionic Turing benchmark
+- Implemented an internal CLI bionic Turing scorecard for continuity reference, mechanism-leakage prevention, naturalness, question bounds, context grounding, and non-empty speech.
+- Adds `show-bionic-turing-scorecard`, `accept-stage39`, and `bionic_turing_score` metrics without live transport, self-memory mutation, or a second decision layer.
+- Tightens deterministic fallback and provider prompts so ordinary replies avoid harness phrasing, internal machinery labels, repeated continuity prefixes, and theatrical metaphor pressure.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage38. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage39+ program replaces them.
+This planned arc starts after Stage39. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage40+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, Stage34 visual-readiness gating, and Stage38 visual-provider bridging.
@@ -129,7 +134,7 @@ Provider/API compatibility breadth
 - Live visual-provider soak should be done before WeChat or live transport is restarted; Stage38 proves the internal CLI image bridge and provider metadata path.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, and Stage38 visual-provider grounding.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, Stage38 visual-provider grounding, and Stage39 bionic Turing scoring.
 - Future work should improve real-world inquiry quality only through bounded kernel evidence and acceptance gates, without adding a second brain.
 
 Online long-horizon canary
