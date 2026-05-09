@@ -5705,7 +5705,15 @@ class MemoryBridge:
 
     def _run_image_understand(self, *, image_path: str, prompt: str) -> dict[str, Any]:
         if self.runner is None or not hasattr(self.runner, "run_task"):
-            return {}
+            return {
+                "payload": {},
+                "processor": {
+                    "status": "unavailable",
+                    "provider": "",
+                    "capabilities": {},
+                    "image_paths": [str(image_path)],
+                },
+            }
         result = self.runner.run_task(
             ProcessorTaskRequest(
                 task_type="image_understand",
@@ -5717,11 +5725,26 @@ class MemoryBridge:
                 allowed_data_layers=("visual_memory", "relationship_state", "activation_state"),
             )
         )
+        metadata = dict(result.metadata or {}) if isinstance(result.metadata, dict) else {}
+        processor = {
+            "status": "ok" if int(result.returncode or 0) == 0 else "error",
+            "provider": str(metadata.get("provider", "") or ""),
+            "lane": str(metadata.get("lane", "") or ""),
+            "model": str(metadata.get("model", "") or ""),
+            "capabilities": dict(metadata.get("capabilities", {})) if isinstance(metadata.get("capabilities", {}), dict) else {},
+            "duration_ms": int(metadata.get("duration_ms", 0) or 0),
+            "image_paths": [str(image_path)],
+            "returncode": int(result.returncode or 0),
+            "stderr": compact_text(str(result.stderr or ""), 240),
+        }
         try:
             payload = json.loads(result.text)
         except (TypeError, ValueError, json.JSONDecodeError):
             payload = {}
-        return payload if isinstance(payload, dict) else {}
+        return {
+            "payload": payload if isinstance(payload, dict) else {},
+            "processor": processor,
+        }
 
     @staticmethod
     def _coerce_visual_list(value: Any) -> list[str]:
@@ -5934,7 +5957,7 @@ class MemoryBridge:
         media_type = str(artifact.get("media_type", "") or "")
         if not media_type.startswith("image/") and str(artifact.get("artifact_type", "") or "") != "image":
             return {"status": "skipped", "reason": "not_image", "artifact": artifact}
-        understanding = self._run_image_understand(
+        understanding_report = self._run_image_understand(
             image_path=str(path),
             prompt=self._visual_understand_prompt(
                 artifact_report=artifact,
@@ -5944,6 +5967,8 @@ class MemoryBridge:
                 note=note,
             ),
         )
+        understanding = dict(understanding_report.get("payload", {})) if isinstance(understanding_report.get("payload", {}), dict) else {}
+        image_understand = dict(understanding_report.get("processor", {})) if isinstance(understanding_report.get("processor", {}), dict) else {}
         if not understanding:
             summary = str(artifact.get("summary_text", "") or "")
             extracted = str(artifact.get("extracted_excerpt", "") or "")
@@ -5957,6 +5982,9 @@ class MemoryBridge:
                 "thread_relevance": 0.62,
                 "visual_anchors": [anchor_seed] if anchor_seed else [],
             }
+            image_understand["fallback_used"] = True
+        else:
+            image_understand["fallback_used"] = False
         visual_payload = {
             "scene_summary": str(understanding.get("scene_summary", artifact.get("summary_text", "")) or ""),
             "objects": self._coerce_visual_list(understanding.get("objects")),
@@ -5989,6 +6017,7 @@ class MemoryBridge:
                 "uncertainty_markers": list(visual_payload["uncertainty_markers"]),
                 "revisit_needed": bool(visual_payload["revisit_needed"]),
                 "perceptual_density": str(visual_payload["perceptual_density"]),
+                "image_understand": image_understand,
             },
             source=source,
         )
@@ -6041,6 +6070,7 @@ class MemoryBridge:
         return {
             "status": "ok",
             "artifact": artifact,
+            "image_understand": image_understand,
             "visual_memory": visual_payload,
             "graph_sync": upsert,
             "world_coupling_signal": world_signal,

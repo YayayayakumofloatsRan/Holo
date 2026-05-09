@@ -453,6 +453,8 @@ class CodexCliProvider(ProcessorProvider):
                 "usage": usage,
                 "duration_ms": duration_ms,
                 "budget_tag": request.budget_tag,
+                "capabilities": dict(self.capabilities),
+                "image_path_count": len([path for path in request.image_paths if str(path or "").strip()]),
             },
         )
 

@@ -28,6 +28,7 @@ class BionicTurnRequest:
     channel: str = "cli"
     adapter: str = "cli"
     record: bool = True
+    image_paths: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

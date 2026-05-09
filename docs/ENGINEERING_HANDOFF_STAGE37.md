@@ -12,7 +12,7 @@ Stage37 is implemented as an internal bionic self-evaluation and capability-hone
 ## Current Debt Position
 - Autonomous inquiry formatting remains resolved by Stage36.
 - Bionic self-eval/capability honesty is now resolved by Stage37.
-- Real image understanding is still not solved for text-only providers; Stage37 only prevents overclaiming and points to `ingest-image` / visual-memory or a real `image_understand` provider.
+- Real image understanding is still not solved for text-only providers; Stage37 only prevents overclaiming and points to `ingest-image` / visual-memory or a real `image_understand` provider. Stage38 closes the internal CLI bridge for explicit image input through `image_understand`.
 - Live WeChat hardening, latency/cache soak, replay fixture breadth, and `reply_api.py` facade size remain explicit debts.
 
 ## Non-Negotiables
@@ -35,4 +35,4 @@ git diff --check
 ```
 
 ## Next Work
-The next substantive debts are still larger than a prompt patch: real image-provider integration, provider latency/cache soak, replay-backed `reply_api.py` facade slimming, replay fixture expansion from a concrete regression, or operator-approved live WeChat hardening.
+Stage38 has now closed the internal CLI image bridge. The next substantive debts are provider latency/cache soak, replay-backed `reply_api.py` facade slimming, replay fixture expansion from a concrete regression, or operator-approved live WeChat hardening.

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import base64
 import json
+import tempfile
+from pathlib import Path
 
+import holo_memory_library.rag_memory as rm
 from ..adapter_registry import adapter_registry
 from ..bionic_agent import BionicKernel, BionicTurnRequest, KERNEL_NAME, STAGE29_NAME, STAGE30_NAME, SUBJECT_LOOP_PHASES
 from ..config import load_config
+from ..memory_bridge import MemoryBridge
 from ..models import ProcessorTaskResult
 from ..reply_api import HoloReplyService
 from ..store import QueueStore
@@ -14,6 +19,8 @@ STAGE31_NAME = "stage31-debt-burndown"
 STAGE32_NAME = "stage32-response-shaping"
 STAGE36_NAME = "stage36-autonomous-inquiry-quality"
 STAGE37_NAME = "stage37-bionic-self-eval-and-capability-honesty"
+STAGE38_NAME = "stage38-visual-provider-bridge"
+STAGE38_PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wn0rC8AAAAASUVORK5CYII="
 STAGE32_TEMPLATE_MARKERS = (
     "stage29 bionic capsule reply:",
     "i read this as a bounded holo turn:",
@@ -99,6 +106,50 @@ class _Stage37ScriptedRunner:
         )
 
 
+class _Stage38ImageRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def run_task(self, request):
+        self.calls.append(request.to_dict())
+        if str(request.task_type) == "image_understand":
+            payload = {
+                "scene_summary": "A screenshot shows a Holo visual-provider diagnostics panel.",
+                "objects": ["diagnostics panel", "provider badge", "image lane"],
+                "text_ocr": "image_understand: ready",
+                "mood_imagery": "engineering verification screenshot",
+                "thread_relevance": 0.88,
+                "visual_anchors": ["visual-provider diagnostics", "image_understand ready"],
+                "spatial_refs": ["center: diagnostics panel"],
+                "uncertainty_markers": [],
+                "revisit_needed": False,
+                "perceptual_density": "medium",
+            }
+            text = json.dumps(payload, ensure_ascii=False)
+            metadata = {
+                "provider": "codex_cli",
+                "lane": "micro_fast",
+                "model": "gpt-5.4-mini",
+                "capabilities": {"text": True, "json_output": True, "image_support": True},
+                "duration_ms": 12,
+            }
+        else:
+            text = "The visual-memory summary says the screenshot shows the Holo image_understand lane ready."
+            metadata = {
+                "provider": "deepseek",
+                "lane": "subject_main",
+                "model": "deepseek-v4-pro",
+                "capabilities": {"text": True, "json_output": True, "image_support": False},
+            }
+        return ProcessorTaskResult(
+            task_type=str(request.task_type),
+            text=text,
+            returncode=0,
+            output_schema=request.output_schema,
+            metadata=metadata,
+        )
+
+
 def close_reply_service(service: HoloReplyService) -> None:
     service.store.close()
     if hasattr(service.memory, "activation"):
@@ -116,11 +167,30 @@ def bionic_agent_payload(
     channel: str,
     offline: bool,
     record: bool,
+    image_paths: list[str] | None = None,
 ) -> tuple[dict, str]:
     config = load_config(config_path=config_path)
     service = HoloReplyService(config)
     runner = None if offline else service.runner
+    normalized_image_paths = [str(path).strip() for path in list(image_paths or []) if str(path).strip()]
+    image_ingests: list[dict] = []
     try:
+        for image_path in normalized_image_paths[:3]:
+            if not Path(image_path).exists():
+                image_ingests.append({"status": "missing_image", "path": image_path})
+                continue
+            image_ingests.append(
+                service.memory.ingest_image(
+                    image_path,
+                    note="bionic_cli_image_input",
+                    source="holo_host.cli.bionic",
+                    tags=["bionic", "cli", "visual"],
+                    channel=channel,
+                    thread_key=thread_key,
+                    chat_name=chat_name,
+                    sync=not bool(offline),
+                )
+            )
         kernel = BionicKernel(config=config, store=service.store, memory=service.memory, runner=runner)
         return kernel.run_request(
             BionicTurnRequest(
@@ -130,6 +200,11 @@ def bionic_agent_payload(
                 channel=channel,
                 adapter="cli",
                 record=record,
+                image_paths=tuple(normalized_image_paths[:3]),
+                metadata={
+                    "image_ingests": image_ingests,
+                    "attachments": [{"type": "image", "path": path} for path in normalized_image_paths[:3]],
+                },
             )
         ), "local_process"
     finally:
@@ -586,4 +661,104 @@ def accept_stage37_payload(
         "self_eval_probe": self_eval_turn,
         "style_probe": style_turn,
         "continuity_prompt_visible": continuity_prompt,
+    }, transport
+
+
+def _close_stage38_bridge(bridge: MemoryBridge) -> None:
+    bridge.activation.close()
+    bridge.graph.close()
+
+
+def accept_stage38_payload(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+) -> tuple[dict, str]:
+    stage37_payload, transport = accept_stage37_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    config = load_config(config_path=config_path)
+    runner = _Stage38ImageRunner()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        image_path = root / "stage38-visual.png"
+        image_path.write_bytes(base64.b64decode(STAGE38_PNG_1X1))
+        bridge = MemoryBridge(
+            root,
+            graph_db_path=root / "mind_graph.sqlite3",
+            vector_backend="milvus",
+            rag=rm,
+            runner=runner,
+        )
+        try:
+            ingest = bridge.ingest_image(
+                str(image_path),
+                note="stage38 visual provider bridge",
+                source="accept.stage38.visual",
+                tags=["stage38", "visual"],
+                channel=channel,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                sync=True,
+            )
+            visual = bridge.visual_memory_state(thread_key=thread_key, chat_name=chat_name, channel=channel)
+            turn = BionicKernel(config=config, memory=bridge, runner=runner).run_request(
+                BionicTurnRequest(
+                    query="What is visible in this screenshot?",
+                    thread_key=thread_key,
+                    chat_name=chat_name,
+                    channel=channel,
+                    adapter="cli",
+                    record=False,
+                    image_paths=(str(image_path),),
+                    metadata={"image_ingests": [ingest]},
+                )
+            )
+        finally:
+            _close_stage38_bridge(bridge)
+    capsule = dict(turn.get("capsule", {}))
+    generation_text = str(dict(capsule.get("generation", {})).get("text", "") or "")
+    stage38 = dict(dict(capsule.get("perception", {})).get("stage38", {}))
+    image_understand = dict(ingest.get("image_understand", {})) if isinstance(ingest.get("image_understand", {}), dict) else {}
+    capabilities = dict(image_understand.get("capabilities", {})) if isinstance(image_understand.get("capabilities", {}), dict) else {}
+    visual_items = list(visual.get("items", [])) if isinstance(visual.get("items", []), list) else []
+    stored_metadata = dict(visual_items[0].get("metadata", {})) if visual_items and isinstance(visual_items[0], dict) else {}
+    checks = {
+        "stage37_gate_passed": bool(stage37_payload.get("ok", False)),
+        "image_provider_metadata_visible": (
+            image_understand.get("provider") == "codex_cli"
+            and capabilities.get("image_support") is True
+            and dict(stored_metadata.get("image_understand", {})).get("provider") == "codex_cli"
+        ),
+        "bionic_visual_grounding_visible": (
+            bool(stage38.get("image_understand_available"))
+            and int(stage38.get("image_input_count", 0) or 0) == 1
+            and "visual" in list(dict(capsule.get("working_field", {})).get("modalities", []))
+        ),
+        "text_provider_no_direct_image_overclaim": (
+            "image_support=false" not in generation_text
+            and "visual-memory summary" in generation_text
+        ),
+        "transport_interface_only": dict(capsule.get("interface_contract", {})).get("transport_decision_authority") is False,
+    }
+    return {
+        "ok": all(checks.values()),
+        "stage": STAGE38_NAME,
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "stage37": stage37_payload,
+        "image_ingest": ingest,
+        "visual_memory": visual,
+        "bionic_turn": turn,
+        "hard_boundaries": {
+            "no_wechat_transport_start": True,
+            "processor_fabric_only": True,
+            "text_provider_no_direct_image_overclaim": True,
+            "transport_interface_only": True,
+        },
     }, transport

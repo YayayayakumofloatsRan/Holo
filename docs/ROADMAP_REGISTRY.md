@@ -114,17 +114,22 @@ Stage37: bionic self-eval and capability honesty
 - Adds same-thread bionic trace continuity, provider-backed capability-honesty guards, question/markdown output bounds, and CLI speech fallback when self-eval would otherwise select a non-executable internal action.
 - Keeps real image understanding deferred to a configured image-capable provider; Stage37 prevents overclaiming but does not pretend text-only providers can read images.
 
+Stage38: visual provider bridge
+- Implemented explicit bionic CLI image input through `agent-run --image-path`.
+- Routes raw image understanding through the processor fabric `image_understand` task and stores image-capable provider metadata with visual memory.
+- Lets bionic text generation consume visual-memory summaries while keeping DeepSeek and other text-only providers honest about not directly reading raw image pixels.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage37. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage38+ program replaces them.
+This planned arc starts after Stage38. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage39+ program replaces them.
 
 Provider/API compatibility breadth
-- Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, and Stage34 visual-readiness gating.
+- Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, Stage34 visual-readiness gating, and Stage38 visual-provider bridging.
 - Future work should broaden API/provider compatibility through the processor fabric, not by adding raw hot-path provider calls.
-- Visual-provider hardening should validate real configured `image_understand` lanes before WeChat or live transport is restarted; Stage34 only proves the offline contract does not overclaim image support.
+- Live visual-provider soak should be done before WeChat or live transport is restarted; Stage38 proves the internal CLI image bridge and provider metadata path.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, and Stage37 bionic self-eval/capability-honesty gating.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, and Stage38 visual-provider grounding.
 - Future work should improve real-world inquiry quality only through bounded kernel evidence and acceptance gates, without adding a second brain.
 
 Online long-horizon canary

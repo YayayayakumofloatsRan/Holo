@@ -37,6 +37,7 @@ class BionicKernel:
         chat_name: str,
         channel: str = "cli",
         record: bool = True,
+        image_paths: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         return self.run_request(
             BionicTurnRequest(
@@ -46,6 +47,7 @@ class BionicKernel:
                 channel=channel,
                 adapter=channel or "cli",
                 record=record,
+                image_paths=tuple(str(path).strip() for path in image_paths if str(path).strip()),
             )
         )
 
@@ -100,6 +102,7 @@ class BionicKernel:
             channel=request.channel,
             adapter=request.adapter,
             record=request.record,
+            image_paths=tuple(request.image_paths),
             metadata=metadata,
         )
 

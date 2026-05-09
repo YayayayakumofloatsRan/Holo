@@ -7990,6 +7990,7 @@ def command_agent_run(
     channel: str,
     offline: bool,
     record: bool,
+    image_paths: list[str] | None = None,
 ) -> int:
     payload, _transport = bionic_cli.bionic_agent_payload(
         config_path,
@@ -7999,6 +8000,7 @@ def command_agent_run(
         channel=channel,
         offline=offline,
         record=record,
+        image_paths=image_paths or [],
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -8091,6 +8093,17 @@ def command_accept_stage36(config_path: str | None, *, thread_key: str, chat_nam
 
 def command_accept_stage37(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
     payload, _transport = bionic_cli.accept_stage37_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_accept_stage38(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = bionic_cli.accept_stage38_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -9043,6 +9056,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_run_parser.add_argument("--channel", default="cli")
     agent_run_parser.add_argument("--offline", action="store_true")
     agent_run_parser.add_argument("--no-record", action="store_true")
+    agent_run_parser.add_argument("--image-path", action="append", default=[])
     agent_trace_parser = subparsers.add_parser("agent-trace", help="Show one Stage-29 bionic kernel trace")
     agent_trace_parser.add_argument("--trace-id", type=int, required=True)
     bionic_metrics_parser = subparsers.add_parser("show-bionic-metrics", help="Show Stage-29 bionic kernel capsule metrics")
@@ -9283,6 +9297,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage37_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage37_parser.add_argument("--chat-name", default="TestUser")
     accept_stage37_parser.add_argument("--channel", default="cli")
+    accept_stage38_parser = subparsers.add_parser("accept-stage38", help="Run the Stage-38 visual provider bridge gate")
+    accept_stage38_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage38_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage38_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("accept-stage33", help="Run the Stage-33 provider API contract gate")
     subparsers.add_parser("accept-stage34", help="Run the Stage-34 debt registry and visual readiness gate")
     subparsers.add_parser("accept-stage35", help="Run the Stage-35 internal runtime readiness gate")
@@ -9485,6 +9503,7 @@ def main(argv: list[str] | None = None) -> int:
             channel=args.channel,
             offline=args.offline,
             record=not bool(args.no_record),
+            image_paths=args.image_path,
         )
     if args.command == "agent-trace":
         return command_agent_trace(args.config, trace_id=args.trace_id)
@@ -10245,6 +10264,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage37":
         return command_accept_stage37(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage38":
+        return command_accept_stage38(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

@@ -86,6 +86,7 @@ class BionicPipeline:
             "chat_name": turn.chat_name,
             "situational_field": situational_field,
             "stage28": stage28,
+            "stage38": bounded_dict(packet.get("stage38", {}), depth=3),
         }
         working_field = {
             "continuity_summary": compact(packet.get("continuity_summary", ""), limit=360),
@@ -194,6 +195,17 @@ class BionicPipeline:
             packet["sidecar_error"] = "non_dict_packet"
             return packet
         packet = dict(packet)
+        stage38 = self._stage38_visual_packet(context=context, packet=packet)
+        if stage38:
+            packet["stage38"] = stage38
+            situational = dict(packet.get("situational_field", {})) if isinstance(packet.get("situational_field", {}), dict) else {}
+            modalities = list(situational.get("modalities", [])) if isinstance(situational.get("modalities", []), list) else []
+            grounding_order = list(situational.get("grounding_order", [])) if isinstance(situational.get("grounding_order", []), list) else []
+            if stage38.get("image_input_count", 0) and "visual" not in modalities:
+                situational["modalities"] = ["visual", *modalities][:8]
+            if stage38.get("image_understand_available") and "visual_field" not in grounding_order:
+                situational["grounding_order"] = ["visual_field", *grounding_order][:8]
+            packet["situational_field"] = situational
         trace_continuity = compact(context.get("bionic_trace_continuity", ""), limit=360)
         if trace_continuity and not str(packet.get("continuity_summary", "") or "").strip():
             packet["continuity_summary"] = trace_continuity
@@ -207,6 +219,38 @@ class BionicPipeline:
             packet["stage37"] = stage37
         packet.setdefault("sidecar_status", "ok")
         return packet
+
+    def _stage38_visual_packet(self, *, context: dict[str, Any], packet: dict[str, Any]) -> dict[str, Any]:
+        image_paths = [str(path).strip() for path in context.get("image_paths", []) if str(path).strip()] if isinstance(context.get("image_paths", []), list) else []
+        image_ingests = [item for item in context.get("image_ingests", []) if isinstance(item, dict)] if isinstance(context.get("image_ingests", []), list) else []
+        visual_field = dict(packet.get("visual_field", {})) if isinstance(packet.get("visual_field", {}), dict) else {}
+        visual_memory = dict(packet.get("visual_memory", {})) if isinstance(packet.get("visual_memory", {}), dict) else {}
+        visual_summary = compact(
+            visual_field.get("summary")
+            or visual_field.get("scene_summary")
+            or visual_memory.get("scene_summary")
+            or "",
+            limit=240,
+        )
+        image_understand = {}
+        for ingest in image_ingests:
+            current = dict(ingest.get("image_understand", {})) if isinstance(ingest.get("image_understand", {}), dict) else {}
+            if current:
+                image_understand = current
+                break
+        if not image_paths and not visual_summary and not image_understand:
+            return {}
+        capabilities = dict(image_understand.get("capabilities", {})) if isinstance(image_understand.get("capabilities", {}), dict) else {}
+        return {
+            "stage": "stage38-visual-provider-bridge",
+            "image_input_count": len(image_paths),
+            "image_paths_visible": [compact(path, limit=180) for path in image_paths[:3]],
+            "image_understand_available": bool(visual_summary or image_understand),
+            "image_understand_provider": str(image_understand.get("provider", "") or ""),
+            "image_understand_image_support": capabilities.get("image_support") is True,
+            "visual_summary": visual_summary,
+            "hard_gate_preserved": True,
+        }
 
     def _action_market(self, packet: dict[str, Any]) -> list[dict[str, Any]]:
         raw_market = packet.get("action_market", [])
@@ -235,12 +279,20 @@ class BionicPipeline:
         action_type = str(selected.get("action_type", "") or "")
         lowered = str(query or "").lower()
         asks_for_self_eval = any(marker in lowered for marker in ("自测", "仿生", "不像人", "self-eval", "self evaluation"))
+        asks_for_visual_answer = any(marker in lowered for marker in ("image", "screenshot", "photo", "vision", "visible", "图片", "截图", "看图", "视觉"))
         cli_non_executable = action_type in {"operator_self_fix", "proactive_ping", "initiative_ping"}
         if str(adapter or "").lower() == "cli" and asks_for_self_eval and cli_non_executable:
             for candidate in action_market[1:]:
                 if str(candidate.get("action_type", "") or "") in SPEECH_ACTIONS:
                     adjusted = dict(candidate)
                     adjusted["selection_adjustment"] = "non_speech_cli_probe_demoted"
+                    adjusted["original_top_action"] = action_type
+                    return adjusted
+        if str(adapter or "").lower() == "cli" and asks_for_visual_answer and action_type == "visual_recall":
+            for candidate in action_market[1:]:
+                if str(candidate.get("action_type", "") or "") in SPEECH_ACTIONS:
+                    adjusted = dict(candidate)
+                    adjusted["selection_adjustment"] = "visual_recall_cli_probe_demoted"
                     adjusted["original_top_action"] = action_type
                     return adjusted
         return selected

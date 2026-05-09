@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage37 is now the current implemented bionic self-eval and capability-honesty milestone, and Stage38+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage38 is now the current implemented visual-provider bridge milestone, and Stage39+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -98,6 +98,12 @@
   - `pytest -q` passed with `298` tests
   - `python scripts/check_public_release_hygiene.py` passed
   - `git diff --check` reported no whitespace errors
+- Stage38 exit state on `2026-05-10`:
+  - explicit bionic CLI image input can be passed with `agent-run --image-path`
+  - raw image understanding remains in the processor fabric through `image_understand`
+  - visual-memory records preserve the image-capable provider metadata used to produce the summary
+  - bionic generation consumes visual-memory summaries and does not claim text-only providers directly read raw images
+  - `accept-stage38` composes Stage37 and verifies the visual-provider bridge without starting WeChat
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -120,6 +126,7 @@
 - Stage35 internal-readiness work must not start WeChat, perform live model calls during acceptance, mutate self-memory, or expose unredacted secrets.
 - Stage36 autonomous-inquiry work must stay inside the bionic kernel, preserve action-market-first generation, and avoid label-template output, multiple ungrounded questions, second-brain planning, or live transport.
 - Stage37 self-eval work must not invent missing continuity, overclaim unsupported image reading, execute internal operator actions from CLI dialogue, or add any planner/loop beyond the existing bionic kernel.
+- Stage38 visual-provider work must route raw image input through `image_understand`, keep text-only generation honest, and preserve transport-as-interface.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -245,6 +252,14 @@
 - `Stop rule`: do not invent continuity, overclaim image support, bypass action-market-first, start transport, mutate self-memory, or create a hidden planner
 - `Rollback rule`: fall back to Stage36 inquiry quality and keep capability-honesty failures visible until Stage37 is green again
 
+### Stage38: Visual Provider Bridge
+- `Status`: implemented on `2026-05-10`
+- `Goal`: close the internal CLI image-reading gap by routing explicit images through image-capable `image_understand` and grounding bionic replies in visual-memory summaries
+- `Scope`: add `BionicTurnRequest.image_paths`, `agent-run --image-path`, image-understand provider metadata preservation, `perception.stage38`, visual-grounding prompt context, and `accept-stage38`
+- `Validation`: `pytest -q`; `accept-stage38`; `tests/test_stage38_visual_provider_bridge.py`
+- `Stop rule`: do not start WeChat, give transport decision authority, bypass processor fabric, or let text-only providers claim direct raw image access
+- `Rollback rule`: fall back to Stage37 capability honesty and refuse unsupported visual claims until Stage38 is green again
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -263,6 +278,7 @@
 | `Stage35` | All Stage34 surfaces | `accept-stage35`; `tests/test_stage35_internal_runtime_readiness.py` | Internal DeepSeek runtime readiness is visible, config is secret-clean, env-key status is redacted, and WeChat transport remains stopped. |
 | `Stage36` | All Stage35 surfaces | `accept-stage36`; `tests/test_stage36_inquiry_quality.py`; `tests/test_stage32_response_shaping.py`; `tests/test_stage29_bionic_cli_agent.py` | Autonomous inquiry is grounded, non-template, bounded to at most one question, action-market-first, and transport-free. |
 | `Stage37` | All Stage36 surfaces | `accept-stage37`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage29_bionic_cli_agent.py` | Bionic self-eval uses same-thread continuity when available, stays honest about provider image support, produces speech for CLI self-eval, and remains transport-free. |
+| `Stage38` | All Stage37 and Stage28 visual-memory surfaces | `accept-stage38`; `tests/test_stage38_visual_provider_bridge.py`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage28_multimodal_homeostatic_kernel.py` | Explicit CLI image input routes through image-capable `image_understand`, visual-memory stores provider metadata, and text-only generation stays honest. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

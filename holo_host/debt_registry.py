@@ -56,12 +56,12 @@ def current_debt_items() -> list[DebtItem]:
         DebtItem(
             debt_id="visual-provider-readiness",
             title="Image understanding must not be overclaimed by text-only providers",
-            status="bounded_by_stage34",
+            status="resolved",
             category="provider_contract",
-            evidence="Stage33 provider contracts mark DeepSeek/OpenAI-compatible text APIs as image_support=false; Stage37 prevents bionic CLI overclaiming direct image reading through those providers.",
-            resolution="Expose visual-readiness and capability-honesty gates; real image understanding still requires configured image-capable provider soak.",
-            validation="accept-stage34, accept-stage37, tests/test_stage34_debt_closure.py, and tests/test_stage37_bionic_self_eval.py.",
-            next_gate="configured-real-image-provider-soak",
+            evidence="Stage33 provider contracts mark DeepSeek/OpenAI-compatible text APIs as image_support=false; Stage37 prevents bionic CLI overclaiming direct image reading; Stage38 routes explicit image input through image_understand and stores image-capable provider metadata.",
+            resolution="Use visual-memory summaries produced by image-capable processor lanes for bionic CLI image grounding while keeping text-only generation honest about not reading raw pixels directly.",
+            validation="accept-stage34, accept-stage37, accept-stage38, tests/test_stage34_debt_closure.py, tests/test_stage37_bionic_self_eval.py, and tests/test_stage38_visual_provider_bridge.py.",
+            next_gate="accept-stage38",
         ),
         DebtItem(
             debt_id="latency-cache-soak",

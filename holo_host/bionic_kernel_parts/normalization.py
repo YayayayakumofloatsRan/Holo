@@ -33,11 +33,13 @@ def normalize_turn_request(request: BionicTurnRequest) -> NormalizedTurn:
         display_name=chat_name,
     )
     context = dict(request.metadata or {})
+    image_paths = tuple(str(path).strip() for path in getattr(request, "image_paths", ()) if str(path).strip())
     context.update({
         "channel": channel,
         "thread_key": thread_key,
         "chat_name": chat_name,
         "sender": chat_name or thread_key,
+        "image_paths": list(image_paths),
         "stage29_kernel": True,
         "stage29_adapter": adapter,
         "transport_is_interface": True,
