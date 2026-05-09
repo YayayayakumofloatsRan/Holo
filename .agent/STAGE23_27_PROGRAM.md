@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage33 is now the current implemented offline provider/API contract milestone, and Stage34+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage34 is now the current implemented offline debt-registry and visual-readiness milestone, and Stage35+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -189,6 +189,14 @@
 - `Stop rule`: do not add direct provider calls outside provider classes, live transport, self-memory writes, or a new planner
 - `Rollback rule`: fall back to Stage32 bionic behavior and keep provider compatibility docs explicit if provider contract detection regresses
 
+### Stage34: Debt Registry And Visual Readiness
+- `Status`: implemented on `2026-05-09`
+- `Goal`: close offline-verifiable technical debt by making current weak spots classified, inspectable, and acceptance-gated
+- `Scope`: add the debt registry, visual-provider readiness diagnostics, `show-debt-registry`, `show-visual-provider-readiness`, and `accept-stage34`
+- `Validation`: `pytest -q`; `accept-stage34`; `tests/test_stage34_debt_closure.py`; `tests/test_stage33_provider_contracts.py`
+- `Stop rule`: do not start live transport, mutate self-memory, overclaim text-provider image support, or delete weak spots without registry entries
+- `Rollback rule`: fall back to Stage33 provider contracts and keep live-only issues as explicit external preconditions
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -203,6 +211,7 @@
 | `Stage31` | All Stage30 surfaces | `accept-stage31`; `tests/test_stage31_debt_burndown.py` | Adapter registry, state-update gate, and subject-loop diagnostics are visible and offline-only. |
 | `Stage32` | All Stage31 surfaces | `accept-stage32`; `tests/test_stage32_response_shaping.py` | Deterministic fallback generation is context-shaped, fixed-template markers are absent, and response-shaping metrics are visible. |
 | `Stage33` | All Stage32 surfaces | `accept-stage33`; `tests/test_stage33_provider_contracts.py`; `tests/test_processor_fabric.py` | Provider API surfaces are explicit, OpenAI-compatible calls use chat-completions, and processor-fabric boundaries remain intact. |
+| `Stage34` | All Stage33 surfaces | `accept-stage34`; `tests/test_stage34_debt_closure.py` | Current weak spots are classified, no unclassified debt remains in the registry, and visual-provider readiness is visible without live calls or image overclaiming. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

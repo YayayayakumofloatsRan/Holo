@@ -94,17 +94,22 @@ Stage33: provider API contracts
 - Corrects `openai_compatible` to use chat-completions while keeping the first-party `responses` provider on the Responses API.
 - Keeps provider/API compatibility inside the processor fabric and provider classes.
 
+Stage34: debt registry and visual readiness
+- Implemented a classified technical-debt registry and `accept-stage34`.
+- Adds `show-debt-registry` so weak spots cannot remain hidden in prose-only handoff notes.
+- Adds `show-visual-provider-readiness` so image-task routing is visible, text-only providers reject image requests, and real visual-provider hardening is treated as explicit configured-provider soak debt.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage33. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage34+ program replaces them.
+This planned arc starts after Stage34. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage35+ program replaces them.
 
 Provider/API compatibility breadth
-- Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, and Stage33 provider contract diagnostics.
+- Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, and Stage34 visual-readiness gating.
 - Future work should broaden API/provider compatibility through the processor fabric, not by adding raw hot-path provider calls.
-- Visual-provider hardening should validate real configured `image_understand` lanes before Holo is restarted.
+- Visual-provider hardening should validate real configured `image_understand` lanes before Holo is restarted; Stage34 only proves the offline contract does not overclaim image support.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, and Stage32 response shaping. Future work should improve autonomous inquiry shape without adding a second brain.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, and Stage34 debt classification. Future work should improve autonomous inquiry shape without adding a second brain.
 
 Online long-horizon canary
 - Deferred until after a new explicit re-plan approves any live widening.

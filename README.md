@@ -72,7 +72,9 @@ python -m holo_host agent-run --query "continue" --thread-key cli:TestUser --cha
 python -m holo_host show-bionic-metrics
 python -m holo_host show-subject-loop-metrics
 python -m holo_host show-provider-contracts
-python -m holo_host accept-stage33
+python -m holo_host show-visual-provider-readiness
+python -m holo_host show-debt-registry
+python -m holo_host accept-stage34
 ```
 
-These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage33 also checks provider API contracts without making live provider calls.
+These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage34 checks provider API contracts, visual-readiness boundaries, and classified technical debt without making live provider calls.

@@ -848,6 +848,57 @@ class CodexRunner:
             },
         }
 
+    def visual_provider_readiness(self) -> dict[str, Any]:
+        probe_request = ProcessorTaskRequest(
+            task_type="image_understand",
+            prompt="Stage34 visual readiness probe. Do not execute; inspect provider support only.",
+            image_paths=("stage34_visual_probe.png",),
+            output_schema="json",
+        )
+        dispatch = self.describe_task_dispatch(probe_request)
+        provider_rows: dict[str, dict[str, Any]] = {}
+        for name, provider in self._providers.items():
+            contract = provider.provider_contract(self)
+            provider_rows[name] = {
+                "name": name,
+                "api_surface": contract.get("api_surface", ""),
+                "capabilities": dict(contract.get("capabilities", {})),
+                "image_request_supported": bool(provider.supports_request(probe_request)),
+                "available": bool(contract.get("available", False)),
+                "availability_reason": str(contract.get("availability_reason", "") or ""),
+            }
+        text_api_provider_names = ("responses", "openai_compatible", "deepseek")
+        text_api_reject_images = all(
+            provider_rows.get(name, {}).get("image_request_supported") is False
+            for name in text_api_provider_names
+        )
+        image_capable = [
+            name
+            for name, payload in provider_rows.items()
+            if bool(payload.get("image_request_supported", False))
+        ]
+        routing_visible = "image_understand" in PROCESSOR_TASK_SPECS and bool(dispatch.get("providers"))
+        return {
+            "stage": "stage34-debt-registry-and-visual-readiness",
+            "providers": provider_rows,
+            "routing": {
+                "image_understand": dispatch,
+            },
+            "checks": {
+                "image_task_routing_visible": routing_visible,
+                "text_api_providers_reject_image_requests": text_api_reject_images,
+                "image_capable_path_visible": bool(image_capable),
+                "no_visual_overclaim": text_api_reject_images,
+            },
+            "image_capable_providers": image_capable,
+            "hard_boundaries": {
+                "no_live_call_required": True,
+                "processor_fabric_only": True,
+                "no_transport_send_right_change": True,
+                "no_self_memory_mutation": True,
+            },
+        }
+
     def describe_task_dispatch(self, request: ProcessorTaskRequest) -> dict[str, Any]:
         spec = dict(PROCESSOR_TASK_SPECS.get(request.task_type, PROCESSOR_TASK_SPECS["reply"]))
         rule = self._routing_rule_for(request.task_type)

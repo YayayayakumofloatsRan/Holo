@@ -28,6 +28,7 @@ from .capabilities import CapabilityBroker
 from .common import atomic_write_text, compact_text, stable_digest, utc_now
 from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
+from .debt_registry import current_debt_registry
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .models import AttentionState, IncomingMessage, OutgoingMessage, ProcessorTaskRequest, ReplyBubble, TurnContext
 from .operator_bus import build_engineering_snapshot, build_homeostasis_state
@@ -51,6 +52,7 @@ from .reply_service_parts.acceptance import (
     accept_stage23 as _accept_stage23,
     accept_stage24 as _accept_stage24,
     accept_stage25 as _accept_stage25,
+    accept_stage34 as _accept_stage34,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -914,6 +916,12 @@ class HoloReplyService:
     def provider_contracts(self) -> dict[str, Any]:
         return self.runner.provider_contracts()
 
+    def visual_provider_readiness(self) -> dict[str, Any]:
+        return self.runner.visual_provider_readiness()
+
+    def debt_registry(self) -> dict[str, Any]:
+        return current_debt_registry()
+
     def usage_ledger(
         self,
         *,
@@ -995,6 +1003,35 @@ class HoloReplyService:
             "status": "pass" if all(checks.values()) else "fail",
             "checks": checks,
             "provider_contracts": contracts,
+        }
+
+    def accept_stage34(self) -> dict[str, Any]:
+        return _accept_stage34(self)
+
+    def _accept_stage34_impl(self) -> dict[str, Any]:
+        stage33 = self.accept_stage33()
+        debt_registry = self.debt_registry()
+        visual_readiness = self.visual_provider_readiness()
+        visual_checks = dict(visual_readiness.get("checks", {}))
+        checks = {
+            "accept_stage33_still_passes": bool(stage33.get("ok", False)),
+            "debt_registry_classified": bool(debt_registry.get("ok", False))
+            and not bool(debt_registry.get("unclassified", [])),
+            "visual_provider_non_overclaiming": visual_checks.get("text_api_providers_reject_image_requests") is True
+            and visual_checks.get("no_visual_overclaim") is True,
+            "image_task_routing_visible": visual_checks.get("image_task_routing_visible") is True,
+            "no_live_or_memory_side_effects": dict(debt_registry.get("hard_boundaries", {})).get("no_live_transport_started") is True
+            and dict(visual_readiness.get("hard_boundaries", {})).get("no_live_call_required") is True,
+        }
+        ok = all(checks.values())
+        return {
+            "ok": ok,
+            "stage": "stage34-debt-registry-and-visual-readiness",
+            "status": "pass" if ok else "fail",
+            "checks": checks,
+            "debt_registry": debt_registry,
+            "visual_provider_readiness": visual_readiness,
+            "stage33": stage33,
         }
 
     def visual_memory(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
@@ -9342,6 +9379,12 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/provider-contracts":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.provider_contracts())
                     return
+                if parsed.path == "/visual-provider-readiness":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.visual_provider_readiness())
+                    return
+                if parsed.path == "/debt-registry":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.debt_registry())
+                    return
                 if parsed.path == "/usage-ledger":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.usage_ledger(
@@ -10251,6 +10294,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/accept-stage33":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.accept_stage33())
+                    return
+                if parsed.path == "/accept-stage34":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.accept_stage34())
                     return
             except ValueError as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(exc)})

@@ -61,12 +61,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 56. `docs/ENGINEERING_HANDOFF_STAGE32.md`
 57. `docs/STAGE33_PROVIDER_API_CONTRACTS.md`
 58. `docs/ENGINEERING_HANDOFF_STAGE33.md`
-59. `HOLO_SYSTEM.md`
-60. `HOLO_HOST.md`
-61. `OPERATIONS.md`
-62. `docs/PUBLIC_RELEASE_HYGIENE.md`
-63. `holo_memory_library/MEMORY_LIBRARY.md`
-64. `windows_helper/README.md`
+59. `docs/STAGE34_DEBT_REGISTRY_AND_VISUAL_READINESS.md`
+60. `docs/ENGINEERING_HANDOFF_STAGE34.md`
+61. `HOLO_SYSTEM.md`
+62. `HOLO_HOST.md`
+63. `OPERATIONS.md`
+64. `docs/PUBLIC_RELEASE_HYGIENE.md`
+65. `holo_memory_library/MEMORY_LIBRARY.md`
+66. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -81,9 +83,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage33-provider-api-contracts`.
+- The current milestone tag is `stage34-debt-registry-and-visual-readiness`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is post-Stage33 autonomous inquiry quality, visual-provider hardening, and CLI agent ergonomics while Holo remains offline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage34+ program replaces it.
+- Current focus is post-Stage34 explicit Stage35 planning for autonomous inquiry quality and real visual-provider soak while Holo remains offline. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage35+ program replaces it.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -101,8 +103,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage31: adapter registry, controlled state-update gate, subject-loop trace/metrics diagnostics, and bionic CLI helper extraction are implemented as offline debt burn-down
   - Stage32: deterministic fallback response shaping replaces the fixed fallback template, exposes `shape` and `context_refs`, and adds `context_shaping_score`
   - Stage33: provider API contracts are inspectable, `openai_compatible` uses chat-completions, and processor-fabric-only model-call boundaries remain explicit
+  - Stage34: current technical debt is classified in `holo_host/debt_registry.py`, visual-provider readiness is inspectable without live calls, and `accept-stage34` prevents hidden weak spots or image-capability overclaiming
 - The next planned arc is:
-  - Stage34+: explicit re-plan for visual-provider hardening, deeper autonomous inquiry quality, and CLI agent ergonomics
+  - Stage35+: explicit re-plan for real visual-provider soak, deeper autonomous inquiry quality, and CLI agent ergonomics
   - Online long-horizon canary remains deferred beyond Stage28 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned
   - Artifact/tool/outcome progress coupling remains deferred and should not be silently folded into Stage28 or a future canary
   - Bounded subject programs remain deferred beyond the current Stage28 milestone
@@ -272,6 +275,11 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host accept-stage32 --thread-key TestUser --chat-name TestUser --channel cli`
 - Stage33 provider API contract acceptance:
   - `python3 -m holo_host accept-stage33`
+- Stage34 debt registry and visual-readiness diagnostics:
+  - `python3 -m holo_host show-debt-registry`
+  - `python3 -m holo_host show-visual-provider-readiness`
+- Stage34 debt registry and visual-readiness acceptance:
+  - `python3 -m holo_host accept-stage34`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -304,22 +312,19 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - Processor routing and cost:
   - `python3 -m holo_host show-processor-routing`
   - `python3 -m holo_host show-provider-status`
+  - `python3 -m holo_host show-provider-contracts`
+  - `python3 -m holo_host show-visual-provider-readiness`
+  - `python3 -m holo_host show-debt-registry`
   - `python3 -m holo_host show-usage-ledger --limit 100`
 
 ## Current Weak Spots
-- `reply_api.py` is still a large facade even after Stage23 orthogonalized semantic and delivery concerns; further structural slimming should happen only behind replay and acceptance coverage
-- `pyweixin_dialog` on `Weixin 4.1` is still the most fragile live layer
-- live WeChat trigger behavior still needs real-world hardening
-- image understanding is still artifact-first, not a fully native visual stack
-- latency and fast-path tuning still need work
-- cache reuse is still cold in practice
-- proactive initiative exists but is often blocked by `initiative_probe_blocked`
-- retrieval and expression control still feel more engineered than natural; Stage32 reduced the fixed fallback template but did not solve higher-level autonomous inquiry quality
-- main-brain override and initiative gate calibration can create false negatives under cold `initiative_window` states
-- token accounting now exists, but some providers still rely on estimates rather than ground-truth usage
-- provider fallback behavior is standardized, but fallback paths still need more live soak time
-- replay coverage is now deterministic, but fixture breadth is still narrow and should grow only when it exposes a real blind spot
-- Stage15 helper-module extraction is in place, but facade files are still larger than ideal and should only be slimmed further behind replay checks
+- Canonical classification now lives in `python3 -m holo_host show-debt-registry`; do not delete or soften weak spots without updating that registry and `accept-stage34`.
+- `reply_api.py` remains bounded structural debt. Further slimming must happen only behind dedicated compatibility tests, replay checks, and acceptance gates.
+- `pyweixin_dialog`, live WeChat trigger behavior, latency/cache/provider-fallback soak, and real visual-provider hardening are external-precondition debts while Holo remains offline.
+- Visual-provider readiness is now bounded by `show-visual-provider-readiness`: text APIs must not overclaim image support, and real image-capable provider hardening requires explicit configured-provider soak before restart.
+- Autonomous inquiry quality remains planned behavior work. Stage32 removed the fixed fallback template, but higher-level natural inquiry still requires a Stage35+ re-plan without adding a second brain.
+- Replay fixture breadth remains intentionally narrow and should grow only when it exposes a real blind spot.
+- Stage15 helper-module extraction is in place, but facade files are still larger than ideal and should only be slimmed further behind replay checks.
 
 - Stage18 `micro_fast` routing is intentionally conservative; do not broaden it without proving explicit memory/history escalation and action-market-first still hold
 - Stage20 temporal state is intentionally bounded and inspectable; do not let it create direct sends, unbounded scheduling, or a second decision layer
@@ -390,11 +395,14 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - `python3 -m holo_host show-bionic-metrics`
 - `python3 -m holo_host show-subject-loop-metrics`
 - `python3 -m holo_host show-provider-contracts`
+- `python3 -m holo_host show-visual-provider-readiness`
+- `python3 -m holo_host show-debt-registry`
 - `python3 -m holo_host accept-stage29 --thread-key TestUser --chat-name TestUser --channel cli`
 - `python3 -m holo_host accept-stage30 --thread-key TestUser --chat-name TestUser --channel cli`
 - `python3 -m holo_host accept-stage31 --thread-key TestUser --chat-name TestUser --channel cli`
 - `python3 -m holo_host accept-stage32 --thread-key TestUser --chat-name TestUser --channel cli`
 - `python3 -m holo_host accept-stage33`
+- `python3 -m holo_host accept-stage34`
 
 ## Next Arc Program
 - Durable Stage23-27 sources of truth:

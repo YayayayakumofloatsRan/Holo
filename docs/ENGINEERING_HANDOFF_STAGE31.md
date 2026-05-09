@@ -29,6 +29,9 @@ Stage31 burns down the immediate Stage29/30 architecture debt that can be comple
 - No self-memory, policy, or Mind Graph write from the offline subject-loop path.
 - No raw provider call outside processor fabric.
 
+## Superseding Debt Registry
+Stage34 now owns the canonical classified debt inventory through `show-debt-registry` and `accept-stage34`. Use this Stage31 handoff for the original debt-burn-down context, but do not treat it as the current weak-spot source of truth.
+
 ## Validation Commands
 - `pytest -q tests/test_stage31_debt_burndown.py tests/test_stage30_subject_loop.py tests/test_stage29_bionic_cli_agent.py`
 - `python -m holo_host --config .holo_host.example.toml accept-stage31 --thread-key TestUser --chat-name TestUser --channel cli`

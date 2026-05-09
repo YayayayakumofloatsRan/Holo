@@ -346,6 +346,42 @@ def _provider_contracts_payload(config_path: str | None, *, allow_local_fallback
             service.memory.graph.close()
 
 
+def _visual_provider_readiness_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/visual-provider-readiness")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.visual_provider_readiness(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _debt_registry_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/debt-registry")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.debt_registry(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _usage_ledger_payload(
     config_path: str | None,
     *,
@@ -405,6 +441,24 @@ def _accept_stage33_payload(config_path: str | None, *, allow_local_fallback: bo
     service = HoloReplyService(config)
     try:
         return service.accept_stage33(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _accept_stage34_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="POST", path="/accept-stage34", payload={}, timeout=30.0)
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.accept_stage34(), "local_process"
     finally:
         service.store.close()
         if hasattr(service.memory, "activation"):
@@ -7854,6 +7908,18 @@ def command_show_provider_contracts(config_path: str | None) -> int:
     return 0
 
 
+def command_show_visual_provider_readiness(config_path: str | None) -> int:
+    payload, _transport = _visual_provider_readiness_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_debt_registry(config_path: str | None) -> int:
+    payload, _transport = _debt_registry_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_show_usage_ledger(
     config_path: str | None,
     *,
@@ -7972,6 +8038,12 @@ def command_accept_stage32(config_path: str | None, *, thread_key: str, chat_nam
 
 def command_accept_stage33(config_path: str | None) -> int:
     payload, _transport = _accept_stage33_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_accept_stage34(config_path: str | None) -> int:
+    payload, _transport = _accept_stage34_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if bool(payload.get("ok", False)) else 1
 
@@ -8886,6 +8958,8 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-processor-routing", help="Show processor lane routing and task dispatch policy")
     subparsers.add_parser("show-provider-status", help="Show processor provider availability and configured lane backends")
     subparsers.add_parser("show-provider-contracts", help="Show processor provider API compatibility contracts")
+    subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
+    subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     usage_ledger_parser = subparsers.add_parser("show-usage-ledger", help="Inspect processor token and timing usage records")
     usage_ledger_parser.add_argument("--limit", type=int, default=50)
     usage_ledger_parser.add_argument("--task-type", default=None)
@@ -9131,6 +9205,7 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage32_parser.add_argument("--chat-name", default="TestUser")
     accept_stage32_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("accept-stage33", help="Run the Stage-33 provider API contract gate")
+    subparsers.add_parser("accept-stage34", help="Run the Stage-34 debt registry and visual readiness gate")
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -9307,6 +9382,10 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_provider_status(args.config)
     if args.command == "show-provider-contracts":
         return command_show_provider_contracts(args.config)
+    if args.command == "show-visual-provider-readiness":
+        return command_show_visual_provider_readiness(args.config)
+    if args.command == "show-debt-registry":
+        return command_show_debt_registry(args.config)
     if args.command == "show-usage-ledger":
         return command_show_usage_ledger(
             args.config,
@@ -10077,6 +10156,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage33":
         return command_accept_stage33(args.config)
+    if args.command == "accept-stage34":
+        return command_accept_stage34(args.config)
     if args.command == "show-processor-mesh":
         return command_show_processor_mesh(args.config)
     if args.command == "accept-processor-fabric":

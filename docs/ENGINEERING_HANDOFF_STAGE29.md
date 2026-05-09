@@ -49,15 +49,14 @@ Stage29 adds a unified bionic subject kernel, a CLI adapter over that kernel, an
 - Sidecar failures are visible as `heuristic_fallback` with an inspectable error class.
 
 ## Known Minimal Implementations
-- Deterministic fallback generation is still a local safety fallback, not a high-quality language path.
+- Deterministic fallback generation has been improved by Stage32 response shaping, but it remains a bounded offline fallback rather than a substitute for configured provider-backed generation.
 - Bionic metrics are first-pass operational indicators; they are useful for regression and review, not a calibrated cognitive score.
-- Stage29 does not implement visual-provider hardening or live image understanding through DeepSeek.
+- Stage34 adds visual-readiness checks and prevents image-capability overclaiming, but real visual-provider hardening still requires configured image-capable lanes and explicit live soak.
 - Stage29 does not start Holo online and does not validate the live WeChat watcher path.
 
 ## Next Debt To Pay
-- Replace deterministic fallback text with a stronger local generation strategy once a provider is intentionally configured for CLI use.
 - Calibrate `template_pressure_score`, working-field density, and inhibition quality against real CLI transcripts.
-- Add a visual-capable provider contract before claiming image-capable API compatibility.
+- Add real visual-provider soak before claiming deployed image-capable API compatibility.
 - Split Stage29 adapter helpers out of the already-large `holo_host/cli.py` once the command surface stabilizes.
 
 ## Validation Commands
