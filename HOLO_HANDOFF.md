@@ -67,12 +67,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 62. `docs/ENGINEERING_HANDOFF_STAGE35.md`
 63. `docs/STAGE36_AUTONOMOUS_INQUIRY_QUALITY.md`
 64. `docs/ENGINEERING_HANDOFF_STAGE36.md`
-65. `HOLO_SYSTEM.md`
-66. `HOLO_HOST.md`
-67. `OPERATIONS.md`
-68. `docs/PUBLIC_RELEASE_HYGIENE.md`
-69. `holo_memory_library/MEMORY_LIBRARY.md`
-70. `windows_helper/README.md`
+65. `docs/STAGE37_BIONIC_SELF_EVAL_AND_CAPABILITY_HONESTY.md`
+66. `docs/ENGINEERING_HANDOFF_STAGE37.md`
+67. `HOLO_SYSTEM.md`
+68. `HOLO_HOST.md`
+69. `OPERATIONS.md`
+70. `docs/PUBLIC_RELEASE_HYGIENE.md`
+71. `holo_memory_library/MEMORY_LIBRARY.md`
+72. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -87,9 +89,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage36-autonomous-inquiry-quality`.
+- The current milestone tag is `stage37-bionic-self-eval-and-capability-honesty`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is post-Stage36 targeted debt repair: real visual-provider integration, provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth from concrete regressions, or operator-approved live WeChat hardening. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
+- Current focus is post-Stage37 targeted debt repair: real visual-provider integration, provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth from concrete regressions, or operator-approved live WeChat hardening. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -110,8 +112,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage34: current technical debt is classified in `holo_host/debt_registry.py`, visual-provider readiness is inspectable without live calls, and `accept-stage34` prevents hidden weak spots or image-capability overclaiming
   - Stage35: internal DeepSeek runtime readiness is machine-checkable, local config is secret-scanned, env-key presence is redacted, and the gate verifies WeChat transport has not been started
   - Stage36: autonomous inquiry formatting debt is closed in the offline bionic kernel; deterministic fallback asks at most one grounded question, exposes inquiry-quality metrics, and preserves action-market-first generation without starting WeChat
+  - Stage37: internal bionic self-evaluation now guards provider-backed generation against empty-continuity hallucination, text-provider image overclaiming, excessive question/markdown pressure, and non-speech CLI self-eval empty replies
 - The next planned arc is:
-  - Stage37+: explicit re-plan for real visual-provider soak, provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live transport hardening
+  - Stage38+: explicit re-plan for real visual-provider soak, provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live transport hardening
   - Online long-horizon canary remains deferred beyond Stage28 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned
   - Artifact/tool/outcome progress coupling remains deferred and should not be silently folded into Stage28 or a future canary
   - Bounded subject programs remain deferred beyond the current Stage28 milestone
@@ -292,6 +295,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host accept-stage35`
 - Stage36 autonomous inquiry quality acceptance:
   - `python3 -m holo_host accept-stage36 --thread-key cli:TestUser --chat-name TestUser --channel cli`
+- Stage37 bionic self-eval and capability-honesty acceptance:
+  - `python3 -m holo_host accept-stage37 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -334,6 +339,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - Canonical classification now lives in `python3 -m holo_host show-debt-registry`; do not delete or soften weak spots without updating that registry and the latest acceptance gate.
 - Internal DeepSeek runtime readiness now lives in `python3 -m holo_host show-internal-runtime-readiness`; do not claim Holo is internally runnable until it passes.
 - Autonomous inquiry formatting debt is now bounded by `python3 -m holo_host accept-stage36`; do not reintroduce label-template inquiry or multiple ungrounded questions.
+- Bionic self-evaluation and capability honesty are now bounded by `python3 -m holo_host accept-stage37`; do not let provider-backed CLI replies invent missing continuity, overclaim image ability, or return empty text for self-eval probes.
 - `reply_api.py` remains bounded structural debt. Further slimming must happen only behind dedicated compatibility tests, replay checks, and acceptance gates.
 - `pyweixin_dialog`, live WeChat trigger behavior, latency/cache/provider-fallback soak, and real visual-provider hardening are external-precondition debts while Holo remains WeChat-offline.
 - Visual-provider readiness is now bounded by `show-visual-provider-readiness`: text APIs must not overclaim image support, and real image-capable provider hardening requires explicit configured-provider soak before restart.
@@ -420,6 +426,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - `python3 -m holo_host show-internal-runtime-readiness`
 - `python3 -m holo_host accept-stage35`
 - `python3 -m holo_host accept-stage36 --thread-key cli:TestUser --chat-name TestUser --channel cli`
+- `python3 -m holo_host accept-stage37 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 
 ## Next Arc Program
 - Durable Stage23-27 sources of truth:
@@ -439,9 +446,10 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage34 is implemented as debt registry and visual-readiness hardening
   - Stage35 is implemented as internal DeepSeek runtime readiness
   - Stage36 is implemented as autonomous inquiry quality hardening
+  - Stage37 is implemented as bionic self-eval and capability-honesty hardening
   - Online long-horizon canary remains deferred beyond Stage28
   - Bounded subject programs remain deferred until a later explicit re-plan
-- Current verified baseline after Stage36:
+- Current verified baseline after Stage37:
   - `pytest -q` passed on `2026-04-11` for the Stage23-27 baseline
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed on `2026-04-28`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
@@ -451,9 +459,11 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage26 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage27 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-28`
-  - `pytest -q` passed with `293` tests on `2026-05-09`
+  - `pytest -q` passed with `298` tests on `2026-05-09`
   - `python -m holo_host --config .holo_host.toml accept-stage36 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-09`
-  - Stage29 through Stage36 are offline/internal bionic-kernel/provider/runtime-readiness/inquiry-quality milestones; run the local verification commands in the Stage36 handoff before claiming current green status
+  - `python -m holo_host --config .holo_host.toml accept-stage37 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-09`
+  - `python scripts/check_public_release_hygiene.py` passed on `2026-05-09`
+  - Stage29 through Stage37 are offline/internal bionic-kernel/provider/runtime-readiness/inquiry-quality/capability-honesty milestones; run the local verification commands in the Stage37 handoff before claiming current green status
 
 ## Invariants
 - Do not silently change online transport modes

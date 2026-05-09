@@ -8089,6 +8089,17 @@ def command_accept_stage36(config_path: str | None, *, thread_key: str, chat_nam
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_accept_stage37(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = bionic_cli.accept_stage37_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_accept_stage33(config_path: str | None) -> int:
     payload, _transport = _accept_stage33_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9268,6 +9279,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage36_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage36_parser.add_argument("--chat-name", default="TestUser")
     accept_stage36_parser.add_argument("--channel", default="cli")
+    accept_stage37_parser = subparsers.add_parser("accept-stage37", help="Run the Stage-37 bionic self-eval and capability honesty gate")
+    accept_stage37_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage37_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage37_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("accept-stage33", help="Run the Stage-33 provider API contract gate")
     subparsers.add_parser("accept-stage34", help="Run the Stage-34 debt registry and visual readiness gate")
     subparsers.add_parser("accept-stage35", help="Run the Stage-35 internal runtime readiness gate")
@@ -10223,6 +10238,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage36":
         return command_accept_stage36(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage37":
+        return command_accept_stage37(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

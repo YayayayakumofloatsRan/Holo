@@ -19,6 +19,8 @@ BOUNDED_CANDIDATE_KEYS = (
     "policy_scenario_bucket",
     "goal_alignment_score",
     "identity_consistency_score",
+    "selection_adjustment",
+    "original_top_action",
 )
 BOUNDED_PREDICTION_KEYS = (
     "predicted_risk",

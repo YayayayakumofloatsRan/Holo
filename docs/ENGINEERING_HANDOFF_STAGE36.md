@@ -37,4 +37,4 @@ git diff --check
 ```
 
 ## Next Work
-The remaining debt is no longer a hidden “formatized inquiry” problem. The next code-bearing work should target one explicit remaining debt at a time: real visual-provider integration, provider latency/cache soak, replay-backed `reply_api.py` facade slimming, replay fixture expansion from a real regression, or operator-approved live WeChat hardening.
+Stage37 has now closed the immediate bionic self-eval and capability-honesty failures found by direct internal dialogue probes. The next code-bearing work should target one explicit remaining debt at a time: real visual-provider integration, provider latency/cache soak, replay-backed `reply_api.py` facade slimming, replay fixture expansion from a real regression, or operator-approved live WeChat hardening.

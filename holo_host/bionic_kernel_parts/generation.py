@@ -9,6 +9,55 @@ from .contracts import SPEECH_ACTIONS, STAGE29_NAME
 from .response_shaping import shape_deterministic_reply
 
 
+LABEL_MARKERS = ("next:", "basis:", "open:", "context:")
+
+
+def _question_count(text: str) -> int:
+    return str(text or "").count("?") + str(text or "").count("？")
+
+
+def _label_marker_count(text: str) -> int:
+    lowered = str(text or "").lower()
+    return sum(1 for marker in LABEL_MARKERS if marker in lowered)
+
+
+def _processor_quality_payload(text: str) -> dict[str, Any]:
+    question_count = _question_count(text)
+    label_count = _label_marker_count(text)
+    score = 1.0
+    if question_count > 1:
+        score -= min(0.45, 0.2 * (question_count - 1))
+    if label_count:
+        score -= min(0.6, 0.2 * label_count)
+    if "**" in str(text or ""):
+        score -= 0.15
+    return {
+        "score": round(max(0.0, min(1.0, score)), 4),
+        "question_count": question_count,
+        "label_marker_count": label_count,
+        "grounded_question": "",
+    }
+
+
+def _strip_markdown_emphasis(text: str) -> str:
+    return str(text or "").replace("**", "").replace("__", "")
+
+
+def _bound_questions(text: str, *, limit: int = 1) -> str:
+    count = 0
+    chars: list[str] = []
+    for char in str(text or ""):
+        if char in {"?", "？"}:
+            count += 1
+            chars.append(char if count <= limit else "。")
+            continue
+        chars.append(char)
+    bounded = "".join(chars)
+    while "。。" in bounded:
+        bounded = bounded.replace("。。", "。")
+    return bounded
+
+
 class BionicGeneration:
     def __init__(self, *, config: HostConfig, runner: Any | None = None) -> None:
         self.config = config
@@ -44,12 +93,17 @@ class BionicGeneration:
                 "context_refs": shaped["context_refs"],
                 "inquiry_quality": shaped["inquiry_quality"],
             }
+        continuity = compact(packet.get("continuity_summary", ""), limit=280)
+        capability_line = "Provider capability boundary: image_support is unknown before provider return; do not claim direct image reading unless image_support=true."
         prompt = "\n".join(
             [
                 "Answer as a bounded Holo bionic kernel turn without label-template prefixes.",
                 "If asking, ask at most one grounded question tied to the current continuity.",
+                "Do not invent prior work. If continuity is empty, say the prior turn is not visible in this capsule.",
+                capability_line,
                 f"Selected action: {selected_action.get('action_type', 'reply_once')}",
-                f"Continuity: {compact(packet.get('continuity_summary', ''), limit=280)}",
+                f"Action basis: {compact(selected_action.get('reason') or selected_action.get('why_now') or '', limit=220)}",
+                f"Continuity: {continuity}",
                 f"User query: {query}",
             ]
         )
@@ -61,10 +115,55 @@ class BionicGeneration:
         )
         result = self.runner.run_task(request)
         metadata = bounded_dict(result.metadata or {}, depth=3)
+        text = self._guard_processor_text(
+            text=str(result.text or ""),
+            query=query,
+            continuity=continuity,
+            metadata=metadata,
+        )
         return {
             "mode": "processor_fabric",
-            "text": str(result.text or ""),
+            "text": text,
             "provider": str(metadata.get("provider", "") or ""),
             "model": str(metadata.get("model", "") or ""),
             "metadata": metadata,
+            "inquiry_quality": _processor_quality_payload(text),
         }
+
+    def _guard_processor_text(self, *, text: str, query: str, continuity: str, metadata: dict[str, Any]) -> str:
+        query_text = str(query or "")
+        lowered_query = query_text.lower()
+        capabilities = metadata.get("capabilities", {}) if isinstance(metadata.get("capabilities", {}), dict) else {}
+        image_support = capabilities.get("image_support")
+        visual_query = any(
+            marker in lowered_query
+            for marker in (
+                "image",
+                "screenshot",
+                "photo",
+                "vision",
+                "截图",
+                "图片",
+                "照片",
+                "读图",
+                "看图",
+                "视觉",
+            )
+        )
+        if visual_query and image_support is not True:
+            return _strip_markdown_emphasis(
+                "当前这条 bionic CLI 生成链路的 provider 标记为 image_support=false；我不能声称已经直接读图。"
+                "正确处理方式是先走 `ingest-image` / visual-memory 或配置真实 `image_understand` 图像 provider，"
+                "再把可检查的视觉摘要送入同一条 bionic kernel。"
+            )
+        continuity_query = any(
+            marker in lowered_query
+            for marker in ("刚才", "上一轮", "之前", "修到哪里", "where were we", "previous turn", "last turn")
+        )
+        if continuity_query and not continuity.strip():
+            visible_query = compact(query_text, limit=120)
+            return _strip_markdown_emphasis(
+                "这条内部 capsule 没拿到可验证的上一轮连续摘要，我不能安全地编造刚才做了什么。"
+                f"当前可见请求是：{visible_query}"
+            )
+        return _bound_questions(_strip_markdown_emphasis(str(text or "")), limit=1)

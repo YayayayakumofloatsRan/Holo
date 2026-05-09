@@ -109,9 +109,14 @@ Stage36: autonomous inquiry quality
 - Removes deterministic label-template inquiry output, caps fallback inquiry to at most one grounded question, and exposes `inquiry_quality_score`, `formatting_pressure_score`, and `question_count`.
 - Keeps action-market-first generation, transport-as-interface, no self-memory mutation, and no new planner or loop.
 
+Stage37: bionic self-eval and capability honesty
+- Implemented an internal bionic self-dialogue repair gate.
+- Adds same-thread bionic trace continuity, provider-backed capability-honesty guards, question/markdown output bounds, and CLI speech fallback when self-eval would otherwise select a non-executable internal action.
+- Keeps real image understanding deferred to a configured image-capable provider; Stage37 prevents overclaiming but does not pretend text-only providers can read images.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage36. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage37+ program replaces them.
+This planned arc starts after Stage37. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage38+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, and Stage34 visual-readiness gating.
@@ -119,7 +124,7 @@ Provider/API compatibility breadth
 - Visual-provider hardening should validate real configured `image_understand` lanes before WeChat or live transport is restarted; Stage34 only proves the offline contract does not overclaim image support.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, and Stage36 inquiry-quality gating.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, and Stage37 bionic self-eval/capability-honesty gating.
 - Future work should improve real-world inquiry quality only through bounded kernel evidence and acceptance gates, without adding a second brain.
 
 Online long-horizon canary

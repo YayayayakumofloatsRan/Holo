@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from .bionic_kernel_parts import BionicCapsule, BionicPhase, BionicPipeline, BionicTurnRequest, KERNEL_NAME, STAGE29_NAME
+from .bionic_kernel_parts.bounded_payload import compact
 from .bionic_kernel_parts.contracts import CAPSULE_PHASES, SPEECH_ACTIONS
 from .bionic_kernel_parts.pipeline import DeterministicAgentMemory
 from .config import HostConfig
@@ -48,6 +50,7 @@ class BionicKernel:
         )
 
     def run_request(self, request: BionicTurnRequest) -> dict[str, Any]:
+        request = self._with_trace_continuity(request)
         result = self._pipeline.run_request(request)
         capsule = result["capsule"]
         trace_id = 0
@@ -63,6 +66,42 @@ class BionicKernel:
             trace_id = int(trace.get("id", 0) or 0)
         result["trace_id"] = trace_id
         return result
+
+    def _with_trace_continuity(self, request: BionicTurnRequest) -> BionicTurnRequest:
+        if self.store is None:
+            return request
+        metadata = dict(request.metadata or {})
+        if str(metadata.get("bionic_trace_continuity", "") or "").strip():
+            return request
+        rows = self.store.list_bionic_agent_traces(
+            limit=1,
+            channel=str(request.channel or "cli"),
+            thread_key=str(request.thread_key or ""),
+        )
+        if not rows:
+            return request
+        try:
+            capsule = json.loads(str(rows[0].get("capsule_json", "{}") or "{}"))
+        except json.JSONDecodeError:
+            return request
+        previous_query = compact(capsule.get("query", ""), limit=120)
+        previous_generation = dict(capsule.get("generation", {})) if isinstance(capsule.get("generation", {}), dict) else {}
+        previous_text = compact(previous_generation.get("text", ""), limit=180)
+        if not previous_query and not previous_text:
+            return request
+        metadata["bionic_trace_continuity"] = compact(
+            f"Previous bionic turn: user asked {previous_query or '<unknown>'}; Holo answered {previous_text or '<no generated text>'}.",
+            limit=360,
+        )
+        return BionicTurnRequest(
+            query=request.query,
+            thread_key=request.thread_key,
+            chat_name=request.chat_name,
+            channel=request.channel,
+            adapter=request.adapter,
+            record=request.record,
+            metadata=metadata,
+        )
 
     def export_trace(self, *, trace_id: int, output: str | Path) -> dict[str, Any]:
         if self.store is None:

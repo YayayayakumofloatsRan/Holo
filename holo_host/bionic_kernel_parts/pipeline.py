@@ -4,7 +4,7 @@ from typing import Any
 
 from ..config import HostConfig
 from .bounded_payload import as_dict, bounded_candidate, bounded_dict, clip_list, compact, safe_float
-from .contracts import BionicCapsule, BionicPhase, BionicTurnRequest, KERNEL_NAME, STAGE29_NAME
+from .contracts import BionicCapsule, BionicPhase, BionicTurnRequest, KERNEL_NAME, SPEECH_ACTIONS, STAGE29_NAME
 from .generation import BionicGeneration
 from .metrics import compute_bionic_metrics
 from .normalization import normalize_turn_request
@@ -61,7 +61,7 @@ class BionicPipeline:
         situational_field = bounded_dict(packet.get("situational_field", {}), depth=3)
         stage28 = bounded_dict(packet.get("stage28", {}), depth=3)
         action_market = self._action_market(packet)
-        selected_action = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
+        selected_action = self._select_action(action_market, query=turn.query, adapter=turn.adapter)
         inhibition = self._inhibition(packet=packet, selected_action=selected_action, situational_field=situational_field)
         generation = self.generation.generate(
             query=turn.query,
@@ -194,6 +194,17 @@ class BionicPipeline:
             packet["sidecar_error"] = "non_dict_packet"
             return packet
         packet = dict(packet)
+        trace_continuity = compact(context.get("bionic_trace_continuity", ""), limit=360)
+        if trace_continuity and not str(packet.get("continuity_summary", "") or "").strip():
+            packet["continuity_summary"] = trace_continuity
+            situational = dict(packet.get("situational_field", {})) if isinstance(packet.get("situational_field", {}), dict) else {}
+            grounding_order = list(situational.get("grounding_order", [])) if isinstance(situational.get("grounding_order", []), list) else []
+            if "bionic_trace" not in grounding_order:
+                situational["grounding_order"] = ["bionic_trace", *grounding_order][:8]
+            packet["situational_field"] = situational
+            stage37 = dict(packet.get("stage37", {})) if isinstance(packet.get("stage37", {}), dict) else {}
+            stage37["trace_continuity_visible"] = True
+            packet["stage37"] = stage37
         packet.setdefault("sidecar_status", "ok")
         return packet
 
@@ -216,6 +227,23 @@ class BionicPipeline:
                 {"action_type": "silence", "score": 0.0, "reason": "fallback non-reply candidate"},
             ]
         return sorted(candidates, key=lambda item: safe_float(item.get("score", 0.0)), reverse=True)[:6]
+
+    def _select_action(self, action_market: list[dict[str, Any]], *, query: str, adapter: str) -> dict[str, Any]:
+        if not action_market:
+            return {"action_type": "reply_once", "score": 0.0}
+        selected = dict(action_market[0])
+        action_type = str(selected.get("action_type", "") or "")
+        lowered = str(query or "").lower()
+        asks_for_self_eval = any(marker in lowered for marker in ("自测", "仿生", "不像人", "self-eval", "self evaluation"))
+        cli_non_executable = action_type in {"operator_self_fix", "proactive_ping", "initiative_ping"}
+        if str(adapter or "").lower() == "cli" and asks_for_self_eval and cli_non_executable:
+            for candidate in action_market[1:]:
+                if str(candidate.get("action_type", "") or "") in SPEECH_ACTIONS:
+                    adjusted = dict(candidate)
+                    adjusted["selection_adjustment"] = "non_speech_cli_probe_demoted"
+                    adjusted["original_top_action"] = action_type
+                    return adjusted
+        return selected
 
     def _inhibition(
         self,

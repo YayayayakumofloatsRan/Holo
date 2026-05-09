@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage36 is now the current implemented autonomous-inquiry quality milestone, and Stage37+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage37 is now the current implemented bionic self-eval and capability-honesty milestone, and Stage38+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -90,6 +90,14 @@
   - fallback inquiry asks at most one grounded question tied to bounded continuity and open-question context
   - bionic metrics expose `inquiry_quality_score`, `formatting_pressure_score`, and `question_count`
   - `accept-stage36` composes Stage35 and verifies inquiry quality without starting WeChat or mutating self-memory
+- Stage37 exit state on `2026-05-09`:
+  - direct internal bionic self-dialogue probes found and repaired context hallucination, text-provider image overclaiming, and non-speech empty self-eval replies
+  - same-thread `bionic_agent_traces` can provide bounded operational continuity to later CLI bionic turns
+  - provider-backed bionic generation now has capability-honesty, question-bound, and markdown-light guards
+  - `accept-stage37` composes Stage36 and verifies the self-eval/capability-honesty contract without starting WeChat or mutating self-memory
+  - `pytest -q` passed with `298` tests
+  - `python scripts/check_public_release_hygiene.py` passed
+  - `git diff --check` reported no whitespace errors
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -111,6 +119,7 @@
 - Stage33 provider/API work must stay inside the processor fabric and provider classes; it must not add raw hot-path model calls.
 - Stage35 internal-readiness work must not start WeChat, perform live model calls during acceptance, mutate self-memory, or expose unredacted secrets.
 - Stage36 autonomous-inquiry work must stay inside the bionic kernel, preserve action-market-first generation, and avoid label-template output, multiple ungrounded questions, second-brain planning, or live transport.
+- Stage37 self-eval work must not invent missing continuity, overclaim unsupported image reading, execute internal operator actions from CLI dialogue, or add any planner/loop beyond the existing bionic kernel.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -228,6 +237,14 @@
 - `Stop rule`: do not reintroduce label-template inquiry, ask multiple ungrounded questions, bypass action-market-first generation, start WeChat, or create a hidden planner
 - `Rollback rule`: fall back to Stage35 readiness plus Stage32 response shaping and keep inquiry-quality debt visible until Stage36 is green again
 
+### Stage37: Bionic Self-Eval And Capability Honesty
+- `Status`: implemented on `2026-05-09`
+- `Goal`: repair observed internal bionic self-eval failures around context continuity, capability honesty, and empty replies
+- `Scope`: reuse same-thread bionic trace continuity, add provider-backed generation guards, demote non-executable self-eval actions to speech candidates already present in the market, and add `accept-stage37`
+- `Validation`: `pytest -q`; `accept-stage37`; `tests/test_stage37_bionic_self_eval.py`
+- `Stop rule`: do not invent continuity, overclaim image support, bypass action-market-first, start transport, mutate self-memory, or create a hidden planner
+- `Rollback rule`: fall back to Stage36 inquiry quality and keep capability-honesty failures visible until Stage37 is green again
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -245,6 +262,7 @@
 | `Stage34` | All Stage33 surfaces | `accept-stage34`; `tests/test_stage34_debt_closure.py` | Current weak spots are classified, no unclassified debt remains in the registry, and visual-provider readiness is visible without live calls or image overclaiming. |
 | `Stage35` | All Stage34 surfaces | `accept-stage35`; `tests/test_stage35_internal_runtime_readiness.py` | Internal DeepSeek runtime readiness is visible, config is secret-clean, env-key status is redacted, and WeChat transport remains stopped. |
 | `Stage36` | All Stage35 surfaces | `accept-stage36`; `tests/test_stage36_inquiry_quality.py`; `tests/test_stage32_response_shaping.py`; `tests/test_stage29_bionic_cli_agent.py` | Autonomous inquiry is grounded, non-template, bounded to at most one question, action-market-first, and transport-free. |
+| `Stage37` | All Stage36 surfaces | `accept-stage37`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage29_bionic_cli_agent.py` | Bionic self-eval uses same-thread continuity when available, stays honest about provider image support, produces speech for CLI self-eval, and remains transport-free. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.
