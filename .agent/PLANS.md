@@ -9,7 +9,7 @@
 - Stage26 is implemented: bounded `task_world_object` plus `task_world_link` now persist inspectable task-world state across restarts, Stage22 `world_coupling_signal` is a compatibility projection over same-thread task-world visibility, and ingress can hydrate same-thread turns from bounded task-world state before heavier recall.
 - Stage27 is implemented: long-horizon blackbox soak runs, scorecards, replay-on-live-artifacts, and blind evaluation packet export now exist as bounded operational surfaces in `QueueStore` and artifact directories without mutating self-memory.
 - Stage28 is implemented as a bounded vertical slice: mind packets now expose `visual_field`, `situational_field`, and `stage28`; visual ingest preserves spatial/uncertainty metadata; prompt ordering uses situational fields before verbatim history; and action-market candidates expose inspectable Stage28 deltas.
-- Stage29 is implemented as a unified bionic subject kernel with CLI as the first adapter: one bounded adapter turn produces an inspectable bionic capsule, records operational `bionic_agent_traces`, exposes bionic metrics, validates a synthetic WeChat adapter path, and can use DeepSeek through the processor fabric.
+- Stage29 is implemented as a unified bionic subject kernel with CLI as the first adapter: one bounded adapter turn produces an inspectable bionic capsule, records operational `bionic_agent_traces`, exposes bionic metrics, validates a synthetic WeChat adapter path, can use DeepSeek through the processor fabric, and now keeps internals split under `holo_host/bionic_kernel_parts/` behind the stable `holo_host.bionic_agent` facade.
 - Verified Stage23-27 on `2026-04-11`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key TestUser --chat-name TestUser --channel wechat` passed in sequential verification
@@ -21,7 +21,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is post-Stage29 bionic workflow hardening and broader provider/API compatibility; Holo remains offline until restart and transport validation are explicitly approved.
+- The next implementation focus is post-Stage29 bionic workflow hardening, adapter registry/API compatibility, and provider hardening; Holo remains offline until restart and transport validation are explicitly approved.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 

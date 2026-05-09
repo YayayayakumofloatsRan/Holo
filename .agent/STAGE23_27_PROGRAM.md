@@ -54,7 +54,7 @@
   - ordinary hot-path prompts render `Situational Field:` before any recent-history block
   - action-market candidates expose `stage28_delta`, `stage28_rationale`, and `stage28_grounding_order`
 - Stage29 exit state on `2026-05-08`:
-  - `BionicKernel` produces bounded adapter capsules with perception, working-field, attention, inhibition, action-market, generation, and outcome phases; `BionicAgent` remains a compatibility wrapper
+  - `BionicKernel` produces bounded adapter capsules with perception, working-field, attention, inhibition, action-market, generation, and outcome phases; `BionicAgent` remains a compatibility wrapper and Stage29 internals now live under `holo_host/bionic_kernel_parts/`
   - `QueueStore` persists operational `bionic_agent_traces` and aggregate bionic metrics without mutating Mind Graph self-memory
   - DeepSeek appears as a processor-fabric provider with text/json chat-completions support and no image support claim
   - `agent-run`, `agent-trace`, `show-bionic-metrics`, `export-bionic-trace`, and `accept-stage29` are available

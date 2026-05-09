@@ -30,6 +30,17 @@ Action-market candidates are clipped to a bounded review payload before they ent
 
 If the selected action is not a speech action, generation is skipped and the capsule records `action_no_generation`.
 
+## Kernel Modules
+The public import surface remains `holo_host.bionic_agent`, but Stage29 internals are split under `holo_host/bionic_kernel_parts/`:
+- `contracts.py`: request, phase, capsule dataclasses and Stage29 constants
+- `normalization.py`: canonical thread identity and adapter context hardening
+- `bounded_payload.py`: bounded trace-safe payload clipping
+- `generation.py`: downstream generation through deterministic fallback or processor fabric
+- `metrics.py`: operational bionic explainability metrics
+- `pipeline.py`: ordered phase assembly
+
+This keeps CLI, synthetic WeChat, and future adapters on one shared subject kernel without turning the facade into a second monolith.
+
 ## DeepSeek Provider
 DeepSeek support lives inside `holo_host.codex_runner.DeepSeekProvider`.
 

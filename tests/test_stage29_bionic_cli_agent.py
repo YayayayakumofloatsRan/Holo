@@ -118,6 +118,16 @@ class _ContextCapturingMemory(_FakeMemory):
 
 
 class Stage29BionicCapsuleTests(unittest.TestCase):
+    def test_bionic_kernel_uses_modular_pipeline_parts(self) -> None:
+        from holo_host.bionic_kernel_parts.pipeline import BionicPipeline
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(repo_root=Path(tmpdir))
+            kernel = BionicKernel(config=config, memory=_FakeMemory(), runner=None)
+
+        self.assertIsInstance(kernel._pipeline, BionicPipeline)
+        self.assertIs(BionicTurnRequest, type(kernel._pipeline).turn_request_type)
+
     def test_cli_and_wechat_adapters_share_one_bionic_kernel(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_config(repo_root=Path(tmpdir))

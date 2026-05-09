@@ -7,9 +7,14 @@ Stage29 adds a unified bionic subject kernel, a CLI adapter over that kernel, an
 - `holo_host/bionic_agent.py`
   - exposes `BionicKernel` and `BionicTurnRequest`
   - keeps `BionicAgent` as a compatibility wrapper
-  - builds the bionic turn capsule from adapter-normalized requests
-  - computes explainability metrics
   - records or exports operational traces
+- `holo_host/bionic_kernel_parts/`
+  - `contracts.py` defines the Stage29 public capsule/request dataclasses and constants
+  - `normalization.py` canonicalizes adapter requests and protects kernel-owned identity fields
+  - `bounded_payload.py` clips sidecar, action-market, and processor metadata before trace export
+  - `generation.py` keeps generation downstream of selected action and inside processor fabric
+  - `metrics.py` computes bionic explainability metrics
+  - `pipeline.py` assembles perception, working-field, attention, inhibition, action-market, generation, and outcome phases
 - `holo_host/codex_runner.py`
   - registers `DeepSeekProvider`
   - keeps DeepSeek inside the processor-provider abstraction
@@ -35,6 +40,7 @@ Stage29 adds a unified bionic subject kernel, a CLI adapter over that kernel, an
 ## Review Notes
 - Bionic traces stay in QueueStore operational storage.
 - The bionic subject kernel is the shared surface; CLI, synthetic WeChat, and future HTTP paths are adapters.
+- `holo_host/bionic_agent.py` is intentionally a thin facade; new Stage29 internals should usually land under `holo_host/bionic_kernel_parts/`.
 - The capsule can use deterministic fallback generation when no runner is supplied.
 - The CLI path does not start watcher, daemon, or background stream work.
 - Provider calls remain replaceable because DeepSeek is a `ProcessorProvider`, not a raw hot-path call.
