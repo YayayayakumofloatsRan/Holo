@@ -206,4 +206,7 @@ def try_acceptance_endpoint(handler: Any, parsed: Any, payload: dict[str, Any]) 
     if parsed.path == "/accept-stage34":
         handler._write_json(HTTPStatus.OK, service.accept_stage34())
         return True
+    if parsed.path == "/accept-stage35":
+        handler._write_json(HTTPStatus.OK, service.accept_stage35())
+        return True
     return False

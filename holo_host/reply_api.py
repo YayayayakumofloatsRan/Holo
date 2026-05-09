@@ -53,6 +53,7 @@ from .reply_service_parts.acceptance import (
     accept_stage24 as _accept_stage24,
     accept_stage25 as _accept_stage25,
     accept_stage34 as _accept_stage34,
+    accept_stage35 as _accept_stage35,
 )
 from .reply_service_parts.diagnostics import (
     replay_calibration_fixture as _replay_calibration_fixture,
@@ -62,6 +63,7 @@ from .reply_service_parts.diagnostics import (
     trace_outcome_history as _trace_outcome_history,
 )
 from .reply_service_parts.endpoints import try_acceptance_endpoint
+from .runtime_readiness import build_internal_runtime_readiness
 from .store import QueueStore
 
 
@@ -1032,6 +1034,43 @@ class HoloReplyService:
             "debt_registry": debt_registry,
             "visual_provider_readiness": visual_readiness,
             "stage33": stage33,
+        }
+
+    def internal_runtime_readiness(self) -> dict[str, Any]:
+        return build_internal_runtime_readiness(self.config, self.provider_status())
+
+    def accept_stage35(self) -> dict[str, Any]:
+        return _accept_stage35(self)
+
+    def _accept_stage35_impl(self) -> dict[str, Any]:
+        stage34 = self.accept_stage34()
+        readiness = self.internal_runtime_readiness()
+        readiness_checks = dict(readiness.get("checks", {}))
+        checks = {
+            "accept_stage34_still_passes": bool(stage34.get("ok", False)),
+            "deepseek_primary_lanes": readiness_checks.get("deepseek_primary_lanes") is True,
+            "deepseek_key_env_present": readiness_checks.get("deepseek_key_env_present") is True,
+            "local_config_secret_free": readiness_checks.get("local_config_secret_free") is True,
+            "deepseek_provider_visible": readiness_checks.get("deepseek_provider_visible") is True,
+            "wechat_transport_not_started_by_gate": readiness_checks.get("wechat_transport_not_started_by_gate") is True,
+        }
+        ok = all(checks.values())
+        hard_boundaries = dict(readiness.get("hard_boundaries", {}))
+        hard_boundaries.update(
+            {
+                "no_live_model_call": True,
+                "no_wechat_transport_start": True,
+                "stage22_shadow_delivery_preserved": self.config.autonomy.stage22_canary_mode in {"shadow", "disabled", "canary_live"},
+            }
+        )
+        return {
+            "ok": ok,
+            "stage": "stage35-internal-runtime-readiness",
+            "status": "pass" if ok else "fail",
+            "checks": checks,
+            "readiness": readiness,
+            "stage34": stage34,
+            "hard_boundaries": hard_boundaries,
         }
 
     def visual_memory(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
@@ -9385,6 +9424,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/debt-registry":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.debt_registry())
                     return
+                if parsed.path == "/internal-runtime-readiness":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.internal_runtime_readiness())
+                    return
                 if parsed.path == "/usage-ledger":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.usage_ledger(
@@ -10297,6 +10339,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/accept-stage34":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.accept_stage34())
+                    return
+                if parsed.path == "/accept-stage35":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.accept_stage35())
                     return
             except ValueError as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(exc)})

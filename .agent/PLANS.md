@@ -2,7 +2,7 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage34-debt-registry-and-visual-readiness`.
+- The live runtime milestone is now `stage35-internal-runtime-readiness`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
@@ -15,10 +15,15 @@
 - Stage32 is implemented as an offline response-shaping slice: deterministic fallback generation now uses bounded query/action/continuity/situational context instead of a fixed template, exposes context-shaping metadata, and validates through `accept-stage32`.
 - Stage33 is implemented as an offline provider/API contract slice: provider API surfaces are inspectable, `openai_compatible` uses chat-completions, and `accept-stage33` validates processor-fabric boundaries.
 - Stage34 is implemented as an offline debt-registry and visual-readiness slice: current weak spots are classified, text-only providers cannot overclaim image support, and `accept-stage34` validates the boundary.
+- Stage35 is implemented as an internal runtime-readiness slice: DeepSeek primary lanes, env-key presence, local config secret hygiene, and no-WeChat quiescence are machine-checkable through `accept-stage35`.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
   - `python scripts/check_public_release_hygiene.py` passed
+- Verified Stage35 on `2026-05-09`:
+  - `pytest -q tests/test_stage35_internal_runtime_readiness.py` passed
+  - `python -m holo_host --config .holo_host.toml show-internal-runtime-readiness` passed with redacted key status and no WeChat helper runtime
+  - `python -m holo_host --config .holo_host.toml accept-stage35` passed
 - Verified Stage23-27 on `2026-04-11`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage22 --thread-key TestUser --chat-name TestUser --channel wechat` passed in sequential verification
@@ -30,7 +35,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is explicit Stage35 planning for autonomous inquiry quality and real visual-provider soak; Holo remains offline until restart and transport validation are explicitly approved.
+- The next implementation focus is explicit Stage36+ planning for autonomous inquiry quality, real visual-provider integration, provider latency/cache soak, or replay-backed facade slimming; Holo remains WeChat-offline until live transport validation is explicitly approved.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 
@@ -50,8 +55,8 @@
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage35 explicit planning for autonomous inquiry quality and real visual-provider soak; Holo remains offline until restart is explicitly approved
-- `Current live runtime boundary`: Stage34 is implemented in code as an offline debt-registry and visual-readiness slice; no live transport or self-memory mutation was added
+- `Active implementation priority`: Stage36+ targeted debt repair for autonomous inquiry quality, real visual-provider integration, provider latency/cache soak, or replay-backed facade slimming
+- `Current live runtime boundary`: Stage35 is implemented in code as an internal runtime-readiness slice; no live transport, live model call during acceptance, or self-memory mutation was added
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.
@@ -74,6 +79,7 @@
 | `Stage32` | `implemented` | Burn down immediate template-pressure debt by replacing the fixed deterministic fallback phrase with bounded context-shaped response generation. | Stage31 adapter and state-gate baseline. | `pytest -q`; `accept-stage32`; `tests/test_stage32_response_shaping.py`. | Do not add live transport, self-memory writes, raw provider calls, or a hidden planner. | Fall back to Stage31 generation behavior only if response-shaping metrics or deterministic fallback stability regress. |
 | `Stage33` | `implemented` | Burn down provider/API compatibility ambiguity by making provider API surfaces explicit and correcting OpenAI-compatible calls to chat-completions. | Stage32 response-shaping baseline and processor fabric. | `pytest -q`; `accept-stage33`; `tests/test_stage33_provider_contracts.py`; `tests/test_processor_fabric.py`. | Do not add direct model calls outside provider classes, live transport, or self-memory writes. | Fall back to Stage32 bionic behavior and disable provider-contract acceptance if provider surfaces become ambiguous. |
 | `Stage34` | `implemented` | Close offline-verifiable technical debt by adding a classified debt registry and bounded visual-provider readiness gate. | Stage33 provider contract baseline. | `pytest -q`; `accept-stage34`; `tests/test_stage34_debt_closure.py`; `tests/test_stage33_provider_contracts.py`. | Do not start live transport, mutate self-memory, overclaim text-provider image support, or hide weak spots outside the registry. | Fall back to Stage33 provider-contract acceptance and keep live-only debts as explicit external preconditions. |
+| `Stage35` | `implemented` | Make the internal DeepSeek-backed runtime startup machine-checkable without starting WeChat. | Stage34 debt registry and local DeepSeek config. | `pytest -q`; `accept-stage35`; `tests/test_stage35_internal_runtime_readiness.py`. | Do not embed keys in config, start WeChat, perform live model calls during acceptance, or expose unredacted secrets. | Fall back to Stage34 gates and keep Holo internal-only until readiness passes again. |
 
 ## Release Hygiene Ledger
 | Surface | Status | Rule | Validation |

@@ -74,7 +74,8 @@ python -m holo_host show-subject-loop-metrics
 python -m holo_host show-provider-contracts
 python -m holo_host show-visual-provider-readiness
 python -m holo_host show-debt-registry
-python -m holo_host accept-stage34
+python -m holo_host show-internal-runtime-readiness
+python -m holo_host accept-stage35
 ```
 
-These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage34 checks provider API contracts, visual-readiness boundaries, and classified technical debt without making live provider calls.
+These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage35 checks provider API contracts, visual-readiness boundaries, classified technical debt, DeepSeek lane readiness, redacted env-key presence, and local config secret hygiene without making live model calls.

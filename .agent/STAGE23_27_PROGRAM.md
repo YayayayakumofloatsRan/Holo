@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage34 is now the current implemented offline debt-registry and visual-readiness milestone, and Stage35+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage35 is now the current implemented internal runtime-readiness milestone, and Stage36+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -77,6 +77,14 @@
   - `openai_compatible` now uses `chat.completions` instead of the first-party Responses API
   - `responses` remains on `responses.create`, while `deepseek` remains on `chat.completions`
   - `accept-stage33` validates provider contracts without live transport or self-memory mutation
+- Stage34 exit state on `2026-05-09`:
+  - current weak spots are classified through `show-debt-registry`
+  - visual-provider readiness is visible without live calls or image overclaiming
+  - `accept-stage34` validates Stage33 provider contracts, debt classification, and visual-readiness boundaries
+- Stage35 exit state on `2026-05-09`:
+  - internal DeepSeek runtime startup is machine-checkable through `show-internal-runtime-readiness`
+  - local config is scanned for embedded provider API keys while env-key presence is reported only in redacted form
+  - `accept-stage35` composes Stage34 plus DeepSeek lane readiness and no-WeChat transport quiescence without live model calls
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -96,6 +104,7 @@
 - Stage30 subject-loop work must stay a bounded contract over existing bionic-kernel data; it must not become a hidden planner, mutate self-memory, or create a new scheduler.
 - Stage32 response-shaping work must remain a bounded fallback-generation improvement; it must not add a hidden planner, bypass processor fabric, or turn fallback text into self-memory.
 - Stage33 provider/API work must stay inside the processor fabric and provider classes; it must not add raw hot-path model calls.
+- Stage35 internal-readiness work must not start WeChat, perform live model calls during acceptance, mutate self-memory, or expose unredacted secrets.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -197,6 +206,14 @@
 - `Stop rule`: do not start live transport, mutate self-memory, overclaim text-provider image support, or delete weak spots without registry entries
 - `Rollback rule`: fall back to Stage33 provider contracts and keep live-only issues as explicit external preconditions
 
+### Stage35: Internal Runtime Readiness
+- `Status`: implemented on `2026-05-09`
+- `Goal`: make internal DeepSeek-backed runtime startup machine-checkable before Holo is treated as runnable
+- `Scope`: add config secret scanning, DeepSeek primary-lane readiness, redacted env-key presence checks, WeChat runtime quiescence checks, `show-internal-runtime-readiness`, and `accept-stage35`
+- `Validation`: `pytest -q`; `accept-stage35`; `tests/test_stage35_internal_runtime_readiness.py`
+- `Stop rule`: do not embed API keys in config, start WeChat, queue sends, perform live model calls during acceptance, mutate self-memory, or expose unredacted secrets
+- `Rollback rule`: fall back to Stage34 gates and keep Holo internal-only until Stage35 passes again
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -212,6 +229,7 @@
 | `Stage32` | All Stage31 surfaces | `accept-stage32`; `tests/test_stage32_response_shaping.py` | Deterministic fallback generation is context-shaped, fixed-template markers are absent, and response-shaping metrics are visible. |
 | `Stage33` | All Stage32 surfaces | `accept-stage33`; `tests/test_stage33_provider_contracts.py`; `tests/test_processor_fabric.py` | Provider API surfaces are explicit, OpenAI-compatible calls use chat-completions, and processor-fabric boundaries remain intact. |
 | `Stage34` | All Stage33 surfaces | `accept-stage34`; `tests/test_stage34_debt_closure.py` | Current weak spots are classified, no unclassified debt remains in the registry, and visual-provider readiness is visible without live calls or image overclaiming. |
+| `Stage35` | All Stage34 surfaces | `accept-stage35`; `tests/test_stage35_internal_runtime_readiness.py` | Internal DeepSeek runtime readiness is visible, config is secret-clean, env-key status is redacted, and WeChat transport remains stopped. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

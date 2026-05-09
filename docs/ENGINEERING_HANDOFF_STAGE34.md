@@ -38,4 +38,4 @@ git diff --check
 ```
 
 ## Next Work
-The next substantial work should be explicit Stage35 planning, likely focused on autonomous inquiry quality and real visual-provider soak. It should not start Holo until the operator explicitly approves restart testing.
+Stage35 now implements internal runtime readiness. Use `docs/ENGINEERING_HANDOFF_STAGE35.md` as the current handoff for DeepSeek-backed local runtime checks. Later work should target one explicit remaining debt at a time and must not start WeChat without operator-approved live-soak planning.
