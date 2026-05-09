@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage32 is now the current implemented offline response-shaping milestone, and Stage33+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage33 is now the current implemented offline provider/API contract milestone, and Stage34+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -72,6 +72,11 @@
   - fallback generation now exposes bounded `shape` and `context_refs` metadata
   - bionic metrics now expose `context_shaping_score` beside `template_pressure_score`
   - `accept-stage32` is available and reuses Stage31 without starting transport
+- Stage33 exit state on `2026-05-09`:
+  - provider API surfaces are visible through `show-provider-contracts`
+  - `openai_compatible` now uses `chat.completions` instead of the first-party Responses API
+  - `responses` remains on `responses.create`, while `deepseek` remains on `chat.completions`
+  - `accept-stage33` validates provider contracts without live transport or self-memory mutation
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -90,6 +95,7 @@
 - Stage29 bionic subject-kernel work must stay local, bounded, operational, adapter-safe, and processor-fabric-safe; it must not start WeChat, mutate self-memory, give adapters decision authority, or add a new always-on loop.
 - Stage30 subject-loop work must stay a bounded contract over existing bionic-kernel data; it must not become a hidden planner, mutate self-memory, or create a new scheduler.
 - Stage32 response-shaping work must remain a bounded fallback-generation improvement; it must not add a hidden planner, bypass processor fabric, or turn fallback text into self-memory.
+- Stage33 provider/API work must stay inside the processor fabric and provider classes; it must not add raw hot-path model calls.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -175,6 +181,14 @@
 - `Stop rule`: do not add live transport, self-memory writes, raw provider calls, a hidden planner, or a new loop
 - `Rollback rule`: fall back to Stage31 fallback generation if response-shaping metrics or deterministic stability regress
 
+### Stage33: Provider API Contracts
+- `Status`: implemented on `2026-05-09`
+- `Goal`: make provider/API compatibility inspectable and correct the generic OpenAI-compatible protocol surface
+- `Scope`: expose provider contract matrix, keep `responses` on `responses.create`, use `chat.completions` for `openai_compatible` and `deepseek`, and add `accept-stage33`
+- `Validation`: `pytest -q`; `accept-stage33`; `tests/test_stage33_provider_contracts.py`; `tests/test_processor_fabric.py`
+- `Stop rule`: do not add direct provider calls outside provider classes, live transport, self-memory writes, or a new planner
+- `Rollback rule`: fall back to Stage32 bionic behavior and keep provider compatibility docs explicit if provider contract detection regresses
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -188,6 +202,7 @@
 | `Stage30` | All Stage29 surfaces | `accept-stage30`; `tests/test_stage30_subject_loop.py` | Subject-loop payloads expose hard invariants without adding mutation authority. |
 | `Stage31` | All Stage30 surfaces | `accept-stage31`; `tests/test_stage31_debt_burndown.py` | Adapter registry, state-update gate, and subject-loop diagnostics are visible and offline-only. |
 | `Stage32` | All Stage31 surfaces | `accept-stage32`; `tests/test_stage32_response_shaping.py` | Deterministic fallback generation is context-shaped, fixed-template markers are absent, and response-shaping metrics are visible. |
+| `Stage33` | All Stage32 surfaces | `accept-stage33`; `tests/test_stage33_provider_contracts.py`; `tests/test_processor_fabric.py` | Provider API surfaces are explicit, OpenAI-compatible calls use chat-completions, and processor-fabric boundaries remain intact. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

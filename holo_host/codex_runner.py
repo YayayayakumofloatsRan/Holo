@@ -286,12 +286,29 @@ def _coerce_usage_payload(payload: Any) -> dict[str, int | bool]:
 
 class ProcessorProvider:
     name = "provider"
+    api_surface = "provider"
+    capabilities: dict[str, Any] = {
+        "text": True,
+        "json_output": False,
+        "image_support": False,
+    }
 
     def availability(self) -> dict[str, Any]:
         return {"available": True, "reason": ""}
 
     def supports_request(self, request: ProcessorTaskRequest) -> bool:
         return True
+
+    def provider_contract(self, runner: "CodexRunner") -> dict[str, Any]:
+        availability = self.availability()
+        return {
+            "name": self.name,
+            "api_surface": self.api_surface,
+            "available": bool(availability.get("available", False)),
+            "availability_reason": str(availability.get("reason", "") or ""),
+            "capabilities": dict(self.capabilities),
+            "processor_fabric_only": True,
+        }
 
     def run_task(
         self,
@@ -307,6 +324,12 @@ class ProcessorProvider:
 
 class CodexCliProvider(ProcessorProvider):
     name = "codex_cli"
+    api_surface = "codex.exec"
+    capabilities = {
+        "text": True,
+        "json_output": True,
+        "image_support": True,
+    }
 
     def availability(self) -> dict[str, Any]:
         return {"available": True, "reason": ""}
@@ -436,6 +459,12 @@ class CodexCliProvider(ProcessorProvider):
 
 class _OpenAIResponsesBase(ProcessorProvider):
     base_name = "responses"
+    api_surface = "responses.create"
+    capabilities = {
+        "text": True,
+        "json_output": True,
+        "image_support": False,
+    }
 
     def __init__(self, *, compatible: bool = False):
         self.compatible = compatible
@@ -541,10 +570,83 @@ class ResponsesProvider(_OpenAIResponsesBase):
 class OpenAICompatibleProvider(_OpenAIResponsesBase):
     def __init__(self) -> None:
         super().__init__(compatible=True)
+        self.api_surface = "chat.completions"
+
+    @staticmethod
+    def _extract_chat_text(response: Any) -> str:
+        choices = getattr(response, "choices", None)
+        if choices is None and isinstance(response, dict):
+            choices = response.get("choices", [])
+        if not choices:
+            return ""
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message", {})
+            return str(message.get("content", "") if isinstance(message, dict) else "").strip()
+        message = getattr(first, "message", None)
+        return str(getattr(message, "content", "") or "").strip()
+
+    def run_task(
+        self,
+        runner: "CodexRunner",
+        request: ProcessorTaskRequest,
+        *,
+        spec: dict[str, Any],
+        lane_name: str,
+        lane_config: ProcessorLaneConfig,
+    ) -> ProcessorTaskResult:
+        started_at = time.perf_counter()
+        client = self._client(runner)
+        payload: dict[str, Any] = {
+            "model": request.model_override or lane_config.model,
+            "messages": [{"role": "user", "content": request.prompt}],
+        }
+        max_tokens = request.max_output_tokens or lane_config.max_output_tokens or None
+        if max_tokens:
+            payload["max_tokens"] = int(max_tokens)
+        output_schema = str(request.output_schema or spec.get("output_schema", "plain_text"))
+        if "json" in output_schema.lower():
+            payload["response_format"] = {"type": "json_object"}
+        response = client.chat.completions.create(**payload)
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        text = self._extract_chat_text(response)
+        usage = _coerce_usage_payload(getattr(response, "usage", None))
+        if not usage["total_tokens"]:
+            usage = {
+                "prompt_tokens": _estimate_text_tokens(request.prompt),
+                "completion_tokens": _estimate_text_tokens(text),
+                "total_tokens": _estimate_text_tokens(request.prompt) + _estimate_text_tokens(text),
+                "estimated": True,
+            }
+        return ProcessorTaskResult(
+            task_type=request.task_type,
+            text=text,
+            session_id=request.session_id,
+            returncode=0,
+            stdout="",
+            stderr="",
+            command=[self.name, "chat.completions.create"],
+            output_schema=output_schema,
+            metadata={
+                "allowed_data_layers": list(request.allowed_data_layers or tuple(spec.get("allowed_data_layers", ()))),
+                "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
+                "provider": self.name,
+                "lane": lane_name,
+                "model": request.model_override or lane_config.model,
+                "reasoning_effort": request.reasoning_effort_override
+                or lane_config.reasoning_effort
+                or str(spec.get("default_reasoning_effort", "")),
+                "usage": usage,
+                "duration_ms": duration_ms,
+                "budget_tag": request.budget_tag,
+                "capabilities": dict(self.capabilities),
+            },
+        )
 
 
 class DeepSeekProvider(ProcessorProvider):
     name = "deepseek"
+    api_surface = "chat.completions"
 
     capabilities = {
         "text": True,
@@ -718,6 +820,32 @@ class CodexRunner:
             "active_backend_alias": self.config.runtime.processor_backend,
             "providers": providers,
             "lanes": lanes,
+        }
+
+    def provider_contracts(self) -> dict[str, Any]:
+        providers = {
+            name: provider.provider_contract(self)
+            for name, provider in self._providers.items()
+        }
+        lane_contracts = {}
+        for lane_name, lane in self.config.processor_fabric.provider_backends.items():
+            lane_contracts[lane_name] = {
+                "primary_provider": lane.primary_provider,
+                "backup_provider": lane.backup_provider,
+                "model": lane.model,
+                "reasoning_effort": lane.reasoning_effort,
+                "provider_chain": self._provider_chain_for_lane(lane_name, lane),
+            }
+        return {
+            "stage": "stage33-provider-api-contracts",
+            "providers": providers,
+            "lanes": lane_contracts,
+            "hard_boundaries": {
+                "processor_fabric_only": True,
+                "no_raw_hot_path_provider_calls": True,
+                "transport_has_no_provider_authority": True,
+                "no_live_call_required": True,
+            },
         }
 
     def describe_task_dispatch(self, request: ProcessorTaskRequest) -> dict[str, Any]:

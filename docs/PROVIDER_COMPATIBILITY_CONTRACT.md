@@ -42,11 +42,16 @@ Use when:
 ### `OpenAICompatibleProvider`
 
 Role:
-- second fallback
+- second fallback through the common chat-completions protocol
 
 Use when:
 - a compatible HTTP backend is configured
 - previous providers are unavailable
+
+Limits:
+- text/json requests only
+- image support is false until an image-capable provider contract is added
+- do not use the first-party Responses API for this generic compatibility path
 
 ### `DeepSeekProvider`
 
@@ -130,8 +135,10 @@ as the authoritative long-term routing surface; they are compatibility aliases.
 
 Use these commands:
 - `python3 -m holo_host show-provider-status`
+- `python3 -m holo_host show-provider-contracts`
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host accept-processor-fabric`
+- `python3 -m holo_host accept-stage33`
 
 ## 9. Forbidden Changes
 

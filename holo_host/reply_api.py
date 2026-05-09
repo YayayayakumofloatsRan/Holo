@@ -911,6 +911,9 @@ class HoloReplyService:
     def provider_status(self) -> dict[str, Any]:
         return self.runner.provider_status()
 
+    def provider_contracts(self) -> dict[str, Any]:
+        return self.runner.provider_contracts()
+
     def usage_ledger(
         self,
         *,
@@ -962,6 +965,36 @@ class HoloReplyService:
             "routing": routing,
             "provider_status": provider_status,
             "usage_ledger": usage_payload,
+        }
+
+    def accept_stage33(self) -> dict[str, Any]:
+        contracts = self.provider_contracts()
+        providers = dict(contracts.get("providers", {}))
+        hard_boundaries = dict(contracts.get("hard_boundaries", {}))
+        openai_compatible = dict(providers.get("openai_compatible", {}))
+        deepseek = dict(providers.get("deepseek", {}))
+        responses = dict(providers.get("responses", {}))
+        codex_cli = dict(providers.get("codex_cli", {}))
+        api_providers = [openai_compatible, deepseek, responses]
+        checks = {
+            "provider_contracts_visible": contracts.get("stage") == "stage33-provider-api-contracts",
+            "openai_compatible_chat_completions": openai_compatible.get("api_surface") == "chat.completions",
+            "deepseek_chat_completions": deepseek.get("api_surface") == "chat.completions",
+            "responses_keeps_responses_api": responses.get("api_surface") == "responses.create",
+            "codex_cli_contract_visible": codex_cli.get("api_surface") == "codex.exec",
+            "no_provider_image_overclaim": all(
+                dict(provider.get("capabilities", {})).get("image_support") is False
+                for provider in api_providers
+            ),
+            "processor_fabric_boundary_preserved": hard_boundaries.get("processor_fabric_only") is True
+            and hard_boundaries.get("no_raw_hot_path_provider_calls") is True,
+        }
+        return {
+            "ok": all(checks.values()),
+            "stage": "stage33-provider-api-contracts",
+            "status": "pass" if all(checks.values()) else "fail",
+            "checks": checks,
+            "provider_contracts": contracts,
         }
 
     def visual_memory(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
@@ -9306,6 +9339,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/provider-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.provider_status())
                     return
+                if parsed.path == "/provider-contracts":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.provider_contracts())
+                    return
                 if parsed.path == "/usage-ledger":
                     params = parse_qs(parsed.query)
                     payload = self.server.reply_service.usage_ledger(
@@ -10212,6 +10248,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/accept-processor-fabric":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.accept_processor_fabric())
+                    return
+                if parsed.path == "/accept-stage33":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.accept_stage33())
                     return
             except ValueError as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": str(exc)})

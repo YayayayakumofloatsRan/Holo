@@ -89,12 +89,17 @@ Stage32: response shaping and template pressure
 - Replaces the fixed fallback phrase with query/action/continuity/situational context, exposes `shape` and `context_refs`, and adds `context_shaping_score`.
 - Keeps the change offline, processor-fabric-safe, and self-memory-neutral.
 
+Stage33: provider API contracts
+- Implemented explicit provider contract diagnostics and `accept-stage33`.
+- Corrects `openai_compatible` to use chat-completions while keeping the first-party `responses` provider on the Responses API.
+- Keeps provider/API compatibility inside the processor fabric and provider classes.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage32. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage33+ program replaces them.
+This planned arc starts after Stage33. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage34+ program replaces them.
 
 Provider/API compatibility breadth
-- Partially implemented through Stage29 DeepSeek text support and Stage31 adapter registry.
+- Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, and Stage33 provider contract diagnostics.
 - Future work should broaden API/provider compatibility through the processor fabric, not by adding raw hot-path provider calls.
 - Visual-provider hardening should validate real configured `image_understand` lanes before Holo is restarted.
 

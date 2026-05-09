@@ -71,7 +71,8 @@ The current offline agent surface is the bionic subject kernel plus subject-loop
 python -m holo_host agent-run --query "continue" --thread-key cli:TestUser --chat-name TestUser --channel cli --offline
 python -m holo_host show-bionic-metrics
 python -m holo_host show-subject-loop-metrics
-python -m holo_host accept-stage32 --thread-key cli:TestUser --chat-name TestUser --channel cli
+python -m holo_host show-provider-contracts
+python -m holo_host accept-stage33
 ```
 
-These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage32 also checks that offline fallback replies are context-shaped rather than fixed-template output.
+These commands do not start WeChat, do not send transport messages, and do not write private self-memory. Stage33 also checks provider API contracts without making live provider calls.
