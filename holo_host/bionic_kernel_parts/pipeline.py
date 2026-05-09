@@ -8,6 +8,7 @@ from .contracts import BionicCapsule, BionicPhase, BionicTurnRequest, KERNEL_NAM
 from .generation import BionicGeneration
 from .metrics import compute_bionic_metrics
 from .normalization import normalize_turn_request
+from ..subject_loop import assemble_subject_loop
 
 
 class DeterministicAgentMemory:
@@ -112,6 +113,16 @@ class BionicPipeline:
             "transport_decision_authority": False,
             "wechat_transport_used": False,
         }
+        subject_loop = assemble_subject_loop(
+            adapter=turn.adapter,
+            channel=turn.channel,
+            thread_key=turn.thread_key,
+            record_requested=turn.record,
+            selected_action=selected_action,
+            generation=generation,
+            outcome=outcome,
+            interface_contract=interface_contract,
+        )
         phases = [
             BionicPhase("perception", "bounded input and situational field captured", perception),
             BionicPhase("working_field", "compact field assembled before generation", working_field),
@@ -140,6 +151,7 @@ class BionicPipeline:
             outcome=outcome,
             metrics=metrics,
             interface_contract=interface_contract,
+            subject_loop=subject_loop,
         ).to_dict()
         return {
             "stage": STAGE29_NAME,

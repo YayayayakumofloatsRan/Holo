@@ -7,6 +7,7 @@ from .bionic_kernel_parts import BionicCapsule, BionicPhase, BionicPipeline, Bio
 from .bionic_kernel_parts.contracts import CAPSULE_PHASES, SPEECH_ACTIONS
 from .bionic_kernel_parts.pipeline import DeterministicAgentMemory
 from .config import HostConfig
+from .subject_loop import STAGE30_NAME, SUBJECT_LOOP_NAME, SUBJECT_LOOP_PHASES
 
 
 class BionicKernel:
@@ -93,4 +94,7 @@ __all__ = [
     "KERNEL_NAME",
     "SPEECH_ACTIONS",
     "STAGE29_NAME",
+    "STAGE30_NAME",
+    "SUBJECT_LOOP_NAME",
+    "SUBJECT_LOOP_PHASES",
 ]

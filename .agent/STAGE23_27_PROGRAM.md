@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage29 is now the current implemented offline bionic subject-kernel milestone, and Stage30+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage30 is now the current implemented offline unified subject-loop milestone, and Stage31+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -58,6 +58,10 @@
   - `QueueStore` persists operational `bionic_agent_traces` and aggregate bionic metrics without mutating Mind Graph self-memory
   - DeepSeek appears as a processor-fabric provider with text/json chat-completions support and no image support claim
   - `agent-run`, `agent-trace`, `show-bionic-metrics`, `export-bionic-trace`, and `accept-stage29` are available
+- Stage30 exit state on `2026-05-09`:
+  - bionic capsules now expose a bounded `subject_loop` payload with perception, working-field, attention, inhibition, action-market, generation, outcome-appraisal, and state-update phases
+  - loop invariants explicitly verify action-market-first generation, transport-as-interface, no self-memory mutation, no policy mutation, no second brain, and no new unbounded loop
+  - `accept-stage30` is available and reuses Stage29 plus synthetic WeChat adapter validation without starting transport
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -74,6 +78,7 @@
 - The older online long-horizon canary milestone remains deferred beyond Stage28 and must not be treated as current-arc scope.
 - Stage28 visual and situational work must stay inside existing MemoryBridge, Mind Graph, processor-fabric, and action-market seams; do not add raw API adapters in the runtime hot path.
 - Stage29 bionic subject-kernel work must stay local, bounded, operational, adapter-safe, and processor-fabric-safe; it must not start WeChat, mutate self-memory, give adapters decision authority, or add a new always-on loop.
+- Stage30 subject-loop work must stay a bounded contract over existing bionic-kernel data; it must not become a hidden planner, mutate self-memory, or create a new scheduler.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 

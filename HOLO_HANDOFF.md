@@ -247,6 +247,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host agent-trace --trace-id <trace_id>`
 - Stage29 bionic subject-kernel acceptance:
   - `python3 -m holo_host accept-stage29 --thread-key TestUser --chat-name TestUser --channel cli`
+- Stage30 unified subject-loop acceptance:
+  - `python3 -m holo_host accept-stage30 --thread-key TestUser --chat-name TestUser --channel cli`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 

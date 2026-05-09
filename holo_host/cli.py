@@ -12,7 +12,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .bionic_agent import BionicKernel, BionicTurnRequest, KERNEL_NAME, STAGE29_NAME
+from .bionic_agent import (
+    BionicKernel,
+    BionicTurnRequest,
+    KERNEL_NAME,
+    STAGE29_NAME,
+    STAGE30_NAME,
+    SUBJECT_LOOP_PHASES,
+)
 from .config import load_config
 from .daemon import build_daemon
 from .models import ProcessorTaskRequest
@@ -518,6 +525,58 @@ def _accept_stage29_payload(
         "capsule": capsule,
         "synthetic_wechat_capsule": wechat_capsule,
     }, "local_process"
+
+
+def _accept_stage30_payload(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+) -> tuple[dict, str]:
+    stage29_payload, transport = _accept_stage29_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    capsule = dict(stage29_payload.get("capsule", {}))
+    synthetic_capsule = dict(stage29_payload.get("synthetic_wechat_capsule", {}))
+    subject_loop = dict(capsule.get("subject_loop", {}))
+    synthetic_subject_loop = dict(synthetic_capsule.get("subject_loop", {}))
+    invariants = dict(subject_loop.get("invariants", {}))
+    synthetic_invariants = dict(synthetic_subject_loop.get("invariants", {}))
+    state_update = dict(subject_loop.get("state_update", {}))
+    checks = {
+        "stage29_gate_passed": bool(stage29_payload.get("ok", False)),
+        "subject_loop_visible": subject_loop.get("stage") == STAGE30_NAME,
+        "phase_order_complete": list(subject_loop.get("phase_order", [])) == list(SUBJECT_LOOP_PHASES),
+        "hard_invariants_pass": bool(invariants) and all(bool(value) for value in invariants.values()),
+        "synthetic_wechat_loop_adapter_only": (
+            synthetic_subject_loop.get("stage") == STAGE30_NAME
+            and synthetic_subject_loop.get("adapter") == "wechat"
+            and all(bool(value) for value in synthetic_invariants.values())
+        ),
+        "state_update_bounded": (
+            state_update.get("self_memory_write") is False
+            and state_update.get("policy_write") is False
+            and state_update.get("mind_graph_write") is False
+            and list(state_update.get("allowed_writes", [])) == ["operational_trace"]
+        ),
+        "no_new_autonomy_path": (
+            dict(capsule.get("interface_contract", {})).get("transport_decision_authority") is False
+            and state_update.get("second_brain_write") is False
+        ),
+    }
+    return {
+        "ok": all(checks.values()),
+        "stage": STAGE30_NAME,
+        "status": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "stage29": stage29_payload,
+        "subject_loop": subject_loop,
+        "synthetic_wechat_subject_loop": synthetic_subject_loop,
+    }, transport
 
 
 def _accept_processor_fabric_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
@@ -8044,6 +8103,17 @@ def command_accept_stage29(config_path: str | None, *, thread_key: str, chat_nam
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_accept_stage30(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = _accept_stage30_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_show_processor_mesh(config_path: str | None) -> int:
     daemon = build_daemon(config_path)
     try:
@@ -9181,6 +9251,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage29_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage29_parser.add_argument("--chat-name", default="TestUser")
     accept_stage29_parser.add_argument("--channel", default="cli")
+    accept_stage30_parser = subparsers.add_parser("accept-stage30", help="Run the Stage-30 unified subject-loop gate")
+    accept_stage30_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage30_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage30_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("show-processor-mesh", help="Show supported processor task types and permissions")
     subparsers.add_parser("accept-processor-fabric", help="Run the processor fabric documentation, routing, and usage acceptance gate")
     processor_task_parser = subparsers.add_parser("processor-task", help="Run one explicit processor-mesh task through Codex")
@@ -10093,6 +10167,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage29":
         return command_accept_stage29(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage30":
+        return command_accept_stage30(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

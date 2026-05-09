@@ -75,9 +75,14 @@ Stage29: bionic subject kernel
 - Adds bounded turn capsules with perception, working-field, attention, inhibition, action-market, generation, outcome phases, adapter provenance, operational `bionic_agent_traces`, bionic explainability metrics, trace export, and `accept-stage29` without mutating self-memory or starting WeChat.
 - Adds DeepSeek provider compatibility inside the processor fabric; DeepSeek is a replaceable text provider, not a raw runtime call path.
 
+Stage30: unified subject loop
+- Implemented as an explicit `subject_loop` contract layered onto the Stage29 bionic capsule.
+- Exposes the bounded loop order from perception through state update, with inspectable invariants for action-market-first generation, transport-as-interface, no self-memory mutation, no policy mutation, no second brain, and no new unbounded loop.
+- Adds `accept-stage30` without starting WeChat or widening runtime autonomy.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage29. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage30+ program replaces them.
+This planned arc starts after Stage30. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage31+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support.
@@ -85,7 +90,7 @@ Provider/API compatibility breadth
 - Visual-provider hardening should validate real configured `image_understand` lanes before Holo is restarted.
 
 Bionic workflow hardening
-- Planned. Future work should reduce template pressure, improve autonomous inquiry shape, and add richer explainability over inhibition/attention without adding a second brain.
+- Partially implemented through Stage30 subject-loop invariants. Future work should reduce template pressure, improve autonomous inquiry shape, and add richer explainability over inhibition/attention without adding a second brain.
 
 Online long-horizon canary
 - Deferred until after a new explicit re-plan approves any live widening.
