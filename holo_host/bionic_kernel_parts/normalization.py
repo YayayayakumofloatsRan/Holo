@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..adapter_registry import AdapterSpec, adapter_registry
 from ..store import QueueStore
 from .contracts import BionicTurnRequest
 
@@ -16,6 +17,7 @@ class NormalizedTurn:
     adapter: str
     record: bool
     context: dict[str, Any]
+    adapter_spec: AdapterSpec
 
 
 def normalize_turn_request(request: BionicTurnRequest) -> NormalizedTurn:
@@ -23,6 +25,7 @@ def normalize_turn_request(request: BionicTurnRequest) -> NormalizedTurn:
     chat_name = str(request.chat_name or "")
     channel = str(request.channel or "cli").strip() or "cli"
     adapter = str(request.adapter or channel).strip() or channel
+    adapter_spec = adapter_registry.resolve(adapter=adapter, channel=channel)
     thread_key = QueueStore._normalize_wechat_thread_key(
         channel,
         str(request.thread_key or ""),
@@ -39,6 +42,7 @@ def normalize_turn_request(request: BionicTurnRequest) -> NormalizedTurn:
         "stage29_adapter": adapter,
         "transport_is_interface": True,
         "transport_decision_authority": False,
+        "adapter_contract": adapter_spec.to_contract(),
     })
     return NormalizedTurn(
         query=query,
@@ -48,4 +52,5 @@ def normalize_turn_request(request: BionicTurnRequest) -> NormalizedTurn:
         adapter=adapter,
         record=bool(request.record),
         context=context,
+        adapter_spec=adapter_spec,
     )

@@ -1341,6 +1341,60 @@ class QueueStore:
         }
 
     @_synchronized
+    def trace_subject_loop(self, *, trace_id: int) -> dict[str, Any]:
+        rows = self.list_bionic_agent_traces(limit=1, trace_id=int(trace_id))
+        if not rows:
+            return {"ok": False, "stage": "stage31-debt-burndown", "trace_id": int(trace_id), "error": "trace_not_found"}
+        row = dict(rows[0])
+        capsule = self._decode_json_dict(row.get("capsule_json", "{}"))
+        subject_loop = self._decode_json_dict(capsule.get("subject_loop", {}))
+        return {
+            "ok": bool(subject_loop),
+            "stage": "stage31-debt-burndown",
+            "trace_id": int(trace_id),
+            "trace": row,
+            "subject_loop": subject_loop,
+        }
+
+    @_synchronized
+    def latest_subject_loop_metrics(self, *, limit: int = 100) -> dict[str, Any]:
+        rows = self.list_bionic_agent_traces(limit=limit)
+        visible = 0
+        all_invariants = 0
+        invariant_passes = 0
+        state_update_bounded = 0
+        operational_trace_writes = 0
+        for row in rows:
+            capsule = self._decode_json_dict(row.get("capsule_json", "{}"))
+            subject_loop = self._decode_json_dict(capsule.get("subject_loop", {}))
+            if not subject_loop:
+                continue
+            visible += 1
+            invariants = self._decode_json_dict(subject_loop.get("invariants", {}))
+            if invariants:
+                all_invariants += 1
+                if all(bool(value) for value in invariants.values()):
+                    invariant_passes += 1
+            state_update = self._decode_json_dict(subject_loop.get("state_update", {}))
+            if (
+                state_update.get("self_memory_write") is False
+                and state_update.get("policy_write") is False
+                and state_update.get("mind_graph_write") is False
+            ):
+                state_update_bounded += 1
+            if "operational_trace" in list(state_update.get("allowed_writes", [])):
+                operational_trace_writes += 1
+        return {
+            "stage": "stage31-debt-burndown",
+            "trace_count": visible,
+            "source_trace_count": len(rows),
+            "invariant_pass_rate": round(invariant_passes / all_invariants, 4) if all_invariants else 0.0,
+            "state_update_bounded_rate": round(state_update_bounded / visible, 4) if visible else 0.0,
+            "operational_trace_write_count": operational_trace_writes,
+            "latest_trace_id": int(rows[0]["id"]) if rows else 0,
+        }
+
+    @_synchronized
     def has_pending_proactive(self, thread_id: int) -> bool:
         row = self.conn.execute(
             """

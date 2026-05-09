@@ -62,3 +62,16 @@ Then adjust `.holo_host.toml` and the local private profile files for the target
 - Do not publish private profiles, memory JSONL, runtime databases, helper receipts, snapshots, or artifact exports.
 - Do not enable live canary or transport automation without reading the watcher contract and current handoff.
 - Keep public examples generic. Use placeholder thread keys such as `wechat:TestUser` in tests and docs.
+
+## Offline Bionic Kernel Probe
+
+The current offline agent surface is the bionic subject kernel plus subject-loop diagnostics:
+
+```powershell
+python -m holo_host agent-run --query "continue" --thread-key cli:TestUser --chat-name TestUser --channel cli --offline
+python -m holo_host show-bionic-metrics
+python -m holo_host show-subject-loop-metrics
+python -m holo_host accept-stage31 --thread-key cli:TestUser --chat-name TestUser --channel cli
+```
+
+These commands do not start WeChat, do not send transport messages, and do not write private self-memory.

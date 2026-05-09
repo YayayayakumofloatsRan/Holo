@@ -249,6 +249,11 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host accept-stage29 --thread-key TestUser --chat-name TestUser --channel cli`
 - Stage30 unified subject-loop acceptance:
   - `python3 -m holo_host accept-stage30 --thread-key TestUser --chat-name TestUser --channel cli`
+- Stage31 debt burn-down diagnostics:
+  - `python3 -m holo_host trace-subject-loop --trace-id <trace_id>`
+  - `python3 -m holo_host show-subject-loop-metrics`
+- Stage31 debt burn-down acceptance:
+  - `python3 -m holo_host accept-stage31 --thread-key TestUser --chat-name TestUser --channel cli`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 

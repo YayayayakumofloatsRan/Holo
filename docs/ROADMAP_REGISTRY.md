@@ -80,17 +80,21 @@ Stage30: unified subject loop
 - Exposes the bounded loop order from perception through state update, with inspectable invariants for action-market-first generation, transport-as-interface, no self-memory mutation, no policy mutation, no second brain, and no new unbounded loop.
 - Adds `accept-stage30` without starting WeChat or widening runtime autonomy.
 
+Stage31: debt burn-down and diagnostics
+- Implemented adapter registry, controlled state-update gate, subject-loop trace/metrics diagnostics, bionic CLI helper extraction, and `accept-stage31`.
+- Keeps all new surfaces offline and operational-only, with no live transport start and no self-memory, policy, or Mind Graph writes from the subject-loop path.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage30. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage31+ program replaces them.
+This planned arc starts after Stage31. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage32+ program replaces them.
 
 Provider/API compatibility breadth
-- Partially implemented through Stage29 DeepSeek text support.
+- Partially implemented through Stage29 DeepSeek text support and Stage31 adapter registry.
 - Future work should broaden API/provider compatibility through the processor fabric, not by adding raw hot-path provider calls.
 - Visual-provider hardening should validate real configured `image_understand` lanes before Holo is restarted.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants. Future work should reduce template pressure, improve autonomous inquiry shape, and add richer explainability over inhibition/attention without adding a second brain.
+- Partially implemented through Stage30 subject-loop invariants and Stage31 subject-loop diagnostics. Future work should reduce template pressure and improve autonomous inquiry shape without adding a second brain.
 
 Online long-horizon canary
 - Deferred until after a new explicit re-plan approves any live widening.

@@ -113,6 +113,7 @@ class BionicPipeline:
             "transport_decision_authority": False,
             "wechat_transport_used": False,
         }
+        adapter_contract = turn.adapter_spec.to_contract()
         subject_loop = assemble_subject_loop(
             adapter=turn.adapter,
             channel=turn.channel,
@@ -122,6 +123,7 @@ class BionicPipeline:
             generation=generation,
             outcome=outcome,
             interface_contract=interface_contract,
+            adapter_contract=adapter_contract,
         )
         phases = [
             BionicPhase("perception", "bounded input and situational field captured", perception),
@@ -151,6 +153,7 @@ class BionicPipeline:
             outcome=outcome,
             metrics=metrics,
             interface_contract=interface_contract,
+            adapter_contract=adapter_contract,
             subject_loop=subject_loop,
         ).to_dict()
         return {

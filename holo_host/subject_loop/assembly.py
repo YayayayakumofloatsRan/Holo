@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import SUBJECT_LOOP_PHASES, SubjectLoopTrace
+from .state_update_gate import controlled_state_update_gate
 
 
 def assemble_subject_loop(
@@ -15,12 +16,14 @@ def assemble_subject_loop(
     generation: dict[str, Any],
     outcome: dict[str, Any],
     interface_contract: dict[str, Any],
+    adapter_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     action_type = str(selected_action.get("action_type", "") or "")
     generation_mode = str(generation.get("mode", "") or "")
     generated = bool(str(generation.get("text", "") or "").strip())
     transport_side_effect = bool(outcome.get("wechat_transport_used", False))
-    allowed_writes = ["operational_trace"] if bool(record_requested) else []
+    adapter_contract = dict(adapter_contract or {})
+    state_decision = controlled_state_update_gate.evaluate(record_requested=bool(record_requested))
     outcome_appraisal = {
         "selected_action": action_type,
         "generation_mode": generation_mode,
@@ -30,15 +33,7 @@ def assemble_subject_loop(
         "appraisal_basis": ["selected_action", "generation", "interface_contract"],
         "quality_signal": "observational_only",
     }
-    state_update = {
-        "allowed_writes": allowed_writes,
-        "operational_storage_only": bool(record_requested),
-        "self_memory_write": False,
-        "policy_write": False,
-        "mind_graph_write": False,
-        "second_brain_write": False,
-        "reason": "Stage30 closes the loop with bounded operational evidence only.",
-    }
+    state_update = state_decision.to_dict()
     invariants = {
         "phase_order_complete": list(SUBJECT_LOOP_PHASES) == [
             "perception",
@@ -54,6 +49,8 @@ def assemble_subject_loop(
         "generation_downstream_of_action_market": bool(action_type) and bool(generation_mode),
         "transport_is_interface": interface_contract.get("transport_is_interface") is True,
         "transport_has_no_decision_authority": interface_contract.get("transport_decision_authority") is False,
+        "adapter_registry_interface_only": adapter_contract.get("transport_is_interface") is True
+        and adapter_contract.get("transport_decision_authority") is False,
         "no_transport_side_effect": transport_side_effect is False,
         "no_self_memory_mutation": state_update["self_memory_write"] is False,
         "no_policy_mutation": state_update["policy_write"] is False,

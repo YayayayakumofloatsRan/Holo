@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage30 is now the current implemented offline unified subject-loop milestone, and Stage31+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage31 is now the current implemented offline debt-burn-down milestone, and Stage32+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -62,6 +62,11 @@
   - bionic capsules now expose a bounded `subject_loop` payload with perception, working-field, attention, inhibition, action-market, generation, outcome-appraisal, and state-update phases
   - loop invariants explicitly verify action-market-first generation, transport-as-interface, no self-memory mutation, no policy mutation, no second brain, and no new unbounded loop
   - `accept-stage30` is available and reuses Stage29 plus synthetic WeChat adapter validation without starting transport
+- Stage31 exit state on `2026-05-09`:
+  - adapter registry and adapter contracts are visible on bionic capsules
+  - controlled state-update gate rejects self-memory, policy, Mind Graph, transport, scheduler, and second-brain writes from the offline subject loop
+  - `trace-subject-loop`, `show-subject-loop-metrics`, and `accept-stage31` are available
+  - bionic CLI payload helpers now live under `holo_host/cli_parts/bionic.py`
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
