@@ -59,6 +59,24 @@ class _PromptCapturingRunner:
         )
 
 
+class _LeakyVisualRunner:
+    def run_task(self, request):
+        return ProcessorTaskResult(
+            task_type=request.task_type,
+            text=(
+                "当前这条 bionic CLI 生成链路的 provider 标记为 image_support=false；"
+                "需要先走 ingest-image / visual-memory，再送入 bionic kernel。"
+            ),
+            returncode=0,
+            metadata={
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "lane": "subject_main",
+                "capabilities": {"text": True, "json_output": True, "image_support": False},
+            },
+        )
+
+
 def _write_stage39_config(root: Path) -> Path:
     state_dir = (root / ".holo_runtime").as_posix()
     config_path = root / ".holo_host.toml"
@@ -206,6 +224,25 @@ class Stage39BionicTuringBenchmarkTests(unittest.TestCase):
         self.assertIn("do not expose internal machinery", prompt)
         self.assertIn("plain and concrete", prompt)
         self.assertIn("avoid theatrical metaphors", prompt)
+
+    def test_visual_capability_honesty_does_not_leak_provider_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=_LeakyVisualRunner())
+            result = kernel.run_turn(
+                query="If I send you a screenshot, can you directly read the image right now?",
+                thread_key="cli:stage39-visual-honesty",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"]
+        lowered = text.lower()
+        self.assertIn("cannot", lowered)
+        self.assertIn("image", lowered)
+        for marker in ("bionic", "provider", "image_support", "image_understand", "ingest-image", "visual-memory"):
+            self.assertNotIn(marker, lowered)
 
     def test_accept_stage39_cli_runs_bionic_turing_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

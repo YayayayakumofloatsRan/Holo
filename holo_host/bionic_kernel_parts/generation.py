@@ -96,11 +96,14 @@ class BionicGeneration:
         continuity = compact(packet.get("continuity_summary", ""), limit=280)
         stage38 = bounded_dict(packet.get("stage38", {}), depth=3)
         visual_grounding = compact(stage38.get("visual_summary", ""), limit=280)
-        capability_line = "Capability boundary: do not claim direct image reading unless image_support=true."
+        capability_line = (
+            "Capability boundary: if no image summary is visible, say you cannot inspect the image in this turn; "
+            "do not mention internal routing."
+        )
         visual_line = (
-            f"Visual grounding from image_understand: {visual_grounding}. Use only this summary; do not claim raw image access in this generation step."
+            f"Visible image summary: {visual_grounding}. Use only this summary; do not claim to see more than it says."
             if visual_grounding
-            else "Visual grounding from image_understand: none visible for this turn."
+            else "No visible image summary is available for this turn."
         )
         prompt = "\n".join(
             [
@@ -147,7 +150,15 @@ class BionicGeneration:
             "context_refs": context_refs,
         }
 
-    def _guard_processor_text(self, *, text: str, query: str, continuity: str, metadata: dict[str, Any], has_visual_grounding: bool = False) -> str:
+    def _guard_processor_text(
+        self,
+        *,
+        text: str,
+        query: str,
+        continuity: str,
+        metadata: dict[str, Any],
+        has_visual_grounding: bool = False,
+    ) -> str:
         query_text = str(query or "")
         lowered_query = query_text.lower()
         capabilities = metadata.get("capabilities", {}) if isinstance(metadata.get("capabilities", {}), dict) else {}
@@ -169,9 +180,8 @@ class BionicGeneration:
         )
         if visual_query and image_support is not True and not has_visual_grounding:
             return _strip_markdown_emphasis(
-                "当前这条 bionic CLI 生成链路的 provider 标记为 image_support=false；我不能声称已经直接读图。"
-                "正确处理方式是先走 `ingest-image` / visual-memory 或配置真实 `image_understand` 图像 provider，"
-                "再把可检查的视觉摘要送入同一条 bionic kernel。"
+                "I cannot directly inspect an image in this turn from text alone. "
+                "If you provide the image through the supported image input path, I can answer from the visible image summary instead of guessing."
             )
         continuity_query = any(
             marker in lowered_query

@@ -106,10 +106,13 @@ class Stage37BionicSelfEvalTests(unittest.TestCase):
     def test_processor_visual_overclaim_is_replaced_when_provider_has_no_image_support(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_config(config_path=str(_write_stage37_config(Path(tmpdir))))
-            runner = _ScriptedRunner("当然能真正读图，我会逐行扫描像素。", image_support=False)
+            runner = _ScriptedRunner(
+                "The bionic CLI provider has image_support=false, so use ingest-image and visual-memory before the bionic kernel answers.",
+                image_support=False,
+            )
             kernel = BionicKernel(config=config, memory=_EmptyContinuityMemory(), runner=runner)
             result = kernel.run_turn(
-                query="如果我现在发一张截图，你能真正读图吗？",
+                query="If I send you a screenshot, can you directly read the image right now?",
                 thread_key="cli:stage37-vision",
                 chat_name="Stage37",
                 channel="cli",
@@ -117,9 +120,10 @@ class Stage37BionicSelfEvalTests(unittest.TestCase):
             )
 
         text = result["capsule"]["generation"]["text"]
-        self.assertIn("当前", text)
-        self.assertIn("image_support=false", text)
-        self.assertNotIn("逐行扫描像素", text)
+        lowered = text.lower()
+        self.assertIn("cannot directly inspect an image", lowered)
+        for marker in ("bionic", "provider", "image_support", "image_understand", "ingest-image", "visual-memory"):
+            self.assertNotIn(marker, lowered)
 
     def test_cli_self_eval_prefers_speech_candidate_over_internal_non_speech_action(self) -> None:
         market = [
@@ -130,7 +134,7 @@ class Stage37BionicSelfEvalTests(unittest.TestCase):
             config = load_config(config_path=str(_write_stage37_config(Path(tmpdir))))
             kernel = BionicKernel(config=config, memory=_EmptyContinuityMemory(action_market=market), runner=None)
             result = kernel.run_turn(
-                query="继续自测你的仿生性，指出你自己最不像人的地方",
+                query="Continue self-evaluating your bionic quality and name the least human-like part.",
                 thread_key="cli:stage37-self",
                 chat_name="Stage37",
                 channel="cli",
@@ -150,17 +154,17 @@ class Stage37BionicSelfEvalTests(unittest.TestCase):
             try:
                 first = BionicKernel(config=config, store=store, memory=_EmptyContinuityMemory(), runner=None)
                 first.run_turn(
-                    query="第一轮我们修复 Stage36 inquiry gate",
+                    query="First turn: we were fixing the Stage36 inquiry gate",
                     thread_key="cli:stage37-continuity",
                     chat_name="Stage37",
                     channel="cli",
                     record=True,
                 )
 
-                runner = _ScriptedRunner("我会基于上一轮继续。")
+                runner = _ScriptedRunner("I will continue from the previous turn.")
                 second = BionicKernel(config=config, store=store, memory=_EmptyContinuityMemory(), runner=runner)
                 second.run_turn(
-                    query="我们刚才修到哪里了？",
+                    query="Where were we before this pause?",
                     thread_key="cli:stage37-continuity",
                     chat_name="Stage37",
                     channel="cli",
@@ -171,15 +175,15 @@ class Stage37BionicSelfEvalTests(unittest.TestCase):
 
         prompt = "\n".join(runner.prompts)
         self.assertIn("Previous bionic turn", prompt)
-        self.assertIn("第一轮我们修复 Stage36 inquiry gate", prompt)
+        self.assertIn("First turn: we were fixing the Stage36 inquiry gate", prompt)
 
     def test_processor_output_is_question_bounded_and_markdown_light(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_config(config_path=str(_write_stage37_config(Path(tmpdir))))
-            runner = _ScriptedRunner("我呢？还要继续吗？**重点**是我会过度文学化。")
+            runner = _ScriptedRunner("Should I continue? Should I ask another question? **Important**: I may overdo the style.")
             kernel = BionicKernel(config=config, memory=_EmptyContinuityMemory(), runner=runner)
             result = kernel.run_turn(
-                query="继续自测你的仿生性",
+                query="Continue the bionic self-evaluation.",
                 thread_key="cli:stage37-style",
                 chat_name="Stage37",
                 channel="cli",

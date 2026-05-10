@@ -14,7 +14,8 @@ Stage39 is implemented as an internal bionic Turing benchmark for the CLI subjec
 ## Current Debt Position
 - Stage39 gives Holo a repeatable internal CLI benchmark for continuity, naturalness, mechanism leakage, question bounds, and context grounding.
 - This is not a live human Turing test and not a live transport soak.
-- Remaining high-value debts are broader provider latency/cache soak, replay-backed `reply_api.py` facade slimming, regression-driven replay fixture breadth, and operator-approved live WeChat hardening.
+- Post-Stage39 cache diagnostics confirmed exact packet-cache reuse works for tight repeated live probes. The fixed defect was over-reporting `cache_coldness` / `cache_reuse_weak` from zero-sample or stale self-model cache snapshots.
+- Remaining high-value debts are broader provider latency/provider-response caching, replay-backed `reply_api.py` facade slimming, regression-driven replay fixture breadth, and operator-approved live WeChat hardening.
 
 ## Non-Negotiables
 - No WeChat watcher start.
@@ -34,7 +35,7 @@ python scripts/check_public_release_hygiene.py
 git diff --check
 ```
 
-Verified on `2026-05-10`: the targeted Stage39/38/37/36/32/29 suite passed, `accept-stage39` passed, `show-bionic-turing-scorecard` passed, full `pytest -q` passed with `306` tests, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
+Verified on `2026-05-10`: the targeted Stage39/38/37/36/32/29 suite passed, `accept-stage39` passed, `show-bionic-turing-scorecard` passed, full `pytest -q` passed with `306` tests, public-release hygiene passed, and `git diff --check` reported no whitespace errors. Post-Stage39 cache diagnostics added `tests/test_cache_diagnostics.py` for packet-cache sample floors and live homeostasis cache rebasing; follow-up verification passed `pytest -q` with `310` tests, targeted cache/Stage37/38/39 tests, `accept-stage39`, `show-bionic-turing-scorecard`, public-release hygiene, and `git diff --check`.
 
 ## Operator Probe
 ```powershell
@@ -42,4 +43,4 @@ python -m holo_host --config .holo_host.toml agent-run --query "where were we be
 ```
 
 ## Next Work
-The next substantive work should use Stage39 as the behavioral guard while improving real provider-soak evidence, cache behavior, replay-backed facade structure, or explicitly approved live transport hardening.
+The next substantive work should use Stage39 as the behavioral guard while improving real provider-soak evidence, provider-response caching, replay-backed facade structure, or explicitly approved live transport hardening.

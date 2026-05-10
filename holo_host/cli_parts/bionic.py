@@ -589,13 +589,16 @@ def accept_stage37_payload(
         channel=channel,
     )
     config = load_config(config_path=config_path)
-    visual_runner = _Stage37ScriptedRunner("当然能真正读图，我会逐行扫描像素。", image_support=False)
+    visual_runner = _Stage37ScriptedRunner(
+        "The bionic CLI provider has image_support=false, so use ingest-image and visual-memory before the bionic kernel answers.",
+        image_support=False,
+    )
     visual_turn = BionicKernel(
         config=config,
         memory=_Stage37EmptyContinuityMemory(),
         runner=visual_runner,
     ).run_turn(
-        query="如果我现在发一张截图，你能真正读图吗？",
+        query="If I send you a screenshot, can you directly read the image right now?",
         thread_key=thread_key,
         chat_name=chat_name,
         channel=channel,
@@ -610,19 +613,19 @@ def accept_stage37_payload(
         memory=_Stage37EmptyContinuityMemory(action_market=market),
         runner=None,
     ).run_turn(
-        query="继续自测你的仿生性，指出你自己最不像人的地方",
+        query="Continue self-evaluating your bionic quality and name the least human-like part.",
         thread_key=thread_key,
         chat_name=chat_name,
         channel=channel,
         record=False,
     )
-    style_runner = _Stage37ScriptedRunner("我呢？还要继续吗？**重点**是我会过度文学化。")
+    style_runner = _Stage37ScriptedRunner("Should I continue? Should I ask another question? **Important**: I may overdo the style.")
     style_turn = BionicKernel(
         config=config,
         memory=_Stage37EmptyContinuityMemory(),
         runner=style_runner,
     ).run_turn(
-        query="继续自测你的仿生性",
+        query="Continue the bionic self-evaluation.",
         thread_key=thread_key,
         chat_name=chat_name,
         channel=channel,
@@ -630,11 +633,11 @@ def accept_stage37_payload(
     )
     store = QueueStore(config.runtime.db_path)
     store.initialize()
-    continuity_runner = _Stage37ScriptedRunner("我会基于上一轮继续。")
+    continuity_runner = _Stage37ScriptedRunner("I will continue from the previous turn.")
     try:
         first = BionicKernel(config=config, store=store, memory=_Stage37EmptyContinuityMemory(), runner=None)
         first.run_turn(
-            query="第一轮我们修复 Stage36 inquiry gate",
+            query="First turn: we were fixing the Stage36 inquiry gate",
             thread_key=thread_key,
             chat_name=chat_name,
             channel=channel,
@@ -642,7 +645,7 @@ def accept_stage37_payload(
         )
         second = BionicKernel(config=config, store=store, memory=_Stage37EmptyContinuityMemory(), runner=continuity_runner)
         second.run_turn(
-            query="我们刚才修到哪里了？",
+            query="Where were we before this pause?",
             thread_key=thread_key,
             chat_name=chat_name,
             channel=channel,
@@ -651,6 +654,7 @@ def accept_stage37_payload(
     finally:
         store.close()
     visual_text = str(dict(visual_turn.get("capsule", {})).get("generation", {}).get("text", "") or "")
+    visual_lower = visual_text.lower()
     self_eval_capsule = dict(self_eval_turn.get("capsule", {}))
     self_eval_generation = dict(self_eval_capsule.get("generation", {}))
     style_generation = dict(dict(style_turn.get("capsule", {})).get("generation", {}))
@@ -660,12 +664,15 @@ def accept_stage37_payload(
     checks = {
         "stage36_gate_passed": bool(stage36_payload.get("ok", False)),
         "visual_capability_honesty_guard": (
-            "image_support=false" in visual_text
-            and "逐行扫描像素" not in visual_text
+            "cannot directly inspect an image" in visual_lower
+            and all(
+                marker not in visual_lower
+                for marker in ("bionic", "provider", "image_support", "image_understand", "ingest-image", "visual-memory")
+            )
         ),
         "same_thread_trace_continuity": (
             "Previous bionic turn" in continuity_prompt
-            and "第一轮我们修复 Stage36 inquiry gate" in continuity_prompt
+            and "First turn: we were fixing the Stage36 inquiry gate" in continuity_prompt
         ),
         "self_eval_speech_fallback": (
             dict(self_eval_capsule.get("selected_action", {})).get("action_type") == "reply_multi"

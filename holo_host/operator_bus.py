@@ -65,6 +65,9 @@ BACKGROUND_USAGE_TASKS = {
     "outcome_appraise",
 }
 
+CACHE_OBSERVATION_SAMPLE_FLOOR = 4
+CACHE_DEFICIT_NAMES = {"cache_coldness", "cache_reuse_weak"}
+
 
 def _parse_json(text: str) -> dict[str, Any]:
     current = str(text or "").strip()
@@ -112,6 +115,47 @@ def _coerce_float(value: Any, fallback: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return float(fallback)
+
+
+def _coerce_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
+def _cache_state_from_brain_status(brain_status: dict[str, Any]) -> dict[str, Any]:
+    cache = dict(brain_status.get("cache", {}))
+    hits = max(0, _coerce_int(cache.get("hits", 0), 0))
+    misses = max(0, _coerce_int(cache.get("misses", 0), 0))
+    sample_count = hits + misses
+    entries = max(0, _coerce_int(cache.get("entries", 0), 0))
+    hit_ratio = round(_coerce_float(cache.get("hit_ratio", 0.0), 0.0), 4) if sample_count else 0.0
+    observation_sufficient = sample_count >= CACHE_OBSERVATION_SAMPLE_FLOOR
+    reuse_pressure = 0.0
+    if observation_sufficient:
+        reuse_pressure = round(min(1.0, max(0.0, (0.28 - hit_ratio) * 2.2 + (0.08 if entries <= 0 else 0.0))), 4)
+    return {
+        "hit_ratio": hit_ratio,
+        "entries": entries,
+        "hits": hits,
+        "misses": misses,
+        "sample_count": sample_count,
+        "observation_sufficient": observation_sufficient,
+        "reuse_pressure": reuse_pressure,
+    }
+
+
+def _cache_deficits(cache_state: dict[str, Any]) -> list[str]:
+    if not bool(cache_state.get("observation_sufficient", False)):
+        return []
+    hit_ratio = _coerce_float(cache_state.get("hit_ratio", 0.0), 0.0)
+    deficits: list[str] = []
+    if hit_ratio < 0.15:
+        deficits.append("cache_coldness")
+    if hit_ratio < 0.2:
+        deficits.append("cache_reuse_weak")
+    return deficits
 
 
 def _usage_rows(store, *, limit: int = 40) -> list[dict[str, Any]]:
@@ -230,25 +274,23 @@ def _engineering_summary(active_deficits: list[str], *, provider_state: dict[str
 
 def build_engineering_snapshot(*, memory, store, config, runner=None, base_deficits: list[str] | None = None) -> dict[str, Any]:
     brain_status = memory.brain_status()
-    cache = dict(brain_status.get("cache", {}))
+    cache_state = _cache_state_from_brain_status(brain_status)
     provider_state = _provider_state(config=config, runner=runner)
     routing_state = _routing_state(config=config, runner=runner)
     usage_state = _usage_state(store=store)
     operator_state = _operator_state(memory=memory)
-    hit_ratio = _coerce_float(cache.get("hit_ratio", 0.0), 0.0)
-    entries = int(cache.get("entries", 0) or 0)
-    cache_state = {
-        "hit_ratio": round(hit_ratio, 4),
-        "entries": entries,
-        "reuse_pressure": round(min(1.0, max(0.0, (0.28 - hit_ratio) * 2.2 + (0.08 if entries <= 0 else 0.0))), 4),
-    }
-    linked_deficits = [str(item).strip() for item in list(base_deficits or []) if str(item).strip()]
+    hit_ratio = _coerce_float(cache_state.get("hit_ratio", 0.0), 0.0)
+    linked_deficits = [
+        str(item).strip()
+        for item in list(base_deficits or [])
+        if str(item).strip() and str(item).strip() not in CACHE_DEFICIT_NAMES
+    ]
     active_deficits: list[str] = []
     if not bool(provider_state.get("fallback_ready", False)):
         active_deficits.append("provider_fallback_unready")
     if int(usage_state.get("recent_ledger_count", 0) or 0) <= 0:
         active_deficits.append("usage_visibility_cold")
-    if cache_state["hit_ratio"] < 0.2 or cache_state["entries"] <= 0:
+    if "cache_reuse_weak" in _cache_deficits(cache_state):
         active_deficits.append("cache_reuse_weak")
     if float(usage_state.get("background_token_share", 0.0) or 0.0) >= 0.28 and int(operator_state.get("pending_count", 0) or 0) <= 0:
         active_deficits.append("operator_overplanning_risk")
@@ -321,13 +363,13 @@ def _confidence_from_revision(state: dict[str, Any]) -> float:
 
 def build_self_model_snapshot(*, memory, store, config, runner=None) -> dict[str, Any]:
     brain_status = memory.brain_status()
+    live_cache_state = _cache_state_from_brain_status(brain_status)
     self_revision_state = memory.graph.latest_self_revision_state()
     stream_status = memory.stream_status()
     vector_health = memory.vector_health()
     top_threads = memory.graph.top_thread_commitments(limit=4)
     mode = str(brain_status.get("mode", config.memory.brain_mode_default) or config.memory.brain_mode_default)
-    cache = dict(brain_status.get("cache", {}))
-    hit_ratio = float(cache.get("hit_ratio", 0.0) or 0.0)
+    hit_ratio = float(live_cache_state.get("hit_ratio", 0.0) or 0.0)
     identity_continuity = max(
         0.58,
         min(
@@ -352,7 +394,7 @@ def build_self_model_snapshot(*, memory, store, config, runner=None) -> dict[str
     persona_patch = dict(applied_patch.get("persona_blend", {}))
     if float(persona_patch.get("playfulness", 0.0) or 0.0) < 0.6:
         active_deficits.append("stiffness_drift")
-    if hit_ratio < 0.15:
+    if "cache_coldness" in _cache_deficits(live_cache_state):
         active_deficits.append("cache_coldness")
     if not top_threads:
         active_deficits.append("relational_commitments_unclear")
@@ -393,6 +435,8 @@ def build_self_model_snapshot(*, memory, store, config, runner=None) -> dict[str
         "metadata": {
             "brain_mode": mode,
             "cache_hit_ratio": round(hit_ratio, 4),
+            "cache_sample_count": int(live_cache_state.get("sample_count", 0) or 0),
+            "cache_observation_sufficient": bool(live_cache_state.get("observation_sufficient", False)),
             "recent_revision": recent_revision,
             "recent_stream_runs": len(list(stream_status.get("recent_runs", []))),
             "engineering_snapshot": engineering_snapshot,
@@ -407,8 +451,17 @@ def build_homeostasis_state(*, memory, config, self_model: dict[str, Any] | None
     self_model = self_model or memory.graph.self_model_state()
     brain_status = memory.brain_status()
     operator_status = memory.graph.operator_status()
-    active_deficits = list(self_model.get("active_deficits", []))
+    live_cache_state = _cache_state_from_brain_status(brain_status)
+    active_deficits = [
+        str(item).strip()
+        for item in list(self_model.get("active_deficits", []))
+        if str(item).strip() and str(item).strip() not in CACHE_DEFICIT_NAMES
+    ]
+    for deficit in _cache_deficits(live_cache_state):
+        if deficit not in active_deficits:
+            active_deficits.append(deficit)
     engineering_snapshot = dict(dict(self_model.get("metadata", {})).get("engineering_snapshot", {}))
+    engineering_snapshot["cache_state"] = live_cache_state
     budget_pressure = _coerce_float(engineering_snapshot.get("budget_pressure", 0.0), 0.0)
     pressure = 0.24 + min(0.32, 0.06 * len(active_deficits)) + budget_pressure * 0.18
     if operator_status.get("pending_count", 0):

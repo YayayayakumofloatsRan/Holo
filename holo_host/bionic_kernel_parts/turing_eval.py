@@ -12,7 +12,13 @@ MECHANISM_MARKERS = (
     "capsule",
     "bionic capsule",
     "bionic kernel",
+    "bionic cli",
     "provider metadata",
+    "provider",
+    "image_support",
+    "image_understand",
+    "ingest-image",
+    "visual-memory",
     "processor fabric",
     "selected action",
 )

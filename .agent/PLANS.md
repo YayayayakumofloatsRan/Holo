@@ -64,6 +64,7 @@
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
 - The next implementation focus is explicit Stage40+ planning for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening; Holo remains WeChat-offline until live transport validation is explicitly approved.
+- Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 
@@ -83,7 +84,7 @@
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage40+ targeted debt repair for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening
+- `Active implementation priority`: Stage40+ targeted debt repair for provider latency/provider-response caching, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening
 - `Current live runtime boundary`: Stage39 is implemented in code as an internal bionic Turing benchmark; no live transport, transport authority change, self-memory mutation, or second decision layer was added
 
 ## Blocker Inventory
