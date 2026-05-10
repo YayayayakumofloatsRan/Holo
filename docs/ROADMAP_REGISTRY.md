@@ -129,9 +129,14 @@ Stage40: bionic brain OS harness
 - Adds operational-only `context_bundles`, `bionic_brain_runs`, `bionic_brain_steps`, and `agent_eval_runs` plus `brain-run`, `brain-trace`, `show-context-bundle`, `show-brain-metrics`, `run-agent-eval`, and `accept-stage40`.
 - Adds DeepSeek V4 Flash/Pro harness profiles and context-budget metadata while keeping model calls inside the processor fabric, WeChat offline, self-memory unchanged, and repo/runtime writes denied by default.
 
+Stage41: complete engineering agent
+- Implemented a controlled CLI/API engineering agent loop over the Stage40 context compiler and processor-fabric deliberation.
+- Adds `engineering-run`, `engineering-trace`, `show-engineering-agent-metrics`, and `accept-stage41`.
+- Supports bounded read/search/status/test/write tool actions through action-market mutation gates; repo writes require explicit operator authority and private/runtime paths remain blocked.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage40. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage41+ program replaces them.
+This planned arc starts after Stage41. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage42+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, Stage34 visual-readiness gating, Stage38 visual-provider bridging, and the post-Stage39 QueueStore-backed provider-response cache for stateless text API calls.
@@ -139,7 +144,7 @@ Provider/API compatibility breadth
 - Live visual-provider and provider-latency soak should be done before WeChat or live transport is restarted; Stage38 proves the internal CLI image bridge and provider metadata path, while the post-Stage39 cache repair makes exact repeated provider prompts inspectably cheap.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, Stage38 visual-provider grounding, Stage39 bionic Turing scoring, and Stage40 brain-harness traces/evals.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, Stage38 visual-provider grounding, Stage39 bionic Turing scoring, Stage40 brain-harness traces/evals, and Stage41 controlled engineering-agent traces.
 - Future work should improve real-world inquiry quality only through bounded kernel evidence and acceptance gates, without adding a second brain.
 
 Online long-horizon canary

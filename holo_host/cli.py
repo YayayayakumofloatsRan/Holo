@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from .cli_parts import bionic as bionic_cli
 from .cli_parts import brain as brain_cli
+from .cli_parts import engineering as engineering_cli
 from .config import load_config
 from .daemon import build_daemon
 from .models import ProcessorTaskRequest
@@ -8066,6 +8067,43 @@ def command_run_agent_eval(config_path: str | None, *, suite: str) -> int:
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_engineering_run(
+    config_path: str | None,
+    *,
+    goal: str,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    offline: bool,
+    max_steps: int,
+    allow_repo_write: bool,
+) -> int:
+    payload, _transport = engineering_cli.engineering_run_payload(
+        config_path,
+        goal=goal,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        offline=offline,
+        max_steps=max_steps,
+        allow_repo_write=allow_repo_write,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_engineering_trace(config_path: str | None, *, trace_id: int) -> int:
+    payload, _transport = engineering_cli.engineering_trace_payload(config_path, trace_id=trace_id)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_show_engineering_agent_metrics(config_path: str | None, *, limit: int) -> int:
+    payload, _transport = engineering_cli.engineering_metrics_payload(config_path, limit=limit)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_trace_subject_loop(config_path: str | None, *, trace_id: int) -> int:
     payload, _transport = bionic_cli.subject_loop_trace_payload(config_path, trace_id=trace_id)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -8185,6 +8223,17 @@ def command_accept_stage39(config_path: str | None, *, thread_key: str, chat_nam
 
 def command_accept_stage40(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
     payload, _transport = brain_cli.accept_stage40_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_accept_stage41(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = engineering_cli.accept_stage41_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -9161,6 +9210,18 @@ def main(argv: list[str] | None = None) -> int:
     brain_metrics_parser.add_argument("--limit", type=int, default=100)
     agent_eval_parser = subparsers.add_parser("run-agent-eval", help="Run the Stage-40 agent evaluation suite")
     agent_eval_parser.add_argument("--suite", default="stage40")
+    engineering_run_parser = subparsers.add_parser("engineering-run", help="Run one Stage-41 controlled engineering agent loop")
+    engineering_run_parser.add_argument("--goal", required=True)
+    engineering_run_parser.add_argument("--thread-key", default="cli:TestUser")
+    engineering_run_parser.add_argument("--chat-name", default="TestUser")
+    engineering_run_parser.add_argument("--channel", default="cli")
+    engineering_run_parser.add_argument("--offline", action="store_true")
+    engineering_run_parser.add_argument("--max-steps", type=int, default=8)
+    engineering_run_parser.add_argument("--allow-repo-write", action="store_true")
+    engineering_trace_parser = subparsers.add_parser("engineering-trace", help="Show one Stage-41 engineering agent trace")
+    engineering_trace_parser.add_argument("--trace-id", type=int, required=True)
+    engineering_metrics_parser = subparsers.add_parser("show-engineering-agent-metrics", help="Show Stage-41 engineering agent metrics")
+    engineering_metrics_parser.add_argument("--limit", type=int, default=100)
     subject_loop_trace_parser = subparsers.add_parser("trace-subject-loop", help="Show the Stage-30 subject-loop payload for one bionic trace")
     subject_loop_trace_parser.add_argument("--trace-id", type=int, required=True)
     subject_loop_metrics_parser = subparsers.add_parser("show-subject-loop-metrics", help="Show Stage-30 subject-loop invariant metrics")
@@ -9409,6 +9470,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage40_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage40_parser.add_argument("--chat-name", default="TestUser")
     accept_stage40_parser.add_argument("--channel", default="cli")
+    accept_stage41_parser = subparsers.add_parser("accept-stage41", help="Run the Stage-41 controlled engineering agent gate")
+    accept_stage41_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage41_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage41_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("accept-stage33", help="Run the Stage-33 provider API contract gate")
     subparsers.add_parser("accept-stage34", help="Run the Stage-34 debt registry and visual readiness gate")
     subparsers.add_parser("accept-stage35", help="Run the Stage-35 internal runtime readiness gate")
@@ -9642,6 +9707,21 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_brain_metrics(args.config, limit=args.limit)
     if args.command == "run-agent-eval":
         return command_run_agent_eval(args.config, suite=args.suite)
+    if args.command == "engineering-run":
+        return command_engineering_run(
+            args.config,
+            goal=args.goal,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            offline=args.offline,
+            max_steps=args.max_steps,
+            allow_repo_write=args.allow_repo_write,
+        )
+    if args.command == "engineering-trace":
+        return command_engineering_trace(args.config, trace_id=args.trace_id)
+    if args.command == "show-engineering-agent-metrics":
+        return command_show_engineering_agent_metrics(args.config, limit=args.limit)
     if args.command == "trace-subject-loop":
         return command_trace_subject_loop(args.config, trace_id=args.trace_id)
     if args.command == "show-subject-loop-metrics":
@@ -10418,6 +10498,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage40":
         return command_accept_stage40(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage41":
+        return command_accept_stage41(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

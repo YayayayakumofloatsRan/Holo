@@ -1688,26 +1688,34 @@ class QueueStore:
         return self._bionic_brain_run_from_row(row) if row else {}
 
     @_synchronized
-    def latest_bionic_brain_metrics(self, *, limit: int = 100) -> dict[str, Any]:
+    def latest_bionic_brain_metrics(self, *, limit: int = 100, stage: str | None = None) -> dict[str, Any]:
+        stage_filter = str(stage or "stage40-bionic-brain-os-harness").strip() or "stage40-bionic-brain-os-harness"
         rows = self._fetchall(
             """
             SELECT * FROM bionic_brain_runs
+            WHERE stage = ?
             ORDER BY id DESC
             LIMIT ?
             """,
-            (max(1, int(limit or 100)),),
+            (stage_filter, max(1, int(limit or 100))),
         )
         decoded = [self._bionic_brain_run_from_row(row) for row in rows]
         ok_count = sum(1 for row in decoded if str(row.get("status", "")) == "completed")
         step_counts = [int(row.get("step_count", 0) or 0) for row in decoded]
         token_estimates = [int(dict(row.get("metrics", {})).get("context_token_estimate", 0) or 0) for row in decoded]
+        action_counts = [int(dict(row.get("metrics", {})).get("action_count", 0) or 0) for row in decoded]
+        blocked_counts = [int(dict(row.get("metrics", {})).get("blocked_count", 0) or 0) for row in decoded]
+        repo_write_counts = [int(dict(row.get("metrics", {})).get("repo_write_count", 0) or 0) for row in decoded]
         return {
-            "stage": "stage40-bionic-brain-os-harness",
+            "stage": stage_filter,
             "run_count": len(decoded),
             "completed_count": ok_count,
             "latest_run_id": int(decoded[0]["run_id"]) if decoded else 0,
             "average_step_count": round(sum(step_counts) / len(step_counts), 4) if step_counts else 0.0,
             "average_context_token_estimate": round(sum(token_estimates) / len(token_estimates), 4) if token_estimates else 0.0,
+            "average_action_count": round(sum(action_counts) / len(action_counts), 4) if action_counts else 0.0,
+            "blocked_action_count": sum(blocked_counts),
+            "repo_write_action_count": sum(repo_write_counts),
         }
 
     @_synchronized

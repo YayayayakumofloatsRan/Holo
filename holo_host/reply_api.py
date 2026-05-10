@@ -30,6 +30,7 @@ from .common import atomic_write_text, compact_text, stable_digest, utc_now
 from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
 from .debt_registry import current_debt_registry
+from .engineering_agent import EngineeringAgentHarness, STAGE41_NAME, accept_stage41_payload as build_stage41_acceptance
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .models import AttentionState, IncomingMessage, OutgoingMessage, ProcessorTaskRequest, ReplyBubble, TurnContext
 from .operator_bus import build_engineering_snapshot, build_homeostasis_state
@@ -1003,6 +1004,47 @@ class HoloReplyService:
     def run_agent_eval(self, *, suite: str = "stage40") -> dict[str, Any]:
         harness = BionicBrainHarness(config=self.config, store=self.store, memory=self.memory, runner=None)
         return run_stage40_agent_eval(config=self.config, store=self.store, harness=harness, suite=suite)
+
+    def engineering_run(
+        self,
+        *,
+        goal: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        offline: bool = False,
+        max_steps: int = 8,
+        allow_repo_write: bool = False,
+    ) -> dict[str, Any]:
+        harness = EngineeringAgentHarness(
+            config=self.config,
+            store=self.store,
+            runner=None if offline else self.runner,
+        )
+        return harness.run(
+            goal=goal,
+            thread_key=str(thread_key or "cli:TestUser"),
+            chat_name=str(chat_name or thread_key or "TestUser"),
+            channel=str(channel or "cli"),
+            offline=bool(offline),
+            max_steps=int(max_steps or 8),
+            allow_repo_write=bool(allow_repo_write),
+        )
+
+    def engineering_trace(self, *, trace_id: int) -> dict[str, Any]:
+        run = self.store.get_bionic_brain_run(run_id=int(trace_id))
+        if not run or str(run.get("stage", "")) != STAGE41_NAME:
+            return {"ok": False, "stage": STAGE41_NAME, "trace_id": int(trace_id), "error": "trace_not_found"}
+        return {
+            "ok": True,
+            "stage": STAGE41_NAME,
+            "trace_id": int(trace_id),
+            "run": run,
+            "steps": self.store.list_bionic_brain_steps(run_id=int(trace_id)),
+        }
+
+    def show_engineering_agent_metrics(self, *, limit: int = 100) -> dict[str, Any]:
+        return self.store.latest_bionic_brain_metrics(limit=limit, stage=STAGE41_NAME)
 
     def accept_processor_fabric(self) -> dict[str, Any]:
         required_docs = [
@@ -2216,6 +2258,23 @@ class HoloReplyService:
             artifact_dir=artifact_dir,
         )
 
+    def accept_stage41(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self._accept_stage41_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
     def _accept_stage40_impl(
         self,
         *,
@@ -2232,6 +2291,32 @@ class HoloReplyService:
             memory=self.memory,
             runner=self.runner,
             stage39_payload=stage39_payload,
+            thread_key=str(thread_key or "cli:TestUser"),
+            chat_name=str(chat_name or thread_key or "TestUser"),
+            channel=str(channel or "cli"),
+        )
+
+    def _accept_stage41_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        stage40_payload = self._accept_stage40_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        return build_stage41_acceptance(
+            config=self.config,
+            store=self.store,
+            runner=self.runner,
+            stage40_payload=stage40_payload,
             thread_key=str(thread_key or "cli:TestUser"),
             chat_name=str(chat_name or thread_key or "TestUser"),
             channel=str(channel or "cli"),
@@ -9551,6 +9636,20 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/engineering-trace":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.engineering_trace(
+                        trace_id=int(params.get("trace_id", ["0"])[0] or 0),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/engineering-agent-metrics":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_engineering_agent_metrics(
+                        limit=int(params.get("limit", ["100"])[0] or 100),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/brain-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.brain_status())
                     return
@@ -10082,6 +10181,24 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             channel=str(payload.get("channel", "cli")).strip() or "cli",
                             offline=bool(payload.get("offline", False)),
                             max_steps=int(payload.get("max_steps", 8) or 8),
+                        ),
+                    )
+                    return
+                if parsed.path == "/engineering-run":
+                    goal = str(payload.get("goal", "") or "").strip()
+                    if not goal:
+                        self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": "`goal` is required"})
+                        return
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.engineering_run(
+                            goal=goal,
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "cli")).strip() or "cli",
+                            offline=bool(payload.get("offline", False)),
+                            max_steps=int(payload.get("max_steps", 8) or 8),
+                            allow_repo_write=bool(payload.get("allow_repo_write", False)),
                         ),
                     )
                     return

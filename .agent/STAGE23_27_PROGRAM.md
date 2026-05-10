@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage40 is now the current implemented bionic brain OS harness milestone, and Stage41+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage41 is now the current implemented controlled engineering-agent milestone; Stage42+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -115,6 +115,13 @@
   - DeepSeek V4 Flash/Pro harness profiles are visible, including safe thinking-mode/tool-call downgrade behavior when `reasoning_content` cannot be preserved
   - QueueStore persists `context_bundles`, `bionic_brain_runs`, `bionic_brain_steps`, and `agent_eval_runs` as operational storage only
   - `brain-run`, `brain-trace`, `show-context-bundle`, `show-brain-metrics`, `run-agent-eval`, and `accept-stage40` are available without starting WeChat or mutating self-memory
+- Stage41 exit state on `2026-05-10`:
+  - `EngineeringAgentHarness` runs a controlled CLI/API engineering loop over Stage40 context compilation and processor-fabric deliberation
+  - Action proposals are gated by mutation class before execution; read/search/status are allowed, tests are allowlisted, and repo writes require explicit operator authority
+  - Private runtime, memory, subject-profile, API-key, and transport-receipt paths remain blocked even when repo-write authority is supplied
+  - Stage41 run evidence is persisted as operational `bionic_brain_runs` and `bionic_brain_steps` with stage `stage41-complete-engineering-agent`
+  - `engineering-run`, `engineering-trace`, `show-engineering-agent-metrics`, and `accept-stage41` are available without starting WeChat or mutating self-memory
+  - `pytest -q` passed with `337` tests, `accept-stage41` passed, public-release hygiene passed, and `git diff --check` reported no whitespace errors
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -140,6 +147,7 @@
 - Stage38 visual-provider work must route raw image input through `image_understand`, keep text-only generation honest, and preserve transport-as-interface.
 - Stage39 bionic Turing benchmark work is an internal engineering benchmark only; it must not claim a real human Turing-test pass, start transport, create a hidden evaluator loop, mutate self-memory, or become a runtime decision layer.
 - Stage40 brain-harness work is an internal CLI/API agent harness only; it must not start WeChat, bypass action-market tool gates, hot-edit the live repo by default, write self-memory, or treat model output as direct tool authority.
+- Stage41 engineering-agent work is an internal CLI/API engineering loop only; it must not start WeChat, bypass action-market tool gates, write private/runtime paths, write self-memory, or grant repo-write authority unless the operator explicitly supplies it.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -289,6 +297,14 @@
 - `Stop rule`: do not start WeChat, bypass action-market tool gating, let model output directly execute tools, allow repo/runtime writes by default, or include private runtime/memory/API-key sources in context bundles
 - `Rollback rule`: keep Stage40 operational tables but remove Stage40 commands from operator workflows and fall back to Stage39 bionic kernel plus Turing scorecard surfaces
 
+### Stage41: Complete Engineering Agent
+- `Status`: implemented on `2026-05-10`
+- `Goal`: make Holo usable as a real internal engineering agent through a controlled CLI/API loop with tool execution, verification, trace inspection, and explicit write authority
+- `Scope`: add `EngineeringAgentHarness`, Stage41 CLI/API surfaces, read/search/status/test/write tool execution, action-market mutation gates, QueueStore traces and metrics, and `accept-stage41`
+- `Validation`: `pytest -q`; `accept-stage40`; `accept-stage41`; `tests/test_stage41_engineering_agent.py`
+- `Stop rule`: do not start WeChat, bypass action-market tool gating, write self-memory, read or write private/runtime paths, allow arbitrary shell commands, or grant repo-write authority without explicit operator approval
+- `Rollback rule`: keep Stage41 operational evidence but remove Stage41 commands from operator workflows and fall back to Stage40 brain harness surfaces
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -310,6 +326,7 @@
 | `Stage38` | All Stage37 and Stage28 visual-memory surfaces | `accept-stage38`; `tests/test_stage38_visual_provider_bridge.py`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage28_multimodal_homeostatic_kernel.py` | Explicit CLI image input routes through image-capable `image_understand`, visual-memory stores provider metadata, and text-only generation stays honest. |
 | `Stage39` | All Stage38 bionic and visual-provider surfaces | `accept-stage39`; `show-bionic-turing-scorecard`; `tests/test_stage39_bionic_turing_benchmark.py`; `tests/test_stage32_response_shaping.py` | Internal bionic replies pass the bounded Turing-style scorecard, avoid mechanism leakage and template pressure, and preserve transport-free self-memory neutrality. |
 | `Stage40` | All Stage39 bionic Turing and provider-fabric surfaces | `accept-stage40`; `brain-run`; `brain-trace`; `show-context-bundle`; `show-brain-metrics`; `run-agent-eval`; `tests/test_stage40_context_compiler.py`; `tests/test_stage40_bionic_brain_harness.py`; `tests/test_stage40_deepseek_v4_profile.py`; `tests/test_stage40_agent_eval.py` | The internal brain harness records phase traces, context bundles, tool gates, verification evidence, and agent eval scorecards without WeChat, self-memory writes, or default repo/runtime write authority. |
+| `Stage41` | All Stage40 brain-harness and provider-fabric surfaces | `accept-stage41`; `engineering-run`; `engineering-trace`; `show-engineering-agent-metrics`; `tests/test_stage41_engineering_agent.py` | The internal engineering agent can execute read/search/status/test/write tool loops through action-market gates, with repo writes opt-in, private paths blocked, and verification evidence persisted. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.
