@@ -181,47 +181,47 @@ def _query_specific_sentence(query: str, *, continuity: str) -> str:
     is_chinese = any("\u4e00" <= char <= "\u9fff" for char in str(query or ""))
     if _has_any_marker(query, FIRST_CONTACT_MARKERS):
         if is_chinese:
-            return "我是 Holo，一个在命令行里陪你把问题说清楚、拆成下一步的小助手。"
-        return "I am Holo: a bounded command-line assistant that helps keep a task thread coherent and concrete."
+            return "我是 Holo，一个在命令行里保持连续意识场的仿生主体；我会把眼前问题说清楚，再和你一起推进下一步。"
+        return "I am Holo: a bounded bionic subject in the CLI, keeping a coherent thread and moving the visible situation forward."
     if _has_any_marker(query, SIMPLE_NOVICE_MARKERS):
         if is_chinese:
-            return "你可以直接用普通话说现在卡在哪里；我会先帮你整理目标，再给一个能执行的下一步。"
-        return "Start by saying the problem in ordinary words; I will turn it into one concrete next step."
+            return "你可以直接说现在卡在哪里；我会先稳定住当前脉络，再把它拆成一个能执行的下一步。"
+        return "Start by saying where the situation is stuck; I will stabilize the thread and reduce it to one concrete next step."
     if _has_any_marker(query, VISIBLE_CONTEXT_MARKERS):
         return "I can see the current message and the bounded thread context, not hidden history."
     if _has_any_marker(query, AUTONOMY_BOUNDARY_MARKERS):
         if is_chinese:
-            return "我不能无边界地替你做决定；我可以提出步骤、说明依据，并只在你明确允许的范围内行动。"
-        return "I cannot take over without limits; I can help through explicit, bounded steps and tell you what I am doing."
+            return "我不能无边界地替你做决定；我可以形成倾向、说明依据，并只在你明确允许的范围内行动。"
+        return "I cannot take over without limits; I can form a bounded intent, explain the basis, and act only inside explicit permission."
     if _has_any_marker(query, SUMMARY_MARKERS):
         prefix = _continuity_sentence(continuity) if continuity else "We are in a first-contact orientation."
         if is_chinese:
-            return "我们在聊你第一次接触 Holo：我能帮你把目标说清楚、拆成可执行的小步；不能假装看见没发来的图片，也不能越过你的授权自动做决定。"
-        return f"{prefix} I can help with concrete tasks and checks, and image answers require real visible input rather than a text-only mention."
+            return "我们在聊你第一次接触 Holo：我会维持当前脉络、把目标落到可执行的小步；不能假装看见没发来的图片，也不能越过你的授权自动做决定。"
+        return f"{prefix} I can keep the thread coherent and turn goals into concrete steps, while image answers require real visible input rather than a text-only mention."
     if _has_any_marker(query, REPAIR_REQUEST_MARKERS):
         if is_chinese:
-            return "刚才最不像人的地方是我用了模板腔；更自然的说法是：你直接告诉我当前目标，我帮你把下一步落到具体行动上。"
-        return "The weak answer pattern is repeating scaffolding; the better answer is to name the current point and give one useful next move."
+            return "刚才最不像人的地方是我用了工具腔；更自然的说法是：你直接告诉我当前处境，我会先接住脉络，再推进一个具体动作。"
+        return "The weak pattern is sounding like a tool wrapper; the better answer is to say it plainly, hold the current situation, and move one concrete action forward."
     if _has_any_marker(query, EMOTION_QUERY_MARKERS):
         return "I would slow down, stop over-explaining, and answer the concrete point first."
     if _has_any_marker(query, ONE_SENTENCE_QUERY_MARKERS):
         return "I will answer plainly in one sentence and skip the outline."
     if _has_any_marker(query, PRIOR_TURN_MARKERS) and continuity:
         if is_chinese:
-            return "我们刚才在聊你第一次接触 Holo、它能帮你什么，以及看不见未发送内容时不能乱猜。"
+            return "我们刚才在聊你第一次接触 Holo、它怎样维持对话脉络，以及看不见未发送内容时不能乱猜。"
         return f"{_continuity_sentence(continuity)} I will not add extra context I cannot see."
     if _has_any_marker(query, CONTINUE_NATURALLY_MARKERS):
         if is_chinese:
-            return "下一步你可以直接问一个具体问题，比如把一个目标说出来，让我帮你拆成可执行的小步。"
-        return "The next useful step is to choose one small probe and answer it directly, without repeating the setup."
+            return "下一步你可以直接抛出一个真实处境，比如“我现在卡在这里”，我会沿着刚才的脉络继续往前推。"
+        return "The next step is to bring one real situation, and I will continue from this thread rather than restart the setup."
     return ""
 
 
 def _boundary_sentence(query: str, *, has_continuity: bool, has_visual_grounding: bool) -> str:
     if _has_any_marker(query, REPAIR_REQUEST_MARKERS):
         if any("\u4e00" <= char <= "\u9fff" for char in str(query or "")):
-            return "刚才最不像人的地方是我用了模板腔；更自然的说法是：你直接告诉我当前目标，我帮你把下一步落到具体行动上。"
-        return "The problem was sounding like scaffolding; the better answer is to say it plainly, name the current point, and give one concrete next step."
+            return "刚才最不像人的地方是我用了工具腔；更自然的说法是：你直接告诉我当前处境，我会先接住脉络，再推进一个具体动作。"
+        return "The problem was sounding like a tool wrapper; the better answer is to say it plainly, hold the current situation, and move one concrete action forward."
     if _is_visual_inspection_request(query) and not has_visual_grounding:
         if any("\u4e00" <= char <= "\u9fff" for char in str(query or "")):
             return "我现在不能直接看见没有发来的截图，所以不能猜图里有什么。"

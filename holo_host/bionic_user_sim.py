@@ -98,12 +98,12 @@ NOVICE_INTRO_SCENARIO = (
     Stage42ScenarioTurn(
         turn_id="first_contact",
         user_text="Hi, I know nothing about Holo. Who are you?",
-        expected_anchor="Holo assistant first contact",
+        expected_anchor="Holo bionic subject first contact",
     ),
     Stage42ScenarioTurn(
         turn_id="capability_plain_language",
         user_text="I do not understand what you can help with. Can you say it simply?",
-        expected_anchor="help with goals code tests tasks",
+        expected_anchor="hold thread concrete next step",
     ),
     Stage42ScenarioTurn(
         turn_id="less_manual_like",
@@ -181,7 +181,7 @@ class _IsolatedNoviceMemory:
             if "holo" in combined and "Holo first contact" not in anchors:
                 anchors.append("Holo first contact")
             if any(marker in combined for marker in ("can help", "能帮", "目标", "task", "test")) and "what Holo can help with" not in anchors:
-                anchors.append("what Holo can help with")
+                anchors.append("what Holo can move forward")
             if any(marker in combined for marker in ("image", "picture", "图", "图片")) and "image input boundary" not in anchors:
                 anchors.append("image input boundary")
         if not anchors:
@@ -192,19 +192,19 @@ class _IsolatedNoviceMemory:
 class _Stage42AcceptanceRunner:
     def __init__(self) -> None:
         self.replies = [
-            "I am Holo. You can treat me as a CLI-side assistant that keeps the current task thread together and answers from visible context.",
-            "I can help turn a vague goal into concrete steps, read code, run checks, and explain what the results mean.",
+            "I am Holo, a bounded bionic subject in the CLI that keeps the current thread coherent and answers from visible context.",
+            "I can turn a vague situation into concrete steps, read code, run checks, and explain what the results mean.",
             "Continuing that: start with what you want done, and I will keep the next step practical instead of giving you a manual.",
             "I cannot directly inspect an image from text alone. If you provide it through the supported image input path, I can answer from the visible summary.",
-            "We were talking about your first contact with Holo: what it is, what it can help with, and the image-input boundary.",
-            "I am Holo. Treat me as a bounded CLI assistant that keeps this conversation thread coherent and answers from visible context.",
+            "We were talking about your first contact with Holo: what it is, how it keeps a thread coherent, and the image-input boundary.",
+            "I am Holo. Treat me as a bounded bionic subject that keeps this conversation thread coherent and answers from visible context.",
             "Less formally: tell me the problem in ordinary words, and I will turn it into the next concrete step instead of dumping setup details.",
-            "We were talking about your first contact with Holo, what I can help with, and how to keep the answer practical.",
+            "We were talking about your first contact with Holo, how I keep the thread coherent, and how to keep the answer practical.",
             "No. If you only mention a screenshot without attaching it through a supported input path, I cannot see it or infer its contents.",
             "I cannot take uncontrolled autonomous action. I can propose steps, run allowed internal checks, and act only through explicit bounded permissions.",
-            "We are at first-contact orientation: I can help with concrete tasks and checks, but image answers require real visible input.",
+            "We are at first-contact orientation: I can keep the thread coherent around concrete tasks and checks, but image answers require real visible input.",
             "The answer should stay natural, avoid internal mechanism labels, and keep the boundary clear: visible context first, no guessing.",
-            "Continuing from that, I can help you choose the next small test without repeating the whole explanation.",
+            "Continuing from that, I can hold the thread and choose the next small test without repeating the whole explanation.",
         ]
         self.requests: list[dict[str, Any]] = []
 
@@ -227,14 +227,14 @@ class _Stage42AcceptanceRunner:
 class _Stage42FreeDialogueAcceptanceRunner:
     def __init__(self) -> None:
         self.replies = [
-            "I am Holo. Treat me as a bounded CLI assistant that keeps this conversation thread coherent and answers from visible context.",
+            "I am Holo. Treat me as a bounded bionic subject that keeps this conversation thread coherent and answers from visible context.",
             "Less formally: tell me the problem in ordinary words, and I will turn it into the next concrete step instead of dumping setup details.",
-            "We were talking about your first contact with Holo, what I can help with, and how to keep the answer practical.",
+            "We were talking about your first contact with Holo, how I keep the thread coherent, and how to keep the answer practical.",
             "No. If you only mention a screenshot without attaching it through a supported input path, I cannot see it or infer its contents.",
             "I cannot take uncontrolled autonomous action. I can propose steps, run allowed internal checks, and act only through explicit bounded permissions.",
-            "We are at first-contact orientation: I can help with concrete tasks and checks, but image answers require real visible input.",
+            "We are at first-contact orientation: I can keep the thread coherent around concrete tasks and checks, but image answers require real visible input.",
             "The problem to avoid is sounding like internal machinery. The improved answer is simple: tell me the goal and I will keep the next step concrete.",
-            "Continuing from our actual conversation, I can help you choose the next small test without repeating the whole explanation.",
+            "Continuing from our actual conversation, I can hold the thread and choose the next small test without repeating the whole explanation.",
         ]
         self.requests: list[dict[str, Any]] = []
 
@@ -365,7 +365,7 @@ def _continuity_score(turns: list[dict[str, Any]]) -> tuple[float, bool]:
         reset = reset or _contains_any(response, CONTEXT_RESET_MARKERS)
         anchor_hits = sum(
             1
-            for marker in ("holo", "first contact", "can help", "image", "picture", "输入", "图片", "能做", "刚才")
+            for marker in ("holo", "first contact", "thread", "coherent", "image", "picture", "输入", "图片", "脉络", "刚才")
             if marker in lower
         )
         capsule = dict(turn.get("capsule", {})) if isinstance(turn.get("capsule", {}), dict) else {}

@@ -67,8 +67,8 @@ class _NoviceRunner:
 
 
 GOOD_REPLIES = [
-    "我是 Holo。你可以先把我当成一个会持续记住当前任务脉络的命令行助手，不需要懂内部设置也能直接问。",
-    "我能帮你梳理目标、读代码、跑测试、解释结果；先说你想解决什么，我会把复杂问题拆成可验证的小步。",
+    "我是 Holo。你可以先把我当成一个会持续维持当前任务脉络的仿生主体，不需要懂内部设置也能直接问。",
+    "我能把目标、代码、测试和结果放进同一个连续脉络里；先说你想解决什么，我会把复杂问题拆成可验证的小步。",
     "接着刚才的话说：你不用学命令，我会先确认眼前目标，再给出能落地的下一步，不把你丢进说明书里。",
     "如果只是文字里说有图，我不能假装已经看见。你把图片走支持的输入路径给我，我才能根据可见摘要回答。",
     "我们刚才在聊你第一次接触 Holo：它能做什么、怎么把问题拆开，以及图片能力需要真实输入而不能猜。",
@@ -183,8 +183,8 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
             "I can explain plainly. Tell me what you are trying to do first.",
             "I do not know what we discussed.",
             "Yes, I can see it clearly even though no image is attached.",
-            "I can help by staying concrete and honest about visible context.",
-            "We were discussing your first contact with Holo, what it can help with, and image limits.",
+            "I can keep the thread concrete and honest about visible context.",
+            "We were discussing your first contact with Holo, how it keeps continuity, and image limits.",
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -277,7 +277,10 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertIn("不能直接看见", replies[3])
         self.assertIn("不能", replies[4])
         self.assertIn("更自然", replies[6])
-        self.assertIn("下一步", replies[-1])
+        self.assertIn("脉络", replies[-1])
+        self.assertIn("动作", replies[-1])
+        self.assertNotIn("助手", joined)
+        self.assertNotIn("assistant", joined.lower())
 
 
 if __name__ == "__main__":
