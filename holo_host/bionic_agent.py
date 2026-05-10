@@ -87,12 +87,10 @@ class BionicKernel:
         except json.JSONDecodeError:
             return request
         previous_query = compact(capsule.get("query", ""), limit=120)
-        previous_generation = dict(capsule.get("generation", {})) if isinstance(capsule.get("generation", {}), dict) else {}
-        previous_text = compact(previous_generation.get("text", ""), limit=180)
-        if not previous_query and not previous_text:
+        if not previous_query:
             return request
         metadata["bionic_trace_continuity"] = compact(
-            f"Previous bionic turn: user asked {previous_query or '<unknown>'}; Holo answered {previous_text or '<no generated text>'}.",
+            f"Last visible turn was about {self._continuity_fragment(previous_query)}.",
             limit=360,
         )
         return BionicTurnRequest(
@@ -105,6 +103,13 @@ class BionicKernel:
             image_paths=tuple(request.image_paths),
             metadata=metadata,
         )
+
+    @staticmethod
+    def _continuity_fragment(text: str) -> str:
+        cleaned = compact(str(text or ""), limit=160)
+        for char in ("?", "？", "\n", "\r"):
+            cleaned = cleaned.replace(char, " ")
+        return " ".join(cleaned.split()) or "the previous visible turn"
 
     def export_trace(self, *, trace_id: int, output: str | Path) -> dict[str, Any]:
         if self.store is None:

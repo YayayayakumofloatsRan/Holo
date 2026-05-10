@@ -121,6 +121,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage39: internal bionic Turing scoring now gates CLI continuity, naturalness, mechanism-leakage prevention, question bounds, and context grounding
 - Post-Stage39 cache diagnostics: exact packet-cache reuse is confirmed live; cache-class homeostasis deficits now require enough packet-cache observations and are rebased from live cache stats instead of stale self-model metadata.
 - Post-Stage39 provider-response cache repair: stateless text API providers (`responses`, `openai_compatible`, `deepseek`) now use a bounded QueueStore cache for exact repeated prompts; cache hits are visible as `status=cache_hit` with zero new token cost.
+- Post-Stage39 self-dialogue Turing repair: internal CLI probes now guard trace-continuity labels, `revision` vs `vision` marker drift, visible-context questions, exact-memory/image boundaries, non-executable action demotion, theatrical provider wording, and action-market reason leakage before user-facing text. Verified with offline self-dialogue, cached DeepSeek provider probe, full tests, `accept-stage39`, public-release hygiene, and `git diff --check`.
 - The next planned arc is:
   - Stage40+: explicit re-plan for provider latency soak evidence, replay-backed facade slimming, replay-fixture breadth, or operator-approved live transport hardening
   - Online long-horizon canary remains deferred beyond Stage28 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned

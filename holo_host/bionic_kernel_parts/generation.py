@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..config import HostConfig
@@ -10,6 +11,10 @@ from .response_shaping import shape_deterministic_reply
 
 
 LABEL_MARKERS = ("next:", "basis:", "open:", "context:")
+THEATRICAL_EMOTION_MARKERS = ("ready to bite", "pour you some wine", "growl it out")
+EMOTION_QUERY_MARKERS = ("irritated", "annoyed", "angry", "upset", "frustrated")
+ASCII_VISUAL_QUERY_MARKERS = ("image", "screenshot", "photo", "visual")
+NON_ASCII_VISUAL_QUERY_MARKERS = ("截图", "图片", "照片", "读图", "看图", "视觉")
 
 
 def _question_count(text: str) -> int:
@@ -56,6 +61,21 @@ def _bound_questions(text: str, *, limit: int = 1) -> str:
     while "。。" in bounded:
         bounded = bounded.replace("。。", "。")
     return bounded
+
+
+def _emotion_guard_text(query: str) -> str:
+    lowered_query = str(query or "").lower()
+    if any(marker in lowered_query for marker in EMOTION_QUERY_MARKERS):
+        return "I would slow down, stop over-explaining, and answer the concrete point first."
+    return "I will keep the reply plain and concrete."
+
+
+def _is_visual_query(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        re.search(rf"(?<![A-Za-z0-9_]){re.escape(marker)}(?![A-Za-z0-9_])", lowered)
+        for marker in ASCII_VISUAL_QUERY_MARKERS
+    ) or any(marker in lowered for marker in NON_ASCII_VISUAL_QUERY_MARKERS)
 
 
 class BionicGeneration:
@@ -163,21 +183,7 @@ class BionicGeneration:
         lowered_query = query_text.lower()
         capabilities = metadata.get("capabilities", {}) if isinstance(metadata.get("capabilities", {}), dict) else {}
         image_support = capabilities.get("image_support")
-        visual_query = any(
-            marker in lowered_query
-            for marker in (
-                "image",
-                "screenshot",
-                "photo",
-                "vision",
-                "截图",
-                "图片",
-                "照片",
-                "读图",
-                "看图",
-                "视觉",
-            )
-        )
+        visual_query = _is_visual_query(lowered_query)
         if visual_query and image_support is not True and not has_visual_grounding:
             return _strip_markdown_emphasis(
                 "I cannot directly inspect an image in this turn from text alone. "
@@ -193,4 +199,8 @@ class BionicGeneration:
                 "The previous turn is not visible in this context, so I should not invent where we left off. "
                 f"The visible request is: {visible_query}"
             )
-        return _bound_questions(_strip_markdown_emphasis(str(text or "")), limit=1)
+        clean_text = _strip_markdown_emphasis(str(text or ""))
+        lowered_text = clean_text.lower()
+        if any(marker in lowered_text for marker in THEATRICAL_EMOTION_MARKERS):
+            return _emotion_guard_text(query_text)
+        return _bound_questions(clean_text, limit=1)

@@ -174,7 +174,9 @@ class Stage37BionicSelfEvalTests(unittest.TestCase):
                 store.close()
 
         prompt = "\n".join(runner.prompts)
-        self.assertIn("Previous bionic turn", prompt)
+        self.assertIn("Last visible turn", prompt)
+        self.assertNotIn("Previous bionic turn", prompt)
+        self.assertNotIn("Holo answered", prompt)
         self.assertIn("First turn: we were fixing the Stage36 inquiry gate", prompt)
 
     def test_processor_output_is_question_bounded_and_markdown_light(self) -> None:

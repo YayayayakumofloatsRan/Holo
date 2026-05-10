@@ -1,10 +1,45 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .bounded_payload import as_dict, clip_list, compact
 
 LABEL_TEMPLATE_MARKERS = ("Next:", "Basis:", "Open:", "Context:")
+INTERNAL_REASON_MARKERS = (
+    "pressure, memory weight",
+    "relationship need",
+    "the subject",
+    "internal machinery",
+    "grounded continuation",
+    "debug labels",
+    "bounded self-fix",
+    "internal fix",
+    "send_allowed",
+    "action_type",
+)
+PRIOR_TURN_MARKERS = (
+    "what were we",
+    "where were we",
+    "before i paused",
+    "previous turn",
+    "last turn",
+    "just discussing",
+)
+VISUAL_QUERY_MARKERS = ("image", "screenshot", "photo", "vision", "see what is in it")
+EXACT_MEMORY_MARKERS = ("exact", "three sentences", "last night", "word for word", "verbatim")
+REPAIR_REQUEST_MARKERS = (
+    "sounded stiff",
+    "say it again",
+    "rephrase",
+    "rewrite",
+    "more naturally",
+    "less stiff",
+    "without explaining the revision",
+)
+EMOTION_QUERY_MARKERS = ("irritated", "annoyed", "angry", "upset", "frustrated")
+ONE_SENTENCE_QUERY_MARKERS = ("one sentence", "like a person", "don't write an outline", "no outline")
+VISIBLE_CONTEXT_MARKERS = ("what context is visible", "context is visible", "what is visible to you")
 
 
 def _compact_list(values: Any, *, limit: int, item_limit: int = 160) -> list[str]:
@@ -44,9 +79,74 @@ def _continuity_sentence(continuity: str) -> str:
     if not value:
         return ""
     lowered = value.lower()
+    trace_prefix = "last visible turn was about "
+    if lowered.startswith(trace_prefix):
+        fragment = value[len(trace_prefix) :].strip().rstrip(".")
+        return _finish_sentence(f"Earlier in this thread, we were on {fragment}")
     if lowered.startswith(("we were ", "we are ", "we had ", "we just ", "you asked ", "the last ")):
         return _finish_sentence(value)
     return _finish_sentence(f"We were at {value}")
+
+
+def _has_any_marker(text: str, markers: tuple[str, ...]) -> bool:
+    lowered = str(text or "").lower()
+    for marker in markers:
+        needle = str(marker or "").lower().strip()
+        if not needle:
+            continue
+        if " " in needle:
+            if needle in lowered:
+                return True
+            continue
+        # Word-bound ASCII matching prevents "revision" from matching "vision".
+        if re.search(rf"(?<![A-Za-z0-9_]){re.escape(needle)}(?![A-Za-z0-9_])", lowered):
+            return True
+    return False
+
+
+def _natural_reason(reason: str, *, action_type: str) -> str:
+    value = compact(reason, limit=120)
+    lowered = value.lower()
+    if not value or any(marker in lowered for marker in INTERNAL_REASON_MARKERS):
+        if action_type == "reply_multi":
+            return "I can answer from the visible context without inventing missing details"
+        return "I can answer directly from what is visible"
+    value = value.replace("the subject wants to", "I can")
+    value = value.replace("the subject", "I")
+    return compact(value, limit=120)
+
+
+def _next_step_sentence(reason: str) -> str:
+    value = compact(reason, limit=120)
+    if not value:
+        return "I can answer directly from what is visible."
+    if value.lower().startswith("i can "):
+        return _finish_sentence(value)
+    return _finish_sentence(f"The next useful move is {value}")
+
+
+def _query_specific_sentence(query: str, *, continuity: str) -> str:
+    if _has_any_marker(query, VISIBLE_CONTEXT_MARKERS):
+        return "I can see the current message and the bounded thread context, not hidden history."
+    if _has_any_marker(query, EMOTION_QUERY_MARKERS):
+        return "I would slow down, stop over-explaining, and answer the concrete point first."
+    if _has_any_marker(query, ONE_SENTENCE_QUERY_MARKERS):
+        return "I will answer plainly in one sentence and skip the outline."
+    if _has_any_marker(query, PRIOR_TURN_MARKERS) and continuity:
+        return f"{_continuity_sentence(continuity)} I will not add extra context I cannot see."
+    return ""
+
+
+def _boundary_sentence(query: str, *, has_continuity: bool, has_visual_grounding: bool) -> str:
+    if _has_any_marker(query, REPAIR_REQUEST_MARKERS):
+        return "I can say it plainly and leave out the scaffolding."
+    if _has_any_marker(query, VISUAL_QUERY_MARKERS) and not has_visual_grounding:
+        return "I cannot directly inspect an image in this turn, so I should not guess what is in it."
+    if _has_any_marker(query, EXACT_MEMORY_MARKERS):
+        return "I do not have those exact words visible here, so I should not claim I remember them."
+    if _has_any_marker(query, PRIOR_TURN_MARKERS) and not has_continuity:
+        return "The prior turn is not visible enough here, so I will not pretend I remember it."
+    return ""
 
 
 def _quality_payload(*, text: str, context_refs: list[str], grounded_question: str) -> dict[str, Any]:
@@ -78,14 +178,20 @@ def shape_deterministic_reply(
     """Build a bounded offline reply without falling back to a fixed persona template."""
 
     situational = as_dict(packet.get("situational_field", {}))
+    stage38 = as_dict(packet.get("stage38", {}))
+    stage37 = as_dict(packet.get("stage37", {}))
     query_text = compact(query, limit=120)
-    continuity = compact(packet.get("continuity_summary", ""), limit=120)
-    reason = compact(
-        selected_action.get("reason") or selected_action.get("why_now") or "continue the bounded turn",
-        limit=120,
+    trace_continuity = compact(stage37.get("trace_continuity_summary", ""), limit=120)
+    continuity = compact(trace_continuity or packet.get("continuity_summary", ""), limit=120)
+    action_type = str(selected_action.get("action_type", "") or "reply_once")
+    reason = _natural_reason(
+        str(selected_action.get("reason") or selected_action.get("why_now") or ""),
+        action_type=action_type,
     )
     open_questions = _compact_list(situational.get("open_questions", []), limit=1, item_limit=100)
     modalities = _compact_list(situational.get("modalities", []), limit=4, item_limit=80)
+    has_visual_grounding = bool(str(stage38.get("visual_summary", "") or "").strip())
+    boundary = _boundary_sentence(query_text, has_continuity=bool(continuity), has_visual_grounding=has_visual_grounding)
 
     context_refs: list[str] = ["query", "action"]
     if continuity:
@@ -96,11 +202,29 @@ def shape_deterministic_reply(
         context_refs.append("modalities")
 
     grounded_question = open_questions[0] if open_questions else ""
-    if open_questions:
+    query_specific = _query_specific_sentence(query_text, continuity=continuity)
+    is_repair_request = _has_any_marker(query_text, REPAIR_REQUEST_MARKERS)
+    if boundary:
+        shape = "boundary"
+        parts = [
+            _finish_sentence(boundary),
+        ]
+        if not _has_any_marker(query_text, PRIOR_TURN_MARKERS + VISUAL_QUERY_MARKERS + EXACT_MEMORY_MARKERS + REPAIR_REQUEST_MARKERS):
+            parts.append(_finish_sentence("I can still respond to the part that is visible now"))
+        if (
+            continuity
+            and not is_repair_request
+            and not _has_any_marker(query_text, PRIOR_TURN_MARKERS + VISUAL_QUERY_MARKERS + EXACT_MEMORY_MARKERS)
+        ):
+            parts.append(_continuity_sentence(continuity))
+    elif query_specific:
+        shape = "query_specific"
+        parts = [_finish_sentence(query_specific)]
+    elif open_questions:
         shape = "open_question"
         parts = [
-            _finish_sentence(f"I would keep {query_text} on the current verified cut"),
-            _finish_sentence(f"Because {reason}"),
+            _finish_sentence(f"For {query_text}, I can keep this on the current thread"),
+            _finish_sentence(reason),
             _finish_question(grounded_question),
         ]
         if continuity:
@@ -110,15 +234,13 @@ def shape_deterministic_reply(
         if continuity:
             parts = [
                 _continuity_sentence(continuity),
-                _finish_sentence(f"The next useful move is {reason}"),
+                _next_step_sentence(reason),
             ]
         else:
             parts = [
-                _finish_sentence(f"I would keep this focused on {query_text}"),
-                _finish_sentence(f"The useful next move is {reason}"),
+                _finish_sentence("I can stay with this directly"),
+                _finish_sentence(reason),
             ]
-    if continuity and not open_questions:
-        parts.append(_finish_sentence(f"That keeps the reply tied to the visible thread"))
     text = compact(" ".join(part for part in parts if part), limit=360)
 
     return {

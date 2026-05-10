@@ -671,7 +671,8 @@ def accept_stage37_payload(
             )
         ),
         "same_thread_trace_continuity": (
-            "Previous bionic turn" in continuity_prompt
+            "Last visible turn" in continuity_prompt
+            and "Previous bionic turn" not in continuity_prompt
             and "First turn: we were fixing the Stage36 inquiry gate" in continuity_prompt
         ),
         "self_eval_speech_fallback": (

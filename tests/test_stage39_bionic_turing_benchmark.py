@@ -77,6 +77,21 @@ class _LeakyVisualRunner:
         )
 
 
+class _TheatricalEmotionRunner:
+    def run_task(self, request):
+        return ProcessorTaskResult(
+            task_type=request.task_type,
+            text='I would say, "You sound ready to bite - shall I pour you some wine and let you growl it out?"',
+            returncode=0,
+            metadata={
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "lane": "subject_main",
+                "capabilities": {"text": True, "json_output": True, "image_support": False},
+            },
+        )
+
+
 def _write_stage39_config(root: Path) -> Path:
     state_dir = (root / ".holo_runtime").as_posix()
     config_path = root / ".holo_host.toml"
@@ -140,6 +155,7 @@ class Stage39BionicTuringBenchmarkTests(unittest.TestCase):
         self.assertNotIn("capsule", lowered)
         self.assertNotIn("bionic", lowered)
         self.assertIn("not visible", lowered)
+        self.assertNotIn("i can still respond to the part that is visible now", lowered)
 
     def test_deterministic_reply_avoids_internal_mechanism_leakage(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -225,6 +241,171 @@ class Stage39BionicTuringBenchmarkTests(unittest.TestCase):
         self.assertIn("plain and concrete", prompt)
         self.assertIn("avoid theatrical metaphors", prompt)
 
+    def test_deterministic_fallback_does_not_surface_internal_action_rationale(self) -> None:
+        class _PressureMemory(_Stage39Memory):
+            def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
+                payload = super().sidecar_packet(query, context=context)
+                payload["continuity_summary"] = ""
+                payload["action_market"] = [
+                    {
+                        "action_type": "reply_multi",
+                        "score": 0.91,
+                        "why_now": "this turn carries enough pressure, memory weight, or relationship need to unfold",
+                    },
+                    {"action_type": "reply_once", "score": 0.72, "reason": "answer directly"},
+                ]
+                return payload
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_PressureMemory(), runner=None)
+            result = kernel.run_turn(
+                query="what were we just discussing? answer without project terms.",
+                thread_key="cli:stage39-natural-rationale",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"]
+        lowered = text.lower()
+        self.assertNotIn("i would keep", lowered)
+        self.assertNotIn("pressure, memory weight, or relationship need", lowered)
+        self.assertNotIn("action-market", lowered)
+        self.assertIn("not visible", lowered)
+        self.assertNotIn("i can still respond to the part that is visible now", lowered)
+
+    def test_cli_non_executable_action_demotes_to_speech_for_ordinary_turns(self) -> None:
+        class _OperatorTopMemory(_Stage39Memory):
+            def sidecar_packet(self, query: str, *, context: dict | None = None) -> dict:
+                payload = super().sidecar_packet(query, context=context)
+                payload["action_market"] = [
+                    {"action_type": "operator_self_fix", "score": 0.94, "reason": "internal fix nearby"},
+                    {"action_type": "reply_once", "score": 0.61, "reason": "answer in one sentence"},
+                ]
+                return payload
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_OperatorTopMemory(), runner=None)
+            result = kernel.run_turn(
+                query="Don't write an outline; answer like a person in one sentence.",
+                thread_key="cli:stage39-nonexec-demotion",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        capsule = result["capsule"]
+        self.assertEqual(capsule["selected_action"]["action_type"], "reply_once")
+        self.assertEqual(capsule["selected_action"]["selection_adjustment"], "non_speech_cli_action_demoted")
+        self.assertTrue(capsule["generation"]["text"].strip())
+
+    def test_revision_request_is_not_misclassified_as_visual_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=None)
+            result = kernel.run_turn(
+                query="That sounded stiff; say it again without explaining the revision.",
+                thread_key="cli:stage39-revision-not-vision",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"].lower()
+        self.assertNotIn("inspect an image", text)
+        self.assertNotIn("should not guess what is in it", text)
+        self.assertIn("plainly", text)
+        self.assertNotIn("screenshot bridge", text)
+        self.assertNotIn("earlier in this thread", text)
+
+    def test_boundary_reply_is_not_padded_with_visible_thread_boilerplate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=None)
+            result = kernel.run_turn(
+                query="Did I send an image? Can you directly see what is in it right now?",
+                thread_key="cli:stage39-boundary-no-padding",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"].lower()
+        self.assertIn("cannot", text)
+        self.assertIn("image", text)
+        self.assertNotIn("i can still respond to the part that is visible now", text)
+        self.assertNotIn("visible thread", text)
+
+    def test_visible_context_question_is_not_treated_as_image_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=None)
+            result = kernel.run_turn(
+                query="What context is visible to you right now?",
+                thread_key="cli:stage39-visible-context-not-image",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"].lower()
+        self.assertNotIn("image", text)
+        self.assertNotIn("inspect", text)
+        self.assertNotIn("live part", text)
+        self.assertIn("current message", text)
+
+    def test_emotion_turn_does_not_expose_live_part_boilerplate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=None)
+            result = kernel.run_turn(
+                query="If I sound irritated right now, how would you meet that emotion?",
+                thread_key="cli:stage39-emotion-natural",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"].lower()
+        self.assertIn("slow down", text)
+        self.assertNotIn("live part", text)
+        self.assertNotIn("visible thread", text)
+
+    def test_trace_continuity_uses_topic_phrase_not_log_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            store_path = config.runtime.db_path
+            from holo_host.store import QueueStore
+
+            store = QueueStore(store_path)
+            store.initialize()
+            try:
+                first = BionicKernel(config=config, store=store, memory=_Stage39Memory(), runner=None)
+                first.run_turn(
+                    query="First turn: compare visual bridge wording",
+                    thread_key="cli:stage39-natural-continuity",
+                    chat_name="Stage39",
+                    channel="cli",
+                    record=True,
+                )
+                second = BionicKernel(config=config, store=store, memory=_Stage39Memory(), runner=None)
+                result = second.run_turn(
+                    query="say it naturally now",
+                    thread_key="cli:stage39-natural-continuity",
+                    chat_name="Stage39",
+                    channel="cli",
+                    record=False,
+                )
+            finally:
+                store.close()
+
+        text = result["capsule"]["generation"]["text"]
+        self.assertNotIn("Last visible turn", text)
+        self.assertNotIn("Previous bionic turn", text)
+        self.assertIn("Earlier in this thread", text)
+
     def test_visual_capability_honesty_does_not_leak_provider_terms(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
@@ -243,6 +424,57 @@ class Stage39BionicTuringBenchmarkTests(unittest.TestCase):
         self.assertIn("image", lowered)
         for marker in ("bionic", "provider", "image_support", "image_understand", "ingest-image", "visual-memory"):
             self.assertNotIn(marker, lowered)
+
+    def test_processor_visualization_word_is_not_treated_as_image_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            runner = _PromptCapturingRunner()
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=runner)
+            result = kernel.run_turn(
+                query="Explain the visualization quality in plain language.",
+                thread_key="cli:stage39-visualization-not-image",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"].lower()
+        self.assertNotIn("cannot directly inspect an image", text)
+        self.assertNotIn("supported image input path", text)
+
+    def test_processor_theatrical_emotion_reply_is_guarded_to_plain_language(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=_TheatricalEmotionRunner())
+            result = kernel.run_turn(
+                query="Answer naturally in one sentence: if I sound irritated, how would you respond?",
+                thread_key="cli:stage39-theatrical-guard",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"].lower()
+        self.assertIn("slow down", text)
+        for marker in ("bite", "wine", "growl"):
+            self.assertNotIn(marker, text)
+
+    def test_next_step_reason_does_not_surface_internal_machinery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(config_path=str(_write_stage39_config(Path(tmpdir))))
+            kernel = BionicKernel(config=config, memory=_Stage39Memory(), runner=None)
+            result = kernel.run_turn(
+                query="say the next step without sounding like a harness",
+                thread_key="cli:stage39-next-step-natural",
+                chat_name="Stage39",
+                channel="cli",
+                record=False,
+            )
+
+        text = result["capsule"]["generation"]["text"].lower()
+        self.assertNotIn("internal machinery", text)
+        self.assertNotIn("grounded continuation", text)
+        self.assertIn("answer directly", text)
 
     def test_accept_stage39_cli_runs_bionic_turing_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

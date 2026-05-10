@@ -10,6 +10,8 @@ Stage39 is implemented as an internal bionic Turing benchmark for the CLI subjec
 - Added bionic metrics for `bionic_turing_score` and `bionic_turing_pass_threshold`.
 - Removed leakage-prone deterministic fallback phrasing such as `I would continue with` and `action-market basis`.
 - Updated provider generation prompts to avoid internal labels and theatrical metaphor pressure.
+- Repaired post-Stage39 self-dialogue failures: trace continuity is rendered as a topic phrase instead of a log label, `revision` no longer trips `vision` image matching, visible-context questions are not treated as image requests, non-executable CLI actions demote to speech for ordinary turns, and action-market reasons such as `internal machinery` are not rendered to users.
+- Added a processor-output guard for theatrical emotion replies observed from a cached DeepSeek probe, falling back to plain language while preserving the provider-fabric path.
 
 ## Current Debt Position
 - Stage39 gives Holo a repeatable internal CLI benchmark for continuity, naturalness, mechanism leakage, question bounds, and context grounding.
@@ -39,6 +41,8 @@ git diff --check
 Verified on `2026-05-10`: the targeted Stage39/38/37/36/32/29 suite passed, `accept-stage39` passed, `show-bionic-turing-scorecard` passed, full `pytest -q` passed with `306` tests, public-release hygiene passed, and `git diff --check` reported no whitespace errors. Post-Stage39 cache diagnostics added `tests/test_cache_diagnostics.py` for packet-cache sample floors and live homeostasis cache rebasing; follow-up verification passed `pytest -q` with `310` tests, targeted cache/Stage37/38/39 tests, `accept-stage39`, `show-bionic-turing-scorecard`, public-release hygiene, and `git diff --check`.
 
 Post-Stage39 provider-response cache repair added `processor_response_cache` in QueueStore and runner-level exact-response reuse for stateless API providers. Verified on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, full `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
+
+Post-Stage39 self-dialogue Turing repair verified on `2026-05-10`: offline `agent-run` probes covered prior-context uncertainty, irritation handling, image honesty, visible-context honesty, anti-template response, exact-memory boundary, and revision repair; a real DeepSeek provider probe returned through the response cache and was guarded to plain language; `pytest -q tests/test_stage32_response_shaping.py tests/test_stage36_inquiry_quality.py tests/test_stage37_bionic_self_eval.py tests/test_stage39_bionic_turing_benchmark.py` passed with `26` tests; full `pytest -q` passed with `322` tests; `accept-stage39` passed; public-release hygiene passed; `git diff --check` reported no whitespace errors.
 
 ## Operator Probe
 ```powershell
