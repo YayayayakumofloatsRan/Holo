@@ -23,6 +23,13 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .bionic_brain import BionicBrainHarness, run_stage40_agent_eval, accept_stage40_payload as build_stage40_acceptance
+from .bionic_user_sim import (
+    BionicUserSimulationHarness,
+    DEFAULT_STAGE42_SUITE,
+    STAGE42_NAME,
+    accept_stage42_payload as build_stage42_acceptance,
+    show_bionic_user_sim_scorecard as build_stage42_scorecard,
+)
 from .brain_ops import initiative_probe as build_initiative_probe
 from .brain_ops import run_self_revision as run_self_revision_cycle
 from .capabilities import CapabilityBroker
@@ -1004,6 +1011,35 @@ class HoloReplyService:
     def run_agent_eval(self, *, suite: str = "stage40") -> dict[str, Any]:
         harness = BionicBrainHarness(config=self.config, store=self.store, memory=self.memory, runner=None)
         return run_stage40_agent_eval(config=self.config, store=self.store, harness=harness, suite=suite)
+
+    def run_bionic_user_sim(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        scenario: str = DEFAULT_STAGE42_SUITE,
+        turn_limit: int = 5,
+        offline: bool = False,
+    ) -> dict[str, Any]:
+        resolved_thread_key = str(thread_key or "cli:Stage42Novice")
+        resolved_chat_name = str(chat_name or resolved_thread_key)
+        harness = BionicUserSimulationHarness(
+            config=self.config,
+            store=self.store,
+            runner=None if offline else self.runner,
+        )
+        return harness.run(
+            thread_key=resolved_thread_key,
+            chat_name=resolved_chat_name,
+            channel=str(channel or "cli"),
+            scenario=str(scenario or DEFAULT_STAGE42_SUITE),
+            turn_limit=int(turn_limit or 5),
+            offline=offline,
+        )
+
+    def show_bionic_user_sim_scorecard(self, *, suite: str = DEFAULT_STAGE42_SUITE) -> dict[str, Any]:
+        return build_stage42_scorecard(store=self.store, suite=str(suite or DEFAULT_STAGE42_SUITE))
 
     def engineering_run(
         self,
@@ -2275,6 +2311,23 @@ class HoloReplyService:
             artifact_dir=artifact_dir,
         )
 
+    def accept_stage42(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self._accept_stage42_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
     def _accept_stage40_impl(
         self,
         *,
@@ -2317,6 +2370,32 @@ class HoloReplyService:
             store=self.store,
             runner=self.runner,
             stage40_payload=stage40_payload,
+            thread_key=str(thread_key or "cli:TestUser"),
+            chat_name=str(chat_name or thread_key or "TestUser"),
+            channel=str(channel or "cli"),
+        )
+
+    def _accept_stage42_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        stage41_payload = self._accept_stage41_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        return build_stage42_acceptance(
+            config=self.config,
+            store=self.store,
+            runner=None,
+            stage41_payload=stage41_payload,
             thread_key=str(thread_key or "cli:TestUser"),
             chat_name=str(chat_name or thread_key or "TestUser"),
             channel=str(channel or "cli"),
@@ -9650,6 +9729,13 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/bionic-user-sim-scorecard":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_bionic_user_sim_scorecard(
+                        suite=params.get("suite", [DEFAULT_STAGE42_SUITE])[0] or DEFAULT_STAGE42_SUITE,
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/brain-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.brain_status())
                     return
@@ -10207,6 +10293,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         HTTPStatus.OK,
                         self.server.reply_service.run_agent_eval(
                             suite=str(payload.get("suite", "stage40")).strip() or "stage40",
+                        ),
+                    )
+                    return
+                if parsed.path == "/bionic-user-sim":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.run_bionic_user_sim(
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "cli")).strip() or "cli",
+                            scenario=str(payload.get("scenario", DEFAULT_STAGE42_SUITE)).strip() or DEFAULT_STAGE42_SUITE,
+                            turn_limit=int(payload.get("turn_limit", payload.get("turns", 5)) or 5),
+                            offline=bool(payload.get("offline", False)),
                         ),
                     )
                     return

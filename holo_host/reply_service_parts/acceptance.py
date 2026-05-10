@@ -79,6 +79,10 @@ def accept_stage41(self: Any, **kwargs: Any) -> dict[str, Any]:
     return _call_method(self, "_accept_stage41_impl", **kwargs)
 
 
+def accept_stage42(self: Any, **kwargs: Any) -> dict[str, Any]:
+    return _call_method(self, "_accept_stage42_impl", **kwargs)
+
+
 def accept_stage34(self: Any, **kwargs: Any) -> dict[str, Any]:
     return _call_method(self, "_accept_stage34_impl", **kwargs)
 

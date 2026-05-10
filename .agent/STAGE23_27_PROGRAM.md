@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage41 is now the current implemented controlled engineering-agent milestone; Stage42+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage42 is now the current implemented isolated bionic user-simulation performance milestone; Stage43+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -122,6 +122,12 @@
   - Stage41 run evidence is persisted as operational `bionic_brain_runs` and `bionic_brain_steps` with stage `stage41-complete-engineering-agent`
   - `engineering-run`, `engineering-trace`, `show-engineering-agent-metrics`, and `accept-stage41` are available without starting WeChat or mutating self-memory
   - `pytest -q` passed with `337` tests, `accept-stage41` passed, public-release hygiene passed, and `git diff --check` reported no whitespace errors
+- Stage42 exit state on `2026-05-10`:
+  - `BionicUserSimulationHarness` runs an isolated novice-user dialogue probe over the bionic kernel
+  - scorecards cover novice comprehension, continuity, capability honesty, question quality, mechanism leakage, naturalness, repetition, and latency
+  - Stage42 stores only operational `agent_eval_runs` with stage `stage42-bionic-user-sim-performance`
+  - `run-bionic-user-sim`, `show-bionic-user-sim-scorecard`, and `accept-stage42` are available without starting WeChat, mutating self-memory, or recording ordinary bionic traces
+  - `pytest -q` passed with `340` tests, `accept-stage42` passed, public-release hygiene passed, and `git diff --check` reported no whitespace errors
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -148,6 +154,7 @@
 - Stage39 bionic Turing benchmark work is an internal engineering benchmark only; it must not claim a real human Turing-test pass, start transport, create a hidden evaluator loop, mutate self-memory, or become a runtime decision layer.
 - Stage40 brain-harness work is an internal CLI/API agent harness only; it must not start WeChat, bypass action-market tool gates, hot-edit the live repo by default, write self-memory, or treat model output as direct tool authority.
 - Stage41 engineering-agent work is an internal CLI/API engineering loop only; it must not start WeChat, bypass action-market tool gates, write private/runtime paths, write self-memory, or grant repo-write authority unless the operator explicitly supplies it.
+- Stage42 bionic user-simulation work is an isolated operational performance test only; it must not start WeChat, mutate self-memory, write archive memory, record ordinary bionic traces, or become runtime decision authority.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -305,6 +312,14 @@
 - `Stop rule`: do not start WeChat, bypass action-market tool gating, write self-memory, read or write private/runtime paths, allow arbitrary shell commands, or grant repo-write authority without explicit operator approval
 - `Rollback rule`: keep Stage41 operational evidence but remove Stage41 commands from operator workflows and fall back to Stage40 brain harness surfaces
 
+### Stage42: Bionic User-Simulation Performance
+- `Status`: implemented on `2026-05-10`
+- `Goal`: isolate the first-time-user Holo dialogue test as a repeatable performance benchmark for bionic quality
+- `Scope`: add `BionicUserSimulationHarness`, simulation-local continuity, Stage42 CLI/API surfaces, operational `agent_eval_runs` scorecards, and `accept-stage42`
+- `Validation`: `pytest -q`; `accept-stage41`; `accept-stage42`; `tests/test_stage42_bionic_user_sim.py`
+- `Stop rule`: do not start WeChat, mutate self-memory, write archive memory, record ordinary bionic traces, or turn benchmark scores into runtime decision authority
+- `Rollback rule`: keep Stage42 eval evidence operational-only and fall back to Stage41 engineering-agent surfaces if simulation isolation regresses
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -327,6 +342,7 @@
 | `Stage39` | All Stage38 bionic and visual-provider surfaces | `accept-stage39`; `show-bionic-turing-scorecard`; `tests/test_stage39_bionic_turing_benchmark.py`; `tests/test_stage32_response_shaping.py` | Internal bionic replies pass the bounded Turing-style scorecard, avoid mechanism leakage and template pressure, and preserve transport-free self-memory neutrality. |
 | `Stage40` | All Stage39 bionic Turing and provider-fabric surfaces | `accept-stage40`; `brain-run`; `brain-trace`; `show-context-bundle`; `show-brain-metrics`; `run-agent-eval`; `tests/test_stage40_context_compiler.py`; `tests/test_stage40_bionic_brain_harness.py`; `tests/test_stage40_deepseek_v4_profile.py`; `tests/test_stage40_agent_eval.py` | The internal brain harness records phase traces, context bundles, tool gates, verification evidence, and agent eval scorecards without WeChat, self-memory writes, or default repo/runtime write authority. |
 | `Stage41` | All Stage40 brain-harness and provider-fabric surfaces | `accept-stage41`; `engineering-run`; `engineering-trace`; `show-engineering-agent-metrics`; `tests/test_stage41_engineering_agent.py` | The internal engineering agent can execute read/search/status/test/write tool loops through action-market gates, with repo writes opt-in, private paths blocked, and verification evidence persisted. |
+| `Stage42` | All Stage41 engineering-agent surfaces | `accept-stage42`; `run-bionic-user-sim`; `show-bionic-user-sim-scorecard`; `tests/test_stage42_bionic_user_sim.py` | The isolated novice-user simulation produces operational scorecards without WeChat, self-memory writes, archive writes, or ordinary bionic-trace pollution. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

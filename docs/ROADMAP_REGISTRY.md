@@ -134,9 +134,14 @@ Stage41: complete engineering agent
 - Adds `engineering-run`, `engineering-trace`, `show-engineering-agent-metrics`, and `accept-stage41`.
 - Supports bounded read/search/status/test/write tool actions through action-market mutation gates; repo writes require explicit operator authority and private/runtime paths remain blocked.
 
+Stage42: bionic user-simulation performance
+- Implemented an isolated first-time-user dialogue performance test over the bionic kernel.
+- Adds `run-bionic-user-sim`, `show-bionic-user-sim-scorecard`, HTTP mirrors, and `accept-stage42`.
+- Scores novice comprehension, continuity, capability honesty, question quality, mechanism leakage, naturalness, repetition, and latency while writing only operational `agent_eval_runs`.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage41. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage42+ program replaces them.
+This planned arc starts after Stage42. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage43+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, Stage34 visual-readiness gating, Stage38 visual-provider bridging, and the post-Stage39 QueueStore-backed provider-response cache for stateless text API calls.

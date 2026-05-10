@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from .cli_parts import bionic as bionic_cli
 from .cli_parts import brain as brain_cli
 from .cli_parts import engineering as engineering_cli
+from .cli_parts import user_sim as user_sim_cli
 from .config import load_config
 from .daemon import build_daemon
 from .models import ProcessorTaskRequest
@@ -8067,6 +8068,35 @@ def command_run_agent_eval(config_path: str | None, *, suite: str) -> int:
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_run_bionic_user_sim(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    scenario: str,
+    turn_limit: int,
+    offline: bool,
+) -> int:
+    payload, _transport = user_sim_cli.run_bionic_user_sim_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        scenario=scenario,
+        turn_limit=turn_limit,
+        offline=offline,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_show_bionic_user_sim_scorecard(config_path: str | None, *, suite: str) -> int:
+    payload, _transport = user_sim_cli.show_bionic_user_sim_scorecard_payload(config_path, suite=suite)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_engineering_run(
     config_path: str | None,
     *,
@@ -8234,6 +8264,17 @@ def command_accept_stage40(config_path: str | None, *, thread_key: str, chat_nam
 
 def command_accept_stage41(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
     payload, _transport = engineering_cli.accept_stage41_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_accept_stage42(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = user_sim_cli.accept_stage42_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -9210,6 +9251,15 @@ def main(argv: list[str] | None = None) -> int:
     brain_metrics_parser.add_argument("--limit", type=int, default=100)
     agent_eval_parser = subparsers.add_parser("run-agent-eval", help="Run the Stage-40 agent evaluation suite")
     agent_eval_parser.add_argument("--suite", default="stage40")
+    user_sim_parser = subparsers.add_parser("run-bionic-user-sim", help="Run the Stage-42 isolated novice-user simulation benchmark")
+    user_sim_parser.add_argument("--thread-key", default="cli:Stage42Novice")
+    user_sim_parser.add_argument("--chat-name", default="Stage42Novice")
+    user_sim_parser.add_argument("--channel", default="cli")
+    user_sim_parser.add_argument("--scenario", default="novice_intro")
+    user_sim_parser.add_argument("--turns", type=int, default=5)
+    user_sim_parser.add_argument("--offline", action="store_true")
+    user_sim_scorecard_parser = subparsers.add_parser("show-bionic-user-sim-scorecard", help="Show the latest Stage-42 user-simulation scorecard")
+    user_sim_scorecard_parser.add_argument("--suite", default="novice_intro")
     engineering_run_parser = subparsers.add_parser("engineering-run", help="Run one Stage-41 controlled engineering agent loop")
     engineering_run_parser.add_argument("--goal", required=True)
     engineering_run_parser.add_argument("--thread-key", default="cli:TestUser")
@@ -9474,6 +9524,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage41_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage41_parser.add_argument("--chat-name", default="TestUser")
     accept_stage41_parser.add_argument("--channel", default="cli")
+    accept_stage42_parser = subparsers.add_parser("accept-stage42", help="Run the Stage-42 isolated bionic user-simulation gate")
+    accept_stage42_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage42_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage42_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("accept-stage33", help="Run the Stage-33 provider API contract gate")
     subparsers.add_parser("accept-stage34", help="Run the Stage-34 debt registry and visual readiness gate")
     subparsers.add_parser("accept-stage35", help="Run the Stage-35 internal runtime readiness gate")
@@ -9707,6 +9761,18 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_brain_metrics(args.config, limit=args.limit)
     if args.command == "run-agent-eval":
         return command_run_agent_eval(args.config, suite=args.suite)
+    if args.command == "run-bionic-user-sim":
+        return command_run_bionic_user_sim(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            scenario=args.scenario,
+            turn_limit=args.turns,
+            offline=args.offline,
+        )
+    if args.command == "show-bionic-user-sim-scorecard":
+        return command_show_bionic_user_sim_scorecard(args.config, suite=args.suite)
     if args.command == "engineering-run":
         return command_engineering_run(
             args.config,
@@ -10505,6 +10571,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage41":
         return command_accept_stage41(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage42":
+        return command_accept_stage42(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

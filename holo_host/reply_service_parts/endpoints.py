@@ -227,6 +227,16 @@ def try_acceptance_endpoint(handler: Any, parsed: Any, payload: dict[str, Any]) 
             ),
         )
         return True
+    if parsed.path == "/accept-stage42":
+        handler._write_json(
+            HTTPStatus.OK,
+            service.accept_stage42(
+                thread_key=str(payload.get("thread_key", "")).strip() or None,
+                chat_name=str(payload.get("chat_name", "")).strip() or None,
+                channel=str(payload.get("channel", "cli")).strip() or "cli",
+            ),
+        )
+        return True
     if parsed.path == "/accept-stage34":
         handler._write_json(HTTPStatus.OK, service.accept_stage34())
         return True
