@@ -133,7 +133,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Post-Stage39 self-dialogue Turing repair: internal CLI probes now guard trace-continuity labels, `revision` vs `vision` marker drift, visible-context questions, exact-memory/image boundaries, non-executable action demotion, theatrical provider wording, and action-market reason leakage before user-facing text. Verified with offline self-dialogue, cached DeepSeek provider probe, full tests, `accept-stage39`, public-release hygiene, and `git diff --check`.
 - Stage40 brain harness: internal CLI/API `brain-run` records operational context bundles, phase traces, action-market tool gates, verification evidence, and agent eval scorecards. It does not start WeChat, mutate self-memory, or allow repo/runtime writes by default.
 - Stage41 engineering agent: internal CLI/API `engineering-run` executes read/search/status/test/write tool loops through explicit mutation gates. Repo writes require `--allow-repo-write`; private/runtime paths remain blocked; WeChat and self-memory stay untouched.
-- Stage42 user simulation: internal CLI/API `run-bionic-user-sim` executes an isolated novice-user dialogue benchmark. It writes only `agent_eval_runs`, not Mind Graph self-memory, archive memory, or ordinary bionic traces.
+- Stage42 user simulation: internal CLI/API `run-bionic-user-sim` executes isolated `novice_intro` and dynamic `free_dialogue` benchmarks. It writes only `agent_eval_runs`, not Mind Graph self-memory, archive memory, or ordinary bionic traces.
+- Stage42 manual free-dialogue review on `2026-05-10` fixed mechanical fallback phrasing in Chinese: action-market reason leakage, `We were at We...` continuity duplication, broad visual-boundary triggers, and English fallback on Chinese continuation turns. A provider-backed eight-turn probe timed out at `180s`, so long provider-dialogue probes need explicit timeout/cache hardening before being used as acceptance authority.
 - The next planned arc is:
   - Stage43+: explicit re-plan for broader provider/API compatibility, richer agent eval suites, replay-backed facade slimming, multimodal user-sim suites, or operator-approved live transport hardening
   - Online long-horizon canary remains deferred beyond Stage28 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned
@@ -341,7 +342,9 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host accept-stage41 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - Stage42 bionic user-simulation performance:
   - `python3 -m holo_host run-bionic-user-sim --thread-key cli:TestUser --chat-name TestUser --channel cli --offline`
+  - `python3 -m holo_host run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 8 --offline`
   - `python3 -m holo_host show-bionic-user-sim-scorecard --suite novice_intro`
+  - `python3 -m holo_host show-bionic-user-sim-scorecard --suite free_dialogue`
 - Stage42 bionic user-simulation acceptance:
   - `python3 -m holo_host accept-stage42 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - Stage15 replay-preserving refactor tests:
@@ -550,7 +553,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:TestUser --chat-name TestUser --channel cli --offline` passed on `2026-05-10`
   - `python -m holo_host --config .holo_host.toml show-bionic-user-sim-scorecard --suite novice_intro` passed on `2026-05-10`
   - `python -m holo_host --config .holo_host.toml accept-stage42 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-10`
-  - `pytest -q` passed with `340` tests on `2026-05-10` after Stage42
+  - `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 8 --offline` passed on `2026-05-10` after manual free-dialogue repair
+  - `pytest -q` passed with `343` tests on `2026-05-10` after Stage42 free-dialogue repair
   - `python scripts/check_public_release_hygiene.py` passed on `2026-05-10`
   - `git diff --check` reported no whitespace errors on `2026-05-10`
   - Stage29 through Stage41 are offline/internal bionic-kernel/provider/runtime-readiness/inquiry-quality/capability-honesty/visual-provider/bionic-Turing/brain-harness/engineering-agent milestones; run the local verification commands in the Stage41 handoff before claiming current green status

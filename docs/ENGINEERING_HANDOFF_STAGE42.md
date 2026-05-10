@@ -12,7 +12,9 @@ Stage42 adds an isolated bionic user-simulation performance test. It lets Holo r
 
 ## Main Surfaces
 - `python -m holo_host run-bionic-user-sim --thread-key cli:TestUser --chat-name TestUser --channel cli --offline`
+- `python -m holo_host run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 8 --offline`
 - `python -m holo_host show-bionic-user-sim-scorecard --suite novice_intro`
+- `python -m holo_host show-bionic-user-sim-scorecard --suite free_dialogue`
 - `python -m holo_host accept-stage42 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 
 ## Review Notes
@@ -20,6 +22,8 @@ Stage42 adds an isolated bionic user-simulation performance test. It lets Holo r
 - The kernel is called with `record=False` and no store, so regular `bionic_agent_traces` are not polluted.
 - Only `agent_eval_runs` receives the scorecard and run payload.
 - The scorecard is intentionally operational. It should not be treated as a real external Turing-test pass.
+- Manual Chinese free-dialogue review caught and fixed mechanical fallback phrasing: action-market reason leakage, `We were at We...` continuity duplication, broad visual-boundary triggers, and English fallback on Chinese continuation turns.
+- A provider-backed eight-turn manual probe timed out at 180 seconds during this pass. Keep long provider-dialogue probes single-turn or explicitly timeout-bounded until provider latency/cache behavior is hardened.
 
 ## Follow-Up Constraints
 - Expand scenarios only as isolated performance suites.

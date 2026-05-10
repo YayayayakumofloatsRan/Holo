@@ -15,6 +15,29 @@ THEATRICAL_EMOTION_MARKERS = ("ready to bite", "pour you some wine", "growl it o
 EMOTION_QUERY_MARKERS = ("irritated", "annoyed", "angry", "upset", "frustrated")
 ASCII_VISUAL_QUERY_MARKERS = ("image", "screenshot", "photo", "visual")
 NON_ASCII_VISUAL_QUERY_MARKERS = ("截图", "图片", "照片", "读图", "看图", "视觉")
+VISUAL_INSPECTION_INTENT_MARKERS = (
+    "see",
+    "look",
+    "inspect",
+    "read",
+    "analyze",
+    "analyse",
+    "describe",
+    "view",
+    "visible",
+    "attach",
+    "attached",
+    "open",
+    "看",
+    "读",
+    "解析",
+    "分析",
+    "描述",
+    "识别",
+    "可见",
+    "上传",
+    "附加",
+)
 
 
 def _question_count(text: str) -> int:
@@ -72,10 +95,13 @@ def _emotion_guard_text(query: str) -> str:
 
 def _is_visual_query(text: str) -> bool:
     lowered = str(text or "").lower()
-    return any(
+    has_visual_reference = any(
         re.search(rf"(?<![A-Za-z0-9_]){re.escape(marker)}(?![A-Za-z0-9_])", lowered)
         for marker in ASCII_VISUAL_QUERY_MARKERS
     ) or any(marker in lowered for marker in NON_ASCII_VISUAL_QUERY_MARKERS)
+    if not has_visual_reference:
+        return False
+    return any(marker in lowered for marker in VISUAL_INSPECTION_INTENT_MARKERS)
 
 
 class BionicGeneration:

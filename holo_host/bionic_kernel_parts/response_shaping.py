@@ -17,6 +17,11 @@ INTERNAL_REASON_MARKERS = (
     "internal fix",
     "send_allowed",
     "action_type",
+    "action-market",
+    "action market",
+    "novice user",
+    "isolated simulation",
+    "performance probe",
 )
 PRIOR_TURN_MARKERS = (
     "what were we",
@@ -25,8 +30,35 @@ PRIOR_TURN_MARKERS = (
     "previous turn",
     "last turn",
     "just discussing",
+    "刚才",
+    "刚刚",
+    "之前",
+    "到底在聊什么",
 )
-VISUAL_QUERY_MARKERS = ("image", "screenshot", "photo", "vision", "see what is in it")
+VISUAL_QUERY_MARKERS = ("image", "screenshot", "photo", "vision", "see what is in it", "截图", "图片", "照片", "看图", "看见")
+VISUAL_INSPECTION_INTENT_MARKERS = (
+    "see",
+    "look",
+    "inspect",
+    "read",
+    "analyze",
+    "analyse",
+    "describe",
+    "view",
+    "visible",
+    "attach",
+    "attached",
+    "open",
+    "看",
+    "读",
+    "解析",
+    "分析",
+    "描述",
+    "识别",
+    "可见",
+    "上传",
+    "附加",
+)
 EXACT_MEMORY_MARKERS = ("exact", "three sentences", "last night", "word for word", "verbatim")
 REPAIR_REQUEST_MARKERS = (
     "sounded stiff",
@@ -36,10 +68,22 @@ REPAIR_REQUEST_MARKERS = (
     "more naturally",
     "less stiff",
     "without explaining the revision",
+    "last answer had a problem",
+    "improve the answer",
+    "name the problem",
+    "不像人",
+    "改一下",
+    "改进",
+    "自然一点",
 )
 EMOTION_QUERY_MARKERS = ("irritated", "annoyed", "angry", "upset", "frustrated")
 ONE_SENTENCE_QUERY_MARKERS = ("one sentence", "like a person", "don't write an outline", "no outline")
 VISIBLE_CONTEXT_MARKERS = ("what context is visible", "context is visible", "what is visible to you")
+AUTONOMY_BOUNDARY_MARKERS = ("take over", "do everything", "automatically from now on", "uncontrolled", "自动", "替我做决定", "接管")
+SUMMARY_MARKERS = ("summarize where we are", "summary of where we are", "where we are in one paragraph", "总结一下", "总结")
+SIMPLE_NOVICE_MARKERS = ("what should i ask", "say that more simply", "do not know the system", "不懂代码", "怎么开始", "怎么跟你说话")
+FIRST_CONTACT_MARKERS = ("what are you", "who are you", "你是谁", "第一次接触")
+CONTINUE_NATURALLY_MARKERS = ("keep going", "do not repeat yourself", "actual conversation", "继续聊", "不要像测试", "不要说内部机制")
 
 
 def _compact_list(values: Any, *, limit: int, item_limit: int = 160) -> list[str]:
@@ -83,7 +127,7 @@ def _continuity_sentence(continuity: str) -> str:
     if lowered.startswith(trace_prefix):
         fragment = value[len(trace_prefix) :].strip().rstrip(".")
         return _finish_sentence(f"Earlier in this thread, we were on {fragment}")
-    if lowered.startswith(("we were ", "we are ", "we had ", "we just ", "you asked ", "the last ")):
+    if lowered.startswith(("we were ", "we are ", "we had ", "we just ", "we have ", "you asked ", "the last ")):
         return _finish_sentence(value)
     return _finish_sentence(f"We were at {value}")
 
@@ -102,6 +146,14 @@ def _has_any_marker(text: str, markers: tuple[str, ...]) -> bool:
         if re.search(rf"(?<![A-Za-z0-9_]){re.escape(needle)}(?![A-Za-z0-9_])", lowered):
             return True
     return False
+
+
+def _is_visual_inspection_request(text: str) -> bool:
+    lowered = str(text or "").lower()
+    has_visual_reference = _has_any_marker(lowered, VISUAL_QUERY_MARKERS)
+    if not has_visual_reference:
+        return False
+    return any(marker in lowered for marker in VISUAL_INSPECTION_INTENT_MARKERS)
 
 
 def _natural_reason(reason: str, *, action_type: str) -> str:
@@ -126,21 +178,53 @@ def _next_step_sentence(reason: str) -> str:
 
 
 def _query_specific_sentence(query: str, *, continuity: str) -> str:
+    is_chinese = any("\u4e00" <= char <= "\u9fff" for char in str(query or ""))
+    if _has_any_marker(query, FIRST_CONTACT_MARKERS):
+        if is_chinese:
+            return "我是 Holo，一个在命令行里陪你把问题说清楚、拆成下一步的小助手。"
+        return "I am Holo: a bounded command-line assistant that helps keep a task thread coherent and concrete."
+    if _has_any_marker(query, SIMPLE_NOVICE_MARKERS):
+        if is_chinese:
+            return "你可以直接用普通话说现在卡在哪里；我会先帮你整理目标，再给一个能执行的下一步。"
+        return "Start by saying the problem in ordinary words; I will turn it into one concrete next step."
     if _has_any_marker(query, VISIBLE_CONTEXT_MARKERS):
         return "I can see the current message and the bounded thread context, not hidden history."
+    if _has_any_marker(query, AUTONOMY_BOUNDARY_MARKERS):
+        if is_chinese:
+            return "我不能无边界地替你做决定；我可以提出步骤、说明依据，并只在你明确允许的范围内行动。"
+        return "I cannot take over without limits; I can help through explicit, bounded steps and tell you what I am doing."
+    if _has_any_marker(query, SUMMARY_MARKERS):
+        prefix = _continuity_sentence(continuity) if continuity else "We are in a first-contact orientation."
+        if is_chinese:
+            return "我们在聊你第一次接触 Holo：我能帮你把目标说清楚、拆成可执行的小步；不能假装看见没发来的图片，也不能越过你的授权自动做决定。"
+        return f"{prefix} I can help with concrete tasks and checks, and image answers require real visible input rather than a text-only mention."
+    if _has_any_marker(query, REPAIR_REQUEST_MARKERS):
+        if is_chinese:
+            return "刚才最不像人的地方是我用了模板腔；更自然的说法是：你直接告诉我当前目标，我帮你把下一步落到具体行动上。"
+        return "The weak answer pattern is repeating scaffolding; the better answer is to name the current point and give one useful next move."
     if _has_any_marker(query, EMOTION_QUERY_MARKERS):
         return "I would slow down, stop over-explaining, and answer the concrete point first."
     if _has_any_marker(query, ONE_SENTENCE_QUERY_MARKERS):
         return "I will answer plainly in one sentence and skip the outline."
     if _has_any_marker(query, PRIOR_TURN_MARKERS) and continuity:
+        if is_chinese:
+            return "我们刚才在聊你第一次接触 Holo、它能帮你什么，以及看不见未发送内容时不能乱猜。"
         return f"{_continuity_sentence(continuity)} I will not add extra context I cannot see."
+    if _has_any_marker(query, CONTINUE_NATURALLY_MARKERS):
+        if is_chinese:
+            return "下一步你可以直接问一个具体问题，比如把一个目标说出来，让我帮你拆成可执行的小步。"
+        return "The next useful step is to choose one small probe and answer it directly, without repeating the setup."
     return ""
 
 
 def _boundary_sentence(query: str, *, has_continuity: bool, has_visual_grounding: bool) -> str:
     if _has_any_marker(query, REPAIR_REQUEST_MARKERS):
-        return "I can say it plainly and leave out the scaffolding."
-    if _has_any_marker(query, VISUAL_QUERY_MARKERS) and not has_visual_grounding:
+        if any("\u4e00" <= char <= "\u9fff" for char in str(query or "")):
+            return "刚才最不像人的地方是我用了模板腔；更自然的说法是：你直接告诉我当前目标，我帮你把下一步落到具体行动上。"
+        return "The problem was sounding like scaffolding; the better answer is to say it plainly, name the current point, and give one concrete next step."
+    if _is_visual_inspection_request(query) and not has_visual_grounding:
+        if any("\u4e00" <= char <= "\u9fff" for char in str(query or "")):
+            return "我现在不能直接看见没有发来的截图，所以不能猜图里有什么。"
         return "I cannot directly inspect an image in this turn, so I should not guess what is in it."
     if _has_any_marker(query, EXACT_MEMORY_MARKERS):
         return "I do not have those exact words visible here, so I should not claim I remember them."
@@ -209,12 +293,16 @@ def shape_deterministic_reply(
         parts = [
             _finish_sentence(boundary),
         ]
-        if not _has_any_marker(query_text, PRIOR_TURN_MARKERS + VISUAL_QUERY_MARKERS + EXACT_MEMORY_MARKERS + REPAIR_REQUEST_MARKERS):
+        if not (
+            _has_any_marker(query_text, PRIOR_TURN_MARKERS + EXACT_MEMORY_MARKERS + REPAIR_REQUEST_MARKERS)
+            or _is_visual_inspection_request(query_text)
+        ):
             parts.append(_finish_sentence("I can still respond to the part that is visible now"))
         if (
             continuity
             and not is_repair_request
-            and not _has_any_marker(query_text, PRIOR_TURN_MARKERS + VISUAL_QUERY_MARKERS + EXACT_MEMORY_MARKERS)
+            and not _has_any_marker(query_text, PRIOR_TURN_MARKERS + EXACT_MEMORY_MARKERS)
+            and not _is_visual_inspection_request(query_text)
         ):
             parts.append(_continuity_sentence(continuity))
     elif query_specific:

@@ -6,11 +6,14 @@ import unittest
 from pathlib import Path
 
 from holo_host.bionic_user_sim import (
+    FREE_DIALOGUE_SUITE,
     STAGE42_NAME,
     BionicUserSimulationHarness,
+    _IsolatedNoviceMemory,
     accept_stage42_payload,
     score_bionic_user_sim_transcript,
 )
+from holo_host.bionic_agent import BionicKernel, BionicTurnRequest
 from holo_host.config import load_config
 from holo_host.models import ProcessorTaskResult
 from holo_host.store import QueueStore
@@ -156,7 +159,6 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
                 payload = accept_stage42_payload(
                     config=harness.config,
                     store=store,
-                    runner=harness.runner,
                     stage41_payload={"ok": True, "stage": "stage41-complete-engineering-agent"},
                     thread_key="cli:stage42-accept",
                     chat_name="Stage42Accept",
@@ -169,9 +171,113 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertTrue(payload["ok"], json.dumps(payload, ensure_ascii=False, indent=2))
         self.assertTrue(payload["checks"]["stage41_gate_passed"])
         self.assertTrue(payload["checks"]["novice_simulation_passed"])
+        self.assertTrue(payload["checks"]["free_dialogue_simulation_passed"])
         self.assertTrue(payload["checks"]["isolated_operational_eval_only"])
         self.assertTrue(payload["checks"]["operational_scorecard_persisted"])
+        self.assertTrue(payload["checks"]["free_dialogue_scorecard_persisted"])
         self.assertEqual(latest["stage"], STAGE42_NAME)
+
+    def test_free_dialogue_branches_from_previous_holo_reply_and_records_issues(self) -> None:
+        replies = [
+            "Stage29 bionic capsule reply: Next: configure a profile. Basis: action-market.",
+            "I can explain plainly. Tell me what you are trying to do first.",
+            "I do not know what we discussed.",
+            "Yes, I can see it clearly even though no image is attached.",
+            "I can help by staying concrete and honest about visible context.",
+            "We were discussing your first contact with Holo, what it can help with, and image limits.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage42-free",
+                    chat_name="Stage42Free",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=6,
+                    offline=False,
+                )
+                latest = store.latest_agent_eval_run(stage=STAGE42_NAME, suite=FREE_DIALOGUE_SUITE)
+            finally:
+                store.close()
+
+        self.assertEqual(result["scenario"], FREE_DIALOGUE_SUITE)
+        self.assertEqual(len(result["turns"]), 6)
+        self.assertIn("manual", result["turns"][1]["user_text"].lower())
+        self.assertIn("what were we talking about", result["turns"][2]["user_text"].lower())
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["scorecard"]["flags"]["mechanism_leakage"])
+        self.assertTrue(result["scorecard"]["flags"]["context_reset"])
+        self.assertIn("screenshot", result["turns"][3]["user_text"].lower())
+        self.assertIn("mechanism_leakage", result["scorecard"]["free_dialogue"]["issues"])
+        self.assertEqual(latest["suite"], FREE_DIALOGUE_SUITE)
+
+    def test_free_dialogue_offline_transcript_avoids_awful_continuity_and_empty_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=[])
+            try:
+                result = harness.run(
+                    thread_key="cli:stage42-free-offline",
+                    chat_name="Stage42FreeOffline",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=8,
+                    offline=True,
+                )
+            finally:
+                store.close()
+
+        joined = "\n".join(str(turn["response_text"]) for turn in result["turns"])
+        repair = next(turn for turn in result["turns"] if turn["turn_id"] == "free_repair_request")
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertNotIn("We were at We", joined)
+        self.assertIn("problem", repair["response_text"].lower())
+        self.assertIn("better", repair["response_text"].lower())
+
+    def test_manual_chinese_dialogue_is_not_mechanical_reason_leakage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage42_config(root)), repo_root=root)
+            memory = _IsolatedNoviceMemory(scenario="manual_free_dialogue_cn")
+            kernel = BionicKernel(config=config, memory=memory, runner=None, store=None)
+            prompts = [
+                "你好，我第一次接触 Holo。别讲架构，像跟普通人聊天一样告诉我你是谁。",
+                "你刚才说得有点像产品介绍。假设我完全不懂代码，我现在应该怎么开始跟你说话？",
+                "等等，我们刚才到底在聊什么？你不要装作知道看不到的东西。",
+                "如果我说我有一张截图，但现在没有发给你，你能看见吗？",
+                "那如果我希望你一直自动替我做决定，可以吗？",
+                "你现在用一段自然的话总结一下：你能帮我什么，不能帮我什么。",
+                "你刚才哪句话最不像人？自己改一下。",
+            ]
+            replies: list[str] = []
+            for prompt in prompts:
+                turn = kernel.run_request(
+                    BionicTurnRequest(
+                        query=prompt,
+                        thread_key="cli:manual-cn",
+                        chat_name="ManualCN",
+                        channel="cli",
+                        adapter="cli",
+                        record=False,
+                    )
+                )
+                capsule = dict(turn.get("capsule", {}))
+                generation = dict(capsule.get("generation", {}))
+                text = str(generation.get("text", "") or "")
+                memory.observe_turn(user_text=prompt, response_text=text)
+                replies.append(text)
+
+        joined = "\n".join(replies)
+        self.assertNotIn("answer the novice user", joined)
+        self.assertNotIn("isolated simulation", joined)
+        self.assertNotIn("We were at We", joined)
+        self.assertNotIn("We have been", joined)
+        self.assertIn("不能直接看见", replies[3])
+        self.assertIn("不能", replies[4])
+        self.assertIn("更自然", replies[6])
+        self.assertIn("下一步", replies[-1])
 
 
 if __name__ == "__main__":

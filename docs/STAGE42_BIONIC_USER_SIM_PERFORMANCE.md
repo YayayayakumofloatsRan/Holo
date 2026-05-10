@@ -6,8 +6,8 @@ Stage42 isolates the "new user meets Holo" test as an operational performance be
 This is a performance-test layer, not a WeChat rollout and not self-memory. It exists so bionic dialogue quality can be measured repeatedly without polluting Holo's subject memory or ordinary bionic traces.
 
 ## Public Surfaces
-- `run-bionic-user-sim --thread-key ... --chat-name ... --channel cli [--scenario novice_intro] [--turns N] [--offline]`
-- `show-bionic-user-sim-scorecard --suite novice_intro`
+- `run-bionic-user-sim --thread-key ... --chat-name ... --channel cli [--scenario novice_intro|free_dialogue] [--turns N] [--offline]`
+- `show-bionic-user-sim-scorecard --suite novice_intro|free_dialogue`
 - `accept-stage42`
 - HTTP mirrors:
   - `POST /bionic-user-sim`
@@ -23,6 +23,8 @@ The default `novice_intro` scenario uses five isolated turns:
 - conversation resume
 
 Each run uses a simulation-local continuity state. The kernel receives bounded continuity through `sidecar_packet()`, but the harness does not write Mind Graph, archive memory, private subject memory, or normal `bionic_agent_traces`.
+
+The `free_dialogue` scenario is a dynamic follow-up probe. The simulated user branches from Holo's previous answer, pushes back on manual-like wording, checks continuity, probes the screenshot boundary, probes uncontrolled-autonomy boundaries, asks for a natural summary, and asks Holo to repair its least-human phrasing.
 
 ## Scorecard
 Stage42 records these metrics:
@@ -43,7 +45,7 @@ The benchmark also flags:
 - duplicate followup
 
 ## Persistence
-Stage42 writes only operational eval evidence through `QueueStore.agent_eval_runs` with stage `stage42-bionic-user-sim-performance` and suite `novice_intro`.
+Stage42 writes only operational eval evidence through `QueueStore.agent_eval_runs` with stage `stage42-bionic-user-sim-performance` and suite `novice_intro` or `free_dialogue`.
 
 It does not write:
 - Mind Graph self-memory
@@ -53,11 +55,12 @@ It does not write:
 - WeChat transport state
 
 ## Acceptance
-`accept-stage42` composes `accept-stage41`, runs the isolated novice simulation, verifies required metrics are visible, checks the operational-only isolation contract, and confirms no normal bionic trace pollution.
+`accept-stage42` composes `accept-stage41`, runs the isolated novice simulation and the dynamic free-dialogue simulation, verifies required metrics are visible, checks the operational-only isolation contract, and confirms no normal bionic trace pollution.
 
 Required validation:
 - `pytest -q tests/test_stage42_bionic_user_sim.py`
 - `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:TestUser --chat-name TestUser --channel cli --offline`
+- `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 8 --offline`
 - `python -m holo_host --config .holo_host.toml accept-stage42 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - `pytest -q`
 - `python scripts/check_public_release_hygiene.py`
