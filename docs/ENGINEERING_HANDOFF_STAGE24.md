@@ -118,6 +118,6 @@ python -m holo_host --config .holo_host.example.toml accept-stage24 --thread-key
 
 ## Next Stage
 
-Stage25 is implemented as the bounded dense continuity scheduler and working set.
+Stage25 is implemented as the bounded dense continuity scheduler and working set, Stage26 as bounded task-world state, Stage27 as long-horizon blackbox soak, and Stage40 as the internal bionic brain OS harness.
 
-Artifact/tool/outcome progress coupling and bounded subject programs remain explicitly deferred until a later re-plan.
+Artifact/tool/outcome progress coupling and bounded subject programs remain explicitly deferred until a later re-plan; they are not hidden inside the current Stage25-40 arc.

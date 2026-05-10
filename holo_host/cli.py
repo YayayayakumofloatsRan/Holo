@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .cli_parts import bionic as bionic_cli
+from .cli_parts import brain as brain_cli
 from .config import load_config
 from .daemon import build_daemon
 from .models import ProcessorTaskRequest
@@ -8018,6 +8019,53 @@ def command_show_bionic_metrics(config_path: str | None, *, limit: int) -> int:
     return 0
 
 
+def command_brain_run(
+    config_path: str | None,
+    *,
+    goal: str,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    offline: bool,
+    max_steps: int,
+) -> int:
+    payload, _transport = brain_cli.brain_run_payload(
+        config_path,
+        goal=goal,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        offline=offline,
+        max_steps=max_steps,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_brain_trace(config_path: str | None, *, trace_id: int) -> int:
+    payload, _transport = brain_cli.brain_trace_payload(config_path, trace_id=trace_id)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_show_context_bundle(config_path: str | None, *, bundle_id: str) -> int:
+    payload, _transport = brain_cli.show_context_bundle_payload(config_path, bundle_id=bundle_id)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_show_brain_metrics(config_path: str | None, *, limit: int) -> int:
+    payload, _transport = brain_cli.brain_metrics_payload(config_path, limit=limit)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_run_agent_eval(config_path: str | None, *, suite: str) -> int:
+    payload, _transport = brain_cli.agent_eval_payload(config_path, suite=suite)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_trace_subject_loop(config_path: str | None, *, trace_id: int) -> int:
     payload, _transport = bionic_cli.subject_loop_trace_payload(config_path, trace_id=trace_id)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -8126,6 +8174,17 @@ def command_show_bionic_turing_scorecard(config_path: str | None, *, thread_key:
 
 def command_accept_stage39(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
     payload, _transport = bionic_cli.accept_stage39_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_accept_stage40(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = brain_cli.accept_stage40_payload(
         config_path,
         thread_key=thread_key,
         chat_name=chat_name,
@@ -9087,6 +9146,21 @@ def main(argv: list[str] | None = None) -> int:
     bionic_turing_parser.add_argument("--thread-key", default="cli:TestUser")
     bionic_turing_parser.add_argument("--chat-name", default="TestUser")
     bionic_turing_parser.add_argument("--channel", default="cli")
+    brain_run_parser = subparsers.add_parser("brain-run", help="Run one Stage-40 bionic brain OS harness loop")
+    brain_run_parser.add_argument("--goal", required=True)
+    brain_run_parser.add_argument("--thread-key", default="cli:TestUser")
+    brain_run_parser.add_argument("--chat-name", default="TestUser")
+    brain_run_parser.add_argument("--channel", default="cli")
+    brain_run_parser.add_argument("--offline", action="store_true")
+    brain_run_parser.add_argument("--max-steps", type=int, default=8)
+    brain_trace_parser = subparsers.add_parser("brain-trace", help="Show one Stage-40 bionic brain OS trace")
+    brain_trace_parser.add_argument("--trace-id", type=int, required=True)
+    context_bundle_parser = subparsers.add_parser("show-context-bundle", help="Show one Stage-40 context bundle")
+    context_bundle_parser.add_argument("--bundle-id", required=True)
+    brain_metrics_parser = subparsers.add_parser("show-brain-metrics", help="Show Stage-40 brain harness operational metrics")
+    brain_metrics_parser.add_argument("--limit", type=int, default=100)
+    agent_eval_parser = subparsers.add_parser("run-agent-eval", help="Run the Stage-40 agent evaluation suite")
+    agent_eval_parser.add_argument("--suite", default="stage40")
     subject_loop_trace_parser = subparsers.add_parser("trace-subject-loop", help="Show the Stage-30 subject-loop payload for one bionic trace")
     subject_loop_trace_parser.add_argument("--trace-id", type=int, required=True)
     subject_loop_metrics_parser = subparsers.add_parser("show-subject-loop-metrics", help="Show Stage-30 subject-loop invariant metrics")
@@ -9331,6 +9405,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage39_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage39_parser.add_argument("--chat-name", default="TestUser")
     accept_stage39_parser.add_argument("--channel", default="cli")
+    accept_stage40_parser = subparsers.add_parser("accept-stage40", help="Run the Stage-40 bionic brain OS harness gate")
+    accept_stage40_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage40_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage40_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("accept-stage33", help="Run the Stage-33 provider API contract gate")
     subparsers.add_parser("accept-stage34", help="Run the Stage-34 debt registry and visual readiness gate")
     subparsers.add_parser("accept-stage35", help="Run the Stage-35 internal runtime readiness gate")
@@ -9546,6 +9624,24 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
         )
+    if args.command == "brain-run":
+        return command_brain_run(
+            args.config,
+            goal=args.goal,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            offline=args.offline,
+            max_steps=args.max_steps,
+        )
+    if args.command == "brain-trace":
+        return command_brain_trace(args.config, trace_id=args.trace_id)
+    if args.command == "show-context-bundle":
+        return command_show_context_bundle(args.config, bundle_id=args.bundle_id)
+    if args.command == "show-brain-metrics":
+        return command_show_brain_metrics(args.config, limit=args.limit)
+    if args.command == "run-agent-eval":
+        return command_run_agent_eval(args.config, suite=args.suite)
     if args.command == "trace-subject-loop":
         return command_trace_subject_loop(args.config, trace_id=args.trace_id)
     if args.command == "show-subject-loop-metrics":
@@ -10315,6 +10411,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage39":
         return command_accept_stage39(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage40":
+        return command_accept_stage40(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

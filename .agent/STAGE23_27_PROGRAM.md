@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage39 is now the current implemented bionic Turing benchmark milestone, and Stage40+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage40 is now the current implemented bionic brain OS harness milestone, and Stage41+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -109,6 +109,12 @@
   - deterministic fallback response shaping no longer emits `I would continue with`, `action-market`, `capsule`, or similar internal mechanism phrasing in user-facing replies
   - provider-backed bionic generation receives plain-language prompt guards against debug labels, theatrical metaphors, unsupported continuity invention, and capability overclaiming
   - `show-bionic-turing-scorecard` and `accept-stage39` are available for internal CLI/API validation without starting WeChat or mutating self-memory
+- Stage40 exit state on `2026-05-10`:
+  - `BionicBrainHarness` runs a bounded CLI/API brain loop over Stage29/39 surfaces with perception, working field, context compilation, deliberation, action-market gating, tool loop, verification, and consolidation intent
+  - `ContextCompiler` creates operational context bundles with source hashes, token estimates, stable cache keys, budget classes, and private-source exclusions
+  - DeepSeek V4 Flash/Pro harness profiles are visible, including safe thinking-mode/tool-call downgrade behavior when `reasoning_content` cannot be preserved
+  - QueueStore persists `context_bundles`, `bionic_brain_runs`, `bionic_brain_steps`, and `agent_eval_runs` as operational storage only
+  - `brain-run`, `brain-trace`, `show-context-bundle`, `show-brain-metrics`, `run-agent-eval`, and `accept-stage40` are available without starting WeChat or mutating self-memory
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -133,6 +139,7 @@
 - Stage37 self-eval work must not invent missing continuity, overclaim unsupported image reading, execute internal operator actions from CLI dialogue, or add any planner/loop beyond the existing bionic kernel.
 - Stage38 visual-provider work must route raw image input through `image_understand`, keep text-only generation honest, and preserve transport-as-interface.
 - Stage39 bionic Turing benchmark work is an internal engineering benchmark only; it must not claim a real human Turing-test pass, start transport, create a hidden evaluator loop, mutate self-memory, or become a runtime decision layer.
+- Stage40 brain-harness work is an internal CLI/API agent harness only; it must not start WeChat, bypass action-market tool gates, hot-edit the live repo by default, write self-memory, or treat model output as direct tool authority.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -274,6 +281,14 @@
 - `Stop rule`: do not claim a real external Turing-test pass, leak internal mechanism labels, invent missing continuity, start WeChat, mutate self-memory, or add evaluator-driven runtime autonomy
 - `Rollback rule`: fall back to Stage38 visual-provider bridge and keep the Stage39 scorecard as an observational diagnostic until naturalness and continuity regressions are repaired
 
+### Stage40: Bionic Brain OS Harness
+- `Status`: implemented on `2026-05-10`
+- `Goal`: turn the bionic kernel into a bounded internal CLI/API agent harness where the model acts as replaceable compute inside an inspectable OS-like loop
+- `Scope`: add context compilation, DeepSeek V4 Flash/Pro harness profiles, action-market-gated tool proposals, bounded tool execution, explicit verification, operational trace persistence, and deterministic Stage40 agent eval
+- `Validation`: `pytest -q`; `accept-stage39`; `accept-stage40`; `tests/test_stage40_context_compiler.py`; `tests/test_stage40_bionic_brain_harness.py`; `tests/test_stage40_deepseek_v4_profile.py`; `tests/test_stage40_agent_eval.py`
+- `Stop rule`: do not start WeChat, bypass action-market tool gating, let model output directly execute tools, allow repo/runtime writes by default, or include private runtime/memory/API-key sources in context bundles
+- `Rollback rule`: keep Stage40 operational tables but remove Stage40 commands from operator workflows and fall back to Stage39 bionic kernel plus Turing scorecard surfaces
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -294,6 +309,7 @@
 | `Stage37` | All Stage36 surfaces | `accept-stage37`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage29_bionic_cli_agent.py` | Bionic self-eval uses same-thread continuity when available, stays honest about provider image support, produces speech for CLI self-eval, and remains transport-free. |
 | `Stage38` | All Stage37 and Stage28 visual-memory surfaces | `accept-stage38`; `tests/test_stage38_visual_provider_bridge.py`; `tests/test_stage37_bionic_self_eval.py`; `tests/test_stage28_multimodal_homeostatic_kernel.py` | Explicit CLI image input routes through image-capable `image_understand`, visual-memory stores provider metadata, and text-only generation stays honest. |
 | `Stage39` | All Stage38 bionic and visual-provider surfaces | `accept-stage39`; `show-bionic-turing-scorecard`; `tests/test_stage39_bionic_turing_benchmark.py`; `tests/test_stage32_response_shaping.py` | Internal bionic replies pass the bounded Turing-style scorecard, avoid mechanism leakage and template pressure, and preserve transport-free self-memory neutrality. |
+| `Stage40` | All Stage39 bionic Turing and provider-fabric surfaces | `accept-stage40`; `brain-run`; `brain-trace`; `show-context-bundle`; `show-brain-metrics`; `run-agent-eval`; `tests/test_stage40_context_compiler.py`; `tests/test_stage40_bionic_brain_harness.py`; `tests/test_stage40_deepseek_v4_profile.py`; `tests/test_stage40_agent_eval.py` | The internal brain harness records phase traces, context bundles, tool gates, verification evidence, and agent eval scorecards without WeChat, self-memory writes, or default repo/runtime write authority. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

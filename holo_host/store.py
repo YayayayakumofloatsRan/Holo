@@ -244,6 +244,74 @@ class QueueStore:
             ON bionic_agent_traces(channel, thread_key, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_bionic_agent_traces_created
             ON bionic_agent_traces(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS context_bundles (
+                id INTEGER PRIMARY KEY,
+                stage TEXT NOT NULL DEFAULT 'stage40-bionic-brain-os-harness',
+                bundle_id TEXT NOT NULL UNIQUE,
+                model_profile TEXT NOT NULL DEFAULT '',
+                budget TEXT NOT NULL DEFAULT '',
+                token_estimate INTEGER NOT NULL DEFAULT 0,
+                cache_key TEXT NOT NULL DEFAULT '',
+                source_hashes_json TEXT NOT NULL DEFAULT '{}',
+                sections_json TEXT NOT NULL DEFAULT '[]',
+                excluded_private_sources_json TEXT NOT NULL DEFAULT '[]',
+                bundle_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_context_bundles_cache
+            ON context_bundles(cache_key);
+            CREATE INDEX IF NOT EXISTS idx_context_bundles_created
+            ON context_bundles(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS bionic_brain_runs (
+                id INTEGER PRIMARY KEY,
+                stage TEXT NOT NULL DEFAULT 'stage40-bionic-brain-os-harness',
+                channel TEXT NOT NULL DEFAULT '',
+                thread_key TEXT NOT NULL DEFAULT '',
+                chat_name TEXT NOT NULL DEFAULT '',
+                goal TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                step_count INTEGER NOT NULL DEFAULT 0,
+                metrics_json TEXT NOT NULL DEFAULT '{}',
+                run_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_bionic_brain_runs_thread
+            ON bionic_brain_runs(channel, thread_key, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_bionic_brain_runs_created
+            ON bionic_brain_runs(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS bionic_brain_steps (
+                id INTEGER PRIMARY KEY,
+                run_id INTEGER NOT NULL DEFAULT 0,
+                step_index INTEGER NOT NULL DEFAULT 0,
+                phase TEXT NOT NULL DEFAULT '',
+                action_type TEXT NOT NULL DEFAULT '',
+                mutation_class TEXT NOT NULL DEFAULT '',
+                allowed INTEGER NOT NULL DEFAULT 0,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_bionic_brain_steps_run
+            ON bionic_brain_steps(run_id, step_index, id);
+
+            CREATE TABLE IF NOT EXISTS agent_eval_runs (
+                id INTEGER PRIMARY KEY,
+                stage TEXT NOT NULL DEFAULT 'stage40-bionic-brain-os-harness',
+                suite TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                scorecard_json TEXT NOT NULL DEFAULT '{}',
+                run_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_eval_runs_stage_suite
+            ON agent_eval_runs(stage, suite, created_at DESC);
             """
         )
         self._ensure_column("contacts", "last_initiative_at", "TEXT")
@@ -1500,6 +1568,248 @@ class QueueStore:
             "total_inhibition_count": inhibition_count,
             "latest_trace_id": int(rows[0]["id"]) if rows else 0,
         }
+
+    @staticmethod
+    def _context_bundle_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        bundle = QueueStore._decode_json_dict(payload.pop("bundle_json", "{}"))
+        if bundle:
+            bundle.setdefault("id", payload.get("id", 0))
+            return bundle
+        payload["source_hashes"] = QueueStore._decode_json_dict(payload.pop("source_hashes_json", "{}"))
+        try:
+            payload["sections"] = json.loads(str(payload.pop("sections_json", "[]") or "[]"))
+        except json.JSONDecodeError:
+            payload["sections"] = []
+        try:
+            payload["excluded_private_sources"] = json.loads(str(payload.pop("excluded_private_sources_json", "[]") or "[]"))
+        except json.JSONDecodeError:
+            payload["excluded_private_sources"] = []
+        return payload
+
+    @_synchronized
+    def record_context_bundle(self, bundle: dict[str, Any]) -> dict[str, Any]:
+        now = str(bundle.get("created_at", "") or utc_now())
+        bundle_id = str(bundle.get("bundle_id", "") or "").strip()
+        if not bundle_id:
+            raise ValueError("bundle_id is required")
+        self.conn.execute(
+            """
+            INSERT INTO context_bundles(
+                stage, bundle_id, model_profile, budget, token_estimate, cache_key,
+                source_hashes_json, sections_json, excluded_private_sources_json,
+                bundle_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bundle_id) DO UPDATE SET
+                model_profile = excluded.model_profile,
+                budget = excluded.budget,
+                token_estimate = excluded.token_estimate,
+                cache_key = excluded.cache_key,
+                source_hashes_json = excluded.source_hashes_json,
+                sections_json = excluded.sections_json,
+                excluded_private_sources_json = excluded.excluded_private_sources_json,
+                bundle_json = excluded.bundle_json
+            """,
+            (
+                str(bundle.get("stage", "stage40-bionic-brain-os-harness") or "stage40-bionic-brain-os-harness"),
+                bundle_id,
+                str(bundle.get("model_profile", "") or ""),
+                str(bundle.get("budget", "") or ""),
+                int(bundle.get("token_estimate", 0) or 0),
+                str(bundle.get("cache_key", "") or ""),
+                json_dumps(bundle.get("source_hashes", {}) or {}),
+                json_dumps(bundle.get("sections", []) or []),
+                json_dumps(bundle.get("excluded_private_sources", []) or []),
+                json_dumps(bundle or {}),
+                now,
+            ),
+        )
+        self.conn.commit()
+        row = self._fetchone("SELECT * FROM context_bundles WHERE bundle_id = ?", (bundle_id,)) or {}
+        return self._context_bundle_from_row(row) if row else {}
+
+    @_synchronized
+    def get_context_bundle(self, *, bundle_id: str) -> dict[str, Any]:
+        row = self._fetchone("SELECT * FROM context_bundles WHERE bundle_id = ?", (str(bundle_id or "").strip(),)) or {}
+        return self._context_bundle_from_row(row) if row else {}
+
+    @staticmethod
+    def _bionic_brain_run_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        payload["run_id"] = int(payload.get("id", 0) or 0)
+        payload["metrics"] = QueueStore._decode_json_dict(payload.pop("metrics_json", "{}"))
+        payload["run"] = QueueStore._decode_json_dict(payload.pop("run_json", "{}"))
+        return payload
+
+    @_synchronized
+    def record_bionic_brain_run(
+        self,
+        *,
+        channel: str,
+        thread_key: str,
+        chat_name: str,
+        goal: str,
+        status: str,
+        step_count: int,
+        metrics: dict[str, Any] | None = None,
+        run_payload: dict[str, Any] | None = None,
+        stage: str = "stage40-bionic-brain-os-harness",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        normalized_thread_key = self._normalize_wechat_thread_key(channel, thread_key, subject=chat_name, display_name=chat_name)
+        cursor = self.conn.execute(
+            """
+            INSERT INTO bionic_brain_runs(
+                stage, channel, thread_key, chat_name, goal, status, step_count,
+                metrics_json, run_json, created_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(stage or "stage40-bionic-brain-os-harness").strip() or "stage40-bionic-brain-os-harness",
+                str(channel or "").strip(),
+                normalized_thread_key,
+                str(chat_name or normalized_thread_key).strip(),
+                str(goal or ""),
+                str(status or ""),
+                max(0, int(step_count or 0)),
+                json_dumps(metrics or {}),
+                json_dumps(run_payload or {}),
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+        row = self._fetchone("SELECT * FROM bionic_brain_runs WHERE id = ?", (int(cursor.lastrowid),)) or {}
+        return self._bionic_brain_run_from_row(row) if row else {}
+
+    @_synchronized
+    def get_bionic_brain_run(self, *, run_id: int) -> dict[str, Any]:
+        row = self._fetchone("SELECT * FROM bionic_brain_runs WHERE id = ?", (int(run_id),)) or {}
+        return self._bionic_brain_run_from_row(row) if row else {}
+
+    @_synchronized
+    def latest_bionic_brain_metrics(self, *, limit: int = 100) -> dict[str, Any]:
+        rows = self._fetchall(
+            """
+            SELECT * FROM bionic_brain_runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit or 100)),),
+        )
+        decoded = [self._bionic_brain_run_from_row(row) for row in rows]
+        ok_count = sum(1 for row in decoded if str(row.get("status", "")) == "completed")
+        step_counts = [int(row.get("step_count", 0) or 0) for row in decoded]
+        token_estimates = [int(dict(row.get("metrics", {})).get("context_token_estimate", 0) or 0) for row in decoded]
+        return {
+            "stage": "stage40-bionic-brain-os-harness",
+            "run_count": len(decoded),
+            "completed_count": ok_count,
+            "latest_run_id": int(decoded[0]["run_id"]) if decoded else 0,
+            "average_step_count": round(sum(step_counts) / len(step_counts), 4) if step_counts else 0.0,
+            "average_context_token_estimate": round(sum(token_estimates) / len(token_estimates), 4) if token_estimates else 0.0,
+        }
+
+    @_synchronized
+    def record_bionic_brain_step(
+        self,
+        *,
+        run_id: int,
+        step_index: int,
+        phase: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utc_now()
+        action_payload = {}
+        if str(phase or "") == "tool_loop":
+            actions = payload.get("actions", []) if isinstance(payload, dict) else []
+            if isinstance(actions, list) and actions:
+                action_payload = dict(actions[0]) if isinstance(actions[0], dict) else {}
+        cursor = self.conn.execute(
+            """
+            INSERT INTO bionic_brain_steps(
+                run_id, step_index, phase, action_type, mutation_class, allowed,
+                payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(run_id),
+                int(step_index),
+                str(phase or ""),
+                str(action_payload.get("tool", "") or ""),
+                str(action_payload.get("mutation_class", "") or ""),
+                1 if bool(dict(action_payload.get("gate", {})).get("allowed", False)) else 0,
+                json_dumps(payload or {}),
+                now,
+            ),
+        )
+        self.conn.commit()
+        return self._fetchone("SELECT * FROM bionic_brain_steps WHERE id = ?", (int(cursor.lastrowid),)) or {}
+
+    @_synchronized
+    def list_bionic_brain_steps(self, *, run_id: int) -> list[dict[str, Any]]:
+        rows = self._fetchall(
+            """
+            SELECT * FROM bionic_brain_steps
+            WHERE run_id = ?
+            ORDER BY step_index ASC, id ASC
+            """,
+            (int(run_id),),
+        )
+        for row in rows:
+            row["payload"] = self._decode_json_dict(row.pop("payload_json", "{}"))
+        return rows
+
+    @staticmethod
+    def _agent_eval_run_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        payload["eval_run_id"] = int(payload.get("id", 0) or 0)
+        payload["scorecard"] = QueueStore._decode_json_dict(payload.pop("scorecard_json", "{}"))
+        payload["run"] = QueueStore._decode_json_dict(payload.pop("run_json", "{}"))
+        return payload
+
+    @_synchronized
+    def record_agent_eval_run(
+        self,
+        *,
+        stage: str,
+        suite: str,
+        status: str,
+        scorecard: dict[str, Any] | None = None,
+        run_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO agent_eval_runs(
+                stage, suite, status, scorecard_json, run_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(stage or "stage40-bionic-brain-os-harness").strip() or "stage40-bionic-brain-os-harness",
+                str(suite or "").strip(),
+                str(status or "").strip(),
+                json_dumps(scorecard or {}),
+                json_dumps(run_payload or {}),
+                now,
+            ),
+        )
+        self.conn.commit()
+        row = self._fetchone("SELECT * FROM agent_eval_runs WHERE id = ?", (int(cursor.lastrowid),)) or {}
+        return self._agent_eval_run_from_row(row) if row else {}
+
+    @_synchronized
+    def latest_agent_eval_run(self, *, stage: str = "stage40-bionic-brain-os-harness", suite: str = "stage40") -> dict[str, Any]:
+        row = self._fetchone(
+            """
+            SELECT * FROM agent_eval_runs
+            WHERE stage = ? AND suite = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(stage or "").strip(), str(suite or "").strip()),
+        ) or {}
+        return self._agent_eval_run_from_row(row) if row else {}
 
     @_synchronized
     def trace_subject_loop(self, *, trace_id: int) -> dict[str, Any]:

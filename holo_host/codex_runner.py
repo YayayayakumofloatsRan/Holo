@@ -657,6 +657,7 @@ class DeepSeekProvider(ProcessorProvider):
         "json_output": True,
         "tool_call_protocol": "openai_chat_completions",
         "thinking_mode": True,
+        "reasoning_content_preserved": True,
         "image_support": False,
     }
 
@@ -698,13 +699,22 @@ class DeepSeekProvider(ProcessorProvider):
         return payload
 
     @staticmethod
-    def _extract_text(response: dict[str, Any]) -> str:
+    def _extract_message(response: dict[str, Any]) -> dict[str, Any]:
         choices = response.get("choices", [])
         if not choices:
-            return ""
+            return {}
         first = choices[0] if isinstance(choices[0], dict) else {}
-        message = first.get("message", {}) if isinstance(first, dict) else {}
+        return first.get("message", {}) if isinstance(first, dict) and isinstance(first.get("message", {}), dict) else {}
+
+    @classmethod
+    def _extract_text(cls, response: dict[str, Any]) -> str:
+        message = cls._extract_message(response)
         return str(message.get("content", "") or "").strip()
+
+    @classmethod
+    def _extract_reasoning_content(cls, response: dict[str, Any]) -> str:
+        message = cls._extract_message(response)
+        return str(message.get("reasoning_content", "") or "").strip()
 
     def run_task(
         self,
@@ -735,6 +745,7 @@ class DeepSeekProvider(ProcessorProvider):
             response_payload = json.loads(response.read().decode("utf-8"))
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         text = self._extract_text(response_payload)
+        reasoning_content = self._extract_reasoning_content(response_payload)
         usage = _coerce_usage_payload(response_payload.get("usage"))
         if not usage["total_tokens"]:
             usage = {
@@ -765,6 +776,8 @@ class DeepSeekProvider(ProcessorProvider):
                 "duration_ms": duration_ms,
                 "budget_tag": request.budget_tag,
                 "capabilities": dict(self.capabilities),
+                "reasoning_content": reasoning_content,
+                "reasoning_content_present": bool(reasoning_content),
             },
         )
 
@@ -823,11 +836,24 @@ class CodexRunner:
             }
             for lane_name, lane in self.config.processor_fabric.provider_backends.items()
         }
+        try:
+            from .bionic_brain import stage40_deepseek_v4_status
+        except Exception:  # noqa: BLE001
+            stage40_status = {}
+        else:
+            stage40_status = stage40_deepseek_v4_status(
+                {
+                    "providers": providers,
+                    "lanes": lanes,
+                    "response_cache": self.response_cache_stats(),
+                }
+            )
         return {
             "active_backend_alias": self.config.runtime.processor_backend,
             "providers": providers,
             "lanes": lanes,
             "response_cache": self.response_cache_stats(),
+            "stage40_deepseek_v4": stage40_status,
         }
 
     def provider_contracts(self) -> dict[str, Any]:

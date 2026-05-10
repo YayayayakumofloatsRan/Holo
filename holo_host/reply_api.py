@@ -22,6 +22,7 @@ from pathlib import PureWindowsPath
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .bionic_brain import BionicBrainHarness, run_stage40_agent_eval, accept_stage40_payload as build_stage40_acceptance
 from .brain_ops import initiative_probe as build_initiative_probe
 from .brain_ops import run_self_revision as run_self_revision_cycle
 from .capabilities import CapabilityBroker
@@ -952,6 +953,56 @@ class HoloReplyService:
             summary["by_lane"][lane_name] = summary["by_lane"].get(lane_name, 0) + int(row.get("total_tokens", 0) or 0)
             summary["by_provider"][provider_name] = summary["by_provider"].get(provider_name, 0) + int(row.get("total_tokens", 0) or 0)
         return {"summary": summary, "items": rows}
+
+    def brain_run(
+        self,
+        *,
+        goal: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        offline: bool = False,
+        max_steps: int = 8,
+    ) -> dict[str, Any]:
+        harness = BionicBrainHarness(
+            config=self.config,
+            store=self.store,
+            memory=self.memory,
+            runner=None if offline else self.runner,
+        )
+        return harness.run(
+            goal=goal,
+            thread_key=str(thread_key or "cli:TestUser"),
+            chat_name=str(chat_name or thread_key or "TestUser"),
+            channel=str(channel or "cli"),
+            offline=bool(offline),
+            max_steps=int(max_steps or 8),
+        )
+
+    def brain_trace(self, *, trace_id: int) -> dict[str, Any]:
+        run = self.store.get_bionic_brain_run(run_id=int(trace_id))
+        if not run:
+            return {"ok": False, "stage": "stage40-bionic-brain-os-harness", "trace_id": int(trace_id), "error": "trace_not_found"}
+        return {
+            "ok": True,
+            "stage": "stage40-bionic-brain-os-harness",
+            "trace_id": int(trace_id),
+            "run": run,
+            "steps": self.store.list_bionic_brain_steps(run_id=int(trace_id)),
+        }
+
+    def show_context_bundle(self, *, bundle_id: str) -> dict[str, Any]:
+        bundle = self.store.get_context_bundle(bundle_id=str(bundle_id or "").strip())
+        if not bundle:
+            return {"ok": False, "stage": "stage40-bionic-brain-os-harness", "bundle_id": bundle_id, "error": "bundle_not_found"}
+        return {"ok": True, "stage": "stage40-bionic-brain-os-harness", "bundle": bundle}
+
+    def show_brain_metrics(self, *, limit: int = 100) -> dict[str, Any]:
+        return self.store.latest_bionic_brain_metrics(limit=limit)
+
+    def run_agent_eval(self, *, suite: str = "stage40") -> dict[str, Any]:
+        harness = BionicBrainHarness(config=self.config, store=self.store, memory=self.memory, runner=None)
+        return run_stage40_agent_eval(config=self.config, store=self.store, harness=harness, suite=suite)
 
     def accept_processor_fabric(self) -> dict[str, Any]:
         required_docs = [
@@ -2146,6 +2197,44 @@ class HoloReplyService:
             channel=channel,
             sender=sender,
             artifact_dir=artifact_dir,
+        )
+
+    def accept_stage40(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self._accept_stage40_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
+    def _accept_stage40_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        stage39_payload = {"ok": True, "skipped": "api_acceptance_reuses_stage40_offline_probe"}
+        return build_stage40_acceptance(
+            config=self.config,
+            store=self.store,
+            memory=self.memory,
+            runner=self.runner,
+            stage39_payload=stage39_payload,
+            thread_key=str(thread_key or "cli:TestUser"),
+            chat_name=str(chat_name or thread_key or "TestUser"),
+            channel=str(channel or "cli"),
         )
 
     def affect_state(self, *, thread_key: str | None = None, chat_name: str | None = None, channel: str = "wechat") -> dict[str, Any]:
@@ -9441,6 +9530,27 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
+                if parsed.path == "/brain-trace":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.brain_trace(
+                        trace_id=int(params.get("trace_id", ["0"])[0] or 0),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/context-bundle":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_context_bundle(
+                        bundle_id=params.get("bundle_id", [""])[0],
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
+                if parsed.path == "/brain-metrics":
+                    params = parse_qs(parsed.query)
+                    payload = self.server.reply_service.show_brain_metrics(
+                        limit=int(params.get("limit", ["100"])[0] or 100),
+                    )
+                    self._write_json(HTTPStatus.OK, payload)
+                    return
                 if parsed.path == "/brain-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.brain_status())
                     return
@@ -9957,6 +10067,31 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/ingest-image":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.ingest_image(payload))
+                    return
+                if parsed.path == "/brain-run":
+                    goal = str(payload.get("goal", "") or "").strip()
+                    if not goal:
+                        self._write_json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "detail": "`goal` is required"})
+                        return
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.brain_run(
+                            goal=goal,
+                            thread_key=str(payload.get("thread_key", "")).strip() or None,
+                            chat_name=str(payload.get("chat_name", "")).strip() or None,
+                            channel=str(payload.get("channel", "cli")).strip() or "cli",
+                            offline=bool(payload.get("offline", False)),
+                            max_steps=int(payload.get("max_steps", 8) or 8),
+                        ),
+                    )
+                    return
+                if parsed.path == "/agent-eval":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        self.server.reply_service.run_agent_eval(
+                            suite=str(payload.get("suite", "stage40")).strip() or "stage40",
+                        ),
+                    )
                     return
                 if parsed.path == "/refresh-wechat-history":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.refresh_wechat_history(payload))
