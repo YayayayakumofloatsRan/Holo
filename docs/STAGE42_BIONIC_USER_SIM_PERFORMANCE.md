@@ -26,6 +26,10 @@ Each run uses a simulation-local continuity state. The kernel receives bounded c
 
 The `free_dialogue` scenario is a dynamic follow-up probe. The simulated user branches from Holo's previous answer, pushes back on manual-like wording, checks continuity, probes the screenshot boundary, probes uncontrolled-autonomy boundaries, asks for a natural summary, and asks Holo to repair its least-human phrasing.
 
+The default `free_dialogue` run is now 12 turns. Its later turns add high-intensity bionic pressure points: bionic-subject identity, same-subject continuity, pressure response, brain-like structural explanation, and non-negotiable boundary reentry. These probes are still simulation-local and operational-only.
+
+Every bionic capsule now exposes an observational top-level `bionic_state` surface computed before language output. It records the current bionic subject state, action-market decision authority, consciousness-field summary, somatic proxy, active intent, uncertainty, continuity pressure, and boundary conditions. This does not change the Stage29/30 core phase contract, is not a second brain, and does not grant runtime authority; it is an inspectable state layer for debugging bionic structure.
+
 ## Scorecard
 Stage42 records these metrics:
 - `novice_comprehension_score`
@@ -55,12 +59,12 @@ It does not write:
 - WeChat transport state
 
 ## Acceptance
-`accept-stage42` composes `accept-stage41`, runs the isolated novice simulation and the dynamic free-dialogue simulation, verifies required metrics are visible, checks the operational-only isolation contract, and confirms no normal bionic trace pollution.
+`accept-stage42` composes `accept-stage41`, runs the isolated novice simulation and the dynamic free-dialogue simulation, verifies required metrics and `bionic_state` are visible, checks the operational-only isolation contract, and confirms no normal bionic trace pollution.
 
 Required validation:
 - `pytest -q tests/test_stage42_bionic_user_sim.py`
 - `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:TestUser --chat-name TestUser --channel cli --offline`
-- `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 8 --offline`
+- `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 12 --offline`
 - `python -m holo_host --config .holo_host.toml accept-stage42 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - `pytest -q`
 - `python scripts/check_public_release_hygiene.py`

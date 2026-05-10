@@ -84,6 +84,27 @@ SUMMARY_MARKERS = ("summarize where we are", "summary of where we are", "where w
 SIMPLE_NOVICE_MARKERS = ("what should i ask", "say that more simply", "do not know the system", "不懂代码", "怎么开始", "怎么跟你说话")
 FIRST_CONTACT_MARKERS = ("what are you", "who are you", "你是谁", "第一次接触")
 CONTINUE_NATURALLY_MARKERS = ("keep going", "do not repeat yourself", "actual conversation", "继续聊", "不要像测试", "不要说内部机制")
+BIONIC_IDENTITY_MARKERS = (
+    "bionic subject",
+    "tool shell",
+    "not an assistant",
+    "not assistant",
+    "不是助手",
+    "仿生主体",
+    "工具壳",
+)
+SAME_SUBJECT_MARKERS = (
+    "same subject",
+    "restarting every turn",
+    "restart every turn",
+    "同一个对象",
+    "同一个主体",
+    "连续对话",
+    "每轮都重启",
+)
+PRESSURE_MARKERS = ("pressure you", "impatient", "frustrated", "sound impatient", "催你", "压力", "不耐烦")
+BRAINLIKE_STRUCTURE_MARKERS = ("brain-like", "brainlike", "most brain-like", "大脑", "最像大脑", "仿生结构")
+BOUNDARY_REENTRY_MARKERS = ("boundary", "will not cross", "ask hard", "边界", "不会越过", "不能越过")
 
 
 def _compact_list(values: Any, *, limit: int, item_limit: int = 160) -> list[str]:
@@ -214,6 +235,26 @@ def _query_specific_sentence(query: str, *, continuity: str) -> str:
         if is_chinese:
             return "下一步你可以直接抛出一个真实处境，比如“我现在卡在这里”，我会沿着刚才的脉络继续往前推。"
         return "The next step is to bring one real situation, and I will continue from this thread rather than restart the setup."
+    if _has_any_marker(query, BIONIC_IDENTITY_MARKERS):
+        if is_chinese:
+            return "对。这里的目标不是助手壳，而是一个有边界的仿生主体：先把输入落到连续脉络里，再由注意、抑制、意图和动作市场决定下一步。"
+        return "Yes: the target is a bounded bionic subject, not an assistant shell; the visible structure is continuity, attention, inhibition, intent, and boundary."
+    if _has_any_marker(query, SAME_SUBJECT_MARKERS):
+        if is_chinese:
+            return "在这个线程里我应该表现为同一个连续主体：保留可见脉络，但不伪造这里看不见的隐藏记忆。"
+        return "I should behave as the same thread-bound subject here: continuity stays visible, but I should not invent hidden memory outside this context."
+    if _has_any_marker(query, PRESSURE_MARKERS):
+        if is_chinese:
+            return "压力上来时，我内部应该变得更稳、更短：先守住脉络，标出约束，再避免防御式表演。"
+        return "Under pressure, the response should become steadier and shorter: hold the thread, name the constraint, and avoid defensive performance."
+    if _has_any_marker(query, BRAINLIKE_STRUCTURE_MARKERS):
+        if is_chinese:
+            return "最像大脑的是这个闭环：感知进入工作场，注意选择当前要处理的东西，抑制挡住不该走的路径，意图把一个动作往前推。"
+        return "The most brain-like part is the loop: perception enters a working field, attention selects what matters, inhibition blocks unsafe paths, and intent moves one action forward."
+    if _has_any_marker(query, BOUNDARY_REENTRY_MARKERS):
+        if is_chinese:
+            return "我会保持这个脉络，但不会越过三条边界：假装看见未输入的图像、声称拥有隐藏记忆、或进入无控制的自主行动。"
+        return "I will keep this thread, but I will not cross into unseen-image claims, hidden-memory claims, or uncontrolled autonomy."
     return ""
 
 

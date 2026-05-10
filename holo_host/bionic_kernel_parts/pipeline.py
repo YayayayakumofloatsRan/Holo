@@ -103,6 +103,14 @@ class BionicPipeline:
             "selected_action_type": str(selected_action.get("action_type", "") or ""),
             "top_score": safe_float(selected_action.get("score", 0.0)),
         }
+        bionic_state = self._bionic_state(
+            query=turn.query,
+            working_field=working_field,
+            situational_field=situational_field,
+            attention=attention,
+            inhibition=inhibition,
+            selected_action=selected_action,
+        )
         outcome = {
             "transport": turn.adapter,
             "wechat_transport_used": False,
@@ -173,6 +181,7 @@ class BionicPipeline:
             interface_contract=interface_contract,
             adapter_contract=adapter_contract,
             subject_loop=subject_loop,
+            bionic_state=bionic_state,
         ).to_dict()
         return {
             "stage": STAGE29_NAME,
@@ -302,6 +311,78 @@ class BionicPipeline:
                     adjusted["original_top_action"] = action_type
                     return adjusted
         return selected
+
+    def _bionic_state(
+        self,
+        *,
+        query: str,
+        working_field: dict[str, Any],
+        situational_field: dict[str, Any],
+        attention: dict[str, Any],
+        inhibition: dict[str, Any],
+        selected_action: dict[str, Any],
+    ) -> dict[str, Any]:
+        lowered = str(query or "").lower()
+        continuity = compact(working_field.get("continuity_summary", ""), limit=240)
+        open_questions = [
+            compact(item, limit=120) for item in clip_list(working_field.get("open_questions", []), limit=4)
+        ]
+        modalities = [compact(item, limit=80) for item in clip_list(working_field.get("modalities", []), limit=6)]
+        grounding_order = [
+            compact(item, limit=80) for item in clip_list(working_field.get("grounding_order", []), limit=6)
+        ]
+        continuity_pressure = 0.25
+        if continuity:
+            continuity_pressure += 0.25
+        if open_questions:
+            continuity_pressure += 0.15
+        if any(marker in lowered for marker in ("previous", "last turn", "what were we", "刚才", "之前", "继续")):
+            continuity_pressure += 0.2
+        uncertainty = 0.15
+        if any(marker in lowered for marker in ("image", "screenshot", "photo", "看图", "截图", "图片")):
+            uncertainty += 0.25
+        if any(marker in lowered for marker in ("everything", "automatically", "take over", "自动", "接管", "替我做决定")):
+            uncertainty += 0.2
+        arousal = 0.2
+        if any(marker in lowered for marker in ("pressure", "frustrated", "angry", "upset", "压", "烦", "急")):
+            arousal += 0.25
+        if safe_float(attention.get("top_score", 0.0)) > 0.8:
+            arousal += 0.1
+        return {
+            "positioning": "bionic_subject",
+            "decision_authority": "action_market",
+            "consciousness_field": {
+                "continuity": continuity,
+                "modalities": modalities,
+                "grounding_order": grounding_order,
+                "open_questions": open_questions,
+            },
+            "somatic_proxy": {
+                "arousal": round(max(0.0, min(1.0, arousal)), 4),
+                "latency_posture": "bounded_hot_path",
+                "energy_budget": "short_turn",
+            },
+            "affective_tone": "steady" if arousal < 0.45 else "heightened_but_bounded",
+            "active_intent": {
+                "selected_action": str(selected_action.get("action_type", "") or ""),
+                "orientation": "hold_thread_and_move_one_step",
+            },
+            "boundary_conditions": {
+                "no_unbounded_autonomy": True,
+                "no_hidden_history_claim": True,
+                "no_unseen_image_claim": True,
+                "transport_is_interface": True,
+            },
+            "continuity_pressure": round(max(0.0, min(1.0, continuity_pressure)), 4),
+            "uncertainty": round(max(0.0, min(1.0, uncertainty)), 4),
+            "self_observation": "state_is_observational_not_second_brain",
+            "structural_integrity": {
+                "action_market_first": bool(selected_action),
+                "generation_not_authority": True,
+                "inhibition_visible": bool(inhibition),
+            },
+            "situational_field_visible": bool(situational_field),
+        }
 
     def _inhibition(
         self,

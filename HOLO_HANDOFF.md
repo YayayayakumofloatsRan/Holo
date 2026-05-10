@@ -101,7 +101,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - transports are eyes and hands
 - The current milestone tag is `stage42-bionic-user-sim-performance`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage42 validation and hardening: isolated bionic user-simulation performance, novice-user continuity, capability honesty, mechanism-leakage prevention, and richer agent-eval evidence. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
+- Current focus is Stage42 validation and hardening: isolated bionic user-simulation performance, novice-user continuity, high-intensity free-dialogue pressure probes, capability honesty, mechanism-leakage prevention, `bionic_state` inspectability, and richer agent-eval evidence. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -127,13 +127,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage39: internal bionic Turing scoring now gates CLI continuity, naturalness, mechanism-leakage prevention, question bounds, and context grounding
   - Stage40: a bionic brain OS harness now runs bounded CLI/API agent loops with perception, working field, context compiler, deliberation, action-market gating, tool loop, verification, consolidation intent, DeepSeek V4 profiles, operational traces, and agent eval scorecards
   - Stage41: a complete controlled engineering agent now runs CLI/API tool loops with read/search/status/test/write actions, action-market mutation gates, explicit repo-write authority, private-path blocking, verification evidence, traces, and metrics
-  - Stage42: an isolated bionic user-simulation performance harness now repeatedly probes first-time-user dialogue quality, scores continuity/naturalness/capability honesty/mechanism leakage, and persists only operational eval evidence
+  - Stage42: an isolated bionic user-simulation performance harness now repeatedly probes first-time-user dialogue quality, high-intensity bionic pressure points, continuity/naturalness/capability honesty/mechanism leakage, and persists only operational eval evidence while the bionic capsule exposes observational `bionic_state`
 - Post-Stage39 cache diagnostics: exact packet-cache reuse is confirmed live; cache-class homeostasis deficits now require enough packet-cache observations and are rebased from live cache stats instead of stale self-model metadata.
 - Post-Stage39 provider-response cache repair: stateless text API providers (`responses`, `openai_compatible`, `deepseek`) now use a bounded QueueStore cache for exact repeated prompts; cache hits are visible as `status=cache_hit` with zero new token cost.
 - Post-Stage39 self-dialogue Turing repair: internal CLI probes now guard trace-continuity labels, `revision` vs `vision` marker drift, visible-context questions, exact-memory/image boundaries, non-executable action demotion, theatrical provider wording, and action-market reason leakage before user-facing text. Verified with offline self-dialogue, cached DeepSeek provider probe, full tests, `accept-stage39`, public-release hygiene, and `git diff --check`.
 - Stage40 brain harness: internal CLI/API `brain-run` records operational context bundles, phase traces, action-market tool gates, verification evidence, and agent eval scorecards. It does not start WeChat, mutate self-memory, or allow repo/runtime writes by default.
 - Stage41 engineering agent: internal CLI/API `engineering-run` executes read/search/status/test/write tool loops through explicit mutation gates. Repo writes require `--allow-repo-write`; private/runtime paths remain blocked; WeChat and self-memory stay untouched.
-- Stage42 user simulation: internal CLI/API `run-bionic-user-sim` executes isolated `novice_intro` and dynamic `free_dialogue` benchmarks. It writes only `agent_eval_runs`, not Mind Graph self-memory, archive memory, or ordinary bionic traces.
+- Stage42 user simulation: internal CLI/API `run-bionic-user-sim` executes isolated `novice_intro`, dynamic `free_dialogue`, and high-intensity bionic pressure benchmarks. It writes only `agent_eval_runs`, not Mind Graph self-memory, archive memory, or ordinary bionic traces.
+- Stage42 bionic structure: every bionic capsule exposes `bionic_state` as an observational phase with bionic-subject positioning, action-market authority, consciousness-field summary, somatic proxy, active intent, uncertainty, continuity pressure, and boundary conditions. It is not a second brain and does not grant runtime authority.
 - Stage42 manual free-dialogue review on `2026-05-10` fixed mechanical fallback phrasing in Chinese: action-market reason leakage, `We were at We...` continuity duplication, broad visual-boundary triggers, and English fallback on Chinese continuation turns. A provider-backed eight-turn probe timed out at `180s`, so long provider-dialogue probes need explicit timeout/cache hardening before being used as acceptance authority.
 - The next planned arc is:
   - Stage43+: explicit re-plan for broader provider/API compatibility, richer agent eval suites, replay-backed facade slimming, multimodal user-sim suites, or operator-approved live transport hardening
@@ -342,7 +343,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host accept-stage41 --thread-key cli:TestUser --chat-name TestUser --channel cli`
 - Stage42 bionic user-simulation performance:
   - `python3 -m holo_host run-bionic-user-sim --thread-key cli:TestUser --chat-name TestUser --channel cli --offline`
-  - `python3 -m holo_host run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 8 --offline`
+  - `python3 -m holo_host run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 12 --offline`
   - `python3 -m holo_host show-bionic-user-sim-scorecard --suite novice_intro`
   - `python3 -m holo_host show-bionic-user-sim-scorecard --suite free_dialogue`
 - Stage42 bionic user-simulation acceptance:
@@ -557,6 +558,9 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `pytest -q` passed with `343` tests on `2026-05-10` after Stage42 free-dialogue repair
   - `python scripts/check_public_release_hygiene.py` passed on `2026-05-10`
   - `git diff --check` reported no whitespace errors on `2026-05-10`
+  - `python -m holo_host --config .holo_host.toml run-bionic-user-sim --thread-key cli:FreeUser --chat-name FreeUser --channel cli --scenario free_dialogue --turns 12 --offline` passed on `2026-05-10` with `issue_count=0` and no WeChat transport start after bionic-state hardening
+  - `python -m holo_host --config .holo_host.toml accept-stage42 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-10` with `bionic_state_visible=true`
+  - `pytest -q` passed with `346` tests on `2026-05-10` after bionic-state hardening
   - Stage29 through Stage41 are offline/internal bionic-kernel/provider/runtime-readiness/inquiry-quality/capability-honesty/visual-provider/bionic-Turing/brain-harness/engineering-agent milestones; run the local verification commands in the Stage41 handoff before claiming current green status
 
 ## Invariants

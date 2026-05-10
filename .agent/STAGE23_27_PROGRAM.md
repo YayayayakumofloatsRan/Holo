@@ -123,11 +123,13 @@
   - `engineering-run`, `engineering-trace`, `show-engineering-agent-metrics`, and `accept-stage41` are available without starting WeChat or mutating self-memory
   - `pytest -q` passed with `337` tests, `accept-stage41` passed, public-release hygiene passed, and `git diff --check` reported no whitespace errors
 - Stage42 exit state on `2026-05-10`:
-  - `BionicUserSimulationHarness` runs an isolated novice-user dialogue probe over the bionic kernel
+  - `BionicUserSimulationHarness` runs isolated novice-user and high-intensity free-dialogue probes over the bionic kernel
   - scorecards cover novice comprehension, continuity, capability honesty, question quality, mechanism leakage, naturalness, repetition, and latency
+  - bionic capsules expose observational `bionic_state` with bionic-subject positioning, action-market authority, consciousness-field summary, somatic proxy, active intent, uncertainty, continuity pressure, and boundary conditions
   - Stage42 stores only operational `agent_eval_runs` with stage `stage42-bionic-user-sim-performance`
   - `run-bionic-user-sim`, `show-bionic-user-sim-scorecard`, and `accept-stage42` are available without starting WeChat, mutating self-memory, or recording ordinary bionic traces
-  - `pytest -q` passed with `340` tests, `accept-stage42` passed, public-release hygiene passed, and `git diff --check` reported no whitespace errors
+  - Stage42 bionic-state hardening exposes top-level `bionic_state`, defaults `free_dialogue` to 12 turns, and makes `accept-stage42` check `bionic_state_visible`
+  - `pytest -q` passed with `346` tests, `accept-stage42` passed with `bionic_state_visible=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -315,9 +317,9 @@
 ### Stage42: Bionic User-Simulation Performance
 - `Status`: implemented on `2026-05-10`
 - `Goal`: isolate the first-time-user Holo dialogue test as a repeatable performance benchmark for bionic quality
-- `Scope`: add `BionicUserSimulationHarness`, simulation-local continuity, Stage42 CLI/API surfaces, operational `agent_eval_runs` scorecards, and `accept-stage42`
+- `Scope`: add `BionicUserSimulationHarness`, simulation-local continuity, high-intensity bionic free-dialogue probes, observational `bionic_state`, Stage42 CLI/API surfaces, operational `agent_eval_runs` scorecards, and `accept-stage42`
 - `Validation`: `pytest -q`; `accept-stage41`; `accept-stage42`; `tests/test_stage42_bionic_user_sim.py`
-- `Stop rule`: do not start WeChat, mutate self-memory, write archive memory, record ordinary bionic traces, or turn benchmark scores into runtime decision authority
+- `Stop rule`: do not start WeChat, mutate self-memory, write archive memory, record ordinary bionic traces, or turn benchmark scores or `bionic_state` into runtime decision authority
 - `Rollback rule`: keep Stage42 eval evidence operational-only and fall back to Stage41 engineering-agent surfaces if simulation isolation regresses
 
 ## Validation Matrix

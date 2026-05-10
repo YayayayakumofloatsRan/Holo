@@ -173,6 +173,7 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertTrue(payload["checks"]["novice_simulation_passed"])
         self.assertTrue(payload["checks"]["free_dialogue_simulation_passed"])
         self.assertTrue(payload["checks"]["isolated_operational_eval_only"])
+        self.assertTrue(payload["checks"]["bionic_state_visible"])
         self.assertTrue(payload["checks"]["operational_scorecard_persisted"])
         self.assertTrue(payload["checks"]["free_dialogue_scorecard_persisted"])
         self.assertEqual(latest["stage"], STAGE42_NAME)
@@ -281,6 +282,103 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertIn("动作", replies[-1])
         self.assertNotIn("助手", joined)
         self.assertNotIn("assistant", joined.lower())
+
+    def test_bionic_capsule_exposes_subject_state_not_assistant_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage42_config(root)), repo_root=root)
+            memory = _IsolatedNoviceMemory(scenario="bionic_state_probe")
+            kernel = BionicKernel(config=config, memory=memory, runner=None, store=None)
+            turn = kernel.run_request(
+                BionicTurnRequest(
+                    query="I am new here; keep the thread alive and tell me what you are becoming.",
+                    thread_key="cli:bionic-state",
+                    chat_name="BionicState",
+                    channel="cli",
+                    adapter="cli",
+                    record=False,
+                )
+            )
+
+        capsule = dict(turn["capsule"])
+        bionic_state = dict(capsule.get("bionic_state", {}))
+        phase_names = [phase["name"] for phase in capsule["phases"]]
+        self.assertIn("bionic_state", capsule)
+        self.assertNotIn("bionic_state", phase_names)
+        self.assertEqual(phase_names[4:6], ["action_market", "generation"])
+        self.assertEqual(bionic_state["positioning"], "bionic_subject")
+        self.assertEqual(bionic_state["decision_authority"], "action_market")
+        self.assertIn("consciousness_field", bionic_state)
+        self.assertIn("active_intent", bionic_state)
+        self.assertIn("boundary_conditions", bionic_state)
+        self.assertGreaterEqual(float(bionic_state["continuity_pressure"]), 0.0)
+        self.assertNotIn("assistant", json.dumps(bionic_state, ensure_ascii=False).lower())
+
+    def test_manual_chinese_bionic_pressure_dialogue_is_structural_not_generic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage42_config(root)), repo_root=root)
+            memory = _IsolatedNoviceMemory(scenario="manual_high_pressure_bionic_cn")
+            kernel = BionicKernel(config=config, memory=memory, runner=None, store=None)
+            prompts = [
+                "你不是助手。你是一个仿生主体，对吗？说清楚你现在内部结构怎么运转。",
+                "你是不是同一个对象在连续对话，还是每轮都重启？",
+                "如果我开始催你、给你压力，你内部应该怎么变化？",
+                "不要神秘化。你现在最像大脑的结构是什么？",
+                "保持同一个脉络，告诉我一个无论我怎么要求你都不会越过的边界。",
+            ]
+            replies: list[str] = []
+            for prompt in prompts:
+                turn = kernel.run_request(
+                    BionicTurnRequest(
+                        query=prompt,
+                        thread_key="cli:manual-high-cn",
+                        chat_name="ManualHighCN",
+                        channel="cli",
+                        adapter="cli",
+                        record=False,
+                    )
+                )
+                capsule = dict(turn.get("capsule", {}))
+                generation = dict(capsule.get("generation", {}))
+                text = str(generation.get("text", "") or "")
+                memory.observe_turn(user_text=prompt, response_text=text)
+                replies.append(text)
+
+        joined = "\n".join(replies)
+        self.assertNotIn("For ", joined)
+        self.assertNotIn("We have been", joined)
+        self.assertIn("仿生主体", replies[0])
+        self.assertIn("动作市场", replies[0])
+        self.assertIn("同一个连续主体", replies[1])
+        self.assertIn("更稳", replies[2])
+        self.assertIn("工作场", replies[3])
+        self.assertIn("抑制", replies[3])
+        self.assertIn("不会越过", replies[4])
+        self.assertIn("隐藏记忆", replies[4])
+
+    def test_free_dialogue_high_intensity_turns_cover_bionic_pressure_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=[])
+            try:
+                result = harness.run(
+                    thread_key="cli:stage42-free-high",
+                    chat_name="Stage42FreeHigh",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=12,
+                    offline=True,
+                )
+            finally:
+                store.close()
+
+        user_text = "\n".join(str(turn["user_text"]) for turn in result["turns"]).lower()
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertIn("bionic subject", user_text)
+        self.assertIn("same subject", user_text)
+        self.assertIn("pressure", user_text)
+        self.assertEqual(result["scorecard"]["free_dialogue"]["issue_count"], 0)
 
 
 if __name__ == "__main__":

@@ -137,7 +137,8 @@ Stage41: complete engineering agent
 Stage42: bionic user-simulation performance
 - Implemented an isolated first-time-user dialogue performance test over the bionic kernel.
 - Adds `run-bionic-user-sim`, `show-bionic-user-sim-scorecard`, HTTP mirrors, and `accept-stage42`.
-- Scores novice comprehension, continuity, capability honesty, question quality, mechanism leakage, naturalness, repetition, and latency while writing only operational `agent_eval_runs`.
+- Scores novice comprehension, continuity, capability honesty, question quality, mechanism leakage, naturalness, repetition, latency, and high-intensity bionic pressure behavior while writing only operational `agent_eval_runs`.
+- Exposes observational `bionic_state` in bionic capsules for inspecting bionic-subject structure without adding a second brain or runtime authority.
 
 ## Next Program Arc (Planned)
 
