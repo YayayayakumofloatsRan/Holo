@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from .common import json_dumps
 from .config import HostConfig, ProcessorLaneConfig, TaskRoutingConfig
 from .models import CodexResult, ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
 
@@ -768,9 +770,12 @@ class DeepSeekProvider(ProcessorProvider):
 
 
 class CodexRunner:
-    def __init__(self, config: HostConfig, *, usage_recorder: Any | None = None):
+    _RESPONSE_CACHE_PROVIDERS = {"responses", "openai_compatible", "deepseek"}
+
+    def __init__(self, config: HostConfig, *, usage_recorder: Any | None = None, response_cache_store: Any | None = None):
         self.config = config
         self.usage_recorder = usage_recorder
+        self.response_cache_store = response_cache_store
         self._providers: dict[str, ProcessorProvider] = {
             "codex_cli": CodexCliProvider(),
             "responses": ResponsesProvider(),
@@ -822,6 +827,7 @@ class CodexRunner:
             "active_backend_alias": self.config.runtime.processor_backend,
             "providers": providers,
             "lanes": lanes,
+            "response_cache": self.response_cache_stats(),
         }
 
     def provider_contracts(self) -> dict[str, Any]:
@@ -1045,6 +1051,176 @@ class CodexRunner:
             chain.append("codex_cli")
         return chain
 
+    def response_cache_stats(self) -> dict[str, Any]:
+        enabled = bool(getattr(self.config.processor_fabric, "response_cache_enabled", True))
+        if not enabled or not hasattr(self.response_cache_store, "processor_response_cache_stats"):
+            return {
+                "enabled": enabled,
+                "available": False,
+                "entries": 0,
+                "hits": 0,
+                "misses": 0,
+                "hit_ratio": 0.0,
+            }
+        try:
+            stats = dict(self.response_cache_store.processor_response_cache_stats())
+        except Exception:
+            return {
+                "enabled": enabled,
+                "available": False,
+                "entries": 0,
+                "hits": 0,
+                "misses": 0,
+                "hit_ratio": 0.0,
+            }
+        stats.setdefault("entries", 0)
+        stats.setdefault("hits", 0)
+        stats.setdefault("misses", 0)
+        stats.setdefault("hit_ratio", 0.0)
+        stats["enabled"] = enabled
+        stats["available"] = True
+        return stats
+
+    def _response_cache_enabled_for(
+        self,
+        request: ProcessorTaskRequest,
+        *,
+        provider_name: str,
+    ) -> bool:
+        if not bool(getattr(self.config.processor_fabric, "response_cache_enabled", True)):
+            return False
+        if provider_name not in self._RESPONSE_CACHE_PROVIDERS:
+            return False
+        if not hasattr(self.response_cache_store, "get_processor_response_cache"):
+            return False
+        if not hasattr(self.response_cache_store, "put_processor_response_cache"):
+            return False
+        if bool(request.metadata.get("cache_bypass", False)):
+            return False
+        if bool(request.allow_memory_writeback):
+            return False
+        if request.image_paths:
+            return False
+        if str(request.workspace_mode or "live_readonly").strip() != "live_readonly":
+            return False
+        return True
+
+    def _response_cache_key(
+        self,
+        request: ProcessorTaskRequest,
+        *,
+        provider_name: str,
+        lane_name: str,
+        lane_config: ProcessorLaneConfig,
+        spec: dict[str, Any],
+    ) -> str:
+        model = str(request.model_override or lane_config.model or "").strip()
+        reasoning_effort = str(
+            request.reasoning_effort_override
+            or lane_config.reasoning_effort
+            or spec.get("default_reasoning_effort", "")
+        ).strip()
+        payload = {
+            "version": 1,
+            "provider": provider_name,
+            "task_type": request.task_type,
+            "lane": lane_name,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "output_schema": request.output_schema,
+            "max_output_tokens": request.max_output_tokens or lane_config.max_output_tokens or 0,
+            "allowed_data_layers": list(request.allowed_data_layers),
+            "workspace_mode": request.workspace_mode,
+            "operator_scope": request.operator_scope,
+            "prompt": request.prompt,
+        }
+        return hashlib.sha256(json_dumps(payload).encode("utf-8")).hexdigest()
+
+    def _cached_result_from_payload(self, *, cached: dict[str, Any], cache_key: str) -> ProcessorTaskResult:
+        payload = dict(cached.get("payload", {})) if isinstance(cached.get("payload", {}), dict) else {}
+        metadata = dict(payload.get("metadata", {})) if isinstance(payload.get("metadata", {}), dict) else {}
+        original_usage = _coerce_usage_payload(metadata.get("usage"))
+        metadata["cached_usage"] = original_usage
+        metadata["usage"] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated": True}
+        metadata["duration_ms"] = 0
+        metadata["processor_usage_status"] = "cache_hit"
+        metadata["cache"] = {
+            "hit": True,
+            "source": "processor_response_cache",
+            "cache_key": cache_key,
+            "cached_at": str(cached.get("created_at", "") or ""),
+            "hit_count": int(cached.get("hit_count", 0) or 0),
+        }
+        command = payload.get("command", [])
+        return ProcessorTaskResult(
+            task_type=str(payload.get("task_type", "") or "reply"),
+            text=str(payload.get("text", "") or ""),
+            session_id=str(payload.get("session_id", "") or ""),
+            returncode=int(payload.get("returncode", 0) or 0),
+            stdout=str(payload.get("stdout", "") or ""),
+            stderr=str(payload.get("stderr", "") or ""),
+            command=list(command) if isinstance(command, list) else [],
+            output_schema=str(payload.get("output_schema", "") or "plain_text"),
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _cacheable_payload_from_result(result: ProcessorTaskResult) -> dict[str, Any]:
+        metadata = dict(result.metadata or {})
+        metadata.pop("cache", None)
+        metadata.pop("processor_usage_status", None)
+        return {
+            "task_type": result.task_type,
+            "text": result.text,
+            "session_id": result.session_id,
+            "returncode": int(result.returncode or 0),
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "command": list(result.command),
+            "output_schema": result.output_schema,
+            "metadata": metadata,
+        }
+
+    def _store_response_cache(
+        self,
+        *,
+        cache_key: str,
+        result: ProcessorTaskResult,
+        provider_name: str,
+        request: ProcessorTaskRequest,
+        lane_name: str,
+        lane_config: ProcessorLaneConfig,
+        spec: dict[str, Any],
+    ) -> None:
+        if int(result.returncode or 0) != 0 or not str(result.text or "").strip():
+            return
+        if not hasattr(self.response_cache_store, "put_processor_response_cache"):
+            return
+        try:
+            self.response_cache_store.put_processor_response_cache(
+                cache_key=cache_key,
+                payload=self._cacheable_payload_from_result(result),
+                provider=provider_name,
+                task_type=request.task_type,
+                lane=lane_name,
+                model=str(result.metadata.get("model", request.model_override or lane_config.model) or ""),
+                reasoning_effort=str(
+                    result.metadata.get(
+                        "reasoning_effort",
+                        request.reasoning_effort_override
+                        or lane_config.reasoning_effort
+                        or str(spec.get("default_reasoning_effort", "")),
+                    )
+                    or ""
+                ),
+                ttl_seconds=int(getattr(self.config.processor_fabric, "response_cache_ttl_seconds", 3600) or 3600),
+                max_entries=int(getattr(self.config.processor_fabric, "response_cache_max_entries", 512) or 512),
+                miss_count=1,
+                metadata={"output_schema": result.output_schema, "budget_tag": result.metadata.get("budget_tag", "")},
+            )
+        except Exception:
+            return
+
     def _record_usage(self, request: ProcessorTaskRequest, result: ProcessorTaskResult) -> None:
         if not callable(self.usage_recorder):
             return
@@ -1057,6 +1233,9 @@ class CodexRunner:
         duration_ms = int(metadata.get("duration_ms", 0) or 0)
         thread_key = str(request.metadata.get("thread_key", "") or request.metadata.get("chat_name", "") or "").strip()
         event_id = str(request.metadata.get("event_id", "") or "").strip()
+        status = str(metadata.get("processor_usage_status", "") or "").strip()
+        if not status:
+            status = "ok" if int(result.returncode or 0) == 0 else "error"
         try:
             self.usage_recorder(
                 ProcessorUsageRecord(
@@ -1072,11 +1251,13 @@ class CodexRunner:
                     completion_tokens=int(usage.get("completion_tokens", 0) or 0),
                     total_tokens=int(usage.get("total_tokens", 0) or 0),
                     estimated=bool(usage.get("estimated", True)),
-                    status="ok" if int(result.returncode or 0) == 0 else "error",
+                    status=status,
                     metadata={
                         "budget_tag": metadata.get("budget_tag", request.budget_tag),
                         "output_schema": result.output_schema,
                         "fallback_provider": metadata.get("fallback_provider", ""),
+                        "cache": metadata.get("cache", {}),
+                        "cached_usage": metadata.get("cached_usage", {}),
                     },
                 )
             )
@@ -1157,6 +1338,35 @@ class CodexRunner:
             if not provider.supports_request(resolved_request):
                 last_error = f"{provider_name} does not support task request"
                 continue
+            cache_key = ""
+            if self._response_cache_enabled_for(resolved_request, provider_name=provider_name):
+                cache_key = self._response_cache_key(
+                    resolved_request,
+                    provider_name=provider_name,
+                    lane_name=lane_name,
+                    lane_config=lane_config,
+                    spec=spec,
+                )
+                try:
+                    cached = self.response_cache_store.get_processor_response_cache(cache_key)
+                except Exception:
+                    cached = None
+                if cached:
+                    result = self._cached_result_from_payload(cached=cached, cache_key=cache_key)
+                    metadata = dict(result.metadata or {})
+                    metadata.setdefault("lane", lane_name)
+                    metadata.setdefault("provider", provider_name)
+                    metadata.setdefault("model", resolved_request.model_override or lane_config.model)
+                    metadata.setdefault(
+                        "reasoning_effort",
+                        resolved_request.reasoning_effort_override
+                        or lane_config.reasoning_effort
+                        or str(spec.get("default_reasoning_effort", "")),
+                    )
+                    metadata.setdefault("budget_tag", resolved_request.budget_tag or rule.budget_tag or resolved_request.task_type)
+                    result.metadata = metadata
+                    self._record_usage(resolved_request, result)
+                    return result
             try:
                 result = provider.run_task(
                     self,
@@ -1179,7 +1389,23 @@ class CodexRunner:
             metadata.setdefault("budget_tag", resolved_request.budget_tag or rule.budget_tag or resolved_request.task_type)
             if index > 0:
                 metadata["fallback_provider"] = provider_name
+            if cache_key:
+                metadata["cache"] = {
+                    "hit": False,
+                    "source": "processor_response_cache",
+                    "cache_key": cache_key,
+                }
             result.metadata = metadata
+            if cache_key:
+                self._store_response_cache(
+                    cache_key=cache_key,
+                    result=result,
+                    provider_name=provider_name,
+                    request=resolved_request,
+                    lane_name=lane_name,
+                    lane_config=lane_config,
+                    spec=spec,
+                )
             self._record_usage(resolved_request, result)
             return result
         failed = ProcessorTaskResult(

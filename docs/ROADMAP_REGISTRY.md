@@ -129,9 +129,9 @@ Stage39: bionic Turing benchmark
 This planned arc starts after Stage39. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage40+ program replaces them.
 
 Provider/API compatibility breadth
-- Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, Stage34 visual-readiness gating, and Stage38 visual-provider bridging.
+- Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, Stage34 visual-readiness gating, Stage38 visual-provider bridging, and the post-Stage39 QueueStore-backed provider-response cache for stateless text API calls.
 - Future work should broaden API/provider compatibility through the processor fabric, not by adding raw hot-path provider calls.
-- Live visual-provider soak should be done before WeChat or live transport is restarted; Stage38 proves the internal CLI image bridge and provider metadata path.
+- Live visual-provider and provider-latency soak should be done before WeChat or live transport is restarted; Stage38 proves the internal CLI image bridge and provider metadata path, while the post-Stage39 cache repair makes exact repeated provider prompts inspectably cheap.
 
 Bionic workflow hardening
 - Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, Stage38 visual-provider grounding, and Stage39 bionic Turing scoring.

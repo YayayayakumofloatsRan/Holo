@@ -86,6 +86,9 @@ class ProcessorFabricConfig:
     deepseek_api_key_env: str = "DEEPSEEK_API_KEY"
     deepseek_model: str = "deepseek-v4-pro"
     deepseek_fast_model: str = "deepseek-v4-flash"
+    response_cache_enabled: bool = True
+    response_cache_ttl_seconds: int = 3600
+    response_cache_max_entries: int = 512
 
 
 # Backward-compatible alias for earlier imports and type hints.
@@ -597,6 +600,15 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         or "deepseek-v4-pro",
         deepseek_fast_model=str(processor_fabric_data.get("deepseek_fast_model", "deepseek-v4-flash")).strip()
         or "deepseek-v4-flash",
+        response_cache_enabled=bool(processor_fabric_data.get("response_cache_enabled", True)),
+        response_cache_ttl_seconds=max(
+            1,
+            int(processor_fabric_data.get("response_cache_ttl_seconds", 3600) or 3600),
+        ),
+        response_cache_max_entries=max(
+            1,
+            int(processor_fabric_data.get("response_cache_max_entries", 512) or 512),
+        ),
     )
 
     ensure_directory(runtime.state_dir)

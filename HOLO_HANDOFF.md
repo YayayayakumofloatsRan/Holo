@@ -95,7 +95,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - transports are eyes and hands
 - The current milestone tag is `stage39-bionic-turing-benchmark`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is post-Stage39 targeted debt repair: provider latency/provider-response caching, replay-backed facade slimming, replay-fixture breadth from concrete regressions, or operator-approved live WeChat hardening. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
+- Current focus is post-Stage39 targeted debt repair: provider latency soak evidence, replay-backed facade slimming, replay-fixture breadth from concrete regressions, or operator-approved live WeChat hardening. Holo remains internal-only unless a separate operator-approved live transport plan says otherwise.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -120,8 +120,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage38: explicit bionic CLI image input now routes through `image_understand`, stores image-capable provider metadata in visual memory, and grounds text-only generation in visual summaries without claiming direct raw image access
   - Stage39: internal bionic Turing scoring now gates CLI continuity, naturalness, mechanism-leakage prevention, question bounds, and context grounding
 - Post-Stage39 cache diagnostics: exact packet-cache reuse is confirmed live; cache-class homeostasis deficits now require enough packet-cache observations and are rebased from live cache stats instead of stale self-model metadata.
+- Post-Stage39 provider-response cache repair: stateless text API providers (`responses`, `openai_compatible`, `deepseek`) now use a bounded QueueStore cache for exact repeated prompts; cache hits are visible as `status=cache_hit` with zero new token cost.
 - The next planned arc is:
-  - Stage40+: explicit re-plan for provider latency/provider-response caching, replay-backed facade slimming, replay-fixture breadth, or operator-approved live transport hardening
+  - Stage40+: explicit re-plan for provider latency soak evidence, replay-backed facade slimming, replay-fixture breadth, or operator-approved live transport hardening
   - Online long-horizon canary remains deferred beyond Stage28 and must stay replay-first, whitelist-only, rollback-safe, and explicitly re-planned
   - Artifact/tool/outcome progress coupling remains deferred and should not be silently folded into Stage28 or a future canary
   - Bounded subject programs remain deferred beyond the current Stage28 milestone

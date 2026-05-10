@@ -126,14 +126,36 @@ If provider does not:
 - estimate usage
 - mark `estimated=true`
 
-## 6. What To Inspect Before Changing Routing
+## 6. Response Cache Policy
+
+Stateless text API providers may use the QueueStore-backed `processor_response_cache`:
+- enabled by `processor_fabric.response_cache_enabled`
+- default TTL: `3600` seconds
+- default bound: `512` entries
+- applies only to `responses`, `openai_compatible`, and `deepseek`
+
+The cache must not apply to:
+- `codex_cli`
+- image tasks
+- memory-writeback tasks
+- `shadow_write` or operator execution tasks
+- requests with `metadata.cache_bypass=true`
+
+Cache hits must still write a `processor_usage_ledger` row with:
+- `status=cache_hit`
+- `total_tokens=0`
+- original usage kept in ledger metadata as `cached_usage`
+
+This keeps repeated diagnostics and exact prompt reruns cheap without hiding whether a response was generated live or served from cache.
+
+## 7. What To Inspect Before Changing Routing
 
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host show-usage-ledger --limit 100`
 - `python3 -m holo_host accept-processor-fabric`
 
-## 7. Forbidden Routing Regressions
+## 8. Forbidden Routing Regressions
 
 - do not route every task to one giant `codex exec` bucket
 - do not let low-density loops drift onto `kernel_xhigh`

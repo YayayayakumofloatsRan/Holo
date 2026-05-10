@@ -186,7 +186,11 @@ class HoloDaemon:
         self.store = store or QueueStore(config.runtime.db_path)
         self.store.initialize()
         self.gateway = gateway or build_mail_gateway(config)
-        self.runner = runner or CodexRunner(config, usage_recorder=self.store.record_processor_usage)
+        self.runner = runner or CodexRunner(
+            config,
+            usage_recorder=self.store.record_processor_usage,
+            response_cache_store=self.store,
+        )
         self.memory = memory or MemoryBridge(
             config.runtime.repo_root,
             top_k=config.memory.prompt_top_k,

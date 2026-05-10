@@ -162,6 +162,29 @@ class QueueStore:
             CREATE INDEX IF NOT EXISTS idx_processor_usage_task ON processor_usage_ledger(task_type, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_processor_usage_lane ON processor_usage_ledger(lane, created_at DESC);
 
+            CREATE TABLE IF NOT EXISTS processor_response_cache (
+                id INTEGER PRIMARY KEY,
+                cache_key TEXT NOT NULL UNIQUE,
+                provider TEXT NOT NULL DEFAULT '',
+                task_type TEXT NOT NULL DEFAULT '',
+                lane TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                reasoning_effort TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                hit_count INTEGER NOT NULL DEFAULT 0,
+                miss_count INTEGER NOT NULL DEFAULT 0,
+                last_hit_at TEXT NOT NULL DEFAULT '',
+                expires_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_processor_response_cache_expires
+            ON processor_response_cache(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_processor_response_cache_provider
+            ON processor_response_cache(provider, task_type, updated_at DESC);
+
             CREATE TABLE IF NOT EXISTS online_canary_traces (
                 id INTEGER PRIMARY KEY,
                 event_row_id INTEGER NOT NULL DEFAULT 0,
@@ -1045,6 +1068,144 @@ class QueueStore:
             LIMIT ?
             """,
             tuple(args),
+        )
+
+    @_synchronized
+    def put_processor_response_cache(
+        self,
+        *,
+        cache_key: str,
+        payload: dict[str, Any],
+        provider: str,
+        task_type: str,
+        lane: str,
+        model: str,
+        reasoning_effort: str,
+        ttl_seconds: int,
+        metadata: dict[str, Any] | None = None,
+        miss_count: int = 0,
+        max_entries: int | None = None,
+    ) -> dict[str, Any]:
+        normalized_key = str(cache_key or "").strip()
+        if not normalized_key:
+            return {}
+        now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+        now = now_dt.isoformat().replace("+00:00", "Z")
+        expires_at = (now_dt + timedelta(seconds=max(1, int(ttl_seconds or 1)))).isoformat().replace("+00:00", "Z")
+        self.conn.execute(
+            """
+            INSERT INTO processor_response_cache(
+                cache_key, provider, task_type, lane, model, reasoning_effort,
+                payload_json, metadata_json, miss_count, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                provider = excluded.provider,
+                task_type = excluded.task_type,
+                lane = excluded.lane,
+                model = excluded.model,
+                reasoning_effort = excluded.reasoning_effort,
+                payload_json = excluded.payload_json,
+                metadata_json = excluded.metadata_json,
+                miss_count = processor_response_cache.miss_count + excluded.miss_count,
+                expires_at = excluded.expires_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_key,
+                str(provider or "").strip(),
+                str(task_type or "").strip(),
+                str(lane or "").strip(),
+                str(model or "").strip(),
+                str(reasoning_effort or "").strip(),
+                json_dumps(dict(payload or {})),
+                json_dumps(dict(metadata or {})),
+                max(0, int(miss_count or 0)),
+                expires_at,
+                now,
+                now,
+            ),
+        )
+        if max_entries is not None:
+            self._prune_processor_response_cache_locked(max_entries=max(1, int(max_entries or 1)))
+        self.conn.commit()
+        row = self._fetchone("SELECT * FROM processor_response_cache WHERE cache_key = ?", (normalized_key,)) or {}
+        return self._decode_processor_response_cache_row(row)
+
+    @_synchronized
+    def get_processor_response_cache(self, cache_key: str) -> dict[str, Any] | None:
+        normalized_key = str(cache_key or "").strip()
+        if not normalized_key:
+            return None
+        now = utc_now()
+        row = self._fetchone("SELECT * FROM processor_response_cache WHERE cache_key = ?", (normalized_key,))
+        if not row:
+            return None
+        expires_at = str(row.get("expires_at", "") or "").strip()
+        if expires_at and expires_at <= now:
+            self.conn.execute("DELETE FROM processor_response_cache WHERE cache_key = ?", (normalized_key,))
+            self.conn.commit()
+            return None
+        self.conn.execute(
+            """
+            UPDATE processor_response_cache
+            SET hit_count = hit_count + 1,
+                last_hit_at = ?,
+                updated_at = ?
+            WHERE cache_key = ?
+            """,
+            (now, now, normalized_key),
+        )
+        self.conn.commit()
+        refreshed = self._fetchone("SELECT * FROM processor_response_cache WHERE cache_key = ?", (normalized_key,)) or row
+        return self._decode_processor_response_cache_row(refreshed)
+
+    @_synchronized
+    def processor_response_cache_stats(self) -> dict[str, Any]:
+        now = utc_now()
+        self.conn.execute(
+            "DELETE FROM processor_response_cache WHERE expires_at != '' AND expires_at <= ?",
+            (now,),
+        )
+        self.conn.commit()
+        row = self._fetchone(
+            """
+            SELECT
+                COUNT(*) AS entries,
+                COALESCE(SUM(hit_count), 0) AS hits,
+                COALESCE(SUM(miss_count), 0) AS misses
+            FROM processor_response_cache
+            """,
+            (),
+        ) or {}
+        hits = int(row.get("hits", 0) or 0)
+        misses = int(row.get("misses", 0) or 0)
+        samples = hits + misses
+        return {
+            "entries": int(row.get("entries", 0) or 0),
+            "hits": hits,
+            "misses": misses,
+            "hit_ratio": round(hits / samples, 4) if samples else 0.0,
+        }
+
+    def _decode_processor_response_cache_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        if not row:
+            return {}
+        payload = dict(row)
+        payload["payload"] = self._decode_json_dict(payload.pop("payload_json", "{}"))
+        payload["metadata"] = self._decode_json_dict(payload.pop("metadata_json", "{}"))
+        return payload
+
+    def _prune_processor_response_cache_locked(self, *, max_entries: int) -> None:
+        self.conn.execute(
+            """
+            DELETE FROM processor_response_cache
+            WHERE id NOT IN (
+                SELECT id FROM processor_response_cache
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+            )
+            """,
+            (max(1, int(max_entries)),),
         )
 
     @staticmethod

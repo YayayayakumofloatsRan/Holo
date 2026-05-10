@@ -63,8 +63,10 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is explicit Stage40+ planning for provider latency/cache soak, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening; Holo remains WeChat-offline until live transport validation is explicitly approved.
+- The next implementation focus is explicit Stage40+ planning for provider latency soak evidence, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening; Holo remains WeChat-offline until live transport validation is explicitly approved.
 - Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
+- Post-Stage39 provider-response caching is implemented in the processor fabric: `responses`, `openai_compatible`, and `deepseek` can reuse exact stateless text API responses through QueueStore, while `codex_cli`, image tasks, memory-writeback tasks, and shadow-write/operator tasks bypass the cache.
+- Verified post-Stage39 provider-response cache repair on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 
@@ -84,7 +86,7 @@
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage40+ targeted debt repair for provider latency/provider-response caching, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening
+- `Active implementation priority`: Stage40+ targeted debt repair for provider latency soak evidence, replay-backed facade slimming, replay-fixture breadth, or operator-approved live WeChat hardening
 - `Current live runtime boundary`: Stage39 is implemented in code as an internal bionic Turing benchmark; no live transport, transport authority change, self-memory mutation, or second decision layer was added
 
 ## Blocker Inventory

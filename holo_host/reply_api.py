@@ -495,7 +495,11 @@ class HoloReplyService:
         self.config = config
         self.store = store or QueueStore(config.runtime.db_path)
         self.store.initialize()
-        self.runner = runner or CodexRunner(config, usage_recorder=self.store.record_processor_usage)
+        self.runner = runner or CodexRunner(
+            config,
+            usage_recorder=self.store.record_processor_usage,
+            response_cache_store=self.store,
+        )
         self.processor = build_processor(config, self.runner)
         self.memory = memory or MemoryBridge(
             config.runtime.repo_root,

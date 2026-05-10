@@ -30,6 +30,9 @@ fast_model = "gpt-5.4-mini"
 [processor_fabric]
 openai_compatible_base_url = "http://localhost:1234/v1"
 openai_compatible_api_key_env = "TEST_COMPAT_KEY"
+response_cache_enabled = true
+response_cache_ttl_seconds = 120
+response_cache_max_entries = 12
 
 [provider_backends.micro_fast]
 primary_provider = "openai_compatible"
@@ -52,6 +55,9 @@ high_conflict_actions = ["push_back"]
             config = load_config(str(config_path), repo_root=root)
 
             self.assertEqual(config.processor_fabric.openai_compatible_base_url, "http://localhost:1234/v1")
+            self.assertTrue(config.processor_fabric.response_cache_enabled)
+            self.assertEqual(config.processor_fabric.response_cache_ttl_seconds, 120)
+            self.assertEqual(config.processor_fabric.response_cache_max_entries, 12)
             self.assertEqual(config.processor_fabric.provider_backends["micro_fast"].primary_provider, "openai_compatible")
             self.assertEqual(config.processor_fabric.provider_backends["micro_fast"].max_output_tokens, 512)
             self.assertEqual(config.processor_fabric.processor_routing["reply"].lane, "kernel_xhigh")
@@ -118,6 +124,36 @@ class ProcessorUsageLedgerTests(unittest.TestCase):
                 self.assertEqual(rows[0]["provider"], "codex_cli")
                 self.assertEqual(rows[0]["total_tokens"], 125)
                 self.assertEqual(json.loads(rows[0]["metadata_json"])["budget_tag"], "chat_reply")
+            finally:
+                store.close()
+
+    def test_queue_store_round_trips_processor_response_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = QueueStore(Path(tmpdir) / "holo_host.sqlite3")
+            store.initialize()
+            try:
+                store.put_processor_response_cache(
+                    cache_key="cache-key-1",
+                    payload={
+                        "task_type": "reply",
+                        "text": "cached reply",
+                        "metadata": {"provider": "deepseek", "usage": {"total_tokens": 10}},
+                    },
+                    provider="deepseek",
+                    task_type="reply",
+                    lane="subject_main",
+                    model="deepseek-v4-pro",
+                    reasoning_effort="",
+                    ttl_seconds=3600,
+                )
+
+                cached = store.get_processor_response_cache("cache-key-1")
+                self.assertIsNotNone(cached)
+                self.assertEqual(cached["payload"]["text"], "cached reply")
+                self.assertEqual(cached["hit_count"], 1)
+                stats = store.processor_response_cache_stats()
+                self.assertEqual(stats["entries"], 1)
+                self.assertEqual(stats["hits"], 1)
             finally:
                 store.close()
 
@@ -213,3 +249,78 @@ deepseek_fast_model = "deepseek-v4-flash"
             self.assertEqual(result.metadata["capabilities"]["thinking_mode"], True)
             request = fake_urlopen.call_args.args[0]
             self.assertTrue(request.full_url.endswith("/chat/completions"))
+
+    def test_deepseek_provider_reuses_cached_response_without_second_http_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_api_key_env = "TEST_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+response_cache_enabled = true
+response_cache_ttl_seconds = 3600
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            store = QueueStore(root / ".holo_runtime" / "holo_host.sqlite3")
+            store.initialize()
+            runner = CodexRunner(
+                config,
+                usage_recorder=store.record_processor_usage,
+                response_cache_store=store,
+            )
+
+            class _FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def read(self):
+                    return json.dumps(
+                        {
+                            "choices": [{"message": {"content": "cached agent reply"}}],
+                            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                        }
+                    ).encode("utf-8")
+
+            try:
+                request = ProcessorTaskRequest(
+                    task_type="reply",
+                    prompt="same expensive prompt",
+                    provider_hint="deepseek",
+                    metadata={"thread_key": "cli:CacheProbe"},
+                )
+                with patch.dict(os.environ, {"TEST_DEEPSEEK_KEY": "unit-key"}), patch(
+                    "holo_host.codex_runner.urlopen",
+                    return_value=_FakeResponse(),
+                ) as fake_urlopen:
+                    first = runner.run_task(request)
+                    second = runner.run_task(request)
+
+                self.assertEqual(first.text, "cached agent reply")
+                self.assertEqual(second.text, "cached agent reply")
+                self.assertEqual(fake_urlopen.call_count, 1)
+                self.assertFalse(first.metadata["cache"]["hit"])
+                self.assertTrue(second.metadata["cache"]["hit"])
+                self.assertEqual(second.metadata["cache"]["source"], "processor_response_cache")
+
+                rows = store.list_processor_usage(limit=5, provider="deepseek")
+                self.assertEqual([row["status"] for row in rows[:2]], ["cache_hit", "ok"])
+                self.assertEqual(rows[0]["total_tokens"], 0)
+                cache_stats = store.processor_response_cache_stats()
+                self.assertEqual(cache_stats["entries"], 1)
+                self.assertEqual(cache_stats["hits"], 1)
+                self.assertEqual(cache_stats["misses"], 1)
+            finally:
+                store.close()

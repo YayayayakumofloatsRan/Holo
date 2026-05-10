@@ -41,6 +41,9 @@ deepseek_base_url = "https://api.deepseek.com"
 deepseek_api_key_env = "DEEPSEEK_API_KEY"
 deepseek_model = "deepseek-v4-pro"
 deepseek_fast_model = "deepseek-v4-flash"
+response_cache_enabled = true
+response_cache_ttl_seconds = 3600
+response_cache_max_entries = 512
 
 [provider_backends.kernel_xhigh]
 primary_provider = "codex_cli"
