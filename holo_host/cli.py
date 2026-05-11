@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from .cli_parts import bionic as bionic_cli
 from .cli_parts import brain as brain_cli
 from .cli_parts import engineering as engineering_cli
+from .cli_parts import motivational as motivational_cli
 from .cli_parts import user_sim as user_sim_cli
 from .config import load_config
 from .daemon import build_daemon
@@ -8284,6 +8285,17 @@ def command_accept_stage42(config_path: str | None, *, thread_key: str, chat_nam
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_accept_stage43(config_path: str | None, *, thread_key: str, chat_name: str, channel: str) -> int:
+    payload, _transport = motivational_cli.accept_stage43_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_accept_stage33(config_path: str | None) -> int:
     payload, _transport = _accept_stage33_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9528,6 +9540,10 @@ def main(argv: list[str] | None = None) -> int:
     accept_stage42_parser.add_argument("--thread-key", default="cli:TestUser")
     accept_stage42_parser.add_argument("--chat-name", default="TestUser")
     accept_stage42_parser.add_argument("--channel", default="cli")
+    accept_stage43_parser = subparsers.add_parser("accept-stage43", help="Run the Stage-43 motivational dynamics field gate")
+    accept_stage43_parser.add_argument("--thread-key", default="cli:TestUser")
+    accept_stage43_parser.add_argument("--chat-name", default="TestUser")
+    accept_stage43_parser.add_argument("--channel", default="cli")
     subparsers.add_parser("accept-stage33", help="Run the Stage-33 provider API contract gate")
     subparsers.add_parser("accept-stage34", help="Run the Stage-34 debt registry and visual readiness gate")
     subparsers.add_parser("accept-stage35", help="Run the Stage-35 internal runtime readiness gate")
@@ -10578,6 +10594,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "accept-stage42":
         return command_accept_stage42(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+        )
+    if args.command == "accept-stage43":
+        return command_accept_stage43(
             args.config,
             thread_key=args.thread_key,
             chat_name=args.chat_name,

@@ -69,6 +69,7 @@ class BionicCapsule:
     adapter_contract: dict[str, Any] = field(default_factory=dict)
     subject_loop: dict[str, Any] = field(default_factory=dict)
     bionic_state: dict[str, Any] = field(default_factory=dict)
+    motivational_field: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -94,5 +95,6 @@ class BionicCapsule:
             "adapter_contract": dict(self.adapter_contract),
             "subject_loop": dict(self.subject_loop),
             "bionic_state": dict(self.bionic_state),
+            "motivational_field": dict(self.motivational_field),
             "created_at": self.created_at,
         }

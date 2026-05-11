@@ -3,7 +3,7 @@
 ## Program Goal
 - Turn Holo from a bounded continuous subject runtime into a more blackbox-like, long-horizon subject without violating the existing constitutional contracts.
 - Start with Stage23 contract repair so Stage22 surfaces, tests, and replay gates are trustworthy before any new long-horizon runtime behavior lands.
-- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage42 is now the current implemented isolated bionic user-simulation performance milestone; Stage43+ requires a fresh explicit program.
+- Use this document as the concrete execution spec for Stage23 through Stage27 plus post-Stage27 addenda. Stage43 is now the current implemented motivational-dynamics milestone; Stage44+ requires a fresh explicit program.
 
 ## Observed Stage22 Baseline
 - Observation date: `2026-04-11`.
@@ -130,6 +130,12 @@
   - `run-bionic-user-sim`, `show-bionic-user-sim-scorecard`, and `accept-stage42` are available without starting WeChat, mutating self-memory, or recording ordinary bionic traces
   - Stage42 bionic-state hardening exposes top-level `bionic_state`, defaults `free_dialogue` to 12 turns, and makes `accept-stage42` check `bionic_state_visible`
   - `pytest -q` passed with `346` tests, `accept-stage42` passed with `bionic_state_visible=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors
+- Stage43 exit state on `2026-05-11`:
+  - bionic capsules expose top-level `motivational_field` with bounded arousal, valence, uncertainty, curiosity, attachment pressure, fatigue, identity coherence, unfinished-loop pressure, diffuse attention, attention center, and replay-stable bounded stochasticity
+  - motivational dynamics are computed after working-field assembly and before action-market selection
+  - action candidates may receive inspectable `motivation_delta` and `motivation_rationale`, but motivational dynamics cannot directly select actions, write self-memory, start transport, or become a second decision layer
+  - `accept-stage43` is available through CLI, reply service, and HTTP `/accept-stage43`
+  - `pytest -q` passed with `351` tests, `accept-stage43` passed with replay-stable bounded motivation checks, public-release hygiene passed, and `git diff --check` reported no whitespace errors
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
@@ -157,6 +163,7 @@
 - Stage40 brain-harness work is an internal CLI/API agent harness only; it must not start WeChat, bypass action-market tool gates, hot-edit the live repo by default, write self-memory, or treat model output as direct tool authority.
 - Stage41 engineering-agent work is an internal CLI/API engineering loop only; it must not start WeChat, bypass action-market tool gates, write private/runtime paths, write self-memory, or grant repo-write authority unless the operator explicitly supplies it.
 - Stage42 bionic user-simulation work is an isolated operational performance test only; it must not start WeChat, mutate self-memory, write archive memory, record ordinary bionic traces, or become runtime decision authority.
+- Stage43 motivational-dynamics work is an internal bionic control-field surface only; it must not become action authority, self-memory, transport authority, hidden planner state, or unbounded stochastic behavior.
 - Public releases must keep deployment-specific subject profile files and live memory out of Git. Only `.example` templates and generic release docs are tracked.
 - Treat any mismatch between docs, acceptance gates, and observed runtime or test reality as a blocker.
 
@@ -322,6 +329,14 @@
 - `Stop rule`: do not start WeChat, mutate self-memory, write archive memory, record ordinary bionic traces, or turn benchmark scores or `bionic_state` into runtime decision authority
 - `Rollback rule`: keep Stage42 eval evidence operational-only and fall back to Stage41 engineering-agent surfaces if simulation isolation regresses
 
+### Stage43: Motivational Dynamics Field
+- `Status`: implemented on `2026-05-11`
+- `Goal`: model internal motivational pressure as bounded, inspectable control variables over the existing bionic kernel instead of fixed conversational rules
+- `Scope`: compute replay-stable arousal, valence, uncertainty, curiosity, attachment pressure, fatigue, identity coherence, unfinished-loop pressure, diffuse attention, attention center, and bounded stochasticity; expose `motivational_field`; add bounded action-market deltas and `accept-stage43`
+- `Validation`: `pytest -q`; `accept-stage42`; `accept-stage43`; `tests/test_stage43_motivational_dynamics.py`
+- `Stop rule`: do not let motivational dynamics become action authority, self-memory mutation, live transport, hidden planner state, or unbounded randomness
+- `Rollback rule`: ignore motivation overlays and fall back to Stage42 bionic-state surfaces if replay stability, boundedness, or action-market-first authority regresses
+
 ## Validation Matrix
 | Stage | Baseline surfaces that must stay green | New surfaces that stage must add and turn green | Exit condition |
 | --- | --- | --- | --- |
@@ -345,6 +360,7 @@
 | `Stage40` | All Stage39 bionic Turing and provider-fabric surfaces | `accept-stage40`; `brain-run`; `brain-trace`; `show-context-bundle`; `show-brain-metrics`; `run-agent-eval`; `tests/test_stage40_context_compiler.py`; `tests/test_stage40_bionic_brain_harness.py`; `tests/test_stage40_deepseek_v4_profile.py`; `tests/test_stage40_agent_eval.py` | The internal brain harness records phase traces, context bundles, tool gates, verification evidence, and agent eval scorecards without WeChat, self-memory writes, or default repo/runtime write authority. |
 | `Stage41` | All Stage40 brain-harness and provider-fabric surfaces | `accept-stage41`; `engineering-run`; `engineering-trace`; `show-engineering-agent-metrics`; `tests/test_stage41_engineering_agent.py` | The internal engineering agent can execute read/search/status/test/write tool loops through action-market gates, with repo writes opt-in, private paths blocked, and verification evidence persisted. |
 | `Stage42` | All Stage41 engineering-agent surfaces | `accept-stage42`; `run-bionic-user-sim`; `show-bionic-user-sim-scorecard`; `tests/test_stage42_bionic_user_sim.py` | The isolated novice-user simulation produces operational scorecards without WeChat, self-memory writes, archive writes, or ordinary bionic-trace pollution. |
+| `Stage43` | All Stage42 bionic user-simulation surfaces | `accept-stage43`; `tests/test_stage43_motivational_dynamics.py`; capsule `motivational_field`; action-market `motivation_delta` metadata | Motivational dynamics are visible, bounded, replay-stable, and action-market-only without transport, self-memory, hidden planner, or unbounded-loop authority. |
 
 ## Global Stop Rules
 - Stop immediately if any stage violates memory-is-self, processor-replaceable, transport-eyes-hands, canonical `wechat:<name>` identity, or action-market-first deliberation.

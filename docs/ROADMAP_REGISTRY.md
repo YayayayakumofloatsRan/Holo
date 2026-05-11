@@ -140,9 +140,14 @@ Stage42: bionic user-simulation performance
 - Scores novice comprehension, continuity, capability honesty, question quality, mechanism leakage, naturalness, repetition, latency, and high-intensity bionic pressure behavior while writing only operational `agent_eval_runs`.
 - Exposes observational `bionic_state` in bionic capsules for inspecting bionic-subject structure without adding a second brain or runtime authority.
 
+Stage43: motivational dynamics field
+- Implemented a bounded internal motivational field over the bionic kernel.
+- Adds top-level `motivational_field`, action-market `motivation_delta` metadata, `motivational_arousal`, `motivational_uncertainty`, `motivational_max_delta`, HTTP mirror `/accept-stage43`, and `accept-stage43`.
+- Models arousal, valence, uncertainty, curiosity, attachment pressure, fatigue, identity coherence, unfinished-loop pressure, diffuse attention, attention center, and replay-stable bounded stochasticity without adding a second brain, self-memory writes, transport authority, or a new unbounded loop.
+
 ## Next Program Arc (Planned)
 
-This planned arc starts after Stage42. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage43+ program replaces them.
+This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
 
 Provider/API compatibility breadth
 - Partially implemented through Stage29 DeepSeek text support, Stage31 adapter registry, Stage33 provider contract diagnostics, Stage34 visual-readiness gating, Stage38 visual-provider bridging, and the post-Stage39 QueueStore-backed provider-response cache for stateless text API calls.
@@ -150,7 +155,7 @@ Provider/API compatibility breadth
 - Live visual-provider and provider-latency soak should be done before WeChat or live transport is restarted; Stage38 proves the internal CLI image bridge and provider metadata path, while the post-Stage39 cache repair makes exact repeated provider prompts inspectably cheap.
 
 Bionic workflow hardening
-- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, Stage38 visual-provider grounding, Stage39 bionic Turing scoring, Stage40 brain-harness traces/evals, and Stage41 controlled engineering-agent traces.
+- Partially implemented through Stage30 subject-loop invariants, Stage31 subject-loop diagnostics, Stage32 response shaping, Stage34 debt classification, Stage35 internal readiness, Stage36 inquiry-quality gating, Stage37 bionic self-eval/capability-honesty gating, Stage38 visual-provider grounding, Stage39 bionic Turing scoring, Stage40 brain-harness traces/evals, Stage41 controlled engineering-agent traces, Stage42 user simulation, and Stage43 motivational dynamics.
 - Future work should improve real-world inquiry quality only through bounded kernel evidence and acceptance gates, without adding a second brain.
 
 Online long-horizon canary

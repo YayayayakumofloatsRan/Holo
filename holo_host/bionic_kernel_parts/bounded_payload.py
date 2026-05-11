@@ -108,8 +108,21 @@ def bounded_value(
     return compact(value, limit=str_limit)
 
 
-def bounded_dict(value: Any, *, depth: int = 2) -> dict[str, Any]:
-    bounded = bounded_value(value, depth=depth)
+def bounded_dict(
+    value: Any,
+    *,
+    depth: int = 2,
+    str_limit: int = 360,
+    list_limit: int = 12,
+    dict_limit: int = 32,
+) -> dict[str, Any]:
+    bounded = bounded_value(
+        value,
+        depth=depth,
+        str_limit=str_limit,
+        list_limit=list_limit,
+        dict_limit=dict_limit,
+    )
     return bounded if isinstance(bounded, dict) else {}
 
 

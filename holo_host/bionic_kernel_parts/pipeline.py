@@ -7,6 +7,7 @@ from .bounded_payload import as_dict, bounded_candidate, bounded_dict, clip_list
 from .contracts import BionicCapsule, BionicPhase, BionicTurnRequest, KERNEL_NAME, SPEECH_ACTIONS, STAGE29_NAME
 from .generation import BionicGeneration
 from .metrics import compute_bionic_metrics
+from .motivational_dynamics import apply_motivational_overlay, compute_motivational_field
 from .normalization import normalize_turn_request
 from ..subject_loop import assemble_subject_loop
 
@@ -58,9 +59,24 @@ class BionicPipeline:
     def run_request(self, request: BionicTurnRequest) -> dict[str, Any]:
         turn = normalize_turn_request(request)
         packet = self._sidecar_packet(turn.query, context=turn.context)
-        situational_field = bounded_dict(packet.get("situational_field", {}), depth=3)
-        stage28 = bounded_dict(packet.get("stage28", {}), depth=3)
-        action_market = self._action_market(packet)
+        situational_field = bounded_dict(packet.get("situational_field", {}), depth=3, str_limit=220, list_limit=8)
+        stage28 = bounded_dict(packet.get("stage28", {}), depth=3, str_limit=220, list_limit=8)
+        working_field = {
+            "continuity_summary": compact(packet.get("continuity_summary", ""), limit=360),
+            "memory_route": str(packet.get("memory_route", "") or ""),
+            "tier": str(packet.get("tier", "") or ""),
+            "sidecar_status": str(packet.get("sidecar_status", "") or "ok"),
+            "sidecar_error": str(packet.get("sidecar_error", "") or ""),
+            "modalities": clip_list(situational_field.get("modalities", []), limit=8),
+            "grounding_order": clip_list(situational_field.get("grounding_order", []), limit=8),
+            "open_questions": clip_list(situational_field.get("open_questions", []), limit=6),
+        }
+        motivational_field = compute_motivational_field(
+            query=turn.query,
+            working_field=working_field,
+            situational_field=situational_field,
+        )
+        action_market = apply_motivational_overlay(self._action_market(packet), motivational_field)
         selected_action = self._select_action(action_market, query=turn.query, adapter=turn.adapter)
         inhibition = self._inhibition(packet=packet, selected_action=selected_action, situational_field=situational_field)
         generation = self.generation.generate(
@@ -78,6 +94,7 @@ class BionicPipeline:
             situational_field=situational_field,
             inhibition=inhibition,
             generation=generation,
+            motivational_field=motivational_field,
         )
         perception = {
             "query": compact(turn.query, limit=480),
@@ -88,18 +105,9 @@ class BionicPipeline:
             "stage28": stage28,
             "stage38": bounded_dict(packet.get("stage38", {}), depth=3),
         }
-        working_field = {
-            "continuity_summary": compact(packet.get("continuity_summary", ""), limit=360),
-            "memory_route": str(packet.get("memory_route", "") or ""),
-            "tier": str(packet.get("tier", "") or ""),
-            "sidecar_status": str(packet.get("sidecar_status", "") or "ok"),
-            "sidecar_error": str(packet.get("sidecar_error", "") or ""),
-            "modalities": clip_list(situational_field.get("modalities", []), limit=8),
-            "grounding_order": clip_list(situational_field.get("grounding_order", []), limit=8),
-            "open_questions": clip_list(situational_field.get("open_questions", []), limit=6),
-        }
         attention = {
             "selected_grounding": clip_list(working_field.get("grounding_order", []), limit=4),
+            "attention_center": str(dict(motivational_field.get("attention", {})).get("attention_center", "") or ""),
             "selected_action_type": str(selected_action.get("action_type", "") or ""),
             "top_score": safe_float(selected_action.get("score", 0.0)),
         }
@@ -110,6 +118,7 @@ class BionicPipeline:
             attention=attention,
             inhibition=inhibition,
             selected_action=selected_action,
+            motivational_field=motivational_field,
         )
         outcome = {
             "transport": turn.adapter,
@@ -138,27 +147,38 @@ class BionicPipeline:
             BionicPhase(
                 "perception",
                 "bounded input and situational field captured",
-                {
-                    "query_chars": len(turn.query),
-                    "situational_keys": sorted(str(key) for key in situational_field.keys())[:8],
-                    "stage28_visible": stage28.get("situational_field_visible") is True,
-                },
+                {},
             ),
-            BionicPhase("working_field", "compact field assembled before generation", working_field),
-            BionicPhase("attention", "attention narrowed through action-market candidates", attention),
-            BionicPhase("inhibition", "non-required recall/tool/send/history paths inhibited", inhibition),
-            BionicPhase("action_market", "selected action comes from action market", {"candidates": action_market}),
+            BionicPhase(
+                "working_field",
+                "compact field assembled before generation",
+                {},
+            ),
+            BionicPhase(
+                "attention",
+                "attention narrowed through action-market candidates",
+                {},
+            ),
+            BionicPhase(
+                "inhibition",
+                "non-required recall/tool/send/history paths inhibited",
+                {},
+            ),
+            BionicPhase(
+                "action_market",
+                "selected action comes from action market",
+                {},
+            ),
             BionicPhase(
                 "generation",
                 "language generation is downstream of selected action",
-                {
-                    "mode": generation.get("mode", ""),
-                    "shape": generation.get("shape", ""),
-                    "generated": bool(str(generation.get("text", "") or "").strip()),
-                    "inquiry_quality_score": metrics.get("inquiry_quality_score", 0.0),
-                },
+                {},
             ),
-            BionicPhase("outcome", "adapter outcome recorded without transport side effects", outcome),
+            BionicPhase(
+                "outcome",
+                "adapter outcome recorded without transport side effects",
+                {},
+            ),
         ]
         capsule = BionicCapsule(
             stage=STAGE29_NAME,
@@ -182,6 +202,7 @@ class BionicPipeline:
             adapter_contract=adapter_contract,
             subject_loop=subject_loop,
             bionic_state=bionic_state,
+            motivational_field=self._capsule_motivational_field(motivational_field),
         ).to_dict()
         return {
             "stage": STAGE29_NAME,
@@ -321,6 +342,7 @@ class BionicPipeline:
         attention: dict[str, Any],
         inhibition: dict[str, Any],
         selected_action: dict[str, Any],
+        motivational_field: dict[str, Any],
     ) -> dict[str, Any]:
         lowered = str(query or "").lower()
         continuity = compact(working_field.get("continuity_summary", ""), limit=240)
@@ -351,6 +373,13 @@ class BionicPipeline:
         return {
             "positioning": "bionic_subject",
             "decision_authority": "action_market",
+            "motivational_field": {
+                "stage": str(motivational_field.get("stage", "") or ""),
+                "attention_center": str(dict(motivational_field.get("attention", {})).get("attention_center", "") or ""),
+                "arousal": safe_float(dict(motivational_field.get("dynamics_state", {})).get("arousal", 0.0)),
+                "uncertainty": safe_float(dict(motivational_field.get("dynamics_state", {})).get("uncertainty", 0.0)),
+                "bounded_noise": safe_float(dict(motivational_field.get("stochasticity", {})).get("bounded_noise", 0.0)),
+            },
             "consciousness_field": {
                 "continuity": continuity,
                 "modalities": modalities,
@@ -382,6 +411,50 @@ class BionicPipeline:
                 "inhibition_visible": bool(inhibition),
             },
             "situational_field_visible": bool(situational_field),
+        }
+
+    def _capsule_motivational_field(self, motivational_field: dict[str, Any]) -> dict[str, Any]:
+        state = dict(motivational_field.get("dynamics_state", {}))
+        attention = dict(motivational_field.get("attention", {}))
+        stochasticity = dict(motivational_field.get("stochasticity", {}))
+        contracts = dict(motivational_field.get("contracts", {}))
+        diffuse = attention.get("diffuse_attention", [])
+        compact_diffuse: list[str] = []
+        if isinstance(diffuse, list):
+            for item in diffuse[:4]:
+                if isinstance(item, dict):
+                    compact_diffuse.append(str(item.get("target", "") or ""))
+        return {
+            "stage": str(motivational_field.get("stage", "") or ""),
+            "field_model": str(motivational_field.get("field_model", "") or ""),
+            "decision_authority": str(motivational_field.get("decision_authority", "") or ""),
+            "dynamics_state": {
+                "arousal": safe_float(state.get("arousal", 0.0)),
+                "valence": safe_float(state.get("valence", 0.0)),
+                "uncertainty": safe_float(state.get("uncertainty", 0.0)),
+                "curiosity": safe_float(state.get("curiosity", 0.0)),
+                "attachment_pressure": safe_float(state.get("attachment_pressure", 0.0)),
+                "fatigue": safe_float(state.get("fatigue", 0.0)),
+                "identity_coherence": safe_float(state.get("identity_coherence", 0.0)),
+                "unfinished_loop_pressure": safe_float(state.get("unfinished_loop_pressure", 0.0)),
+            },
+            "attention": {
+                "attention_center": str(attention.get("attention_center", "") or ""),
+                "diffuse_attention": compact_diffuse,
+            },
+            "stochasticity": {
+                "seed": str(stochasticity.get("seed", "") or "")[:8],
+                "bounded_noise": safe_float(stochasticity.get("bounded_noise", 0.0)),
+                "replay_stable": stochasticity.get("replay_stable") is True,
+            },
+            "candidate_biases": dict(motivational_field.get("candidate_biases", {})),
+            "contracts": {
+                "replay_stable": contracts.get("replay_stable") is True,
+                "action_market_first": contracts.get("action_market_first") is True,
+                "no_second_brain": contracts.get("no_second_brain") is True,
+                "no_self_memory_write": contracts.get("no_self_memory_write") is True,
+                "no_unbounded_loop": contracts.get("no_unbounded_loop") is True,
+            },
         }
 
     def _inhibition(

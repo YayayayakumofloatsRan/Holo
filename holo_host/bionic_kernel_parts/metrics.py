@@ -14,6 +14,7 @@ def compute_bionic_metrics(
     situational_field: dict[str, Any],
     inhibition: dict[str, Any],
     generation: dict[str, Any],
+    motivational_field: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     field_units = [
         packet.get("continuity_summary", ""),
@@ -64,6 +65,14 @@ def compute_bionic_metrics(
             }
         ]
     )
+    motivational_field = motivational_field if isinstance(motivational_field, dict) else {}
+    motivational_state = motivational_field.get("dynamics_state", {})
+    motivational_state = motivational_state if isinstance(motivational_state, dict) else {}
+    motivation_deltas = [
+        abs(safe_float(item.get("motivation_delta", 0.0)))
+        for item in action_market
+        if isinstance(item, dict) and "motivation_delta" in item
+    ]
     return {
         "working_field_density": round(min(1.0, sum(1 for item in field_units if str(item or "").strip()) / 8.0), 4),
         "inhibition_count": len(list(inhibition.get("reasons", []))),
@@ -76,6 +85,9 @@ def compute_bionic_metrics(
         "inquiry_quality_score": round(inquiry_quality_score, 4),
         "bionic_turing_score": round(safe_float(turing_score.get("overall_score", 0.0)), 4),
         "bionic_turing_pass_threshold": round(safe_float(turing_score.get("pass_threshold", 0.82)), 4),
+        "motivational_arousal": round(safe_float(motivational_state.get("arousal", 0.0)), 4),
+        "motivational_uncertainty": round(safe_float(motivational_state.get("uncertainty", 0.0)), 4),
+        "motivational_max_delta": round(max(motivation_deltas) if motivation_deltas else 0.0, 4),
         "question_count": question_count,
         "query_chars": len(str(query or "")),
     }

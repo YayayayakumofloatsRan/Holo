@@ -43,6 +43,7 @@ from .models import AttentionState, IncomingMessage, OutgoingMessage, ProcessorT
 from .operator_bus import build_engineering_snapshot, build_homeostasis_state
 from .operator_bus import operator_probe as run_operator_probe
 from .operator_bus import refresh_self_model, run_operator_cycle
+from .stage43_motivational_dynamics import accept_stage43_payload as build_stage43_acceptance
 from .policy import AutonomyPolicy
 from .processors import _select_reply_lane, build_attention_state, build_processor, build_reply_bubbles
 from .processors import build_turn_plan, render_chat_prompt
@@ -2328,6 +2329,23 @@ class HoloReplyService:
             artifact_dir=artifact_dir,
         )
 
+    def accept_stage43(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        return self._accept_stage43_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+
     def _accept_stage40_impl(
         self,
         *,
@@ -2396,6 +2414,32 @@ class HoloReplyService:
             store=self.store,
             runner=None,
             stage41_payload=stage41_payload,
+            thread_key=str(thread_key or "cli:TestUser"),
+            chat_name=str(chat_name or thread_key or "TestUser"),
+            channel=str(channel or "cli"),
+        )
+
+    def _accept_stage43_impl(
+        self,
+        *,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "cli",
+        sender: str | None = None,
+        artifact_dir: str | None = None,
+    ) -> dict[str, Any]:
+        stage42_payload = self._accept_stage42_impl(
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=sender,
+            artifact_dir=artifact_dir,
+        )
+        return build_stage43_acceptance(
+            config=self.config,
+            store=self.store,
+            runner=None,
+            stage42_payload=stage42_payload,
             thread_key=str(thread_key or "cli:TestUser"),
             chat_name=str(chat_name or thread_key or "TestUser"),
             channel=str(channel or "cli"),

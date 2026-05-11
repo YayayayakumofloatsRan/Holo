@@ -2,7 +2,7 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage42-bionic-user-sim-performance`.
+- The live runtime milestone is now `stage43-motivational-dynamics-field`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
@@ -23,6 +23,7 @@
 - Stage40 is implemented as a bionic brain OS harness slice: internal CLI/API `brain-run` now records operational context bundles, phase traces, action-market tool gates, verification evidence, DeepSeek V4 profile metadata, and agent-eval scorecards without starting WeChat or mutating self-memory.
 - Stage41 is implemented as a complete controlled engineering-agent slice: internal CLI/API `engineering-run` can observe, compile context, deliberate, gate tool actions, execute read/search/test/write actions under explicit authority, verify outcomes, and persist inspectable operational traces without starting WeChat or mutating self-memory.
 - Stage42 is implemented as an isolated bionic user-simulation performance slice: internal CLI/API `run-bionic-user-sim` repeatedly probes first-time-user dialogue quality and high-intensity bionic pressure points, scores continuity, naturalness, capability honesty, mechanism leakage, repetition, and latency, persists only operational `agent_eval_runs`, and exposes observational `bionic_state` in bionic capsules.
+- Stage43 is implemented as a bounded motivational-dynamics slice: bionic capsules expose replay-stable `motivational_field` with internal pressure variables, diffuse attention, attention center, bounded stochasticity, and action-market-only score deltas without adding a second decision layer.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -66,7 +67,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is Stage42 validation/hardening for isolated bionic user-simulation quality and bionic-state inspectability, then broader provider/API compatibility, richer eval suites, multimodal user-sim scenarios, replay-backed facade slimming, or operator-approved live WeChat hardening; Holo remains WeChat-offline until live transport validation is explicitly approved.
+- The next implementation focus is Stage43 validation/hardening for motivational dynamics and bionic-state inspectability, then broader provider/API compatibility, richer eval suites, multimodal user-sim scenarios, replay-backed facade slimming, or operator-approved live WeChat hardening; Holo remains WeChat-offline until live transport validation is explicitly approved.
 - Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
 - Post-Stage39 provider-response caching is implemented in the processor fabric: `responses`, `openai_compatible`, and `deepseek` can reuse exact stateless text API responses through QueueStore, while `codex_cli`, image tasks, memory-writeback tasks, and shadow-write/operator tasks bypass the cache.
 - Verified post-Stage39 provider-response cache repair on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
@@ -105,6 +106,12 @@
   - `python -m holo_host --config .holo_host.toml accept-stage42 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed with `bionic_state_visible=true`
   - `python scripts/check_public_release_hygiene.py` passed
   - `git diff --check` reported no whitespace errors
+- Verified Stage43 on `2026-05-11`:
+  - `pytest -q tests/test_stage29_bionic_cli_agent.py tests/test_stage39_bionic_turing_benchmark.py tests/test_stage42_bionic_user_sim.py tests/test_stage43_motivational_dynamics.py` passed with `43` tests
+  - `python -m holo_host --config .holo_host.toml accept-stage43 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed with `motivational_field_replay_stable=true`, `bounded_stochasticity=true`, and `bounded_action_delta=true`
+  - `pytest -q` passed with `351` tests
+  - `python scripts/check_public_release_hygiene.py` passed
+  - `git diff --check` reported no whitespace errors
 - The durable planning pair for the next arc is `.agent/PLANS.md` plus `.agent/STAGE23_27_PROGRAM.md`.
 - Public release hygiene now treats local subject-profile files and live memory as private deployment data. Git should track only `.example` templates and generic architecture docs.
 
@@ -124,8 +131,8 @@
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage42 bionic user-simulation hardening, provider/API compatibility, richer eval suites, multimodal user-sim scenarios, replay-backed facade slimming, or operator-approved live WeChat hardening
-- `Current live runtime boundary`: Stage42 is implemented in code as an isolated internal CLI/API performance test; no live transport, transport authority change, self-memory mutation, default repo-write authority, runtime decision authority, or second decision layer was added
+- `Active implementation priority`: Stage43 motivational-dynamics validation, provider/API compatibility, richer eval suites, multimodal user-sim scenarios, replay-backed facade slimming, or operator-approved live WeChat hardening
+- `Current live runtime boundary`: Stage43 is implemented in code as an internal bionic control-field surface; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, or second decision layer was added
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.
@@ -156,6 +163,7 @@
 | `Stage40` | `implemented` | Add a bounded bionic brain OS harness for CLI/API agent work: context compilation, DeepSeek V4 profiles, action-market-gated tool loop, verification, operational traces, and agent eval. | Stage39 bionic Turing benchmark, processor fabric, QueueStore operational storage. | `pytest -q`; `accept-stage39`; `accept-stage40`; `tests/test_stage40_context_compiler.py`; `tests/test_stage40_bionic_brain_harness.py`; `tests/test_stage40_deepseek_v4_profile.py`; `tests/test_stage40_agent_eval.py`. | Do not start WeChat, mutate self-memory, bypass action-market gating, allow repo/runtime writes by default, or include private sources in context bundles. | Disable Stage40 brain commands from operator workflows and fall back to Stage39 bionic kernel surfaces while retaining operational tables. |
 | `Stage41` | `implemented` | Turn Stage40 into a complete controlled engineering agent with CLI/API tool loops, explicit repo-write authority, verification evidence, trace inspection, and metrics. | Stage40 brain OS harness, processor fabric, QueueStore operational storage. | `pytest -q`; `accept-stage40`; `accept-stage41`; `tests/test_stage41_engineering_agent.py`. | Do not start WeChat, mutate self-memory, bypass action-market gating, read or write private/runtime paths, or allow repo writes without explicit operator authority. | Disable Stage41 engineering commands from operator workflows and fall back to Stage40 brain harness surfaces while retaining operational run evidence. |
 | `Stage42` | `implemented` | Isolate the bionic first-time-user simulation as a repeatable performance test with continuity, naturalness, capability-honesty, mechanism-leakage, repetition, latency scoring, high-intensity bionic pressure probes, and observational `bionic_state`. | Stage41 engineering-agent baseline, Stage39 bionic Turing scoring, QueueStore operational eval storage. | `pytest -q`; `accept-stage41`; `accept-stage42`; `tests/test_stage42_bionic_user_sim.py`. | Do not start WeChat, mutate self-memory, write normal bionic traces, or let benchmark scores or `bionic_state` become runtime decision authority. | Keep Stage42 evidence operational-only, disable user-sim commands from operator workflows if isolation regresses, and fall back to Stage41 engineering-agent surfaces. |
+| `Stage43` | `implemented` | Add a bounded motivational-dynamics field over the bionic kernel: pressure variables, diffuse attention, attention-center selection, replay-stable stochasticity, and action-market-only score deltas. | Stage42 bionic-state surface, Stage29 bionic kernel, action-market-first contract. | `pytest -q`; `accept-stage42`; `accept-stage43`; `tests/test_stage43_motivational_dynamics.py`. | Do not let motivation become action authority, self-memory mutation, live transport, hidden planner state, or unbounded stochastic behavior. | Ignore `motivational_field` overlays and fall back to Stage42 bionic-state surfaces if boundedness or replay stability regresses. |
 
 ## Release Hygiene Ledger
 | Surface | Status | Rule | Validation |
