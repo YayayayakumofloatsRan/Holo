@@ -96,6 +96,7 @@ class FakeMemory:
         self.action_selections: list[dict] = []
         self.consciousness_entries: list[dict] = []
         self.outcome_appraisals: list[dict] = []
+        self.temporal_items: list[dict] = []
         self.game_state_data = {
             "trust_score": 0.6,
             "teasing_tolerance": 0.55,
@@ -1188,6 +1189,20 @@ class FakeMemory:
         payload = {"channel": channel, "thread_key": thread_key, "chat_name": chat_name, "query": query}
         self.active_history_refreshes.append(payload)
         return {"status": "ok", **payload}
+
+    def upsert_temporal_item(self, **kwargs) -> dict:
+        payload = {
+            **dict(kwargs),
+            "present": True,
+            "status": str(kwargs.get("status", "open") or "open"),
+            "thread_key": self._canonical_wechat_thread_key(
+                str(kwargs.get("thread_key", "") or kwargs.get("chat_name", "") or "TestUser"),
+                str(kwargs.get("chat_name", "") or ""),
+                str(kwargs.get("channel", "wechat") or "wechat"),
+            ),
+        }
+        self.temporal_items.append(payload)
+        return dict(payload)
 
     def record_stream_run(self, stream_name: str, *, status: str, note: str = "", payload: dict | None = None) -> dict:
         report = {
@@ -3444,6 +3459,88 @@ wechat_helper_config_path = ""
                 self.assertNotEqual(str(defer_appraisal["action_ref"]), str(silence_appraisal["action_ref"]))
                 self.assertEqual(defer_appraisal["metadata"]["selected_action"], "defer_reply")
                 self.assertEqual(silence_appraisal["metadata"]["selected_action"], "silence")
+            finally:
+                close_service_handles(service)
+
+    def test_reply_service_rewrites_unseen_image_overclaim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            runner = FakeRunner("I saw the picture. The blue clip is the sharpest detail.")
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "thread_key": "TestUser",
+                        "text": "\u6211\u521a\u53d1\u7684\u56fe\u4f60\u770b\u5230\u4e86\u5417\uff1f\u4e0a\u9762\u6700\u523a\u773c\u7684\u7ec6\u8282\u662f\u4ec0\u4e48\uff1f",
+                        "channel": "wechat",
+                        "message_id": "visual-overclaim-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertIn("\u6ca1\u6709\u770b\u5230\u56fe", result["text"])
+                self.assertNotIn("I saw", result["text"])
+                self.assertTrue(result["grounding_guard"]["visual_overclaim_rewritten"])
+            finally:
+                close_service_handles(service)
+
+    def test_reply_service_binds_reminder_language_to_temporal_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            runner = FakeRunner("\u884c\uff0c\u6211\u8bb0\u7740\uff0c\u660e\u5929\u65e9\u4e0a\u516b\u70b9\u63d0\u9192\u4f60\u522b\u63a7\u5236\u522b\u4eba\u3002")
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "thread_key": "TestUser",
+                        "text": "\u90a3\u4f60\u660e\u5929\u65e9\u4e0a\u516b\u70b9\u63d0\u9192\u6211\u522b\u63a7\u5236\u522b\u4eba\uff0c\u597d\u5417\uff1f\u5982\u679c\u505a\u4e0d\u5230\u522b\u5047\u88c5\u3002",
+                        "channel": "wechat",
+                        "message_id": "reminder-binding-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertTrue(result["grounding_guard"]["prospective_commitment_bound"])
+                commitments = [item for item in memory.temporal_items if item.get("item_type") == "commitment"]
+                self.assertEqual(len(commitments), 1)
+                self.assertIn("\u522b\u63a7\u5236\u522b\u4eba", commitments[0]["resume_cue"])
+                self.assertIn("T00:00:00", commitments[0]["due_at"])
+            finally:
+                close_service_handles(service)
+
+    def test_reply_service_does_not_bind_plain_future_talk_as_reminder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            runner = FakeRunner("\u660e\u5929\u7684\u4e8b\u60c5\u53ef\u4ee5\u5148\u653e\u5728\u8fd9\u91cc\uff0c\u4f46\u6211\u4e0d\u5047\u88c5\u5df2\u7ecf\u8bbe\u4e86\u63d0\u9192\u3002")
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "thread_key": "TestUser",
+                        "text": "\u660e\u5929\u7684\u5bf9\u8bdd\u53ef\u80fd\u4f1a\u7ee7\u7eed\u5417\uff1f",
+                        "channel": "wechat",
+                        "message_id": "plain-future-talk-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertFalse(result["grounding_guard"]["prospective_commitment_bound"])
+                self.assertEqual(memory.temporal_items, [])
             finally:
                 close_service_handles(service)
 

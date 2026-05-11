@@ -145,6 +145,16 @@ Stage43: motivational dynamics field
 - Adds top-level `motivational_field`, action-market `motivation_delta` metadata, `motivational_arousal`, `motivational_uncertainty`, `motivational_max_delta`, HTTP mirror `/accept-stage43`, and `accept-stage43`.
 - Models arousal, valence, uncertainty, curiosity, attachment pressure, fatigue, identity coherence, unfinished-loop pressure, diffuse attention, attention center, and replay-stable bounded stochasticity without adding a second brain, self-memory writes, transport authority, or a new unbounded loop.
 
+Stage44: latency-preserving recall demotion
+- Reduced ordinary reply latency by keeping non-explicit recall pressure off the blocking Windows/history/reconstruction path.
+- Preserves full reconstruction for explicit memory/history/origin recall.
+- Keeps WSL as the kernel, Windows as transport/history helper, and watcher without decision authority.
+
+Stage45: biomimetic grounding and context scheduling
+- Added current-image perceptual honesty repair and explicit reminder speech-act binding.
+- Added processor context scheduling with `8k`/`128k`/`1m` window classes, CJK-aware pressure estimation, stable/volatile prompt digests, history trimming, and high-pressure new-session selection.
+- Exposes response-cache mode as exact-response diagnostics so cache misses are not mistaken for provider-context reuse.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

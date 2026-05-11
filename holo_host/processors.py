@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from .codex_runner import CodexRunner
 from .common import compact_text
 from .config import HostConfig
+from .context_scheduler import plan_processor_context
 from .models import AttentionState, ProcessorTaskRequest, ReplyBubble, ReplyPlan, ToolRequest, TurnContext, TurnPlan
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
@@ -1246,13 +1247,42 @@ class CodexCliProcessor:
                 packet["recall_reconstruction"] = reconstruction
                 context.mind_packet = packet
                 context.sidecar = packet
-        prompt = render_chat_prompt(context, turn_plan=turn_plan)
-        started_at = time.perf_counter()
         selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
         lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
+        lane_config = self.config.processor_fabric.provider_backends.get(lane)
+        lane_model = str(getattr(lane_config, "model", "") or "")
+        prompt = render_chat_prompt(context, turn_plan=turn_plan)
+        context_schedule = plan_processor_context(
+            prompt=prompt,
+            lane_name=lane,
+            model=lane_model,
+            current_session_id=session_id,
+            history_messages=turn_plan.history_window,
+        )
+        max_history = int(context_schedule.get("max_history_messages", turn_plan.history_window) or 0)
+        if 0 <= max_history < int(turn_plan.history_window):
+            turn_plan = TurnPlan(
+                route=turn_plan.route,
+                fast_path=turn_plan.fast_path,
+                reply_goal=turn_plan.reply_goal,
+                history_window=max_history,
+                bubble_target=turn_plan.bubble_target,
+                tool_mode=turn_plan.tool_mode,
+                latency_tier=turn_plan.latency_tier,
+            )
+            prompt = render_chat_prompt(context, turn_plan=turn_plan)
+            context_schedule = plan_processor_context(
+                prompt=prompt,
+                lane_name=lane,
+                model=lane_model,
+                current_session_id=session_id,
+                history_messages=turn_plan.history_window,
+            )
+        effective_session_id = str(context_schedule.get("effective_session_id", session_id) or "")
+        started_at = time.perf_counter()
         result = self._run_runner(
             prompt,
-            session_id=session_id,
+            session_id=effective_session_id,
             lane=lane,
             budget_tag="chat_reply",
             max_output_tokens=1200,
@@ -1266,6 +1296,7 @@ class CodexCliProcessor:
                 "reply_lane_reason": lane_reason,
                 "reflex_micro_fast_candidate": bool(reflex_micro_fast_candidate),
                 "stage18_reflex": bool(reflex_micro_fast_candidate),
+                "context_schedule": context_schedule,
             },
         )
         processor_ms = int((time.perf_counter() - started_at) * 1000)
@@ -1311,6 +1342,7 @@ class CodexCliProcessor:
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
                 "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),
                 "predictive_lines_in_prompt": int(context.metadata.get("predictive_lines_in_prompt", 0) or 0),
+                "context_schedule": dict(context_schedule),
             },
         )
 

@@ -1253,6 +1253,12 @@ class QueueStore:
             "hits": hits,
             "misses": misses,
             "hit_ratio": round(hits / samples, 4) if samples else 0.0,
+            "cache_mode": "exact_response",
+            "diagnostic_note": (
+                "Chat replies miss unless the full rendered prompt is identical; "
+                "context_schedule metadata tracks stable and volatile prompt digests "
+                "for processor-context reuse work."
+            ),
         }
 
     def _decode_processor_response_cache_row(self, row: dict[str, Any]) -> dict[str, Any]:

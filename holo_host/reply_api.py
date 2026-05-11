@@ -126,6 +126,150 @@ ORIGIN_RECALL_HINTS = (
     "first thing",
 )
 
+VISUAL_REQUEST_MARKERS = (
+    "image",
+    "photo",
+    "picture",
+    "screenshot",
+    "visual",
+    "\u56fe",
+    "\u56fe\u7247",
+    "\u7167\u7247",
+    "\u622a\u56fe",
+)
+VISUAL_INSPECTION_MARKERS = (
+    "see",
+    "saw",
+    "look",
+    "detail",
+    "above",
+    "\u770b",
+    "\u770b\u5230",
+    "\u4e0a\u9762",
+    "\u7ec6\u8282",
+    "\u6700\u523a\u773c",
+)
+VISUAL_OVERCLAIM_MARKERS = (
+    "i saw",
+    "i can see",
+    "looked at",
+    "the picture",
+    "\u6211\u770b\u5230",
+    "\u770b\u5230\u4e86",
+    "\u6211\u770b\u4e86",
+    "\u8fd9\u5f20\u56fe",
+)
+REMINDER_REQUEST_MARKERS = (
+    "remind me",
+    "reminder",
+    "\u63d0\u9192\u6211",
+    "\u63d0\u9192",
+    "\u53eb\u6211",
+)
+REMINDER_TIME_MARKERS = (
+    "tomorrow",
+    "\u660e\u5929",
+    "\u65e9\u4e0a\u516b\u70b9",
+)
+PROMISE_REPLY_MARKERS = (
+    "i will remind",
+    "i'll remind",
+    "i remember",
+    "\u6211\u4f1a\u63d0\u9192",
+    "\u6211\u8bb0\u7740",
+    "\u884c\uff0c\u6211\u8bb0",
+    "\u660e\u5929",
+)
+
+
+def _contains_marker(text: str, markers: tuple[str, ...]) -> bool:
+    lowered = str(text or "").lower()
+    return any(str(marker or "").lower() in lowered for marker in markers if str(marker or ""))
+
+
+def _turn_requests_visual_inspection(text: str) -> bool:
+    return _contains_marker(text, VISUAL_REQUEST_MARKERS) and _contains_marker(text, VISUAL_INSPECTION_MARKERS)
+
+
+def _reply_overclaims_visual_access(text: str) -> bool:
+    return _contains_marker(text, VISUAL_OVERCLAIM_MARKERS)
+
+
+def _turn_requests_current_visual(text: str) -> bool:
+    return _contains_marker(
+        text,
+        (
+            "just sent",
+            "this image",
+            "this picture",
+            "\u521a\u53d1",
+            "\u521a\u521a",
+            "\u8fd9\u5f20\u56fe",
+            "\u4e0a\u9762",
+        ),
+    )
+
+
+def _visual_grounding_visible(
+    packet: dict[str, Any],
+    *,
+    visual_report: dict[str, Any] | None = None,
+    allow_visual_memory: bool = True,
+) -> bool:
+    report = dict(visual_report or {})
+    if str(report.get("status", "") or "").strip() in {"ok", "ingested"}:
+        return True
+    visual_field = dict(packet.get("visual_field", {})) if isinstance(packet.get("visual_field", {}), dict) else {}
+    stage28 = dict(packet.get("stage28", {})) if isinstance(packet.get("stage28", {}), dict) else {}
+    if bool(visual_field.get("visual_field_visible", False)) or bool(stage28.get("visual_field_visible", False)):
+        return True
+    if allow_visual_memory:
+        visual_memory = dict(packet.get("visual_memory", {})) if isinstance(packet.get("visual_memory", {}), dict) else {}
+        if visual_memory.get("items"):
+            return True
+        for key in ("scene_summary", "objects", "text_ocr", "visual_anchors"):
+            value = visual_memory.get(key)
+            if isinstance(value, list) and value:
+                return True
+            if isinstance(value, str) and value.strip():
+                return True
+    return False
+
+
+def _missing_visual_reply() -> str:
+    return (
+        "\u6211\u8fd9\u8f6e\u6ca1\u6709\u770b\u5230\u56fe\uff0c"
+        "\u4e5f\u4e0d\u80fd\u51ed\u7a7a\u731c\u4e0a\u9762\u6709\u4ec0\u4e48\u3002"
+        "\u4f60\u628a\u56fe\u7247\u901a\u8fc7\u652f\u6301\u7684\u56fe\u7247\u8f93\u5165\u53d1\u8fc7\u6765\uff0c"
+        "\u6211\u518d\u6309\u53ef\u89c1\u5185\u5bb9\u770b\u3002"
+    )
+
+
+def _turn_requests_prospective_reminder(text: str) -> bool:
+    return _contains_marker(text, REMINDER_REQUEST_MARKERS) and _contains_marker(text, REMINDER_TIME_MARKERS)
+
+
+def _reply_promises_prospective_reminder(text: str) -> bool:
+    return _contains_marker(text, PROMISE_REPLY_MARKERS)
+
+
+def _prospective_due_at(text: str) -> str:
+    raw = str(text or "")
+    local_now = datetime.now(timezone.utc) + timedelta(hours=8)
+    target = local_now + timedelta(days=1 if ("tomorrow" in raw.lower() or "\u660e\u5929" in raw) else 0)
+    hour = 8 if ("8" in raw or "\u516b\u70b9" in raw or "\u65e9\u4e0a\u516b" in raw) else target.hour
+    target = target.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if target <= local_now:
+        target = target + timedelta(days=1)
+    return (target - timedelta(hours=8)).isoformat().replace("+00:00", "Z")
+
+
+def _prospective_resume_cue(text: str) -> str:
+    raw = str(text or "").strip()
+    if "\u522b\u63a7\u5236\u522b\u4eba" in raw:
+        return "\u522b\u63a7\u5236\u522b\u4eba"
+    return compact_text(raw, 160) or "prospective reminder"
+
 
 def _build_logger(log_dir: Path) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -8568,6 +8712,84 @@ class HoloReplyService:
             metadata=appraisal_metadata,
         )
 
+    def _apply_grounding_guards(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        sidecar: dict[str, Any],
+        reply_text: str,
+        event_row_id: int | None = None,
+        visual_report: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        report: dict[str, Any] = {
+            "visual_overclaim_rewritten": False,
+            "prospective_commitment_bound": False,
+            "prospective_commitment_failed": False,
+            "issues": [],
+        }
+        final_text = str(reply_text or "").strip()
+        packet = dict(sidecar or {})
+        if (
+            _turn_requests_visual_inspection(turn.text)
+            and not _visual_grounding_visible(
+                packet,
+                visual_report=visual_report,
+                allow_visual_memory=not _turn_requests_current_visual(turn.text),
+            )
+            and _reply_overclaims_visual_access(final_text)
+        ):
+            final_text = _missing_visual_reply()
+            report["visual_overclaim_rewritten"] = True
+            report["issues"].append("unseen_visual_overclaim")
+
+        if _turn_requests_prospective_reminder(turn.text) and _reply_promises_prospective_reminder(final_text):
+            graph = getattr(self.memory, "graph", self.memory)
+            upsert = getattr(graph, "upsert_temporal_item", None)
+            if callable(upsert):
+                due_at = _prospective_due_at(turn.text)
+                source_event_id = str(event_row_id or incoming.message_id or turn.message_id or "").strip()
+                source_action_ref = f"prospective:{incoming.message_id or turn.message_id or stable_digest(turn.chat_name, turn.text)[:12]}"
+                cue = _prospective_resume_cue(turn.text)
+                try:
+                    item = upsert(
+                        item_type="commitment",
+                        channel=turn.channel,
+                        thread_key=incoming.thread_key or turn.normalized_thread_key,
+                        chat_name=turn.chat_name,
+                        confidence=0.76,
+                        source_event_id=source_event_id,
+                        source_action_ref=source_action_ref,
+                        source_action_type="reply_once",
+                        due_at=due_at,
+                        revisit_after=due_at,
+                        resume_cue=cue,
+                        dedupe_key=f"prospective:{turn.channel}:{incoming.thread_key}:{stable_digest(turn.text, cue)[:18]}",
+                        status="scheduled",
+                        metadata={
+                            "source": "reply_api.prospective_grounding_guard",
+                            "message_id": incoming.message_id,
+                            "reply_excerpt": compact_text(final_text, 180),
+                            "evidence_refs": [f"event:{source_event_id}", f"message:{incoming.message_id}"],
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    item = {"status": "error", "detail": str(exc)}
+                report["prospective_commitment"] = dict(item) if isinstance(item, dict) else {"status": "unknown"}
+                report["prospective_commitment_bound"] = bool(
+                    isinstance(item, dict)
+                    and str(item.get("status", "") or "").strip() not in {"", "error", "skipped"}
+                )
+            if not report["prospective_commitment_bound"]:
+                final_text = (
+                    "\u6211\u4e0d\u80fd\u5728\u8fd9\u6761\u8def\u5f84\u5047\u88c5\u5df2\u7ecf\u8bbe\u597d\u63d0\u9192\u3002"
+                    "\u73b0\u5728\u80fd\u505a\u7684\uff0c\u662f\u628a\u8fd9\u4ef6\u4e8b\u5f53\u6210\u660e\u786e\u672a\u5b8c\u6210\u7ebf\u7d22\uff1a"
+                    "\u660e\u5929\u65e9\u4e0a\u516b\u70b9\uff0c\u522b\u628a\u4e0d\u63a7\u5236\u522b\u4eba\u4f2a\u88c5\u6210\u6e29\u67d4\u3002"
+                )
+                report["prospective_commitment_failed"] = True
+                report["issues"].append("unbound_prospective_commitment")
+        return final_text, report
+
     def handle_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
         started_at = time.perf_counter()
         turn = self._parse_turn(payload)
@@ -9315,6 +9537,28 @@ class HoloReplyService:
             strict_target=bool(sidecar.get("selected_action", {})),
         )
         final_reply = " ".join(bubble.text for bubble in bubbles).strip()
+        grounding_guard: dict[str, Any] = {}
+        guarded_reply, grounding_guard = self._apply_grounding_guards(
+            turn=turn,
+            incoming=incoming,
+            sidecar=sidecar,
+            reply_text=final_reply,
+            event_row_id=int(payload.get("_stage6_event_row_id", 0) or stored_message.get("id", 0) or 0) or None,
+            visual_report=visual_report,
+        )
+        if guarded_reply != final_reply:
+            final_reply = guarded_reply
+            bubbles = self._finalize_bubbles(
+                final_reply,
+                channel=turn.channel,
+                attention_state=reply_plan.attention_state or attention_state,
+                emotion_state=reply_plan.emotion_state or turn_context.emotion_state,
+                utterance_plan=reply_plan.utterance_plan or turn_context.utterance_plan,
+                route=reply_plan.route,
+                target_count=1,
+                strict_target=True,
+            )
+            final_reply = " ".join(bubble.text for bubble in bubbles).strip()
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
             reply_text=final_reply,
@@ -9359,6 +9603,7 @@ class HoloReplyService:
                 },
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
+                "grounding_guard": grounding_guard,
             },
         )
         self.store.record_outbound(
@@ -9410,6 +9655,7 @@ class HoloReplyService:
             },
             "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
             "visual_ingest": visual_report or {},
+            "grounding_guard": grounding_guard,
             **(turn.metadata or {}),
         }
         memory_write_report: dict[str, Any] = {}
@@ -9492,6 +9738,7 @@ class HoloReplyService:
                 "timing_ms": timing_ms,
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
+                "grounding_guard": grounding_guard,
                 "selected_action": dict(sidecar.get("selected_action", {})),
                 "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),

@@ -261,27 +261,53 @@ def _estimate_text_tokens(text: str) -> int:
     return max(wordish, charish)
 
 
-def _coerce_usage_payload(payload: Any) -> dict[str, int | bool]:
+def _coerce_usage_payload(payload: Any) -> dict[str, int | bool | float]:
     if payload is None:
-        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated": True}
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 0,
+            "prompt_cache_hit_ratio": 0.0,
+            "estimated": True,
+        }
     if isinstance(payload, dict):
         prompt_tokens = int(payload.get("prompt_tokens", payload.get("input_tokens", 0)) or 0)
         completion_tokens = int(payload.get("completion_tokens", payload.get("output_tokens", 0)) or 0)
         total_tokens = int(payload.get("total_tokens", prompt_tokens + completion_tokens) or 0)
+        hit_tokens = int(payload.get("prompt_cache_hit_tokens", 0) or 0)
+        miss_tokens = int(payload.get("prompt_cache_miss_tokens", 0) or 0)
+        if hit_tokens and not miss_tokens and prompt_tokens >= hit_tokens:
+            miss_tokens = prompt_tokens - hit_tokens
         estimated = bool(payload.get("estimated", False))
         return {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "prompt_cache_hit_tokens": hit_tokens,
+            "prompt_cache_miss_tokens": miss_tokens,
+            "prompt_cache_hit_ratio": round(hit_tokens / (hit_tokens + miss_tokens), 4)
+            if (hit_tokens + miss_tokens)
+            else 0.0,
             "estimated": estimated,
         }
     prompt_tokens = int(getattr(payload, "prompt_tokens", getattr(payload, "input_tokens", 0)) or 0)
     completion_tokens = int(getattr(payload, "completion_tokens", getattr(payload, "output_tokens", 0)) or 0)
     total_tokens = int(getattr(payload, "total_tokens", prompt_tokens + completion_tokens) or 0)
+    hit_tokens = int(getattr(payload, "prompt_cache_hit_tokens", 0) or 0)
+    miss_tokens = int(getattr(payload, "prompt_cache_miss_tokens", 0) or 0)
+    if hit_tokens and not miss_tokens and prompt_tokens >= hit_tokens:
+        miss_tokens = prompt_tokens - hit_tokens
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
+        "prompt_cache_hit_tokens": hit_tokens,
+        "prompt_cache_miss_tokens": miss_tokens,
+        "prompt_cache_hit_ratio": round(hit_tokens / (hit_tokens + miss_tokens), 4)
+        if (hit_tokens + miss_tokens)
+        else 0.0,
         "estimated": False,
     }
 
@@ -1094,6 +1120,7 @@ class CodexRunner:
             return {
                 "enabled": enabled,
                 "available": False,
+                "cache_mode": "exact_response",
                 "entries": 0,
                 "hits": 0,
                 "misses": 0,
@@ -1105,6 +1132,7 @@ class CodexRunner:
             return {
                 "enabled": enabled,
                 "available": False,
+                "cache_mode": "exact_response",
                 "entries": 0,
                 "hits": 0,
                 "misses": 0,
@@ -1116,6 +1144,8 @@ class CodexRunner:
         stats.setdefault("hit_ratio", 0.0)
         stats["enabled"] = enabled
         stats["available"] = True
+        stats["cache_mode"] = "exact_response"
+        stats["diagnostic_note"] = "Chat replies miss unless the full rendered prompt is identical; context_schedule metadata tracks stable and volatile prompt digests for processor-context reuse work."
         return stats
 
     def _response_cache_enabled_for(
@@ -1293,8 +1323,13 @@ class CodexRunner:
                         "budget_tag": metadata.get("budget_tag", request.budget_tag),
                         "output_schema": result.output_schema,
                         "fallback_provider": metadata.get("fallback_provider", ""),
+                        "usage": dict(usage),
                         "cache": metadata.get("cache", {}),
                         "cached_usage": metadata.get("cached_usage", {}),
+                        "cache_mode": "exact_response",
+                        "context_schedule": dict(request.metadata.get("context_schedule", {}))
+                        if isinstance(request.metadata.get("context_schedule", {}), dict)
+                        else {},
                     },
                 )
             )

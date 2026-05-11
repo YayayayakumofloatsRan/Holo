@@ -286,10 +286,49 @@ Biomimetic interpretation:
 - The third gap is hippocampal-style binding hygiene: symbolic anchors are remembered, but corrections and metaphorical expansions can blur the original binding.
 - The fourth gap is metacognitive audit: the system can narrate its own continuity, but it does not reliably audit against internal evidence surfaces.
 
+## Biomimetic Guard Repair - 2026-05-12
+
+This pass implements the first hard repairs from the stress retest without widening live transport.
+
+Implemented:
+
+- Added a post-generation perceptual-grounding guard in `holo_host/reply_api.py`.
+  - If the user asks about a current image and the current visual field has no grounding, visual overclaims are rewritten to an explicit missing-image response.
+  - Historical visual memory is still allowed for historical-image questions, but it is not allowed to justify claims about a just-sent/current image.
+- Added prospective speech-act binding.
+  - If a reply promises a reminder, the service must bind a `commitment` temporal item through memory graph state.
+  - If the write is unavailable or fails, the final text is rewritten so the system does not pretend a reminder exists.
+  - Plain future talk such as "tomorrow" is not enough to create a commitment; the user turn must contain an explicit reminder request and a future time marker.
+- Added `holo_host/context_scheduler.py`.
+  - Classifies processor context windows as `8k`, `128k`, or `1m` from lane/model.
+  - Estimates CJK token pressure conservatively instead of treating Chinese as ASCII/4.
+  - Splits prompt digests into stable and volatile regions so cache misses can be diagnosed as lack of prefix reuse rather than generic provider failure.
+  - Under high context pressure, trims rendered history and intentionally opens a fresh processor session instead of reusing one overloaded thread forever.
+- Added cache diagnostics.
+  - `processor_response_cache` is now explicitly reported as `exact_response`.
+  - DeepSeek `usage.prompt_cache_hit_tokens` and `usage.prompt_cache_miss_tokens` are preserved in processor metadata instead of being dropped during usage coercion.
+  - The observed `55` entries, `0` hits, `55` misses pattern is expected for ordinary chat turns because the cache key includes the full rendered prompt, and the current turn/history/state region changes every request.
+  - This is not sufficient as a Codex-style context cache. It is a response reuse cache plus a new scheduling/diagnostic layer. The next efficiency step is provider-aware stable-prefix reuse, not pretending exact-response cache should hit conversational traffic.
+
+Verification:
+
+```powershell
+python -m pytest -q tests\test_context_scheduler.py
+python -m pytest -q tests\test_holo_host.py -k "unseen_image_overclaim or reminder_language or plain_future_talk or recall_reconstruct or windows_history_refresh or high_risk_continuity"
+python -m pytest -q tests\test_processor_fabric.py -k "response_cache or deepseek_provider"
+```
+
+Observed:
+
+- `3 passed`
+- `5 passed, 61 deselected`
+- `5 passed, 4 deselected`
+- Local provider-status construction reports `response_cache.cache_mode=exact_response`; the running live API process must be restarted before that field appears through `/provider-status`.
+
 ## Recommended Next Work
 
-1. Add a perceptual-grounding guard before generation and after generation: if `visual_field_visible=false`, prohibit "I saw/looked" claims and force a missing-artifact response. This is the highest-priority neuro-bionic direction because biological perception is evidence-coupled.
-2. Bind future-oriented language to prospective-memory state. Reminder, initiative, and follow-up utterances must either create a commitment/open-loop/deferred intention or explicitly say the system cannot do it.
+1. Extend the perceptual-grounding guard toward pre-generation prompt constraints and image-provider positive evidence; the current repair covers post-generation visual overclaim rewriting.
+2. Extend prospective speech-act binding beyond reminders into initiative and follow-up utterances; the current repair covers explicit reminder requests.
 3. Add hippocampal binding/update tests for symbolic anchors and corrections: seed, probe, correction, delayed probe, and self-audit must distinguish original binding, corrected binding, and metaphorical embellishment.
 4. Add an anterior-cingulate-style conflict monitor for capability conflicts: image requested but no image, reminder requested but no scheduler write, user asks for impossible autonomy, or self-audit misses observed failures.
 5. Make desire/motivation reports evidence-bound to internal motivational/control variables instead of pure rhetorical flourish.

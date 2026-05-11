@@ -229,7 +229,13 @@ deepseek_fast_model = "deepseek-v4-flash"
                     return json.dumps(
                         {
                             "choices": [{"message": {"content": "agent reply"}}],
-                            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                            "usage": {
+                                "prompt_tokens": 7,
+                                "completion_tokens": 3,
+                                "total_tokens": 10,
+                                "prompt_cache_hit_tokens": 2,
+                                "prompt_cache_miss_tokens": 5,
+                            },
                         }
                     ).encode("utf-8")
 
@@ -246,6 +252,9 @@ deepseek_fast_model = "deepseek-v4-flash"
             self.assertEqual(result.metadata["provider"], "deepseek")
             self.assertEqual(result.metadata["model"], "deepseek-v4-pro")
             self.assertEqual(result.metadata["usage"]["total_tokens"], 10)
+            self.assertEqual(result.metadata["usage"]["prompt_cache_hit_tokens"], 2)
+            self.assertEqual(result.metadata["usage"]["prompt_cache_miss_tokens"], 5)
+            self.assertEqual(result.metadata["usage"]["prompt_cache_hit_ratio"], 0.2857)
             self.assertEqual(result.metadata["capabilities"]["thinking_mode"], True)
             request = fake_urlopen.call_args.args[0]
             self.assertTrue(request.full_url.endswith("/chat/completions"))
