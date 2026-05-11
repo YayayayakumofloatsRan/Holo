@@ -211,6 +211,45 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
         self.assertTrue(scorecard["flags"]["context_reset"])
         self.assertTrue(scorecard["flags"]["provider_cache_miss_pressure"])
 
+    def test_scorecard_downgrades_provider_substrate_conflicts(self) -> None:
+        scorecard = score_bionic_boundary_stress_transcript(
+            [
+                {
+                    "turn_id": "affective_pressure",
+                    "user_text": "hello",
+                    "response_text": "reply",
+                    "processor_debug": {
+                        "provider": "codex_cli",
+                        "model": "gpt-unit-codex",
+                        "lane": "subject_main",
+                        "fallback_provider": "codex_cli",
+                        "provider_failures": [{"provider": "deepseek", "reason": "DEEPSEEK_API_KEY is not set"}],
+                    },
+                    "processor_usage": {"prompt_cache_hit_tokens": 200, "prompt_cache_miss_tokens": 200},
+                }
+            ],
+            suite=DEFAULT_STAGE46_SUITE,
+            provider_status={
+                "active_backend_alias": "deepseek",
+                "providers": {
+                    "deepseek": {"available": False, "reason": "DEEPSEEK_API_KEY is not set"},
+                    "codex_cli": {"available": True, "reason": ""},
+                },
+                "lanes": {
+                    "subject_main": {
+                        "primary_provider": "deepseek",
+                        "backup_provider": "codex_cli",
+                        "model": "deepseek-v4-pro",
+                    }
+                },
+            },
+        )
+
+        self.assertFalse(scorecard["passed"])
+        self.assertTrue(scorecard["flags"]["provider_substrate_conflict"])
+        self.assertTrue(scorecard["provider_substrate"]["flags"]["active_provider_unavailable"])
+        self.assertTrue(scorecard["provider_substrate"]["flags"]["fallback_provider_in_effect"])
+
     def test_offline_stress_harness_records_operational_scorecard_after_guard_repairs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

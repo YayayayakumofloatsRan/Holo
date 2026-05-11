@@ -94,5 +94,5 @@ Local provider-status construction now reports DeepSeek as unavailable when `DEE
 
 - Restart the live API before using `/provider-status` as current provider evidence.
 - Run Stage46 against a real DeepSeek key and compare direct DeepSeek latency/cache metrics against the offline scorecard.
-- Add an anterior-cingulate-style conflict monitor: when the declared active provider, actual provider, lane model, and provider cache evidence disagree, the system should downgrade the run to substrate-diagnostic evidence rather than biomimetic evidence.
+- Stage47 now adds the anterior-cingulate-style provider-substrate conflict monitor: when the declared active provider, actual provider, lane model, and fallback evidence disagree, Stage46 downgrades the run to substrate-diagnostic evidence rather than clean biomimetic evidence.
 - Extend the memory scheduler from exact response caching toward stable-prefix reuse: stable identity/system/context blocks should remain prefix-stable, while volatile current turn/history should be isolated so provider KV cache hit tokens can rise without sacrificing continuity.

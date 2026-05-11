@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from .common import json_dumps
 from .config import HostConfig, ProcessorLaneConfig, TaskRoutingConfig
 from .models import CodexResult, ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
+from .provider_substrate import analyze_provider_substrate_conflicts
 
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
     "reply": {
@@ -927,6 +928,15 @@ class CodexRunner:
             "lanes": lanes,
             "response_cache": self.response_cache_stats(),
             "stage40_deepseek_v4": stage40_status,
+        }
+
+    def provider_substrate_status(self) -> dict[str, Any]:
+        provider_status = self.provider_status()
+        report = analyze_provider_substrate_conflicts(provider_status)
+        return {
+            "stage": "stage47-provider-substrate-conflict-monitor",
+            "provider_status": provider_status,
+            **report,
         }
 
     def provider_contracts(self) -> dict[str, Any]:

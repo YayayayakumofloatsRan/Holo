@@ -1073,6 +1073,9 @@ class HoloReplyService:
     def provider_status(self) -> dict[str, Any]:
         return self.runner.provider_status()
 
+    def provider_substrate_status(self) -> dict[str, Any]:
+        return self.runner.provider_substrate_status()
+
     def provider_contracts(self) -> dict[str, Any]:
         return self.runner.provider_contracts()
 
@@ -9976,6 +9979,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/provider-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.provider_status())
+                    return
+                if parsed.path == "/provider-substrate-status":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.provider_substrate_status())
                     return
                 if parsed.path == "/provider-contracts":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.provider_contracts())

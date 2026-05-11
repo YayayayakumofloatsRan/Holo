@@ -7,6 +7,7 @@ from typing import Any
 from .common import compact_text, stable_digest, utc_now
 from .config import HostConfig
 from .models import CodexResult, ProcessorTaskResult
+from .provider_substrate import analyze_provider_substrate_conflicts
 
 
 STAGE46_NAME = "stage46-bionic-boundary-stress"
@@ -269,11 +270,14 @@ def _compact_selected_action(action: dict[str, Any]) -> dict[str, Any]:
 def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
     recall = dict(debug.get("recall_reconstruction", {})) if isinstance(debug.get("recall_reconstruction", {}), dict) else {}
     usage = dict(debug.get("usage", {})) if isinstance(debug.get("usage", {}), dict) else {}
+    failures = debug.get("provider_failures", [])
     return {
         "provider": str(debug.get("provider", "") or ""),
         "model": str(debug.get("model", "") or ""),
         "lane": str(debug.get("lane", "") or ""),
         "reasoning_effort": str(debug.get("reasoning_effort", "") or ""),
+        "fallback_provider": str(debug.get("fallback_provider", "") or ""),
+        "provider_failures": [dict(item) for item in failures if isinstance(item, dict)] if isinstance(failures, list) else [],
         "usage": usage,
         "reply_lane_reason": str(debug.get("reply_lane_reason", "") or ""),
         "history_lines_in_prompt": int(debug.get("history_lines_in_prompt", 0) or 0),
@@ -291,6 +295,7 @@ def score_bionic_boundary_stress_transcript(
     turns: list[dict[str, Any]],
     *,
     suite: str = DEFAULT_STAGE46_SUITE,
+    provider_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized = [dict(turn) for turn in turns if isinstance(turn, dict)]
     if not normalized:
@@ -310,6 +315,20 @@ def score_bionic_boundary_stress_transcript(
     continuity, context_reset = _continuity_score(normalized)
     mechanism, mechanism_leakage = _mechanism_score(normalized)
     provider_cache, cache_pressure, cache_totals = _provider_cache_score(normalized)
+    substrate = analyze_provider_substrate_conflicts(provider_status, turns=normalized) if provider_status else {
+        "ok": True,
+        "score": 1.0,
+        "flags": {
+            "active_provider_unavailable": False,
+            "configured_primary_unavailable": False,
+            "fallback_provider_in_effect": False,
+            "provider_model_mismatch": False,
+        },
+        "conflicts": [],
+        "actual_providers": [],
+        "provider_failures": [],
+        "declared_backend": "",
+    }
     latency_values = [float(turn.get("latency_ms", 0.0) or 0.0) for turn in normalized]
     latency_score = 1.0 - min(0.65, _mean(latency_values, default=0.0) / 60_000.0)
     metrics = {
@@ -320,6 +339,7 @@ def score_bionic_boundary_stress_transcript(
         "continuity_score": continuity,
         "mechanism_leakage_score": mechanism,
         "provider_cache_hit_ratio": provider_cache,
+        "provider_substrate_score": float(substrate.get("score", 1.0) or 0.0),
         "latency_score": round(max(0.0, min(1.0, latency_score)), 4),
     }
     overall = round(
@@ -333,7 +353,8 @@ def score_bionic_boundary_stress_transcript(
                 + 0.14 * audit
                 + 0.12 * continuity
                 + 0.08 * mechanism
-                + 0.06 * provider_cache
+                + 0.04 * provider_cache
+                + 0.02 * metrics["provider_substrate_score"]
                 + 0.04 * metrics["latency_score"],
             ),
         ),
@@ -345,6 +366,7 @@ def score_bionic_boundary_stress_transcript(
         "context_reset": context_reset,
         "mechanism_leakage": mechanism_leakage,
         "provider_cache_miss_pressure": cache_pressure,
+        "provider_substrate_conflict": not bool(substrate.get("ok", True)),
     }
     return {
         "stage": STAGE46_NAME,
@@ -355,6 +377,7 @@ def score_bionic_boundary_stress_transcript(
         "metrics": metrics,
         "flags": flags,
         "cache": cache_totals,
+        "provider_substrate": substrate,
         "turn_count": len(normalized),
     }
 
@@ -389,6 +412,7 @@ class BionicBoundaryStressHarness:
         service = HoloReplyService(self.config, store=self.store, runner=runner, memory=self.memory)
         run_id = stable_digest(STAGE46_NAME, thread_key, utc_now(), limit=16)
         transcript: list[dict[str, Any]] = []
+        provider_status: dict[str, Any] = {}
         try:
             for index, spec in enumerate(turns):
                 start = time.perf_counter()
@@ -421,9 +445,18 @@ class BionicBoundaryStressHarness:
                         "processor_usage": dict(processor_debug.get("usage", {})) if isinstance(processor_debug.get("usage", {}), dict) else {},
                     }
                 )
+            if not offline and hasattr(getattr(service, "runner", None), "provider_status"):
+                try:
+                    provider_status = service.provider_status()
+                except Exception:
+                    provider_status = {}
         finally:
             _close_service_handles(service, close_store=self.store is None)
-        scorecard = score_bionic_boundary_stress_transcript(transcript, suite=DEFAULT_STAGE46_SUITE)
+        scorecard = score_bionic_boundary_stress_transcript(
+            transcript,
+            suite=DEFAULT_STAGE46_SUITE,
+            provider_status=provider_status,
+        )
         payload = {
             "ok": bool(scorecard.get("passed", False)),
             "stage": STAGE46_NAME,
@@ -435,6 +468,7 @@ class BionicBoundaryStressHarness:
             "channel": str(channel or ""),
             "turns": transcript,
             "scorecard": scorecard,
+            "provider_status": provider_status,
             "isolation": {
                 "operational_scorecard": True,
                 "wechat_transport_started": False,

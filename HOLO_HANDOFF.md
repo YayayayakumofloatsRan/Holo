@@ -84,12 +84,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 79. `docs/ENGINEERING_HANDOFF_STAGE44.md`
 80. `docs/ENGINEERING_HANDOFF_STAGE45.md`
 81. `docs/ENGINEERING_HANDOFF_STAGE46.md`
-82. `HOLO_SYSTEM.md`
-83. `HOLO_HOST.md`
-84. `OPERATIONS.md`
-85. `docs/PUBLIC_RELEASE_HYGIENE.md`
-86. `holo_memory_library/MEMORY_LIBRARY.md`
-87. `windows_helper/README.md`
+82. `docs/ENGINEERING_HANDOFF_STAGE47.md`
+83. `HOLO_SYSTEM.md`
+84. `HOLO_HOST.md`
+85. `OPERATIONS.md`
+86. `docs/PUBLIC_RELEASE_HYGIENE.md`
+87. `holo_memory_library/MEMORY_LIBRARY.md`
+88. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -101,20 +102,22 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage46 commit on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage46 commit.
-- Current milestone: `stage46-bionic-boundary-stress`
-- Current status: Stage46 is implemented and verified as an internal bionic boundary stress and provider-substrate diagnostic surface.
+- Resume commit: Stage47 commit on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the Stage47 commit.
+- Current milestone: `stage47-provider-substrate-conflict-monitor`
+- Current status: Stage47 is implemented and verified as an internal provider-substrate conflict monitor that downgrades conflicted Stage46 biomimetic evidence.
 - Latest full verification evidence:
-  - `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `16` tests on `2026-05-12`.
-  - `python -m pytest -q` passed with `367` tests on `2026-05-12`.
+  - `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `18` tests on `2026-05-12`.
+  - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
   - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage46Verify-20260512 --chat-name Stage46Verify-20260512` passed with `overall_score=0.9846` on `2026-05-12`.
+  - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage47Verify-20260512 --chat-name Stage47Verify-20260512` passed with `overall_score=0.9896` and `provider_substrate_score=1.0` on `2026-05-12`.
   - `python -m holo_host show-bionic-boundary-stress-scorecard` reported latest run `status=pass`, `overall_score=0.9846` on `2026-05-12`.
   - Local direct provider-status construction reported `deepseek.available=False` because `DEEPSEEK_API_KEY` was not set in this process.
+  - `python -m holo_host show-provider-substrate-status` returned `ok=false` because `DEEPSEEK_API_KEY is not set`, which is correct substrate-diagnostic evidence.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
-- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE46.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: restart the live API and rerun Stage46 against a real DeepSeek key, then add provider-conflict monitoring and provider-aware stable-prefix reuse.
+- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE47.md`, and do not assume any uncommitted chat-only state exists.
+- Next safe direction: restart the live API and rerun Stage46 against a real DeepSeek key, then add provider-aware stable-prefix reuse.
 - Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is

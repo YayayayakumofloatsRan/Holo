@@ -10,6 +10,7 @@ from unittest.mock import patch
 from holo_host.config import load_config
 from holo_host.codex_runner import CodexRunner
 from holo_host.models import ProcessorTaskRequest, ProcessorUsageRecord
+from holo_host.provider_substrate import analyze_provider_substrate_conflicts
 from holo_host.store import QueueStore
 
 
@@ -473,3 +474,39 @@ max_output_tokens = 256
             self.assertEqual(command[command.index("-m") + 1], "gpt-unit-codex")
             self.assertNotIn("deepseek-v4-pro", command)
             self.assertEqual(result.metadata["provider_failures"][0]["provider"], "deepseek")
+
+    def test_provider_substrate_conflict_monitor_flags_unavailable_active_provider_and_fallback(self) -> None:
+        provider_status = {
+            "active_backend_alias": "deepseek",
+            "providers": {
+                "deepseek": {"available": False, "reason": "DEEPSEEK_API_KEY is not set"},
+                "codex_cli": {"available": True, "reason": ""},
+            },
+            "lanes": {
+                "subject_main": {
+                    "primary_provider": "deepseek",
+                    "backup_provider": "codex_cli",
+                    "model": "deepseek-v4-pro",
+                }
+            },
+        }
+        report = analyze_provider_substrate_conflicts(
+            provider_status,
+            turns=[
+                {
+                    "processor_debug": {
+                        "provider": "codex_cli",
+                        "model": "gpt-unit-codex",
+                        "lane": "subject_main",
+                        "fallback_provider": "codex_cli",
+                        "provider_failures": [{"provider": "deepseek", "reason": "DEEPSEEK_API_KEY is not set"}],
+                    }
+                }
+            ],
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertTrue(report["flags"]["active_provider_unavailable"])
+        self.assertTrue(report["flags"]["fallback_provider_in_effect"])
+        self.assertFalse(report["flags"]["provider_model_mismatch"])
+        self.assertEqual(report["declared_backend"], "deepseek")

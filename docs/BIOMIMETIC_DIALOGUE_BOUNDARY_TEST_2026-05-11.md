@@ -359,6 +359,12 @@ Repair:
 - Fallback metadata includes `provider_failures`, so future stress results can separate processor-substrate failure from biomimetic behavior failure.
 - A running API service started before this patch must be restarted before `/provider-status` is current evidence.
 
+Stage47 follow-up:
+
+- Added `show-provider-substrate-status` and HTTP `/provider-substrate-status`.
+- Stage46 scorecards now include `provider_substrate_score` and `provider_substrate_conflict`.
+- The current process correctly reports `ok=false` because `DEEPSEEK_API_KEY is not set`; this is substrate-diagnostic evidence, not a biomimetic behavior failure.
+
 ## Recommended Next Work
 
 1. Restart the live API and rerun Stage46 against a real DeepSeek key before treating live biomimetic scores as current.

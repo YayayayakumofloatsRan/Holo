@@ -333,6 +333,24 @@ def _provider_status_payload(config_path: str | None, *, allow_local_fallback: b
             service.memory.graph.close()
 
 
+def _provider_substrate_status_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/provider-substrate-status")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.provider_substrate_status(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _provider_contracts_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
     live_payload = _live_api_request(config_path, method="GET", path="/provider-contracts")
     if live_payload is not None:
@@ -7943,6 +7961,12 @@ def command_show_provider_status(config_path: str | None) -> int:
     return 0
 
 
+def command_show_provider_substrate_status(config_path: str | None) -> int:
+    payload, _transport = _provider_substrate_status_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_show_provider_contracts(config_path: str | None) -> int:
     payload, _transport = _provider_contracts_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9251,6 +9275,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-stream-status", help="Show background Mind OS stream status and recent runs")
     subparsers.add_parser("show-processor-routing", help="Show processor lane routing and task dispatch policy")
     subparsers.add_parser("show-provider-status", help="Show processor provider availability and configured lane backends")
+    subparsers.add_parser("show-provider-substrate-status", help="Show provider substrate conflicts between configured and actual processor state")
     subparsers.add_parser("show-provider-contracts", help="Show processor provider API compatibility contracts")
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
@@ -9757,6 +9782,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_processor_routing(args.config)
     if args.command == "show-provider-status":
         return command_show_provider_status(args.config)
+    if args.command == "show-provider-substrate-status":
+        return command_show_provider_substrate_status(args.config)
     if args.command == "show-provider-contracts":
         return command_show_provider_contracts(args.config)
     if args.command == "show-visual-provider-readiness":

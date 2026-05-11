@@ -160,6 +160,11 @@ Stage46: bionic boundary stress and provider substrate diagnostics
 - Adds `run-bionic-boundary-stress` and `show-bionic-boundary-stress-scorecard`, persisting only operational `agent_eval_runs`.
 - Repairs provider fallback model isolation so DeepSeek lanes do not invoke Codex CLI with DeepSeek model names, and marks local DeepSeek status unavailable when the configured API key env var is missing.
 
+Stage47: provider substrate conflict monitor
+- Adds `show-provider-substrate-status` plus HTTP `/provider-substrate-status` for active-provider, lane-primary, fallback, and provider/model mismatch conflicts.
+- Stage46 scorecards now include `provider_substrate_score` and `provider_substrate_conflict`, so provider/key/model failures downgrade a run before it is treated as biomimetic evidence.
+- Keeps the signal diagnostic-only inside the processor fabric; no WeChat transport, watcher authority, self-memory mutation, or second decision layer is added.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
