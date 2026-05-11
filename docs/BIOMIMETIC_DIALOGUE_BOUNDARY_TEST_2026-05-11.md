@@ -192,6 +192,34 @@ Remaining latency risk:
 - The new guard removes the avoidable reconstruction path for ordinary `reply_once` emotional recall turns.
 - When the subject layer selects `history_refresh`, latency remains bounded by memory refresh and reconstruction. That is intentional for explicit or selected recall work, but still too slow for always-on companionship if the selector overuses history refresh.
 
+## Pipeline Latency Repair - 2026-05-11
+
+The second latency pass kept capability intact by moving non-explicit recall pressure out of the blocking Windows/history/reconstruction path.
+
+Root cause:
+
+- A casual tiredness probe was classified as `stage17:high_risk_continuity_ambiguity`.
+- That reason made `_should_refresh_wechat_history()` allow a synchronous Windows-side history refresh even though the user did not ask for memory/history.
+- The selected `history_refresh` action then caused synchronous `recall_reconstruct` before final reply generation.
+
+Code changes:
+
+- `stage17:high_risk_continuity_ambiguity` no longer authorizes blocking Windows history refresh by itself.
+- Blocking Windows history refresh remains allowed for explicit memory/search requests, explicit memory recall reasons, and origin recall.
+- If a non-explicit emotional recall turn still enters `history_refresh`, `recall_reconstruct` is skipped on the blocking reply path.
+- Demotion metadata now records `nonblocking_recall_without_explicit_request`.
+
+Fresh verification after API restart:
+
+- `pytest -q tests/test_holo_host.py tests/test_processor_fabric.py -k "deepseek_provider or recall_reconstruct or reconstruction or windows_history_refresh or high_risk_continuity"`: `9 passed, 63 deselected`.
+- Live casual probe: `elapsed_ms=4098`, `selected_action=reply_once`, `route=recall`, `processor_ms=3142`, `recall_reconstruct_ms=0`.
+- Live explicit-memory probe: `elapsed_ms=10162`, `selected_action=history_refresh`, `route=deep_recall`, `processor_ms=2677`, `recall_reconstruct_ms=5971`.
+
+Interpretation:
+
+- Ordinary companionship now approaches the current DeepSeek reply floor plus host overhead, without crossing Windows or running a second model call.
+- Explicit memory remains slower because it intentionally keeps the full recall path.
+
 ## Recommended Next Work
 
 1. Add UTF-8 `/reply` request regression coverage with raw Chinese JSON and no ASCII escaping.

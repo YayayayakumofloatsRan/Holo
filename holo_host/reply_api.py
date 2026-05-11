@@ -7709,8 +7709,15 @@ class HoloReplyService:
             return False
         query = turn.text.lower()
         explicit_request = any(marker in query for marker in WECHAT_HISTORY_EXPLICIT_HINTS)
+        intent = {}
+        for key in ("intent_state_v4", "intent_state_v3", "intent_state_v2", "intent_state"):
+            candidate = sidecar.get(key, {})
+            if isinstance(candidate, dict):
+                intent = candidate
+                break
+        explicit_memory_request = bool(intent.get("local_memory_requested") or intent.get("search_requested"))
         recall_reason = str(sidecar.get("recall_reason", "") or str(dict(sidecar.get("stage17", {})).get("recall_escalation_reason", ""))).strip()
-        if recall_reason in {"stage17:explicit_memory_query", "explicit_memory_query", "stage17:high_risk_continuity_ambiguity", "high_risk_continuity_ambiguity"}:
+        if explicit_memory_request or recall_reason in {"stage17:explicit_memory_query", "explicit_memory_query"}:
             return True
         if str(sidecar.get("query_focus", "") or "") == "origin" and str(sidecar.get("tier", "")).strip().lower() in {"recall", "deep_recall"}:
             return True
@@ -8620,7 +8627,10 @@ class HoloReplyService:
         selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
         demoted_history_refresh_report: dict[str, Any] = {}
         if selected_action_type == "history_refresh" and not self._should_refresh_wechat_history(turn, sidecar):
-            selected_action, selected_action_type, demoted_history_refresh_report = self._demote_nonblocking_history_refresh(sidecar)
+            selected_action, selected_action_type, demoted_history_refresh_report = self._demote_nonblocking_history_refresh(
+                sidecar,
+                reason="nonblocking_recall_without_explicit_request",
+            )
         self._record_subject_action(turn=turn, incoming=incoming, sidecar=sidecar)
         self.store.update_event_decision(
             event_row_id,
@@ -9141,7 +9151,10 @@ class HoloReplyService:
                     selected_action_type = candidate_type
                     break
         if selected_action_type == "history_refresh" and not self._should_refresh_wechat_history(turn, sidecar):
-            selected_action, selected_action_type, demoted_history_refresh_report = self._demote_nonblocking_history_refresh(sidecar)
+            selected_action, selected_action_type, demoted_history_refresh_report = self._demote_nonblocking_history_refresh(
+                sidecar,
+                reason="nonblocking_recall_without_explicit_request",
+            )
         last_action_selection = dict(sidecar.get("last_action_selection", {})) if isinstance(sidecar.get("last_action_selection", {}), dict) else {}
         if record.get("duplicate") and record.get("awaiting_reply"):
             if str(last_action_selection.get("message_id", "") or "") == incoming.message_id and selected_action_type in {"silence", "defer_reply"}:

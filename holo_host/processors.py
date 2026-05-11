@@ -906,7 +906,7 @@ def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> 
             intent = candidate
             break
     explicit_memory_request = bool(intent.get("local_memory_requested") or intent.get("search_requested"))
-    if tier == "recall" and selected_action_type == "reply_once" and not explicit_memory_request:
+    if tier == "recall" and selected_action_type in {"reply_once", "history_refresh"} and not explicit_memory_request:
         if context.attention_state.primary_focus in {"emotional_load", "companionship", "direct_answer"}:
             return False
     if list(context.mind_packet.get("activation_trace_ids", [])):

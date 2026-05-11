@@ -16,6 +16,7 @@ from holo_host.mind_graph import MindGraph
 from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, TurnContext
 from holo_host.policy import AutonomyPolicy
 from holo_host.reply_api import (
+    ChatTurn,
     HoloReplyService,
     _coerce_helper_artifact_path,
     _coerce_helper_artifact_path_for_holo_host,
@@ -2443,6 +2444,50 @@ class DaemonFlowTests(unittest.TestCase):
             finally:
                 close_daemon_handles(daemon)
 class ReplyServiceTests(unittest.TestCase):
+    def test_high_risk_continuity_does_not_block_windows_history_without_explicit_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = object.__new__(HoloReplyService)
+            service.config = config
+            turn = ChatTurn(
+                chat_name="LatencyTest",
+                thread_key="LatencyTest",
+                sender="LatencyTest",
+                channel="wechat",
+                text="I'm a bit tired today. are you there?",
+            )
+            packet = {
+                "tier": "recall",
+                "recall_reason": "stage17:high_risk_continuity_ambiguity",
+                "selected_action": {"action_type": "history_refresh"},
+                "intent_state_v4": {"local_memory_requested": False, "search_requested": False},
+            }
+
+            self.assertFalse(service._should_refresh_wechat_history(turn, packet))
+
+    def test_explicit_memory_query_still_allows_windows_history_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            service = object.__new__(HoloReplyService)
+            service.config = config
+            turn = ChatTurn(
+                chat_name="LatencyTest",
+                thread_key="LatencyTest",
+                sender="LatencyTest",
+                channel="wechat",
+                text="do you remember what I said yesterday?",
+            )
+            packet = {
+                "tier": "deep_recall",
+                "recall_reason": "stage17:explicit_memory_query",
+                "selected_action": {"action_type": "history_refresh"},
+                "intent_state_v4": {"local_memory_requested": True, "search_requested": False},
+            }
+
+            self.assertTrue(service._should_refresh_wechat_history(turn, packet))
+
     def test_casual_emotional_recall_does_not_block_on_reconstruction(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2459,6 +2504,38 @@ class ReplyServiceTests(unittest.TestCase):
                 chat_name="LatencyTest",
                 sender="LatencyTest",
                 user_text="tired, are you here?",
+                sidecar=packet,
+                mind_packet=packet,
+                attention_state=AttentionState(
+                    primary_focus="emotional_load",
+                    secondary_focus="companionship",
+                    reply_goal="soothe_then_answer",
+                    pressure_level="high",
+                    salience_sources=["pressure", "companionship", "question"],
+                ),
+                emotion_state={},
+                history=[],
+            )
+
+            self.assertFalse(_should_run_recall_reconstruct(context, config))
+
+    def test_high_risk_history_refresh_does_not_block_emotional_reconstruction_without_explicit_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            packet = {
+                "tier": "recall",
+                "recall_reason": "stage17:high_risk_continuity_ambiguity",
+                "selected_action": {"action_type": "history_refresh"},
+                "episodic_recall": {"lines": ["older warmth anchor"]},
+                "intent_state_v4": {"local_memory_requested": False, "search_requested": False},
+            }
+            context = TurnContext(
+                channel="wechat",
+                thread_key="wechat:LatencyTest",
+                chat_name="LatencyTest",
+                sender="LatencyTest",
+                user_text="I'm a bit tired today. are you there?",
                 sidecar=packet,
                 mind_packet=packet,
                 attention_state=AttentionState(
