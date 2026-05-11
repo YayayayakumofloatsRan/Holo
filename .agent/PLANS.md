@@ -128,11 +128,13 @@
 ## Active Program Index
 - `Stage23-27 bootstrap program`: `.agent/STAGE23_27_PROGRAM.md`
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
+- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE43.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
 - `Active implementation priority`: Stage43 motivational-dynamics validation, provider/API compatibility, richer eval suites, multimodal user-sim scenarios, replay-backed facade slimming, or operator-approved live WeChat hardening
 - `Current live runtime boundary`: Stage43 is implemented in code as an internal bionic control-field surface; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, or second decision layer was added
+- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, commit `e9651a3 feat: add stage43 motivational dynamics field`, clean working tree at Stage43 handoff
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.

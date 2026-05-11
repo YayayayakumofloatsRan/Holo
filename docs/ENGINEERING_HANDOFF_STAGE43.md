@@ -29,6 +29,14 @@ Stage43 adds a bounded motivational dynamics field to the bionic kernel. It is a
 - `python scripts/check_public_release_hygiene.py` passed.
 - `git diff --check` reported no whitespace errors.
 
+## New Thread Resume
+- Continue from branch `codex/stage29-bionic-cli-agent`.
+- Stage43 implementation commit is `e9651a3 feat: add stage43 motivational dynamics field`.
+- Treat `HOLO_HANDOFF.md`, `.agent/PLANS.md`, and this file as the durable state; do not rely on prior chat context.
+- First check in a new thread should be `git status --short`.
+- If continuing implementation, make a fresh Stage44+ plan before changing runtime behavior.
+- Keep Stage43 internal-only: no WeChat startup, no transport-authority change, no self-memory write, no second brain, and no new unbounded loop.
+
 ## Review Notes
 - The field is replay-stable: stochasticity uses a stable digest seed, not runtime randomness.
 - The field is bounded: action-market deltas are capped at `0.08`; stochastic noise is capped at `0.03`.

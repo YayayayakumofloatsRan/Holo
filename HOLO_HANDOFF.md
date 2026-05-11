@@ -95,6 +95,23 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - processor routing and cost policy entrypoints
 - current next-step focus for the next thread
 
+## New Thread Resume Snapshot
+- Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
+- Resume branch: `codex/stage29-bionic-cli-agent`
+- Resume commit: `e9651a3 feat: add stage43 motivational dynamics field`
+- Working tree at handoff time: clean immediately after the Stage43 commit.
+- Current milestone: `stage43-motivational-dynamics-field`
+- Current status: Stage43 is implemented and verified as an internal bionic control-field surface.
+- Latest full verification evidence:
+  - `pytest -q tests/test_stage29_bionic_cli_agent.py tests/test_stage39_bionic_turing_benchmark.py tests/test_stage42_bionic_user_sim.py tests/test_stage43_motivational_dynamics.py` passed with `43` tests on `2026-05-11`.
+  - `python -m holo_host --config .holo_host.toml accept-stage43 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-11`.
+  - `pytest -q` passed with `351` tests on `2026-05-11`.
+  - `python scripts/check_public_release_hygiene.py` passed on `2026-05-11`.
+  - `git diff --check` reported no whitespace errors on `2026-05-11`.
+- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE43.md`, and do not assume any uncommitted chat-only state exists.
+- Next safe direction: Stage44+ should be explicitly planned before implementation. Reasonable candidates are motivational-dynamics hardening, richer multimodal user-simulation suites, provider/API compatibility breadth through the processor fabric, replay-backed facade slimming, or operator-approved live transport hardening.
+- Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
+
 ## What Holo Is
 - Holo is not one long Codex conversation.
 - Holo is an externalized system:
