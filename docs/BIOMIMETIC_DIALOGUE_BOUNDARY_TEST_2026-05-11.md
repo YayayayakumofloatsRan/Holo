@@ -325,16 +325,51 @@ Observed:
 - `5 passed, 4 deselected`
 - Local provider-status construction reports `response_cache.cache_mode=exact_response`; the running live API process must be restarted before that field appears through `/provider-status`.
 
+## Stage46 Boundary Suite - 2026-05-12
+
+The compact high-intensity regression suite from the valid stress probes is now implemented as Stage46.
+
+Added:
+
+- `run-bionic-boundary-stress`
+- `show-bionic-boundary-stress-scorecard`
+- `holo_host/bionic_boundary_stress.py`
+- `tests/test_stage46_bionic_boundary_stress.py`
+- `docs/ENGINEERING_HANDOFF_STAGE46.md`
+
+The suite tests affective pressure, symbolic correction, reminder binding, visual honesty, continuity, self-audit, mechanism leakage, cache pressure, and latency without starting WeChat transport or mutating self-memory.
+
+Fresh offline verification:
+
+- `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py`: `16 passed`
+- `python -m pytest -q`: `367 passed`
+- `run-bionic-boundary-stress --offline`: `ok=True`, `overall_score=0.9846`, `turns=7`
+- `show-bionic-boundary-stress-scorecard`: latest run `status=pass`, `overall_score=0.9846`
+
+Substrate finding:
+
+- The live DeepSeek stress path was not valid biomimetic evidence in this process because `DEEPSEEK_API_KEY` was missing.
+- The previous provider status path could still report DeepSeek as available because it only reflected the provider class contract.
+- When DeepSeek failed, fallback to `codex_cli` reused the DeepSeek lane model `deepseek-v4-pro`, causing Codex CLI to fail with an unsupported model instead of using the configured Codex model.
+
+Repair:
+
+- Provider fallback now resolves models per provider.
+- Local provider status reports DeepSeek unavailable when the configured key env var is absent.
+- Fallback metadata includes `provider_failures`, so future stress results can separate processor-substrate failure from biomimetic behavior failure.
+- A running API service started before this patch must be restarted before `/provider-status` is current evidence.
+
 ## Recommended Next Work
 
-1. Extend the perceptual-grounding guard toward pre-generation prompt constraints and image-provider positive evidence; the current repair covers post-generation visual overclaim rewriting.
-2. Extend prospective speech-act binding beyond reminders into initiative and follow-up utterances; the current repair covers explicit reminder requests.
-3. Add hippocampal binding/update tests for symbolic anchors and corrections: seed, probe, correction, delayed probe, and self-audit must distinguish original binding, corrected binding, and metaphorical embellishment.
-4. Add an anterior-cingulate-style conflict monitor for capability conflicts: image requested but no image, reminder requested but no scheduler write, user asks for impossible autonomy, or self-audit misses observed failures.
-5. Make desire/motivation reports evidence-bound to internal motivational/control variables instead of pure rhetorical flourish.
-6. Keep selector calibration focused on explicitness: ordinary affective turns should avoid blocking recall, while explicit memory probes can keep full reconstruction.
-7. Add a compact high-intensity bionic dialogue regression suite from the valid `CodexBionicStressUtf8Arg2-20260511` probes.
-8. Keep UTF-8 `/reply` request regression coverage, including raw Chinese JSON and the PowerShell stdin failure mode, so future tests do not confuse harness encoding with bionic failure.
+1. Restart the live API and rerun Stage46 against a real DeepSeek key before treating live biomimetic scores as current.
+2. Extend the perceptual-grounding guard toward pre-generation prompt constraints and image-provider positive evidence; the current repair covers post-generation visual overclaim rewriting.
+3. Extend prospective speech-act binding beyond reminders into initiative and follow-up utterances; the current repair covers explicit reminder requests.
+4. Add hippocampal binding/update tests for symbolic anchors and corrections: seed, probe, correction, delayed probe, and self-audit must distinguish original binding, corrected binding, and metaphorical embellishment.
+5. Add an anterior-cingulate-style conflict monitor for capability conflicts: declared provider versus actual provider, image requested but no image, reminder requested but no scheduler write, user asks for impossible autonomy, or self-audit misses observed failures.
+6. Make desire/motivation reports evidence-bound to internal motivational/control variables instead of pure rhetorical flourish.
+7. Keep selector calibration focused on explicitness: ordinary affective turns should avoid blocking recall, while explicit memory probes can keep full reconstruction.
+8. Move from exact-response cache diagnostics toward provider-aware stable-prefix reuse so cache-hit tokens rise without pinning all dialogue to one overloaded conversation.
+9. Keep UTF-8 `/reply` request regression coverage, including raw Chinese JSON and the PowerShell stdin failure mode, so future tests do not confuse harness encoding with bionic failure.
 
 ## Reproduction Commands
 

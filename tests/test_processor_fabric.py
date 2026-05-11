@@ -387,3 +387,89 @@ response_cache_ttl_seconds = 3600
                 self.assertEqual(cache_stats["misses"], 1)
             finally:
                 store.close()
+
+    def test_deepseek_provider_status_requires_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_api_key_env = "TEST_MISSING_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+
+            status = runner.provider_status()
+
+            deepseek = status["providers"]["deepseek"]
+            self.assertFalse(deepseek["available"])
+            self.assertEqual(deepseek["api_key_env"], "TEST_MISSING_DEEPSEEK_KEY")
+            self.assertIn("TEST_MISSING_DEEPSEEK_KEY", deepseek["reason"])
+
+    def test_deepseek_to_codex_fallback_uses_codex_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+codex_command_prefix = ["codex"]
+codex_model = "gpt-unit-codex"
+codex_reasoning_effort = "low"
+
+[processor_fabric]
+deepseek_api_key_env = "TEST_MISSING_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+
+[provider_backends.subject_main]
+primary_provider = "deepseek"
+backup_provider = "codex_cli"
+model = "deepseek-v4-pro"
+reasoning_effort = "medium"
+max_output_tokens = 256
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+
+            with patch("holo_host.codex_runner.subprocess.run") as run_mock:
+                def fake_run(command, **kwargs):
+                    Path(command[command.index("-o") + 1]).write_text("fallback reply", encoding="utf-8")
+
+                    class _Completed:
+                        returncode = 0
+                        stdout = '{"type":"thread.started","thread_id":"fallback-thread"}\n'
+                        stderr = ""
+
+                    return _Completed()
+
+                run_mock.side_effect = fake_run
+                result = runner.run_task(
+                    ProcessorTaskRequest(task_type="reply", prompt="hello", provider_hint="deepseek")
+                )
+
+            command = run_mock.call_args.args[0]
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.text, "fallback reply")
+            self.assertEqual(result.metadata["provider"], "codex_cli")
+            self.assertEqual(result.metadata["fallback_provider"], "codex_cli")
+            self.assertEqual(result.metadata["model"], "gpt-unit-codex")
+            self.assertIn("-m", command)
+            self.assertEqual(command[command.index("-m") + 1], "gpt-unit-codex")
+            self.assertNotIn("deepseek-v4-pro", command)
+            self.assertEqual(result.metadata["provider_failures"][0]["provider"], "deepseek")

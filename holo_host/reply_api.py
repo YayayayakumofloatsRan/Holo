@@ -9739,6 +9739,7 @@ class HoloReplyService:
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
                 "grounding_guard": grounding_guard,
+                "processor_debug": dict(reply_plan.debug or {}),
                 "selected_action": dict(sidecar.get("selected_action", {})),
                 "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),

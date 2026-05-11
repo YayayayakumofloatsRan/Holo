@@ -81,12 +81,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 76. `docs/ENGINEERING_HANDOFF_STAGE42.md`
 77. `docs/STAGE43_MOTIVATIONAL_DYNAMICS_FIELD.md`
 78. `docs/ENGINEERING_HANDOFF_STAGE43.md`
-79. `HOLO_SYSTEM.md`
-80. `HOLO_HOST.md`
-81. `OPERATIONS.md`
-82. `docs/PUBLIC_RELEASE_HYGIENE.md`
-83. `holo_memory_library/MEMORY_LIBRARY.md`
-84. `windows_helper/README.md`
+79. `docs/ENGINEERING_HANDOFF_STAGE44.md`
+80. `docs/ENGINEERING_HANDOFF_STAGE45.md`
+81. `docs/ENGINEERING_HANDOFF_STAGE46.md`
+82. `HOLO_SYSTEM.md`
+83. `HOLO_HOST.md`
+84. `OPERATIONS.md`
+85. `docs/PUBLIC_RELEASE_HYGIENE.md`
+86. `holo_memory_library/MEMORY_LIBRARY.md`
+87. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -98,18 +101,20 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: `e9651a3 feat: add stage43 motivational dynamics field`
-- Working tree at handoff time: clean immediately after the Stage43 commit.
-- Current milestone: `stage43-motivational-dynamics-field`
-- Current status: Stage43 is implemented and verified as an internal bionic control-field surface.
+- Resume commit: Stage46 commit on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the Stage46 commit.
+- Current milestone: `stage46-bionic-boundary-stress`
+- Current status: Stage46 is implemented and verified as an internal bionic boundary stress and provider-substrate diagnostic surface.
 - Latest full verification evidence:
-  - `pytest -q tests/test_stage29_bionic_cli_agent.py tests/test_stage39_bionic_turing_benchmark.py tests/test_stage42_bionic_user_sim.py tests/test_stage43_motivational_dynamics.py` passed with `43` tests on `2026-05-11`.
-  - `python -m holo_host --config .holo_host.toml accept-stage43 --thread-key cli:TestUser --chat-name TestUser --channel cli` passed on `2026-05-11`.
-  - `pytest -q` passed with `351` tests on `2026-05-11`.
-  - `python scripts/check_public_release_hygiene.py` passed on `2026-05-11`.
-  - `git diff --check` reported no whitespace errors on `2026-05-11`.
-- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE43.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: Stage44+ should be explicitly planned before implementation. Reasonable candidates are motivational-dynamics hardening, richer multimodal user-simulation suites, provider/API compatibility breadth through the processor fabric, replay-backed facade slimming, or operator-approved live transport hardening.
+  - `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `16` tests on `2026-05-12`.
+  - `python -m pytest -q` passed with `367` tests on `2026-05-12`.
+  - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage46Verify-20260512 --chat-name Stage46Verify-20260512` passed with `overall_score=0.9846` on `2026-05-12`.
+  - `python -m holo_host show-bionic-boundary-stress-scorecard` reported latest run `status=pass`, `overall_score=0.9846` on `2026-05-12`.
+  - Local direct provider-status construction reported `deepseek.available=False` because `DEEPSEEK_API_KEY` was not set in this process.
+  - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
+  - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
+- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE46.md`, and do not assume any uncommitted chat-only state exists.
+- Next safe direction: restart the live API and rerun Stage46 against a real DeepSeek key, then add provider-conflict monitoring and provider-aware stable-prefix reuse.
 - Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is

@@ -155,6 +155,11 @@ Stage45: biomimetic grounding and context scheduling
 - Added processor context scheduling with `8k`/`128k`/`1m` window classes, CJK-aware pressure estimation, stable/volatile prompt digests, history trimming, and high-pressure new-session selection.
 - Exposes response-cache mode as exact-response diagnostics so cache misses are not mistaken for provider-context reuse.
 
+Stage46: bionic boundary stress and provider substrate diagnostics
+- Added a seven-turn high-intensity biomimetic boundary stress suite for affective pressure, symbolic correction, reminder binding, visual honesty, continuity, self-audit, mechanism leakage, cache pressure, and latency.
+- Adds `run-bionic-boundary-stress` and `show-bionic-boundary-stress-scorecard`, persisting only operational `agent_eval_runs`.
+- Repairs provider fallback model isolation so DeepSeek lanes do not invoke Codex CLI with DeepSeek model names, and marks local DeepSeek status unavailable when the configured API key env var is missing.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

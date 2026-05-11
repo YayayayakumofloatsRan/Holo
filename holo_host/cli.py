@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .cli_parts import bionic as bionic_cli
+from .cli_parts import boundary_stress as boundary_stress_cli
 from .cli_parts import brain as brain_cli
 from .cli_parts import engineering as engineering_cli
 from .cli_parts import motivational as motivational_cli
@@ -8098,6 +8099,33 @@ def command_show_bionic_user_sim_scorecard(config_path: str | None, *, suite: st
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_run_bionic_boundary_stress(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    turn_limit: int,
+    offline: bool,
+) -> int:
+    payload, _transport = boundary_stress_cli.run_bionic_boundary_stress_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        turn_limit=turn_limit,
+        offline=offline,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_show_bionic_boundary_stress_scorecard(config_path: str | None, *, suite: str) -> int:
+    payload, _transport = boundary_stress_cli.show_bionic_boundary_stress_scorecard_payload(config_path, suite=suite)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_engineering_run(
     config_path: str | None,
     *,
@@ -9272,6 +9300,14 @@ def main(argv: list[str] | None = None) -> int:
     user_sim_parser.add_argument("--offline", action="store_true")
     user_sim_scorecard_parser = subparsers.add_parser("show-bionic-user-sim-scorecard", help="Show the latest Stage-42 user-simulation scorecard")
     user_sim_scorecard_parser.add_argument("--suite", default="novice_intro")
+    boundary_stress_parser = subparsers.add_parser("run-bionic-boundary-stress", help="Run the Stage-46 high-intensity bionic boundary stress suite")
+    boundary_stress_parser.add_argument("--thread-key", default="cli:Stage46Boundary")
+    boundary_stress_parser.add_argument("--chat-name", default="Stage46Boundary")
+    boundary_stress_parser.add_argument("--channel", default="cli")
+    boundary_stress_parser.add_argument("--turns", type=int, default=7)
+    boundary_stress_parser.add_argument("--offline", action="store_true")
+    boundary_stress_scorecard_parser = subparsers.add_parser("show-bionic-boundary-stress-scorecard", help="Show the latest Stage-46 boundary-stress scorecard")
+    boundary_stress_scorecard_parser.add_argument("--suite", default="boundary_stress")
     engineering_run_parser = subparsers.add_parser("engineering-run", help="Run one Stage-41 controlled engineering agent loop")
     engineering_run_parser.add_argument("--goal", required=True)
     engineering_run_parser.add_argument("--thread-key", default="cli:TestUser")
@@ -9789,6 +9825,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "show-bionic-user-sim-scorecard":
         return command_show_bionic_user_sim_scorecard(args.config, suite=args.suite)
+    if args.command == "run-bionic-boundary-stress":
+        return command_run_bionic_boundary_stress(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            turn_limit=args.turns,
+            offline=args.offline,
+        )
+    if args.command == "show-bionic-boundary-stress-scorecard":
+        return command_show_bionic_boundary_stress_scorecard(args.config, suite=args.suite)
     if args.command == "engineering-run":
         return command_engineering_run(
             args.config,

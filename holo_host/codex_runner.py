@@ -328,7 +328,7 @@ class ProcessorProvider:
         return True
 
     def provider_contract(self, runner: "CodexRunner") -> dict[str, Any]:
-        availability = self.availability()
+        availability = runner._provider_availability(self.name, self)
         return {
             "name": self.name,
             "api_surface": self.api_surface,
@@ -373,6 +373,14 @@ class CodexCliProvider(ProcessorProvider):
     ) -> ProcessorTaskResult:
         with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", delete=False) as handle:
             output_path = Path(handle.name)
+        effective_model = runner._provider_model(self.name, lane_name, lane_config, request)
+        effective_reasoning_effort = runner._provider_reasoning_effort(
+            self.name,
+            lane_name,
+            lane_config,
+            request,
+            spec,
+        )
 
         def run_once(*, resumed: bool) -> tuple[subprocess.CompletedProcess[str], list[str]]:
             prefix = runner._codex_invocation_prefix()
@@ -417,10 +425,8 @@ class CodexCliProvider(ProcessorProvider):
             command = runner._apply_runtime_options(
                 command,
                 resumed=resumed,
-                model_override=request.model_override or lane_config.model,
-                reasoning_effort_override=request.reasoning_effort_override
-                or lane_config.reasoning_effort
-                or str(spec.get("default_reasoning_effort", "")),
+                model_override=effective_model,
+                reasoning_effort_override=effective_reasoning_effort,
             )
             if output_path.exists():
                 output_path.write_text("", encoding="utf-8")
@@ -474,10 +480,8 @@ class CodexCliProvider(ProcessorProvider):
                 "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
                 "provider": self.name,
                 "lane": lane_name,
-                "model": request.model_override or lane_config.model,
-                "reasoning_effort": request.reasoning_effort_override
-                or lane_config.reasoning_effort
-                or str(spec.get("default_reasoning_effort", "")),
+                "model": effective_model,
+                "reasoning_effort": effective_reasoning_effort,
                 "usage": usage,
                 "duration_ms": duration_ms,
                 "budget_tag": request.budget_tag,
@@ -552,8 +556,16 @@ class _OpenAIResponsesBase(ProcessorProvider):
     ) -> ProcessorTaskResult:
         started_at = time.perf_counter()
         client = self._client(runner)
+        effective_model = runner._provider_model(self.name, lane_name, lane_config, request)
+        effective_reasoning_effort = runner._provider_reasoning_effort(
+            self.name,
+            lane_name,
+            lane_config,
+            request,
+            spec,
+        )
         response = client.responses.create(
-            model=request.model_override or lane_config.model,
+            model=effective_model,
             input=request.prompt,
             max_output_tokens=request.max_output_tokens or lane_config.max_output_tokens or None,
         )
@@ -581,10 +593,8 @@ class _OpenAIResponsesBase(ProcessorProvider):
                 "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
                 "provider": self.name,
                 "lane": lane_name,
-                "model": request.model_override or lane_config.model,
-                "reasoning_effort": request.reasoning_effort_override
-                or lane_config.reasoning_effort
-                or str(spec.get("default_reasoning_effort", "")),
+                "model": effective_model,
+                "reasoning_effort": effective_reasoning_effort,
                 "usage": usage,
                 "duration_ms": duration_ms,
                 "budget_tag": request.budget_tag,
@@ -627,8 +637,16 @@ class OpenAICompatibleProvider(_OpenAIResponsesBase):
     ) -> ProcessorTaskResult:
         started_at = time.perf_counter()
         client = self._client(runner)
+        effective_model = runner._provider_model(self.name, lane_name, lane_config, request)
+        effective_reasoning_effort = runner._provider_reasoning_effort(
+            self.name,
+            lane_name,
+            lane_config,
+            request,
+            spec,
+        )
         payload: dict[str, Any] = {
-            "model": request.model_override or lane_config.model,
+            "model": effective_model,
             "messages": [{"role": "user", "content": request.prompt}],
         }
         max_tokens = request.max_output_tokens or lane_config.max_output_tokens or None
@@ -662,10 +680,8 @@ class OpenAICompatibleProvider(_OpenAIResponsesBase):
                 "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
                 "provider": self.name,
                 "lane": lane_name,
-                "model": request.model_override or lane_config.model,
-                "reasoning_effort": request.reasoning_effort_override
-                or lane_config.reasoning_effort
-                or str(spec.get("default_reasoning_effort", "")),
+                "model": effective_model,
+                "reasoning_effort": effective_reasoning_effort,
                 "usage": usage,
                 "duration_ms": duration_ms,
                 "budget_tag": request.budget_tag,
@@ -710,15 +726,12 @@ class DeepSeekProvider(ProcessorProvider):
         *,
         spec: dict[str, Any],
         lane_config: ProcessorLaneConfig,
+        model: str,
+        reasoning_effort: str,
     ) -> dict[str, Any]:
-        effective_effort = str(
-            request.reasoning_effort_override
-            or lane_config.reasoning_effort
-            or spec.get("default_reasoning_effort", "")
-            or ""
-        ).strip().lower()
+        effective_effort = str(reasoning_effort or "").strip().lower()
         payload: dict[str, Any] = {
-            "model": request.model_override or lane_config.model,
+            "model": model,
             "messages": [{"role": "user", "content": request.prompt}],
             "stream": False,
         }
@@ -766,8 +779,22 @@ class DeepSeekProvider(ProcessorProvider):
         api_key = self._api_key(runner)
         if not api_key:
             raise RuntimeError(f"{runner.config.processor_fabric.deepseek_api_key_env} is not set")
+        effective_model = runner._provider_model(self.name, lane_name, lane_config, request)
+        effective_reasoning_effort = runner._provider_reasoning_effort(
+            self.name,
+            lane_name,
+            lane_config,
+            request,
+            spec,
+        )
         url = f"{self._base_url(runner)}/chat/completions"
-        payload = self._payload(request, spec=spec, lane_config=lane_config)
+        payload = self._payload(
+            request,
+            spec=spec,
+            lane_config=lane_config,
+            model=effective_model,
+            reasoning_effort=effective_reasoning_effort,
+        )
         http_request = Request(
             url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -805,10 +832,8 @@ class DeepSeekProvider(ProcessorProvider):
                 "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
                 "provider": self.name,
                 "lane": lane_name,
-                "model": request.model_override or lane_config.model,
-                "reasoning_effort": request.reasoning_effort_override
-                or lane_config.reasoning_effort
-                or str(spec.get("default_reasoning_effort", "")),
+                "model": effective_model,
+                "reasoning_effort": effective_reasoning_effort,
                 "usage": usage,
                 "duration_ms": duration_ms,
                 "budget_tag": request.budget_tag,
@@ -855,11 +880,22 @@ class CodexRunner:
             for task_type, rule in self.config.processor_fabric.processor_routing.items()
         }
 
+    def _provider_availability(self, provider_name: str, provider: ProcessorProvider) -> dict[str, Any]:
+        availability = dict(provider.availability())
+        if provider_name == "deepseek":
+            env_name = self.config.processor_fabric.deepseek_api_key_env or "DEEPSEEK_API_KEY"
+            availability["api_key_env"] = env_name
+            availability["base_url"] = self.config.processor_fabric.deepseek_base_url or "https://api.deepseek.com"
+            if not str(os.environ.get(env_name, "") or "").strip():
+                availability["available"] = False
+                availability["reason"] = f"{env_name} is not set"
+        return availability
+
     def provider_status(self) -> dict[str, Any]:
         providers = {
             name: {
                 "name": name,
-                **provider.availability(),
+                **self._provider_availability(name, provider),
             }
             for name, provider in self._providers.items()
         }
@@ -976,16 +1012,19 @@ class CodexRunner:
         lane_name = self._resolve_lane_for_request(request, rule)
         lane_config = self._lane_config(lane_name)
         providers = self._provider_chain_for_lane(lane_name, lane_config, request.provider_hint)
+        first_provider = providers[0] if providers else ""
         return {
             "task_type": request.task_type,
             "lane": lane_name,
             "fallback_lane": rule.fallback_lane,
             "budget_tag": request.budget_tag or rule.budget_tag or request.task_type,
             "providers": providers,
-            "model": request.model_override or lane_config.model,
-            "reasoning_effort": request.reasoning_effort_override
-            or lane_config.reasoning_effort
-            or str(spec.get("default_reasoning_effort", "")),
+            "model": self._provider_model(first_provider, lane_name, lane_config, request),
+            "reasoning_effort": self._provider_reasoning_effort(first_provider, lane_name, lane_config, request, spec),
+            "provider_models": {
+                provider_name: self._provider_model(provider_name, lane_name, lane_config, request)
+                for provider_name in providers
+            },
             "max_output_tokens": request.max_output_tokens or lane_config.max_output_tokens,
             "upgrade_to_lane": rule.upgrade_to_lane,
         }
@@ -1114,6 +1153,65 @@ class CodexRunner:
             chain.append("codex_cli")
         return chain
 
+    @staticmethod
+    def _uses_fast_model(lane_name: str) -> bool:
+        current = str(lane_name or "").strip().lower()
+        return current == "micro_fast" or current.endswith("_fast") or "fast" in current
+
+    def _provider_model(
+        self,
+        provider_name: str,
+        lane_name: str,
+        lane_config: ProcessorLaneConfig,
+        request: ProcessorTaskRequest,
+    ) -> str:
+        explicit = str(request.model_override or "").strip()
+        if explicit:
+            return explicit
+        provider = str(provider_name or "").strip()
+        lane_model = str(lane_config.model or "").strip()
+        use_fast = self._uses_fast_model(lane_name)
+        if provider == "codex_cli":
+            preferred = self.config.runtime.fast_model if use_fast else self.config.runtime.codex_model
+            return str(preferred or lane_model or "").strip()
+        if provider == "responses":
+            preferred = self.config.runtime.responses_fast_model if use_fast else self.config.runtime.responses_model
+            return str(preferred or lane_model or "").strip()
+        if provider == "deepseek":
+            preferred = (
+                self.config.processor_fabric.deepseek_fast_model
+                if use_fast
+                else self.config.processor_fabric.deepseek_model
+            )
+            if lane_config.primary_provider == "deepseek":
+                return str(lane_model or preferred or "").strip()
+            return str(preferred or lane_model or "").strip()
+        if provider == "openai_compatible":
+            if lane_config.primary_provider == "openai_compatible":
+                return lane_model
+            preferred = self.config.runtime.responses_fast_model if use_fast else self.config.runtime.responses_model
+            return str(preferred or lane_model or "").strip()
+        return lane_model
+
+    def _provider_reasoning_effort(
+        self,
+        provider_name: str,
+        lane_name: str,
+        lane_config: ProcessorLaneConfig,
+        request: ProcessorTaskRequest,
+        spec: dict[str, Any],
+    ) -> str:
+        explicit = str(request.reasoning_effort_override or "").strip()
+        if explicit:
+            return explicit
+        provider = str(provider_name or "").strip()
+        if provider == "codex_cli":
+            if self._uses_fast_model(lane_name) and str(self.config.runtime.fast_reasoning_effort or "").strip():
+                return str(self.config.runtime.fast_reasoning_effort or "").strip()
+            if str(self.config.runtime.codex_reasoning_effort or "").strip():
+                return str(self.config.runtime.codex_reasoning_effort or "").strip()
+        return str(lane_config.reasoning_effort or spec.get("default_reasoning_effort", "") or "").strip()
+
     def response_cache_stats(self) -> dict[str, Any]:
         enabled = bool(getattr(self.config.processor_fabric, "response_cache_enabled", True))
         if not enabled or not hasattr(self.response_cache_store, "processor_response_cache_stats"):
@@ -1181,12 +1279,8 @@ class CodexRunner:
         lane_config: ProcessorLaneConfig,
         spec: dict[str, Any],
     ) -> str:
-        model = str(request.model_override or lane_config.model or "").strip()
-        reasoning_effort = str(
-            request.reasoning_effort_override
-            or lane_config.reasoning_effort
-            or spec.get("default_reasoning_effort", "")
-        ).strip()
+        model = self._provider_model(provider_name, lane_name, lane_config, request)
+        reasoning_effort = self._provider_reasoning_effort(provider_name, lane_name, lane_config, request, spec)
         payload = {
             "version": 2,
             "provider": provider_name,
@@ -1270,13 +1364,11 @@ class CodexRunner:
                 provider=provider_name,
                 task_type=request.task_type,
                 lane=lane_name,
-                model=str(result.metadata.get("model", request.model_override or lane_config.model) or ""),
+                model=str(result.metadata.get("model", self._provider_model(provider_name, lane_name, lane_config, request)) or ""),
                 reasoning_effort=str(
                     result.metadata.get(
                         "reasoning_effort",
-                        request.reasoning_effort_override
-                        or lane_config.reasoning_effort
-                        or str(spec.get("default_reasoning_effort", "")),
+                        self._provider_reasoning_effort(provider_name, lane_name, lane_config, request, spec),
                     )
                     or ""
                 ),
@@ -1398,17 +1490,21 @@ class CodexRunner:
         lane_config = self._lane_config(lane_name)
         provider_chain = self._provider_chain_for_lane(lane_name, lane_config, resolved_request.provider_hint)
         last_error: str = ""
+        provider_failures: list[dict[str, Any]] = []
         for index, provider_name in enumerate(provider_chain):
             provider = self._providers.get(provider_name)
             if provider is None:
                 last_error = f"unknown provider: {provider_name}"
+                provider_failures.append({"provider": provider_name, "reason": last_error})
                 continue
             availability = provider.availability()
             if not bool(availability.get("available", False)):
                 last_error = str(availability.get("reason", f"{provider_name} unavailable"))
+                provider_failures.append({"provider": provider_name, "reason": last_error})
                 continue
             if not provider.supports_request(resolved_request):
                 last_error = f"{provider_name} does not support task request"
+                provider_failures.append({"provider": provider_name, "reason": last_error})
                 continue
             cache_key = ""
             if self._response_cache_enabled_for(resolved_request, provider_name=provider_name):
@@ -1428,14 +1524,14 @@ class CodexRunner:
                     metadata = dict(result.metadata or {})
                     metadata.setdefault("lane", lane_name)
                     metadata.setdefault("provider", provider_name)
-                    metadata.setdefault("model", resolved_request.model_override or lane_config.model)
+                    metadata.setdefault("model", self._provider_model(provider_name, lane_name, lane_config, resolved_request))
                     metadata.setdefault(
                         "reasoning_effort",
-                        resolved_request.reasoning_effort_override
-                        or lane_config.reasoning_effort
-                        or str(spec.get("default_reasoning_effort", "")),
+                        self._provider_reasoning_effort(provider_name, lane_name, lane_config, resolved_request, spec),
                     )
                     metadata.setdefault("budget_tag", resolved_request.budget_tag or rule.budget_tag or resolved_request.task_type)
+                    if provider_failures:
+                        metadata["provider_failures"] = list(provider_failures)
                     result.metadata = metadata
                     self._record_usage(resolved_request, result)
                     return result
@@ -1449,18 +1545,21 @@ class CodexRunner:
                 )
             except Exception as exc:  # noqa: BLE001
                 last_error = str(exc)
+                provider_failures.append({"provider": provider_name, "reason": last_error})
                 continue
             metadata = dict(result.metadata or {})
             metadata.setdefault("lane", lane_name)
             metadata.setdefault("provider", provider_name)
-            metadata.setdefault("model", resolved_request.model_override or lane_config.model)
+            metadata.setdefault("model", self._provider_model(provider_name, lane_name, lane_config, resolved_request))
             metadata.setdefault(
                 "reasoning_effort",
-                resolved_request.reasoning_effort_override or lane_config.reasoning_effort or str(spec.get("default_reasoning_effort", "")),
+                self._provider_reasoning_effort(provider_name, lane_name, lane_config, resolved_request, spec),
             )
             metadata.setdefault("budget_tag", resolved_request.budget_tag or rule.budget_tag or resolved_request.task_type)
             if index > 0:
                 metadata["fallback_provider"] = provider_name
+            if provider_failures:
+                metadata["provider_failures"] = list(provider_failures)
             if cache_key:
                 metadata["cache"] = {
                     "hit": False,
@@ -1492,11 +1591,16 @@ class CodexRunner:
             metadata={
                 "lane": lane_name,
                 "provider": "",
-                "model": resolved_request.model_override or lane_config.model,
-                "reasoning_effort": resolved_request.reasoning_effort_override
-                or lane_config.reasoning_effort
-                or str(spec.get("default_reasoning_effort", "")),
+                "model": self._provider_model(provider_chain[0] if provider_chain else "", lane_name, lane_config, resolved_request),
+                "reasoning_effort": self._provider_reasoning_effort(
+                    provider_chain[0] if provider_chain else "",
+                    lane_name,
+                    lane_config,
+                    resolved_request,
+                    spec,
+                ),
                 "budget_tag": resolved_request.budget_tag or rule.budget_tag or resolved_request.task_type,
+                "provider_failures": list(provider_failures),
                 "usage": {
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
