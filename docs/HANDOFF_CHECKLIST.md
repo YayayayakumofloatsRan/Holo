@@ -20,6 +20,10 @@ If Stage-10 is the active work item, read:
 ## 2. Baseline Commands
 
 - `./scripts/holo-status.sh`
+- On Windows, verify WSL source alignment before trusting live-kernel results:
+  - `powershell -ExecutionPolicy Bypass -File scripts\holo-wsl-status.ps1`
+  - `wsl -d HoloUbuntu -- bash -lc "cd /home/holo/holo && git rev-parse HEAD && git status --short"`
+  - if WSL is behind the Windows repo snapshot, stop Holo and run `powershell -ExecutionPolicy Bypass -File scripts\holo-wsl-align.ps1`
 - `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host show-usage-ledger --limit 50`
