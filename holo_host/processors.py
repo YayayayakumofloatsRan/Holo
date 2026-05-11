@@ -896,6 +896,19 @@ def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> 
         return False
     if list(context.mind_packet.get("recall_reconstruction", {}).get("anchors", [])):
         return False
+    raw_selected_action = context.mind_packet.get("selected_action", {})
+    selected_action = dict(raw_selected_action) if isinstance(raw_selected_action, dict) else {}
+    selected_action_type = str(selected_action.get("action_type", "") or "").strip()
+    intent = {}
+    for key in ("intent_state_v4", "intent_state_v3", "intent_state_v2", "intent_state"):
+        candidate = context.mind_packet.get(key, {})
+        if isinstance(candidate, dict):
+            intent = candidate
+            break
+    explicit_memory_request = bool(intent.get("local_memory_requested") or intent.get("search_requested"))
+    if tier == "recall" and selected_action_type == "reply_once" and not explicit_memory_request:
+        if context.attention_state.primary_focus in {"emotional_load", "companionship", "direct_answer"}:
+            return False
     if list(context.mind_packet.get("activation_trace_ids", [])):
         return True
     if list(context.mind_packet.get("episodic_recall", {}).get("lines", [])):

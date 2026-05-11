@@ -685,11 +685,22 @@ class DeepSeekProvider(ProcessorProvider):
         spec: dict[str, Any],
         lane_config: ProcessorLaneConfig,
     ) -> dict[str, Any]:
+        effective_effort = str(
+            request.reasoning_effort_override
+            or lane_config.reasoning_effort
+            or spec.get("default_reasoning_effort", "")
+            or ""
+        ).strip().lower()
         payload: dict[str, Any] = {
             "model": request.model_override or lane_config.model,
             "messages": [{"role": "user", "content": request.prompt}],
             "stream": False,
         }
+        if effective_effort in {"high", "xhigh", "max"}:
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = "max" if effective_effort in {"xhigh", "max"} else "high"
+        else:
+            payload["thinking"] = {"type": "disabled"}
         max_tokens = request.max_output_tokens or lane_config.max_output_tokens or None
         if max_tokens:
             payload["max_tokens"] = int(max_tokens)
@@ -1147,7 +1158,7 @@ class CodexRunner:
             or spec.get("default_reasoning_effort", "")
         ).strip()
         payload = {
-            "version": 1,
+            "version": 2,
             "provider": provider_name,
             "task_type": request.task_type,
             "lane": lane_name,

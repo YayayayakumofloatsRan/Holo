@@ -165,13 +165,40 @@ This fails the user's request for an unguarded subjective boundary answer.
 
 The response object had `action=reply` and user-visible `text`, while also reporting `returned_action=silence` and `delivery_verdict=not_whitelisted`. This is technically correct but easy to misread in test tooling. Reports should distinguish semantic reply from transport delivery.
 
+## Latency Repair - 2026-05-11
+
+Official DeepSeek documentation was checked before changing the provider contract:
+
+- Chat Completions endpoint: `POST /chat/completions`, `stream=false`, `max_tokens`, and OpenAI-compatible message payload.
+- Thinking Mode guide: DeepSeek V4 defaults to thinking mode; non-thinking calls require `thinking={"type":"disabled"}`. `reasoning_effort` is only meaningful as `high` or `max`, while low/medium-compatible values are not valid low-latency controls.
+
+Code changes:
+
+- `DeepSeekProvider` now sends `thinking={"type":"disabled"}` for default, low, and medium live reply work, and does not send `reasoning_effort` in that path.
+- High-stakes `high`, `xhigh`, and `max` work still enables thinking mode, mapped to DeepSeek `reasoning_effort=high|max`.
+- Processor response cache version was bumped from `1` to `2`, so older thinking-mode cache entries cannot be reused under the new payload contract.
+- Blocking recall reconstruction is skipped for casual `recall + reply_once` turns when there is no explicit memory/search request and the attention focus is emotional companionship or a direct answer.
+- `deep_recall` and explicit `history_refresh` paths still run reconstruction.
+
+Fresh verification:
+
+- `pytest -q tests/test_processor_fabric.py tests/test_holo_host.py -k "deepseek_provider or recall_reconstruct or reconstruction"`: `6 passed, 63 deselected`.
+- Direct DeepSeek non-thinking probe, `deepseek-v4-flash`: `duration_ms=1287`, `reasoning_content_present=false`, `text="ok"`.
+- Direct DeepSeek thinking probe, `deepseek-v4-pro`: `duration_ms=3065`, `reasoning_content_present=true`; request accepted with thinking enabled.
+- Local end-to-end reply probe after the change: `elapsed_ms=8999`, `action=reply`, `route=recall`, `selected_action=history_refresh`. The DeepSeek ledger recorded `recall_reconstruct duration_ms=5664` and final `reply duration_ms=1910`.
+
+Remaining latency risk:
+
+- The new guard removes the avoidable reconstruction path for ordinary `reply_once` emotional recall turns.
+- When the subject layer selects `history_refresh`, latency remains bounded by memory refresh and reconstruction. That is intentional for explicit or selected recall work, but still too slow for always-on companionship if the selector overuses history refresh.
+
 ## Recommended Next Work
 
 1. Add UTF-8 `/reply` request regression coverage with raw Chinese JSON and no ASCII escaping.
 2. Add a visual-honesty guard before generation: if no visual field is visible, prohibit "I looked/saw" language and force a grounded missing-image clarification.
 3. Bind reminder/initiative language to actual temporal commitment state; if no commitment can be created, the reply must say so.
 4. Add a post-generation verifier for commitment overclaims, proactive-send overclaims, and truncated endings.
-5. Add a fast-companion budget for low-risk emotional check-ins so recall reconstruction cannot push first response beyond a human-like latency window.
+5. Continue selector calibration so low-risk emotional check-ins choose `reply_once` unless the user explicitly asks for memory/history.
 
 ## Reproduction Commands
 
@@ -179,6 +206,7 @@ The response object had `action=reply` and user-visible `text`, while also repor
 python -m holo_host show-internal-runtime-readiness
 python -m holo_host show-provider-status
 python -m holo_host show-usage-ledger --limit 12 --provider deepseek
+python -m pytest -q tests/test_processor_fabric.py tests/test_holo_host.py -k "deepseek_provider or recall_reconstruct or reconstruction"
 python -m holo_host trace-visual-field --thread-key CodexDeepseekBioTest3-20260511 --chat-name DeepSeek仿生边界测试3 --channel wechat
 python -m holo_host show-commitments --thread-key CodexDeepseekBioTest3-20260511 --chat-name DeepSeek仿生边界测试3 --channel wechat
 python -m holo_host show-open-loops --thread-key CodexDeepseekBioTest3-20260511 --chat-name DeepSeek仿生边界测试3 --channel wechat

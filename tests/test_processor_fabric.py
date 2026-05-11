@@ -249,6 +249,60 @@ deepseek_fast_model = "deepseek-v4-flash"
             self.assertEqual(result.metadata["capabilities"]["thinking_mode"], True)
             request = fake_urlopen.call_args.args[0]
             self.assertTrue(request.full_url.endswith("/chat/completions"))
+            body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(body["thinking"], {"type": "disabled"})
+            self.assertNotIn("reasoning_effort", body)
+
+    def test_deepseek_provider_enables_thinking_only_for_high_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_api_key_env = "TEST_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+deepseek_fast_model = "deepseek-v4-flash"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+
+            class _FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def read(self):
+                    return json.dumps(
+                        {
+                            "choices": [{"message": {"content": "deep plan"}}],
+                            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                        }
+                    ).encode("utf-8")
+
+            with patch.dict(os.environ, {"TEST_DEEPSEEK_KEY": "unit-key"}), patch(
+                "holo_host.codex_runner.urlopen",
+                return_value=_FakeResponse(),
+            ) as fake_urlopen:
+                result = runner.run_task(
+                    ProcessorTaskRequest(task_type="deep_simulation", prompt="simulate", provider_hint="deepseek")
+                )
+
+            self.assertEqual(result.returncode, 0)
+            request = fake_urlopen.call_args.args[0]
+            body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(body["thinking"], {"type": "enabled"})
+            self.assertEqual(body["reasoning_effort"], "max")
 
     def test_deepseek_provider_reuses_cached_response_without_second_http_call(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

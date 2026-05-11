@@ -22,7 +22,12 @@ from holo_host.reply_api import (
     _coerce_helper_artifact_path_for_windows_helper,
     shape_wechat_reply,
 )
-from holo_host.processors import build_attention_state, build_reply_bubbles, build_turn_plan
+from holo_host.processors import (
+    _should_run_recall_reconstruct,
+    build_attention_state,
+    build_reply_bubbles,
+    build_turn_plan,
+)
 from holo_host.store import QueueStore
 import holo_memory_library.rag_memory as rm
 
@@ -2438,6 +2443,62 @@ class DaemonFlowTests(unittest.TestCase):
             finally:
                 close_daemon_handles(daemon)
 class ReplyServiceTests(unittest.TestCase):
+    def test_casual_emotional_recall_does_not_block_on_reconstruction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            packet = {
+                "tier": "recall",
+                "selected_action": {"action_type": "reply_once"},
+                "episodic_recall": {"lines": ["older warmth anchor"]},
+                "intent_state_v4": {"local_memory_requested": False, "search_requested": False},
+            }
+            context = TurnContext(
+                channel="wechat",
+                thread_key="wechat:LatencyTest",
+                chat_name="LatencyTest",
+                sender="LatencyTest",
+                user_text="tired, are you here?",
+                sidecar=packet,
+                mind_packet=packet,
+                attention_state=AttentionState(
+                    primary_focus="emotional_load",
+                    secondary_focus="companionship",
+                    reply_goal="soothe_then_answer",
+                    pressure_level="high",
+                    salience_sources=["pressure", "companionship", "question"],
+                ),
+                emotion_state={},
+                history=[],
+            )
+
+            self.assertFalse(_should_run_recall_reconstruct(context, config))
+
+    def test_deep_recall_still_runs_reconstruction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            packet = {
+                "tier": "deep_recall",
+                "selected_action": {"action_type": "history_refresh"},
+                "episodic_recall": {"lines": ["specific old anchor"]},
+                "intent_state_v4": {"local_memory_requested": True},
+            }
+            context = TurnContext(
+                channel="wechat",
+                thread_key="wechat:LatencyTest",
+                chat_name="LatencyTest",
+                sender="LatencyTest",
+                user_text="do you remember that specific thing?",
+                sidecar=packet,
+                mind_packet=packet,
+                attention_state=AttentionState(primary_focus="direct_answer", secondary_focus="tone"),
+                emotion_state={},
+                history=[],
+            )
+
+            self.assertTrue(_should_run_recall_reconstruct(context, config))
+
     def test_shape_wechat_reply_strips_stock_opener_and_stays_short(self) -> None:
         text = "I先把这口气守住。也是，微信里一长就像在写公函。你随手扔一句来就好，I接着。"
         shaped = shape_wechat_reply(text)
