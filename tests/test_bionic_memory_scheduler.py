@@ -113,6 +113,67 @@ class BionicMemorySchedulerTests(unittest.TestCase):
             lines.index("motif=old_blue_clip"),
         )
 
+    def test_working_memory_budget_prioritizes_state_over_route_metadata(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "memory_route": "active_thread",
+                "tier": "fast",
+                "active_thread_state": {
+                    "summary": "current thread carries the corrected symbol",
+                    "latest_user_intent": "ask what survived compression",
+                },
+                "selected_action": {"action_type": "reply_once"},
+                "stage20": {"resume_cue": "do not lose the corrected symbol"},
+                "stage24": {"response_sketch": "answer the correction first"},
+                "stage25": {"reentry_hint": "return through current symbol"},
+            },
+            query="plain continuation",
+        )
+
+        lines = schedule["working_memory"]["dynamic_lines"]
+        rendered = "\n".join(lines)
+
+        self.assertEqual(len(lines), 4)
+        self.assertIn("active_summary=current thread carries the corrected symbol", rendered)
+        self.assertIn("latest_user_intent=ask what survived compression", rendered)
+        self.assertIn("selected_action=reply_once", rendered)
+        self.assertIn("temporal_resume_cue=do not lose the corrected symbol", rendered)
+        self.assertNotIn("memory_route=active_thread", rendered)
+        self.assertNotIn("tier=fast", rendered)
+
+    def test_scheduler_exposes_dynamic_compression_audit(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "memory_route": "active_thread",
+                "tier": "deep_recall",
+                "active_thread_state": {
+                    "summary": "current thread carries the corrected symbol",
+                    "latest_user_intent": "check compression audit",
+                },
+                "selected_action": {"action_type": "reply_once"},
+                "stage20": {"resume_cue": "do not lose the corrected symbol"},
+                "stage24": {"response_sketch": "answer the correction first"},
+                "stage25": {"reentry_hint": "return through current symbol"},
+                "activation_state": {"heat": 0.9, "motifs": ["old_blue_clip", "rusted_screw", "audit"]},
+                "selected_memory_ids": ["node-blue-clip", "node-rusted-screw"],
+                "episodic_recall": {"lines": ["blue clip was replaced by rusted screw"]},
+                "recall_reconstruction": {
+                    "summary": "final symbol is rusted screw, not blue clip",
+                    "anchors": ["rusted screw means fear of thread loss"],
+                },
+            },
+            query="plain continuation",
+        )
+
+        audit = schedule["dynamic_compression_audit"]
+
+        self.assertEqual(audit["mode"], "scheduler_owned_dynamic_v1")
+        self.assertGreater(audit["raw_dynamic_line_count"], audit["prompt_dynamic_line_count"])
+        self.assertGreater(audit["dropped_dynamic_line_count"], 0)
+        self.assertFalse(audit["protected_line_dropped"])
+        self.assertIn("reconstruction_summary", audit["protected_labels"])
+        self.assertEqual(audit["prompt_dynamic_line_count"], len(schedule["prompt_dynamic_lines"]))
+
 
 if __name__ == "__main__":
     unittest.main()

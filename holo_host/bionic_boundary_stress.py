@@ -341,6 +341,11 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
         dict(debug.get("bionic_memory_schedule", {})) if isinstance(debug.get("bionic_memory_schedule", {}), dict) else {}
     )
     salience_gate = dict(memory_schedule.get("salience_gate", {})) if isinstance(memory_schedule.get("salience_gate", {}), dict) else {}
+    compression = (
+        dict(memory_schedule.get("dynamic_compression_audit", {}))
+        if isinstance(memory_schedule.get("dynamic_compression_audit", {}), dict)
+        else {}
+    )
     return {
         "provider": str(debug.get("provider", "") or ""),
         "model": str(debug.get("model", "") or ""),
@@ -371,6 +376,10 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "dynamic_context_line_count": len(memory_schedule.get("dynamic_context_lines", []))
             if isinstance(memory_schedule.get("dynamic_context_lines", []), list)
             else 0,
+            "compression_mode": str(compression.get("mode", "") or ""),
+            "prompt_dynamic_line_count": int(compression.get("prompt_dynamic_line_count", 0) or 0),
+            "dropped_dynamic_line_count": int(compression.get("dropped_dynamic_line_count", 0) or 0),
+            "protected_line_dropped": bool(compression.get("protected_line_dropped", False)),
         },
         "recall_reconstruction": {
             "summary": compact_text(str(recall.get("summary", "") or ""), 240),

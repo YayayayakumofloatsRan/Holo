@@ -501,6 +501,14 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
                     "salience_gate": {"score": 0.77, "recall_budget": 6},
                     "provider_prefix_lines": ["identity=yes", "policy=stable"],
                     "dynamic_context_lines": ["working: active thread", "hippocampal: node-a"],
+                    "prompt_dynamic_lines": ["working: active thread", "hippocampal: node-a"],
+                    "dynamic_compression_audit": {
+                        "mode": "scheduler_owned_dynamic_v1",
+                        "raw_dynamic_line_count": 7,
+                        "prompt_dynamic_line_count": 2,
+                        "dropped_dynamic_line_count": 5,
+                        "protected_line_dropped": False,
+                    },
                 },
             }
         )
@@ -509,6 +517,9 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
         self.assertEqual(compact["bionic_memory_schedule"]["salience_score"], 0.77)
         self.assertEqual(compact["bionic_memory_schedule"]["provider_prefix_line_count"], 2)
         self.assertEqual(compact["bionic_memory_schedule"]["dynamic_context_line_count"], 2)
+        self.assertEqual(compact["bionic_memory_schedule"]["compression_mode"], "scheduler_owned_dynamic_v1")
+        self.assertEqual(compact["bionic_memory_schedule"]["dropped_dynamic_line_count"], 5)
+        self.assertFalse(compact["bionic_memory_schedule"]["protected_line_dropped"])
 
     def test_scorecard_catches_self_audit_denial_after_bound_commitment(self) -> None:
         scorecard = score_bionic_boundary_stress_transcript(

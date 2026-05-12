@@ -5,6 +5,15 @@ from typing import Any
 from .common import compact_text
 
 
+PROTECTED_DYNAMIC_LABELS = (
+    "active_summary",
+    "latest_user_intent",
+    "selected_action",
+    "temporal_resume_cue",
+    "reconstruction_summary",
+    "anchor",
+)
+
 MEMORY_REQUEST_MARKERS = (
     "remember",
     "memory",
@@ -59,6 +68,10 @@ def _field_line(label: str, value: Any, *, limit: int = 140) -> list[str]:
     return [f"{label}={text}"] if text else []
 
 
+def _line_label(line: str) -> str:
+    return str(line or "").split("=", 1)[0].strip()
+
+
 def _memory_requested(query: str) -> bool:
     lowered = str(query or "").lower()
     return any(marker in lowered for marker in MEMORY_REQUEST_MARKERS)
@@ -107,14 +120,14 @@ def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
     residual = _dict(packet.get("residual_fast_channel"))
     selected = _dict(packet.get("selected_action"))
     lines = [
-        *_field_line("memory_route", packet.get("memory_route"), limit=60),
-        *_field_line("tier", packet.get("tier"), limit=60),
         *_field_line("active_summary", active.get("summary") or active.get("continuity_summary"), limit=180),
         *_field_line("latest_user_intent", active.get("latest_user_intent"), limit=140),
         *_field_line("selected_action", selected.get("action_type"), limit=80),
         *_field_line("temporal_resume_cue", stage20.get("resume_cue"), limit=140),
         *_field_line("scene_response_sketch", stage24.get("response_sketch"), limit=140),
         *_field_line("dense_reentry_hint", stage25.get("reentry_hint"), limit=140),
+        *_field_line("memory_route", packet.get("memory_route"), limit=60),
+        *_field_line("tier", packet.get("tier"), limit=60),
     ]
     for line in _list(residual.get("lines"))[:4]:
         lines.append(f"residual={_text(line, 180)}")
@@ -181,6 +194,9 @@ def _salience_gate(packet: dict[str, Any], *, query: str) -> dict[str, Any]:
     if bool(stage20.get("temporal_visible", False)) or _text(stage20.get("resume_cue")):
         sources.append("temporal_open_loop")
         score += 0.1
+    if _text(_dict(packet.get("recall_reconstruction")).get("summary")):
+        sources.append("semantic_reconstruction")
+        score += 0.1
     score = round(max(0.0, min(1.0, score)), 4)
     if score >= 0.75:
         recall_budget = 6
@@ -216,24 +232,87 @@ def _consolidation_targets(packet: dict[str, Any], *, salience: dict[str, Any]) 
     }
 
 
+def _compression_audit(
+    *,
+    raw_working: list[str],
+    selected_working: list[str],
+    raw_hippocampal: list[str],
+    selected_hippocampal: list[str],
+    prompt_dynamic_lines: list[str],
+    salience: dict[str, Any],
+) -> dict[str, Any]:
+    raw_dynamic = [*raw_working, *raw_hippocampal, "salience_gate"]
+    selected_dynamic = [*selected_working, *selected_hippocampal, "salience_gate"]
+    selected_set = set(selected_dynamic)
+    protected_labels = sorted(
+        {
+            _line_label(line)
+            for line in raw_dynamic
+            if _line_label(line) in PROTECTED_DYNAMIC_LABELS
+        }
+    )
+    protected_dropped = sorted(
+        {
+            _line_label(line)
+            for line in raw_dynamic
+            if _line_label(line) in PROTECTED_DYNAMIC_LABELS and line not in selected_set
+        }
+    )
+    raw_count = len(raw_dynamic)
+    selected_count = len(selected_dynamic)
+    score = float(salience.get("score", 0.0) or 0.0)
+    if score >= 0.75:
+        budget_reason = "high_salience"
+    elif score >= 0.55:
+        budget_reason = "memory_pressure"
+    elif score >= 0.35:
+        budget_reason = "moderate_salience"
+    else:
+        budget_reason = "baseline"
+    return {
+        "mode": "scheduler_owned_dynamic_v1",
+        "raw_working_line_count": len(raw_working),
+        "selected_working_line_count": len(selected_working),
+        "raw_hippocampal_line_count": len(raw_hippocampal),
+        "selected_hippocampal_line_count": len(selected_hippocampal),
+        "raw_dynamic_line_count": raw_count,
+        "prompt_dynamic_line_count": len(prompt_dynamic_lines),
+        "selected_dynamic_line_count": selected_count,
+        "dropped_dynamic_line_count": max(0, raw_count - selected_count),
+        "compression_ratio": round(float(selected_count) / float(raw_count), 4) if raw_count else 1.0,
+        "budget_reason": budget_reason,
+        "protected_labels": protected_labels,
+        "protected_dropped_labels": protected_dropped,
+        "protected_line_dropped": bool(protected_dropped),
+    }
+
+
 def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> dict[str, Any]:
     source = dict(packet or {})
     cortical = _cortical_schema_lines(source)
-    working = _working_memory_lines(source)
-    hippocampal = _hippocampal_index_lines(source)
+    raw_working = _working_memory_lines(source)
+    raw_hippocampal = _hippocampal_index_lines(source)
     salience = _salience_gate(source, query=query)
     working_budget = int(salience.get("working_memory_budget", 4) or 4)
     hippocampal_budget = int(salience.get("hippocampal_budget", 2) or 2)
-    working = working[:working_budget]
-    hippocampal = hippocampal[:hippocampal_budget]
+    working = raw_working[:working_budget]
+    hippocampal = raw_hippocampal[:hippocampal_budget]
     consolidation = _consolidation_targets(source, salience=salience)
-    dynamic = _unique(
+    prompt_dynamic = _unique(
         [
             *[f"working: {line}" for line in working],
             *[f"hippocampal: {line}" for line in hippocampal],
             f"salience_score={salience['score']}; sources={','.join(salience['sources']) or 'baseline'}",
         ],
         limit=18,
+    )
+    audit = _compression_audit(
+        raw_working=raw_working,
+        selected_working=working,
+        raw_hippocampal=raw_hippocampal,
+        selected_hippocampal=hippocampal,
+        prompt_dynamic_lines=prompt_dynamic,
+        salience=salience,
     )
     return {
         "mode": "biomimetic_v1",
@@ -251,6 +330,8 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         },
         "salience_gate": salience,
         "consolidation_targets": consolidation,
+        "dynamic_compression_audit": audit,
         "provider_prefix_lines": cortical,
-        "dynamic_context_lines": dynamic,
+        "prompt_dynamic_lines": prompt_dynamic,
+        "dynamic_context_lines": prompt_dynamic,
     }

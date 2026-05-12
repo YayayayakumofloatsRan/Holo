@@ -226,3 +226,24 @@ Interpretation:
 - Removing duplicate volatile prompt material improves cache behavior, but only if the scheduler preserves the high-value recall signal.
 - The X failure is useful evidence: a memory prompt diet that removes `Recall Reconstruction` without promoting reconstruction into `hippocampal_index` damages bionic continuity.
 - The Y repair restores all Stage46 bionic correctness metrics to `1.0` while improving live cache evidence from Stage48 W's `4608` hit / `18707` miss to `5376` hit / `14558` miss.
+
+## Stage50 Dynamic Compression Audit
+
+Stage50 makes the dynamic side of the scheduler measurable instead of relying on prompt-size intuition:
+
+- `prompt_dynamic_lines` is now the scheduler-owned dynamic payload for memory token accounting.
+- `dynamic_compression_audit` records raw/selected/dropped dynamic line counts, compression ratio, budget reason, protected labels, and whether a protected line was dropped.
+- Working memory now prioritizes active summary, latest intent, selected action, and temporal resume cue over route/tier metadata under tight budgets.
+
+Live evidence:
+
+| Run | Status | Overall | Cache hit | Cache miss | Compression evidence |
+| --- | --- | ---: | ---: | ---: | --- |
+| `cli:DeepSeekLiveBoundary-20260512Y` | pass | `0.9648` | `5376` | `14558` | Stage49 prompt diet, no explicit compression audit |
+| `cli:DeepSeekLiveBoundary-20260512Z` | pass | `0.9647` | `5376` | `14525` | `scheduler_owned_dynamic_v1`; `protected_line_dropped=false` every turn |
+
+Interpretation:
+
+- Stage50 preserves the Stage49 live cache/correctness envelope while exposing the exact dynamic compression state.
+- Low-salience turns compress to seven scheduler dynamic lines; high-continuity turns expand to eleven lines without dropping protected reconstruction/current-state labels.
+- The next improvement should be repeated live soak and adaptive compression thresholds, not consolidation writeback or larger cortical schema.

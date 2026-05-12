@@ -221,6 +221,45 @@ class ContextSchedulerTests(unittest.TestCase):
         self.assertNotIn("Reply Constraints:", prompt)
         self.assertIn("recall naturally", prompt)
 
+    def test_context_schedule_reports_memory_compression_audit(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "memory_route": "active_thread",
+                "tier": "deep_recall",
+                "active_thread_state": {
+                    "summary": "current thread carries the corrected symbol",
+                    "latest_user_intent": "check compression audit",
+                },
+                "selected_action": {"action_type": "reply_once"},
+                "stage20": {"resume_cue": "do not lose the corrected symbol"},
+                "stage24": {"response_sketch": "answer the correction first"},
+                "stage25": {"reentry_hint": "return through current symbol"},
+                "activation_state": {"heat": 0.9, "motifs": ["old_blue_clip", "rusted_screw", "audit"]},
+                "selected_memory_ids": ["node-blue-clip", "node-rusted-screw"],
+                "episodic_recall": {"lines": ["blue clip was replaced by rusted screw"]},
+                "recall_reconstruction": {
+                    "summary": "final symbol is rusted screw, not blue clip",
+                    "anchors": ["rusted screw means fear of thread loss"],
+                },
+            },
+            query="plain continuation",
+        )
+
+        plan = plan_processor_context(
+            prompt="Stable\n\nCurrent User Turn:\nhello",
+            lane_name="subject_main",
+            model="deepseek-v4-pro",
+            current_session_id="thread-123",
+            history_messages=8,
+            memory_schedule=schedule,
+        )
+
+        self.assertEqual(plan["memory_compression_mode"], "scheduler_owned_dynamic_v1")
+        self.assertGreater(plan["memory_dropped_dynamic_lines"], 0)
+        self.assertFalse(plan["memory_protected_line_dropped"])
+        self.assertEqual(plan["memory_prompt_dynamic_lines"], len(schedule["prompt_dynamic_lines"]))
+        self.assertGreater(plan["memory_prompt_dynamic_tokens"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

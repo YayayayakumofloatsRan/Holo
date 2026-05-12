@@ -97,8 +97,18 @@ def plan_processor_context(
     provider_cache_prefix, provider_cache_dynamic = _split_provider_cache_prefix(prompt)
     schedule = dict(memory_schedule or {}) if isinstance(memory_schedule, dict) else {}
     schedule_stable = "\n".join(str(line).strip() for line in schedule.get("provider_prefix_lines", []) if str(line).strip())
-    schedule_dynamic = "\n".join(str(line).strip() for line in schedule.get("dynamic_context_lines", []) if str(line).strip())
+    prompt_dynamic_lines = (
+        schedule.get("prompt_dynamic_lines", [])
+        if isinstance(schedule.get("prompt_dynamic_lines", []), list)
+        else schedule.get("dynamic_context_lines", [])
+    )
+    schedule_dynamic = "\n".join(str(line).strip() for line in prompt_dynamic_lines if str(line).strip())
     schedule_dynamic_tokens = estimate_tokens(schedule_dynamic)
+    compression = (
+        dict(schedule.get("dynamic_compression_audit", {}))
+        if isinstance(schedule.get("dynamic_compression_audit", {}), dict)
+        else {}
+    )
     start_new_session = bool(current_session_id and pressure >= 0.72)
     reason = "context_pressure" if start_new_session else "reuse_session"
     max_history_messages = _history_limit(pressure=pressure, current=int(history_messages or 0))
@@ -120,4 +130,10 @@ def plan_processor_context(
         "memory_schedule_stable_tokens": estimate_tokens(schedule_stable),
         "memory_schedule_dynamic_tokens": schedule_dynamic_tokens,
         "memory_dynamic_pressure": round(float(schedule_dynamic_tokens) / float(max_tokens), 4) if max_tokens else 0.0,
+        "memory_compression_mode": str(compression.get("mode", "") or ""),
+        "memory_prompt_dynamic_lines": int(compression.get("prompt_dynamic_line_count", 0) or len(prompt_dynamic_lines)),
+        "memory_dropped_dynamic_lines": int(compression.get("dropped_dynamic_line_count", 0) or 0),
+        "memory_compression_ratio": float(compression.get("compression_ratio", 1.0) or 1.0),
+        "memory_protected_line_dropped": bool(compression.get("protected_line_dropped", False)),
+        "memory_prompt_dynamic_tokens": schedule_dynamic_tokens,
     }

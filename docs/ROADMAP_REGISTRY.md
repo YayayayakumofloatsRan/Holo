@@ -179,6 +179,12 @@ Stage49: memory prompt diet and reconstruction priority
 - Promotes recall reconstruction summaries and anchors ahead of generic activation metadata inside the hippocampal budget, preserving continuity under prompt diet.
 - Verified with a failing DeepSeek live intermediate run and a passing follow-up run; no self-memory writes, transport widening, new store, or second decision layer.
 
+Stage50: dynamic compression audit
+- Adds scheduler-owned `prompt_dynamic_lines` plus `dynamic_compression_audit` so memory compression is inspectable and regression-testable.
+- Prioritizes current-state working-memory facts over route/tier metadata under low-salience budgets.
+- Exposes compression mode, dropped dynamic line count, compression ratio, and protected-line drop status in context scheduling and Stage46 debug evidence.
+- Keeps all changes diagnostic/prompt-scheduling only: no self-memory writes, new store, transport widening, or second decision layer.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
