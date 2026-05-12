@@ -1826,6 +1826,26 @@ class QueueStore:
         return self._agent_eval_run_from_row(row) if row else {}
 
     @_synchronized
+    def list_agent_eval_runs(
+        self,
+        *,
+        stage: str = "stage40-bionic-brain-os-harness",
+        suite: str = "stage40",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(200, int(limit or 20)))
+        rows = self._fetchall(
+            """
+            SELECT * FROM agent_eval_runs
+            WHERE stage = ? AND suite = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (str(stage or "").strip(), str(suite or "").strip(), safe_limit),
+        )
+        return [self._agent_eval_run_from_row(row) for row in rows]
+
+    @_synchronized
     def trace_subject_loop(self, *, trace_id: int) -> dict[str, Any]:
         rows = self.list_bionic_agent_traces(limit=1, trace_id=int(trace_id))
         if not rows:

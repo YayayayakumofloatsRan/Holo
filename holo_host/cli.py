@@ -8225,6 +8225,76 @@ def command_render_consciousness_dimensional_lift(config_path: str | None, *, su
     return 0
 
 
+def command_render_consciousness_geometry_calibration(
+    config_path: str | None,
+    *,
+    suite: str,
+    limit: int,
+    output: str | None,
+) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .consciousness_geometry_calibration import build_geometry_calibration, write_geometry_calibration_artifacts
+
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        if hasattr(store, "list_agent_eval_runs"):
+            rows = store.list_agent_eval_runs(stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE, limit=limit)
+        else:
+            latest = store.latest_agent_eval_run(stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE)
+            rows = [latest] if latest else []
+    finally:
+        store.close()
+    if not rows:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "stage": "stage57-geometry-calibration",
+                    "error": "stage46_runs_not_found",
+                    "suite": suite or DEFAULT_STAGE46_SUITE,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    run_payloads = [dict(row.get("run", {})) for row in reversed(rows) if isinstance(row.get("run", {}), dict)]
+    calibration = build_geometry_calibration(run_payloads)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = config.runtime.repo_root / "artifacts" / "stage57" / "consciousness_geometry_calibration.html"
+    written = write_geometry_calibration_artifacts(calibration, output_path)
+    trace_set = dict(calibration.get("trace_set", {})) if isinstance(calibration.get("trace_set", {}), dict) else {}
+    trace_depth = dict(calibration.get("trace_depth", {})) if isinstance(calibration.get("trace_depth", {}), dict) else {}
+    evidence = dict(calibration.get("evidence_gate", {})) if isinstance(calibration.get("evidence_gate", {}), dict) else {}
+    predictive = dict(calibration.get("predictive_probe", {})) if isinstance(calibration.get("predictive_probe", {}), dict) else {}
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "stage": calibration.get("stage", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "geometry_calibration_png_path": str(written["geometry_calibration_png"]),
+                "observatory": {
+                    "run_count": trace_set.get("run_count", 0),
+                    "total_points": trace_set.get("total_points", 0),
+                    "longest_trace_points": trace_depth.get("longest_trace_points", 0),
+                    "geometry_score_correlation": predictive.get("geometry_score_correlation", 0),
+                    "requires_longer_traces": bool(evidence.get("requires_longer_traces", True)),
+                    "do_not_claim_manifold": bool(evidence.get("do_not_claim_manifold", True)),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_show_visual_provider_readiness(config_path: str | None) -> int:
     payload, _transport = _visual_provider_readiness_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9555,6 +9625,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     consciousness_lift_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
     consciousness_lift_parser.add_argument("--output", default=None)
+    consciousness_calibration_parser = subparsers.add_parser(
+        "render-consciousness-geometry-calibration",
+        help="Render Stage57 multi-run geometry calibration from recent Stage46 runs",
+    )
+    consciousness_calibration_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    consciousness_calibration_parser.add_argument("--limit", type=int, default=8)
+    consciousness_calibration_parser.add_argument("--output", default=None)
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     subparsers.add_parser("show-internal-runtime-readiness", help="Show internal DeepSeek runtime readiness without starting WeChat")
@@ -10078,6 +10155,13 @@ def main(argv: list[str] | None = None) -> int:
         return command_render_consciousness_manifold(args.config, suite=args.suite, output=args.output)
     if args.command == "render-consciousness-dimensional-lift":
         return command_render_consciousness_dimensional_lift(args.config, suite=args.suite, output=args.output)
+    if args.command == "render-consciousness-geometry-calibration":
+        return command_render_consciousness_geometry_calibration(
+            args.config,
+            suite=args.suite,
+            limit=args.limit,
+            output=args.output,
+        )
     if args.command == "show-visual-provider-readiness":
         return command_show_visual_provider_readiness(args.config)
     if args.command == "show-debt-registry":

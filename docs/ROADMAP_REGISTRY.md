@@ -221,6 +221,12 @@ Stage56: dimensional-lift observatory
 - Reports the current evidence conservatively: `point_count=7`, `effective_rank_proxy=3.2727`, `max_observable_rank=6`, and `limited_by_trace_length=true`.
 - Keeps all changes observational: no provider call, self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage57: geometry calibration
+- Compares multiple Stage46-derived Stage56 lifted traces instead of interpreting one short projection.
+- Adds bounded recent eval-run listing, pairwise lifted-centroid distances, baseline-relative perturbation response, geometry-vs-score predictive probes, evidence gates, and calibration PNG dashboards.
+- Reports the current evidence conservatively: recent eight Stage46 runs have `total_points=56`, `longest_trace_points=7`, `geometry_score_correlation=0.7966`, `requires_longer_traces=true`, and `do_not_claim_manifold=true`.
+- Keeps all changes observational: no provider call, self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

@@ -156,6 +156,12 @@
   - Stage56 does not start WeChat, mutate self-memory, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
   - The current local Stage56 render produced `point_count=7`, `base_dimension=12`, `lifted_dimension=138`, `effective_rank_proxy=3.2727`, and `limited_by_trace_length=true`
   - `python -m pytest -q tests\test_stage56_dimensional_lift_observatory.py` passed with `3` tests
+- Stage57 alignment state on `2026-05-12`:
+  - Stage57 adds an observational multi-run geometry-calibration layer over Stage46/54/55/56 traces
+  - `render-consciousness-geometry-calibration` writes HTML, JSON, and PNG artifacts with pairwise lifted-geometry distances, perturbation response, predictive probes, and evidence gates
+  - Stage57 does not start WeChat, mutate self-memory, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
+  - The current local Stage57 render over eight recent Stage46 runs produced `total_points=56`, `longest_trace_points=7`, `geometry_score_correlation=0.7966`, `requires_longer_traces=true`, and `do_not_claim_manifold=true`
+  - `python -m pytest -q tests\test_stage57_geometry_calibration.py` passed with `3` tests
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.
