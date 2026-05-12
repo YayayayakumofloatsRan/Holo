@@ -8366,6 +8366,94 @@ def command_render_consciousness_longform_lab(
     return 0
 
 
+def command_run_consciousness_provider_trace(
+    config_path: str | None,
+    *,
+    suite: str,
+    runs: int,
+    turns: int,
+    max_total_tokens: int,
+    provider_hint: str,
+    model: str,
+    lane: str,
+    max_output_tokens: int,
+    output: str | None,
+    execute: bool,
+    allow_provider_fallback: bool,
+    use_live_state: bool,
+    resume: bool,
+) -> int:
+    from .consciousness_provider_trace import (
+        DEFAULT_STAGE59_SUITE,
+        run_provider_longform_trace,
+        shadow_config_for_provider_trace,
+        write_provider_trace_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = config.runtime.repo_root / "artifacts" / "stage59" / "provider_longform_trace.html"
+    journal_path = output_path.with_name(f"{output_path.stem}_turns.jsonl")
+    trace_config = config
+    state_isolation = "dry_run_no_state"
+    state_root = ""
+    if execute and not use_live_state:
+        shadow_root = output_path.with_name(f"{output_path.stem}_shadow_runtime")
+        trace_config = shadow_config_for_provider_trace(config, shadow_root)
+        state_isolation = "shadow_runtime"
+        state_root = str(shadow_root)
+    elif execute:
+        state_isolation = "live_runtime"
+        state_root = str(config.runtime.state_dir)
+    report = run_provider_longform_trace(
+        execute=execute,
+        config=trace_config,
+        suite=suite or DEFAULT_STAGE59_SUITE,
+        runs=runs,
+        turns=turns,
+        max_total_tokens=max_total_tokens,
+        provider_hint=provider_hint,
+        model=model,
+        lane=lane,
+        max_output_tokens=max_output_tokens,
+        checkpoint_path=journal_path if execute else None,
+        resume=resume,
+        allow_provider_fallback=allow_provider_fallback,
+        state_isolation=state_isolation,
+        state_root=state_root,
+    )
+    written = write_provider_trace_artifacts(report, output_path)
+    trace_set = dict(report.get("provider_trace_set", {})) if isinstance(report.get("provider_trace_set", {}), dict) else {}
+    budget = dict(report.get("budget_guard", {})) if isinstance(report.get("budget_guard", {}), dict) else {}
+    evidence = dict(report.get("provider_evidence_gate", {})) if isinstance(report.get("provider_evidence_gate", {}), dict) else {}
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "status": report.get("status", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "provider_trace_png_path": str(written["provider_trace_png"]),
+                "journal_path": str(journal_path) if execute else "",
+                "observatory": {
+                    "planned_total_turns": trace_set.get("planned_total_turns", 0),
+                    "collected_turn_count": trace_set.get("collected_turn_count", 0),
+                    "real_provider_trace": bool(trace_set.get("real_provider_trace", False)),
+                    "observed_total_tokens": budget.get("observed_total_tokens", 0),
+                    "stopped_reason": budget.get("stopped_reason", ""),
+                    "do_not_claim_real_manifold": bool(evidence.get("do_not_claim_real_manifold", True)),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def command_show_visual_provider_readiness(config_path: str | None) -> int:
     payload, _transport = _visual_provider_readiness_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9711,6 +9799,23 @@ def main(argv: list[str] | None = None) -> int:
     consciousness_longform_parser.add_argument("--limit", type=int, default=8)
     consciousness_longform_parser.add_argument("--turns", type=int, default=420)
     consciousness_longform_parser.add_argument("--output", default=None)
+    provider_trace_parser = subparsers.add_parser(
+        "run-consciousness-provider-trace",
+        help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
+    )
+    provider_trace_parser.add_argument("--suite", default="provider_longform_bionic_trace")
+    provider_trace_parser.add_argument("--runs", type=int, default=1)
+    provider_trace_parser.add_argument("--turns", type=int, default=24)
+    provider_trace_parser.add_argument("--max-total-tokens", type=int, default=20_000)
+    provider_trace_parser.add_argument("--provider-hint", default="deepseek")
+    provider_trace_parser.add_argument("--model", default="")
+    provider_trace_parser.add_argument("--lane", default="subject_main")
+    provider_trace_parser.add_argument("--max-output-tokens", type=int, default=240)
+    provider_trace_parser.add_argument("--output", default=None)
+    provider_trace_parser.add_argument("--execute", action="store_true")
+    provider_trace_parser.add_argument("--resume", action="store_true")
+    provider_trace_parser.add_argument("--allow-provider-fallback", action="store_true")
+    provider_trace_parser.add_argument("--use-live-state", action="store_true")
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     subparsers.add_parser("show-internal-runtime-readiness", help="Show internal DeepSeek runtime readiness without starting WeChat")
@@ -10248,6 +10353,23 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             turns=args.turns,
             output=args.output,
+        )
+    if args.command == "run-consciousness-provider-trace":
+        return command_run_consciousness_provider_trace(
+            args.config,
+            suite=args.suite,
+            runs=args.runs,
+            turns=args.turns,
+            max_total_tokens=args.max_total_tokens,
+            provider_hint=args.provider_hint,
+            model=args.model,
+            lane=args.lane,
+            max_output_tokens=args.max_output_tokens,
+            output=args.output,
+            execute=args.execute,
+            allow_provider_fallback=args.allow_provider_fallback,
+            use_live_state=args.use_live_state,
+            resume=args.resume,
         )
     if args.command == "show-visual-provider-readiness":
         return command_show_visual_provider_readiness(args.config)

@@ -168,6 +168,12 @@
   - Stage58 does not start WeChat, mutate self-memory, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
   - The current local Stage58 render generated five surrogate traces of `420` turns each, `total_generated_turns=2100`, Stage57 `geometry_score_correlation=0.983`, and Stage58 `do_not_claim_real_manifold=true`
   - `python -m pytest -q tests\test_stage58_longform_geometry_lab.py` passed with `3` tests
+- Stage59 alignment state on `2026-05-13`:
+  - Stage59 adds an observational real provider long-form trace runner over Holo's subject runtime
+  - `run-consciousness-provider-trace` defaults to dry-run, requires `--execute` for provider calls, disables provider fallback by default, uses shadow runtime state unless `--use-live-state` is passed, writes HTML/JSON/PNG artifacts, writes JSONL turn journals, supports `--resume`, and feeds Stage46-compatible real provider traces into Stage57 calibration
+  - Stage59 does not start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
+  - The current strict DeepSeek shadow smoke collected `2` real provider turns, `observed_total_tokens=5301`, `actual_providers=["deepseek"]`, `actual_models=["deepseek-v4-flash"]`, and `do_not_claim_real_manifold=true`
+  - `python -m pytest -q tests\test_stage59_provider_trace.py` passed with `7` tests
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.

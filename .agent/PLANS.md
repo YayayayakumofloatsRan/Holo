@@ -39,6 +39,7 @@
 - Stage56 is implemented as a dimensional-lift observatory: Stage55 vectors are lifted from 12 dimensions into 138 residual/dynamics/lag/interaction dimensions, with residual fast-channel preservation, multi-plane projections, effective-rank probes, sample-adequacy diagnostics, and section-stability checks.
 - Stage57 is implemented as geometry calibration: recent Stage46 runs can be compared in Stage56 lifted space through pairwise geometry distances, baseline-relative perturbation response, predictive probes, and evidence gates that keep manifold claims blocked until trace depth is sufficient.
 - Stage58 is implemented as a long-form geometry lab: recent Stage46 seeds can generate bounded Stage46-compatible surrogate long traces with perturbation labels, feed them through Stage57 calibration, and export artifacts while keeping real-manifold claims blocked until real provider long-form evidence exists.
+- Stage59 is implemented as a provider long-form trace runner: `run-consciousness-provider-trace` can dry-run or execute strict provider long-form simulations through Holo's subject runtime, defaults execute mode to shadow state, writes HTML/JSON/PNG plus JSONL journals, supports resume, and feeds collected real provider traces into Stage57 calibration.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -143,13 +144,13 @@
 ## Active Program Index
 - `Stage23-27 bootstrap program`: `.agent/STAGE23_27_PROGRAM.md`
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
-- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE58.md`
+- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE59.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: real long-form provider trace generation without live transport widening
-- `Current live runtime boundary`: Stage58 is implemented as an observational surrogate long-form geometry lab over Stage46/54/55/56/57 traces; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, or second decision layer was added
-- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage58 handoff in `docs/ENGINEERING_HANDOFF_STAGE58.md`
+- `Active implementation priority`: budget-approved Stage59 long provider traces in shadow state, then model/geometry comparison
+- `Current live runtime boundary`: Stage59 is implemented as an observational provider long-form trace runner over Holo's subject runtime; execute mode defaults to shadow state, no live transport, transport authority change, live self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, or second decision layer was added
+- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage59 handoff in `docs/ENGINEERING_HANDOFF_STAGE59.md`
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.

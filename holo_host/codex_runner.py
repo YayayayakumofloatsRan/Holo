@@ -1220,9 +1220,18 @@ class CodexRunner:
                 return str(rule.upgrade_to_lane).strip() or lane_name
         return lane_name
 
-    def _provider_chain_for_lane(self, lane_name: str, lane_config: ProcessorLaneConfig, provider_hint: str = "") -> list[str]:
+    def _provider_chain_for_lane(
+        self,
+        lane_name: str,
+        lane_config: ProcessorLaneConfig,
+        provider_hint: str = "",
+        *,
+        disable_fallback: bool = False,
+    ) -> list[str]:
         chain: list[str] = []
         hint = str(provider_hint or "").strip()
+        if disable_fallback and hint:
+            return [hint]
         for name in (
             hint,
             lane_config.primary_provider,
@@ -1571,7 +1580,12 @@ class CodexRunner:
         rule = self._routing_rule_for(resolved_request.task_type)
         lane_name = self._resolve_lane_for_request(resolved_request, rule)
         lane_config = self._lane_config(lane_name)
-        provider_chain = self._provider_chain_for_lane(lane_name, lane_config, resolved_request.provider_hint)
+        provider_chain = self._provider_chain_for_lane(
+            lane_name,
+            lane_config,
+            resolved_request.provider_hint,
+            disable_fallback=bool(resolved_request.metadata.get("disable_provider_fallback", False)),
+        )
         last_error: str = ""
         provider_failures: list[dict[str, Any]] = []
         for index, provider_name in enumerate(provider_chain):

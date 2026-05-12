@@ -233,6 +233,13 @@ Stage58: long-form geometry lab
 - Reports the current toolchain evidence conservatively: five surrogate traces of `420` turns each produce `total_generated_turns=2100`, Stage57 `geometry_score_correlation=0.983`, and Stage58 `do_not_claim_real_manifold=true`.
 - Keeps all changes observational and surrogate-only: no provider call, self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage59: provider long-form trace
+- Adds an operator-gated real provider long-form trace runner through Holo's subject runtime.
+- Defaults to dry-run planning; `--execute` is required for token consumption, strict provider traces disable fallback, and execute mode uses shadow runtime state unless `--use-live-state` is explicitly passed.
+- Writes HTML/JSON/PNG artifacts, per-turn JSONL journals, resume-from-journal support, Stage46-compatible trace payloads, and Stage57 calibration over collected real provider traces.
+- Reports the current evidence conservatively: a strict DeepSeek `deepseek-v4-flash` shadow smoke collected `2` real provider turns and `5301` observed tokens, but Stage57 still has only `total_points=2`, so `do_not_claim_real_manifold=true`.
+- Keeps all changes observational: no WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
