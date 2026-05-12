@@ -141,8 +141,15 @@
   - Stage54 adds an observational consciousness-flow visualization layer over Stage46 traces
   - `render-consciousness-map` writes HTML, JSON, and PNG artifacts with compute heatmaps, high-dimensional compute vectors, vector movement, attention-block allocation proxies, and internal/output token ratios
   - Stage54 does not start WeChat, mutate self-memory, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, or add an unbounded loop
-  - `python -m pytest -q tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `19` tests
-  - `python -m pytest -q` passed with `415` tests
+  - `python -m pytest -q tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `20` tests
+  - `python -m pytest -q` passed with `418` tests
+- Stage55 alignment state on `2026-05-12`:
+  - Stage55 adds an observational consciousness-manifold layer over Stage46/54 traces
+  - `render-consciousness-manifold` writes HTML, JSON, and PNG artifacts with delay embeddings, Poincare-style section families, local dynamics, hyperbolic proxies, recurrence edges, and topology cycle-rank proxies
+  - Stage55 does not start WeChat, mutate self-memory, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, or add an unbounded loop
+  - The current local Stage55 render produced `betti1_proxy=0`, `loop_candidate_count=0`, and `torus_candidate=false`, so the observatory does not force loop geometry onto unsupported traces
+  - `python -m pytest -q tests\test_stage55_consciousness_manifold_observatory.py` passed with `3` tests
+  - `python -m pytest -q tests\test_stage55_consciousness_manifold_observatory.py tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `23` tests
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.

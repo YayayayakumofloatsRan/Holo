@@ -209,6 +209,12 @@ Stage54: consciousness-flow visualization
 - Uses operational trace evidence only; attention blocks are inspectable proxies, not provider-native neural attention weights.
 - Keeps all changes observational: no self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, or unbounded loop.
 
+Stage55: consciousness-manifold observatory
+- Derives high-dimensional dynamical geometry from Stage46/54 operational traces.
+- Adds delay embeddings, Poincare-style section families, local vector dynamics, hyperbolic expansion/contraction proxies, recurrence edges, cycle-rank topology proxies, and manifold PNG dashboards.
+- Reports negative topology evidence conservatively; the current local trace has `betti1_proxy=0` and `torus_candidate=false`.
+- Keeps all changes observational: no provider call, self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, downstream MCP server, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

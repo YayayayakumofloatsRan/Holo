@@ -93,13 +93,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 88. `docs/ENGINEERING_HANDOFF_STAGE53.md`
 89. `docs/STAGE54_CONSCIOUSNESS_FLOW_VISUALIZATION.md`
 90. `docs/ENGINEERING_HANDOFF_STAGE54.md`
-91. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-92. `HOLO_SYSTEM.md`
-93. `HOLO_HOST.md`
-94. `OPERATIONS.md`
-95. `docs/PUBLIC_RELEASE_HYGIENE.md`
-96. `holo_memory_library/MEMORY_LIBRARY.md`
-97. `windows_helper/README.md`
+91. `docs/STAGE55_CONSCIOUSNESS_MANIFOLD_OBSERVATORY.md`
+92. `docs/ENGINEERING_HANDOFF_STAGE55.md`
+93. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+94. `HOLO_SYSTEM.md`
+95. `HOLO_HOST.md`
+96. `OPERATIONS.md`
+97. `docs/PUBLIC_RELEASE_HYGIENE.md`
+98. `holo_memory_library/MEMORY_LIBRARY.md`
+99. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -111,18 +113,22 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage54 consciousness-flow visualization plus Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage54 consciousness-flow visualization commit.
-- Current milestone: `stage54-consciousness-flow-visualization`
-- Current status: Stage54 renders Stage46 high-intensity bionic dialogue traces into HTML, JSON, and PNG artifacts with compute heatmaps, high-dimensional compute vectors, turn-to-turn vector movement, attention-block allocation proxies, internal/output token ratios, and explicit observational boundaries. Stage53's upstream MCP client remains available as bounded external observation substrate; downstream Holo-as-MCP-server exposure remains intentionally deferred.
+- Resume commit: Stage55 consciousness-manifold observatory plus Stage54 consciousness-flow visualization, Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the Stage55 consciousness-manifold observatory commit.
+- Current milestone: `stage55-consciousness-manifold-observatory`
+- Current status: Stage55 derives high-dimensional dynamical geometry from Stage46/54 traces: delay embeddings, Poincare-style section families, local vector dynamics, hyperbolic expansion/contraction proxies, recurrence edges, cycle-rank topology proxies, and HTML/JSON/PNG artifacts. It remains observational only; Stage53's upstream MCP client remains available as bounded external observation substrate; downstream Holo-as-MCP-server exposure remains intentionally deferred.
 - Latest full verification evidence:
+  - `python -m pytest -q tests\test_stage55_consciousness_manifold_observatory.py` passed with `3` tests on `2026-05-12`.
+  - `python -m holo_host --config .holo_host.toml render-consciousness-manifold --output artifacts\stage55\stage55_current.html` returned `ok=true`, `point_count=7`, `dimension=12`, `betti0_proxy=1`, `betti1_proxy=0`, `loop_candidate_count=0`, and `torus_candidate=false` on `2026-05-12`.
+  - `python -m pytest -q tests\test_stage55_consciousness_manifold_observatory.py tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `23` tests on `2026-05-12`.
+  - `python -m py_compile holo_host\consciousness_manifold.py holo_host\consciousness_visualization.py holo_host\cli.py` passed on `2026-05-12`.
   - `python -m pytest -q tests\test_stage54_consciousness_visualization.py` passed with `5` tests on `2026-05-12`.
   - `python -m py_compile holo_host\consciousness_visualization.py holo_host\cli.py` passed on `2026-05-12`.
-  - `python -m pytest -q tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `19` tests on `2026-05-12`.
+  - `python -m pytest -q tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `20` tests on `2026-05-12`.
   - `python -m holo_host --config .holo_host.toml render-consciousness-map --output artifacts\stage54\stage54_current.html` returned `ok=true`, `turn_count=7`, `internal_tokens=22345`, `output_tokens=222`, `internal_output_ratio=100.6532`, `internal_token_share=0.9902`, `average_latency_ms=8769.38`, `heatmap_png_path=artifacts\stage54\stage54_current_heatmap.png`, `dashboard_png_path=artifacts\stage54\stage54_current_dashboard.png`, and `compute_manifold_projection=deterministic_stage54_compute_manifold_v1`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git emitted only CRLF conversion warnings.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
-  - `python -m pytest -q` passed with `415` tests on `2026-05-12`.
+  - `python -m pytest -q` passed with `418` tests on `2026-05-12`.
   - `python -m pytest -q tests\test_stage20_temporal_commitments.py tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `36` tests on `2026-05-12` after the residual fast channel repair.
   - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
   - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage46Verify-20260512 --chat-name Stage46Verify-20260512` passed with `overall_score=0.9846` on `2026-05-12`.
