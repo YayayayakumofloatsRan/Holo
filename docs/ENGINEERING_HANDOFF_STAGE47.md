@@ -80,3 +80,17 @@ Note: `processor-task --json` can still create a separate `response_format=json_
 - Restart any live API process that predates this patch before trusting `/provider-status` or `/provider-substrate-status` from the server process.
 - Rerun Stage46 against live DeepSeek with `provider_substrate.ok=true` and compare against prior offline scorecards.
 - Extend the monitor with stable-prefix cache evidence: when provider cache miss tokens stay high despite stable prompt digests, mark it as context-scheduling evidence rather than response-quality evidence.
+
+## DeepSeek Live Bionic Stress Calibration - 2026-05-12
+
+See `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md` for the full run notes.
+
+Key outcome:
+
+- `GET https://api.deepseek.com/models` returned `deepseek-v4-flash` and `deepseek-v4-pro`.
+- Compatibility aliases `deepseek-chat` and `deepseek-reasoner` still work but returned through `deepseek-v4-flash`.
+- Thinking-mode probes can spend all capped output tokens on `reasoning_content`, leaving final `content` empty; normal replies should stay non-thinking.
+- `CodexResult` now preserves processor metadata so Stage46 transcripts can prove actual provider/model/usage instead of only configured substrate.
+- Strict live Stage46 run `cli:DeepSeekLiveBoundary-20260512D` failed with `overall_score=0.8142` because self-audit contradicted the already-bound reminder state.
+
+Next repair: expose temporal-commitment state as an introspective signal before self-audit generation, then keep Stage46 strict scoring as the acceptance gate.

@@ -85,12 +85,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 80. `docs/ENGINEERING_HANDOFF_STAGE45.md`
 81. `docs/ENGINEERING_HANDOFF_STAGE46.md`
 82. `docs/ENGINEERING_HANDOFF_STAGE47.md`
-83. `HOLO_SYSTEM.md`
-84. `HOLO_HOST.md`
-85. `OPERATIONS.md`
-86. `docs/PUBLIC_RELEASE_HYGIENE.md`
-87. `holo_memory_library/MEMORY_LIBRARY.md`
-88. `windows_helper/README.md`
+83. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+84. `HOLO_SYSTEM.md`
+85. `HOLO_HOST.md`
+86. `OPERATIONS.md`
+87. `docs/PUBLIC_RELEASE_HYGIENE.md`
+88. `holo_memory_library/MEMORY_LIBRARY.md`
+89. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -102,8 +103,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage47 plus DeepSeek Windows user-env fallback commit on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the DeepSeek env fallback commit.
+- Resume commit: Stage47 plus DeepSeek live bionic stress calibration commit on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the DeepSeek bionic stress calibration commit.
 - Current milestone: `stage47-provider-substrate-conflict-monitor`
 - Current status: Stage47 is implemented and verified as an internal provider-substrate conflict monitor that downgrades conflicted Stage46 biomimetic evidence.
 - Latest full verification evidence:
@@ -115,10 +116,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Local direct provider-status construction now reports `deepseek.available=True` and `api_key_source=windows_registry`; the key exists in Windows User environment even when the current process env did not inherit it.
   - `python -m holo_host show-provider-substrate-status` returned `ok=true`, `score=1.0`, and `deepseek.api_key_source=windows_registry` after the fallback repair.
   - `python -m holo_host processor-task --task-type reply --prompt "请用一句话回应：收到" --lane micro_fast --provider-hint deepseek --max-output-tokens 20` returned through `provider=deepseek`, `model=deepseek-v4-flash`, `duration_ms=1642`, with real token usage and no fallback.
+  - `GET https://api.deepseek.com/models` returned `deepseek-v4-flash` and `deepseek-v4-pro`; compatibility aliases `deepseek-chat` and `deepseek-reasoner` returned through `deepseek-v4-flash`.
+  - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512D --chat-name DeepSeekLiveBoundary-20260512D --channel cli --turns 7` failed under strict self-audit scoring: `overall_score=0.8142`, `provider_substrate.ok=true`, `actual_providers=["deepseek"]`, `self_audit_score=0.0`, `self_audit_commitment_inconsistent=true`.
+  - Latest bionic finding: DeepSeek substrate and commitment binding are operational, but metacognitive self-audit is not reliably coupled to the actual scheduled commitment state.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
 - First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE47.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: restart any stale live API process before trusting `/provider-status`, then rerun Stage46 against live DeepSeek and add provider-aware stable-prefix reuse.
+- Next safe direction: add an introspective state bridge so self-audit can see real temporal-commitment state, then rerun Stage46 live before treating bionic scores as current green evidence. Provider-aware stable-prefix reuse remains the next efficiency repair.
 - Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is

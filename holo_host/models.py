@@ -50,6 +50,7 @@ class CodexResult:
     stdout: str = ""
     stderr: str = ""
     command: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -114,6 +115,7 @@ class ProcessorTaskResult:
             stdout=self.stdout,
             stderr=self.stderr,
             command=list(self.command),
+            metadata=dict(self.metadata),
         )
 
     def to_dict(self) -> dict[str, Any]:
