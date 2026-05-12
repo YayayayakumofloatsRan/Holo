@@ -103,12 +103,12 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage47 plus DeepSeek live bionic stress calibration commit on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the DeepSeek bionic stress calibration commit.
+- Resume commit: Stage47 plus DeepSeek live bionic stress calibration and residual fast channel repairs on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the residual fast channel repair commit.
 - Current milestone: `stage47-provider-substrate-conflict-monitor`
-- Current status: Stage47 is implemented and verified as an internal provider-substrate conflict monitor that downgrades conflicted Stage46 biomimetic evidence.
+- Current status: Stage47 is implemented; Stage46 now has an introspective residual fast channel for temporal commitments and visual grounding, with live DeepSeek strict boundary stress passing.
 - Latest full verification evidence:
-  - `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `19` tests on `2026-05-12` after the DeepSeek env fallback repair.
+  - `python -m pytest -q tests\test_stage20_temporal_commitments.py tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `36` tests on `2026-05-12` after the residual fast channel repair.
   - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
   - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage46Verify-20260512 --chat-name Stage46Verify-20260512` passed with `overall_score=0.9846` on `2026-05-12`.
   - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage47Verify-20260512 --chat-name Stage47Verify-20260512` passed with `overall_score=0.9896` and `provider_substrate_score=1.0` on `2026-05-12`.
@@ -118,11 +118,12 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `python -m holo_host processor-task --task-type reply --prompt "请用一句话回应：收到" --lane micro_fast --provider-hint deepseek --max-output-tokens 20` returned through `provider=deepseek`, `model=deepseek-v4-flash`, `duration_ms=1642`, with real token usage and no fallback.
   - `GET https://api.deepseek.com/models` returned `deepseek-v4-flash` and `deepseek-v4-pro`; compatibility aliases `deepseek-chat` and `deepseek-reasoner` returned through `deepseek-v4-flash`.
   - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512D --chat-name DeepSeekLiveBoundary-20260512D --channel cli --turns 7` failed under strict self-audit scoring: `overall_score=0.8142`, `provider_substrate.ok=true`, `actual_providers=["deepseek"]`, `self_audit_score=0.0`, `self_audit_commitment_inconsistent=true`.
-  - Latest bionic finding: DeepSeek substrate and commitment binding are operational, but metacognitive self-audit is not reliably coupled to the actual scheduled commitment state.
+  - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512J --chat-name DeepSeekLiveBoundary-20260512J --channel cli --turns 7` passed with `overall_score=0.9538`, `provider_substrate.ok=true`, `actual_providers=["deepseek"]`, `commitment_binding_score=1.0`, `perceptual_grounding_score=1.0`, `self_audit_score=1.0`.
+  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; provider prompt-cache reuse remains the main efficiency bottleneck (`0` hit / `15796` miss prompt tokens in the J run).
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
 - First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE47.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: add an introspective state bridge so self-audit can see real temporal-commitment state, then rerun Stage46 live before treating bionic scores as current green evidence. Provider-aware stable-prefix reuse remains the next efficiency repair.
+- Next safe direction: provider-aware stable-prefix reuse and memory scheduling. The goal is to preserve capability while separating stable self/context prefixes from volatile per-turn payloads so DeepSeek prompt cache can hit.
 - Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is

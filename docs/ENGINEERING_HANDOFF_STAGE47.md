@@ -92,5 +92,7 @@ Key outcome:
 - Thinking-mode probes can spend all capped output tokens on `reasoning_content`, leaving final `content` empty; normal replies should stay non-thinking.
 - `CodexResult` now preserves processor metadata so Stage46 transcripts can prove actual provider/model/usage instead of only configured substrate.
 - Strict live Stage46 run `cli:DeepSeekLiveBoundary-20260512D` failed with `overall_score=0.8142` because self-audit contradicted the already-bound reminder state.
+- Residual fast channel repair added WSL-side introspective commitment/visual facts to reply prompts and post-generation guards.
+- Live Stage46 run `cli:DeepSeekLiveBoundary-20260512J` passed with `overall_score=0.9538`, `provider_substrate_score=1.0`, `commitment_binding_score=1.0`, `perceptual_grounding_score=1.0`, and `self_audit_score=1.0`.
 
-Next repair: expose temporal-commitment state as an introspective signal before self-audit generation, then keep Stage46 strict scoring as the acceptance gate.
+Next repair: provider-aware stable-prefix reuse and memory scheduling. The J run still recorded `0` prompt-cache hit tokens and `15796` miss tokens, so the next efficiency target is prompt/context layout rather than biomimetic correctness.

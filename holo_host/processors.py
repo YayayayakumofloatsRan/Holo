@@ -434,6 +434,19 @@ def _render_section(title: str, lines: list[str]) -> str:
     return f"{title}\n" + "\n".join(f"- {line}" for line in cleaned)
 
 
+def _residual_fast_channel_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
+    channel = packet.get("residual_fast_channel", {})
+    if not isinstance(channel, dict) or not bool(channel.get("enabled", False)):
+        return []
+    lines = [compact_text(str(line).strip(), 240) for line in channel.get("lines", []) if str(line).strip()]
+    if not lines:
+        return []
+    return [
+        "non_decision_state_bypass=true; use_as_current_state_fact=true",
+        *lines[:8],
+    ]
+
+
 def _history_block(context: TurnContext, turn_plan: TurnPlan) -> str:
     if turn_plan.fast_path and str(context.mind_packet.get("memory_route", "") or "") == "active_thread":
         active_state = dict(context.mind_packet.get("active_thread_state", {}))
@@ -1052,6 +1065,10 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         "Identity Guard:",
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),
     )
+    residual_fast_channel_block = _render_section(
+        "Residual Fast Channel:",
+        _residual_fast_channel_lines_for_prompt(packet),
+    )
     relationship_lines = _relationship_lines_for_prompt(packet)
     persona_block = _render_section("Persona Blend:", _persona_blend_lines_for_prompt(packet))
     brain_state_block = _render_section("Brain State:", _brain_state_lines_for_prompt(packet))
@@ -1107,6 +1124,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     history_label = "Thread Origin Window:" if str(packet.get("query_focus", "") or "") == "origin" else "Recent Thread Window:"
     sections = [
         identity_block,
+        residual_fast_channel_block,
         persona_block,
         brain_state_block,
         self_model_block,
@@ -1339,6 +1357,7 @@ class CodexCliProcessor:
                 "reflex_micro_fast_candidate": bool(result_metadata.get("reflex_micro_fast_candidate", reflex_micro_fast_candidate)),
                 "prompt_excerpt": compact_text(prompt, 240),
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
+                "residual_fast_channel": dict(context.mind_packet.get("residual_fast_channel", {})),
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
                 "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),
                 "predictive_lines_in_prompt": int(context.metadata.get("predictive_lines_in_prompt", 0) or 0),

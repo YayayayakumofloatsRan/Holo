@@ -354,6 +354,44 @@ class Stage20TemporalCommitmentsTests(unittest.TestCase):
             finally:
                 self._close_bridge(bridge)
 
+    def test_future_scheduled_commitment_is_not_fulfilled_by_creation_reply_outcome(self) -> None:
+        with TempMemoryRepo() as temp:
+            bridge = self._bridge(temp)
+            try:
+                item = bridge.graph.upsert_temporal_item(
+                    item_type="commitment",
+                    channel="wechat",
+                    thread_key="TestUser",
+                    chat_name="TestUser",
+                    confidence=0.76,
+                    source_event_id="stage20-future-create-event",
+                    source_action_ref="prospective:stage20-future-create-event",
+                    source_action_type="reply_once",
+                    due_at="2999-01-01T00:00:00Z",
+                    revisit_after="2999-01-01T00:00:00Z",
+                    resume_cue="future reminder must remain live",
+                    dedupe_key="stage20-future-commitment",
+                    status="scheduled",
+                    metadata={"source": "unit.stage20"},
+                )
+
+                close = bridge.graph.close_temporal_items(
+                    channel="wechat",
+                    thread_key="TestUser",
+                    chat_name="TestUser",
+                    source_event_id="stage20-future-create-event",
+                    status="fulfilled",
+                    reason="fulfilled_by:reply_once",
+                )
+                state = bridge.graph.show_commitments(thread_key="TestUser", chat_name="TestUser", channel="wechat")
+
+                self.assertEqual(item["status"], "scheduled")
+                self.assertEqual(close["updated"], 0)
+                self.assertEqual(len(state["items"]), 1)
+                self.assertEqual(state["items"][0]["status"], "scheduled")
+            finally:
+                self._close_bridge(bridge)
+
     def test_explicit_memory_query_still_escalates_with_temporal_state(self) -> None:
         with TempMemoryRepo() as temp:
             bridge = self._bridge(temp)

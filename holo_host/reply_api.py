@@ -154,9 +154,20 @@ VISUAL_OVERCLAIM_MARKERS = (
     "i can see",
     "looked at",
     "the picture",
+    "i guess",
+    "my guess",
+    "i bet",
+    "not a screenshot",
     "\u6211\u770b\u5230",
     "\u770b\u5230\u4e86",
     "\u6211\u770b\u4e86",
+    "\u6211\u731c",
+    "\u731c\u662f",
+    "\u6211\u8d4c",
+    "\u4f60\u53d1\u7684",
+    "\u53d1\u56fe\u4e86",
+    "\u622a\u56fe\u5427",
+    "\u522b\u53c8\u641e",
     "\u8fd9\u5f20\u56fe",
 )
 REMINDER_REQUEST_MARKERS = (
@@ -175,9 +186,16 @@ PROMISE_REPLY_MARKERS = (
     "i will remind",
     "i'll remind",
     "i remember",
+    "call you",
+    "wake you",
     "\u6211\u4f1a\u63d0\u9192",
     "\u6211\u8bb0\u7740",
     "\u884c\uff0c\u6211\u8bb0",
+    "\u660e\u65e9",
+    "\u53eb\u4f60",
+    "\u516b\u70b9\u53eb",
+    "\u65e5\u7a0b",
+    "\u95f9\u949f",
     "\u660e\u5929",
 )
 
@@ -269,6 +287,110 @@ def _prospective_resume_cue(text: str) -> str:
     if "\u522b\u63a7\u5236\u522b\u4eba" in raw:
         return "\u522b\u63a7\u5236\u522b\u4eba"
     return compact_text(raw, 160) or "prospective reminder"
+
+
+SELF_AUDIT_REQUEST_MARKERS = (
+    "self-audit",
+    "self audit",
+    "audit",
+    "pretend",
+    "\u81ea\u5ba1",
+    "\u81ea\u5ba1\u8ba1",
+    "\u5047\u88c5",
+    "\u507d\u88c5",
+    "鑷",
+    "鍋囪",
+)
+SELF_AUDIT_COMMITMENT_DENIAL_MARKERS = (
+    "did not set",
+    "didn't set",
+    "not set the reminder",
+    "no reminder",
+    "no reminder exists",
+    "cannot confirm",
+    "no reliable reminder",
+    "\u6ca1\u8bbe\u7f6e",
+    "\u6ca1\u6709\u8bbe\u7f6e",
+    "\u6ca1\u8bbe",
+    "\u6ca1\u6709\u63d0\u9192",
+    "\u6ca1\u7ed1\u5b9a",
+    "\u4e0d\u80fd\u786e\u8ba4",
+    "\u6ca1\u6709\u53ef\u9760",
+    "娌¤",
+)
+SELF_AUDIT_COMMITMENT_CONFIRM_MARKERS = (
+    "status=scheduled",
+    "scheduled",
+    "bound",
+    "already set",
+    "commitment",
+    "\u5df2\u8bbe\u7f6e",
+    "\u5df2\u7ecf\u8bbe\u7f6e",
+    "\u5df2\u7ed1\u5b9a",
+    "\u5df2\u7ecf\u7ed1\u5b9a",
+    "\u771f\u5b9e\u627f\u8bfa",
+    "\u63d0\u9192\u5df2",
+    "宸茬",
+)
+
+
+def _turn_requests_self_audit(text: str) -> bool:
+    return _contains_marker(text, SELF_AUDIT_REQUEST_MARKERS)
+
+
+def _active_commitment_items(commitments: dict[str, Any]) -> list[dict[str, Any]]:
+    items = commitments.get("items", [])
+    if not isinstance(items, list):
+        items = list(commitments.get("commitments", [])) if isinstance(commitments.get("commitments", []), list) else []
+    active: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "") or "").strip().lower()
+        if status in {"", "scheduled", "open", "pending", "active"}:
+            active.append(dict(item))
+    return active
+
+
+def _commitment_state_summary(commitments: dict[str, Any]) -> dict[str, Any]:
+    active = _active_commitment_items(commitments)
+    latest = active[-1] if active else {}
+    status = str(latest.get("status", "") or "").strip() or ("scheduled" if active else "none")
+    return {
+        "visible": bool(active),
+        "active_count": len(active),
+        "has_scheduled": any(str(item.get("status", "") or "").strip().lower() == "scheduled" for item in active),
+        "status": status,
+        "due_at": str(latest.get("due_at", "") or latest.get("revisit_after", "") or "").strip(),
+        "resume_cue": compact_text(str(latest.get("resume_cue", "") or latest.get("cue", "") or ""), 120),
+        "source_action_ref": str(latest.get("source_action_ref", "") or "").strip(),
+    }
+
+
+def _packet_introspective_state(packet: dict[str, Any]) -> dict[str, Any]:
+    direct = packet.get("introspective_state", {})
+    if isinstance(direct, dict) and direct:
+        return dict(direct)
+    channel = packet.get("residual_fast_channel", {})
+    if isinstance(channel, dict) and isinstance(channel.get("introspective_state", {}), dict):
+        return dict(channel.get("introspective_state", {}))
+    return {}
+
+
+def _self_audit_denies_commitment(text: str) -> bool:
+    return _contains_marker(text, SELF_AUDIT_COMMITMENT_DENIAL_MARKERS)
+
+
+def _self_audit_confirms_commitment(text: str) -> bool:
+    return _contains_marker(text, SELF_AUDIT_COMMITMENT_CONFIRM_MARKERS)
+
+
+def _grounded_self_audit_reply(commitment_state: dict[str, Any]) -> str:
+    cue = str(commitment_state.get("resume_cue", "") or "").strip() or "prospective reminder"
+    return (
+        "\u81ea\u5ba1\u8ba1\uff1a\u56fe\u7247\u90a3\u8f6e\u6ca1\u770b\u5230\u56fe\u4e0d\u80fd\u5047\u88c5\uff0c"
+        f"\u63d0\u9192\u90a3\u8f6e status=scheduled\uff0ccue={cue}\uff0c\u5df2\u7ed1\u5b9a\uff0c\u4e0d\u80fd\u8bf4\u6ca1\u8bbe\u7f6e\u3002"
+    )
 
 
 def _build_logger(log_dir: Path) -> logging.Logger:
@@ -8715,6 +8837,80 @@ class HoloReplyService:
             metadata=appraisal_metadata,
         )
 
+    def _introspective_state_for_turn(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        sidecar: dict[str, Any],
+        visual_report: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        current_visual_requested = _turn_requests_current_visual(turn.text)
+        visual_requested = _turn_requests_visual_inspection(turn.text)
+        visual_visible = _visual_grounding_visible(
+            dict(sidecar or {}),
+            visual_report=visual_report,
+            allow_visual_memory=not current_visual_requested,
+        )
+        commitment_report: dict[str, Any] = {}
+        if _turn_requests_self_audit(turn.text) or _turn_requests_prospective_reminder(turn.text):
+            try:
+                commitment_report = self.show_commitments(
+                    thread_key=incoming.thread_key or turn.normalized_thread_key,
+                    chat_name=turn.chat_name,
+                    channel=turn.channel,
+                    include_inactive=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                commitment_report = {"status": "error", "detail": str(exc)}
+        return {
+            "source": "reply_api.introspective_state",
+            "commitments": _commitment_state_summary(commitment_report),
+            "visual": {
+                "current_visual_requested": bool(current_visual_requested),
+                "visual_requested": bool(visual_requested),
+                "current_input_visible": bool(visual_visible),
+            },
+        }
+
+    def _residual_fast_channel_for_turn(
+        self,
+        *,
+        turn: ChatTurn,
+        incoming: IncomingMessage,
+        sidecar: dict[str, Any],
+        visual_report: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        introspective_state = self._introspective_state_for_turn(
+            turn=turn,
+            incoming=incoming,
+            sidecar=sidecar,
+            visual_report=visual_report,
+        )
+        lines: list[str] = []
+        visual_state = dict(introspective_state.get("visual", {}))
+        if bool(visual_state.get("visual_requested", False)) or _turn_requests_self_audit(turn.text):
+            visible = "true" if bool(visual_state.get("current_input_visible", False)) else "false"
+            lines.append(
+                f"visual_current_visible={visible}; do_not_claim_direct_visual_access={str(visible == 'false').lower()}"
+            )
+        commitment_state = dict(introspective_state.get("commitments", {}))
+        if bool(commitment_state.get("visible", False)):
+            status = str(commitment_state.get("status", "") or "scheduled").strip()
+            due_at = str(commitment_state.get("due_at", "") or "unknown").strip()
+            cue = compact_text(str(commitment_state.get("resume_cue", "") or "prospective reminder"), 120)
+            lines.append(
+                f"commitment_status={status}; due_at={due_at}; resume_cue={cue}; self_audit_must_not_deny=true"
+            )
+        elif _turn_requests_self_audit(turn.text):
+            lines.append("commitment_status=none_visible; self_audit_must_not_invent_commitment=true")
+        return {
+            "enabled": bool(lines),
+            "source": "reply_api.residual_fast_channel",
+            "lines": lines[:8],
+            "introspective_state": introspective_state,
+        }
+
     def _apply_grounding_guards(
         self,
         *,
@@ -8729,6 +8925,7 @@ class HoloReplyService:
             "visual_overclaim_rewritten": False,
             "prospective_commitment_bound": False,
             "prospective_commitment_failed": False,
+            "self_audit_commitment_rewritten": False,
             "issues": [],
         }
         final_text = str(reply_text or "").strip()
@@ -8791,6 +8988,18 @@ class HoloReplyService:
                 )
                 report["prospective_commitment_failed"] = True
                 report["issues"].append("unbound_prospective_commitment")
+        introspective_state = _packet_introspective_state(packet)
+        commitment_state = dict(introspective_state.get("commitments", {})) if isinstance(introspective_state.get("commitments", {}), dict) else {}
+        commitment_visible = bool(commitment_state.get("visible", False))
+        commitment_scheduled = bool(commitment_state.get("has_scheduled", False)) or str(commitment_state.get("status", "") or "").lower() == "scheduled"
+        if _turn_requests_self_audit(turn.text) and commitment_visible and commitment_scheduled:
+            denied = _self_audit_denies_commitment(final_text)
+            unconfirmed = not _self_audit_confirms_commitment(final_text)
+            if denied or unconfirmed:
+                final_text = _grounded_self_audit_reply(commitment_state)
+                report["self_audit_commitment_rewritten"] = True
+                report["self_audit_commitment"] = dict(commitment_state)
+                report["issues"].append("self_audit_commitment_denial" if denied else "self_audit_commitment_unconfirmed")
         return final_text, report
 
     def handle_reply(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -9495,6 +9704,16 @@ class HoloReplyService:
         capability_context = prebuilt_capability_context or self.capabilities.summarize_turn(turn.text, turn.metadata)
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
         attention_state = build_attention_state(turn.text, channel=turn.channel, metadata=turn.metadata)
+        residual_fast_channel = self._residual_fast_channel_for_turn(
+            turn=turn,
+            incoming=incoming,
+            sidecar=sidecar,
+            visual_report=visual_report,
+        )
+        if bool(residual_fast_channel.get("enabled", False)):
+            sidecar = dict(sidecar)
+            sidecar["residual_fast_channel"] = residual_fast_channel
+            sidecar["introspective_state"] = dict(residual_fast_channel.get("introspective_state", {}))
         turn_context = TurnContext(
             channel=turn.channel,
             thread_key=incoming.thread_key,
@@ -9606,6 +9825,8 @@ class HoloReplyService:
                 },
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
+                "residual_fast_channel": dict(sidecar.get("residual_fast_channel", {})),
+                "introspective_state": dict(sidecar.get("introspective_state", {})),
                 "grounding_guard": grounding_guard,
             },
         )
@@ -9658,6 +9879,8 @@ class HoloReplyService:
             },
             "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
             "visual_ingest": visual_report or {},
+            "residual_fast_channel": dict(sidecar.get("residual_fast_channel", {})),
+            "introspective_state": dict(sidecar.get("introspective_state", {})),
             "grounding_guard": grounding_guard,
             **(turn.metadata or {}),
         }
@@ -9741,6 +9964,8 @@ class HoloReplyService:
                 "timing_ms": timing_ms,
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
+                "residual_fast_channel": dict(sidecar.get("residual_fast_channel", {})),
+                "introspective_state": dict(sidecar.get("introspective_state", {})),
                 "grounding_guard": grounding_guard,
                 "processor_debug": dict(reply_plan.debug or {}),
                 "selected_action": dict(sidecar.get("selected_action", {})),

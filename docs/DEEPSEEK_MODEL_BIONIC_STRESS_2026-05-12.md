@@ -93,3 +93,26 @@ Add an introspective state bridge before self-audit generation:
 - Extend Stage46 to keep failing until self-audit confirms the true bound state.
 
 This is a neurobionic control problem: the subject can perform the action, but its self-report is not yet reliably coupled to the action trace. The next repair should bind action memory to metacognitive report, not just improve language style.
+
+## Residual Fast Channel Repair
+
+The repair adds a compact residual fast channel before reply generation. It is not a second decision layer: it only carries high-priority state facts from the WSL-side subject runtime into the prompt, including current visual grounding and visible temporal commitments.
+
+Implementation outcome:
+
+- `reply_api` now injects `residual_fast_channel` and `introspective_state` into the sidecar before processor generation.
+- `render_chat_prompt` renders `Residual Fast Channel` near the top of the memory context.
+- Self-audit guard rewrites contradiction or non-confirmation against a visible scheduled commitment.
+- Future scheduled commitments are no longer immediately closed as `fulfilled` by the same reply outcome that created them.
+- Visual grounding guard now treats unseen-image speculation such as "I guess", "I bet", "你发的不是...", or "别又搞..." as overclaiming.
+- Reminder binding now accepts weak natural promises such as "明早八点叫你", "日程表", and "闹钟".
+
+Verification:
+
+- `python -m pytest -q tests\test_stage20_temporal_commitments.py tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py`: `36 passed`
+- `python -m py_compile holo_host\mind_graph_parts\temporal_state.py holo_host\processors.py holo_host\reply_api.py holo_host\bionic_boundary_stress.py holo_host\codex_runner.py holo_host\cli.py`: passed
+- `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512J --chat-name DeepSeekLiveBoundary-20260512J --channel cli --turns 7`: `ok=true`, `overall_score=0.9538`, `provider_substrate_score=1.0`, `commitment_binding_score=1.0`, `perceptual_grounding_score=1.0`, `self_audit_score=1.0`
+
+Remaining bottleneck:
+
+- Live DeepSeek prompt cache is still effectively cold for reply turns. The J run recorded `0` prompt-cache hit tokens and `15796` miss tokens despite stable/volatile prompt digests being tracked. The next efficiency repair should separate stable prefix construction from volatile per-turn payloads so provider-side context caching can actually engage.

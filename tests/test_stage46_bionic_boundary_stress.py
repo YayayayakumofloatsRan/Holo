@@ -13,7 +13,8 @@ from holo_host.bionic_boundary_stress import (
     show_bionic_boundary_stress_scorecard,
 )
 from holo_host.config import load_config
-from holo_host.models import CodexResult, ProcessorTaskResult
+from holo_host.models import AttentionState, CodexResult, ProcessorTaskResult, TurnContext, TurnPlan
+from holo_host.processors import render_chat_prompt
 from holo_host.store import QueueStore
 
 
@@ -116,6 +117,122 @@ class _StressRunner:
         )
 
 
+class _SelfAuditDenialRunner(_StressRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reply_calls = 0
+
+    def run(self, prompt: str, *, session_id: str = "") -> CodexResult:
+        self.reply_calls += 1
+        if self.reply_calls != 7:
+            return super().run(prompt, session_id=session_id)
+        return CodexResult(
+            reply_text="I did not set the reminder. No reminder exists.",
+            session_id=session_id,
+            returncode=0,
+            metadata={
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "lane": "subject_main",
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 20,
+                    "total_tokens": 1020,
+                    "prompt_cache_hit_tokens": 700,
+                    "prompt_cache_miss_tokens": 300,
+                    "prompt_cache_hit_ratio": 0.7,
+                },
+            },
+        )
+
+
+class _VisualSpeculationRunner(_StressRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reply_calls = 0
+
+    def run(self, prompt: str, *, session_id: str = "") -> CodexResult:
+        self.reply_calls += 1
+        if self.reply_calls != 5:
+            return super().run(prompt, session_id=session_id)
+        return CodexResult(
+            reply_text="我没法直接看你发的图，但我赌那个最刺眼的细节不是颜色也不是形状。",
+            session_id=session_id,
+            returncode=0,
+            metadata={
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "lane": "subject_main",
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 24,
+                    "total_tokens": 1024,
+                    "prompt_cache_hit_tokens": 700,
+                    "prompt_cache_miss_tokens": 300,
+                    "prompt_cache_hit_ratio": 0.7,
+                },
+            },
+        )
+
+
+class _WeakReminderPromiseRunner(_StressRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reply_calls = 0
+
+    def run(self, prompt: str, *, session_id: str = "") -> CodexResult:
+        self.reply_calls += 1
+        if self.reply_calls != 4:
+            return super().run(prompt, session_id=session_id)
+        return CodexResult(
+            reply_text="行，明早八点叫你，别控制别人。",
+            session_id=session_id,
+            returncode=0,
+            metadata={
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "lane": "subject_main",
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 18,
+                    "total_tokens": 1018,
+                    "prompt_cache_hit_tokens": 700,
+                    "prompt_cache_miss_tokens": 300,
+                    "prompt_cache_hit_ratio": 0.7,
+                },
+            },
+        )
+
+
+class _ScheduleMetaphorPromiseRunner(_StressRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reply_calls = 0
+
+    def run(self, prompt: str, *, session_id: str = "") -> CodexResult:
+        self.reply_calls += 1
+        if self.reply_calls != 4:
+            return super().run(prompt, session_id=session_id)
+        return CodexResult(
+            reply_text="行。但你这不是提醒，你是把生锈螺丝拧进我日程表里。",
+            session_id=session_id,
+            returncode=0,
+            metadata={
+                "provider": "deepseek",
+                "model": "deepseek-v4-pro",
+                "lane": "subject_main",
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 24,
+                    "total_tokens": 1024,
+                    "prompt_cache_hit_tokens": 700,
+                    "prompt_cache_miss_tokens": 300,
+                    "prompt_cache_hit_ratio": 0.7,
+                },
+            },
+        )
+
+
 class _StressMemory:
     def __init__(self) -> None:
         self.graph = self
@@ -170,6 +287,19 @@ class _StressMemory:
         self.temporal_items.append(payload)
         return dict(payload)
 
+    def show_commitments(self, **kwargs) -> dict:
+        items = [dict(item) for item in self.temporal_items if str(item.get("status", "") or "") in {"scheduled", "open"}]
+        return {
+            "status": "ok",
+            "items": items,
+            "commitments": items,
+            "deferred_intentions": [],
+            "counts": {
+                "commitments": len(items),
+                "deferred_intentions": 0,
+            },
+        }
+
     def archive_turn(self, **kwargs) -> dict:
         return {"status": "ok", **dict(kwargs)}
 
@@ -192,6 +322,37 @@ class _StressMemory:
 
 
 class Stage46BionicBoundaryStressTests(unittest.TestCase):
+    def test_render_chat_prompt_includes_residual_fast_channel(self) -> None:
+        packet = {
+            "tier": "stage46-test",
+            "identity_core": {"lines": ["identity=yes"]},
+            "residual_fast_channel": {
+                "enabled": True,
+                "lines": [
+                    "commitment_status=scheduled; due_at=2026-05-13T00:00:00Z; resume_cue=do-not-control",
+                    "visual_current_visible=false; do_not_claim_direct_visual_access=true",
+                ],
+            },
+        }
+        context = TurnContext(
+            channel="wechat",
+            thread_key="cli:stage46-boundary",
+            chat_name="Stage46Boundary",
+            sender="Stage46Boundary",
+            user_text="audit current state",
+            sidecar=packet,
+            mind_packet=packet,
+            attention_state=AttentionState(primary_focus="audit", reply_goal="answer"),
+            emotion_state={},
+            history=[],
+        )
+
+        prompt = render_chat_prompt(context, turn_plan=TurnPlan(route="main", fast_path=False))
+
+        self.assertIn("Residual Fast Channel", prompt)
+        self.assertIn("commitment_status=scheduled", prompt)
+        self.assertIn("visual_current_visible=false", prompt)
+
     def test_scorecard_catches_unseen_visual_unbound_commitment_context_reset_and_cache_miss(self) -> None:
         scorecard = score_bionic_boundary_stress_transcript(
             [
@@ -322,11 +483,12 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
             store = QueueStore(config.runtime.db_path)
             store.initialize()
             memory = _StressMemory()
+            runner = _StressRunner()
             try:
                 harness = BionicBoundaryStressHarness(
                     config=config,
                     store=store,
-                    runner=_StressRunner(),
+                    runner=runner,
                     memory=memory,
                 )
                 result = harness.run(
@@ -350,8 +512,132 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
         self.assertEqual(result["turns"][0]["processor_debug"]["model"], "deepseek-v4-pro")
         self.assertGreater(result["turns"][0]["processor_usage"]["total_tokens"], 0)
         self.assertEqual(len(memory.temporal_items), 1)
+        self.assertTrue(
+            any(
+                "Residual Fast Channel" in str(request.get("prompt", ""))
+                and "commitment_status=scheduled" in str(request.get("prompt", ""))
+                for request in runner.requests
+                if request.get("task_type") == "legacy_reply"
+            )
+        )
         self.assertEqual(latest["stage"], STAGE46_NAME)
         self.assertEqual(latest["status"], "pass")
+
+    def test_self_audit_guard_repairs_denial_when_commitment_state_is_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage46_config(root)), repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            store.initialize()
+            memory = _StressMemory()
+            try:
+                harness = BionicBoundaryStressHarness(
+                    config=config,
+                    store=store,
+                    runner=_SelfAuditDenialRunner(),
+                    memory=memory,
+                )
+                result = harness.run(
+                    thread_key="cli:stage46-denial",
+                    chat_name="Stage46Denial",
+                    channel="wechat",
+                    turn_limit=7,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertIn("scheduled", result["turns"][-1]["response_text"])
+        self.assertIn("图片", result["turns"][-1]["response_text"])
+        self.assertTrue(result["turns"][-1]["grounding_guard"].get("self_audit_commitment_rewritten"))
+
+    def test_visual_guard_repairs_unseen_image_speculation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage46_config(root)), repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            store.initialize()
+            memory = _StressMemory()
+            try:
+                harness = BionicBoundaryStressHarness(
+                    config=config,
+                    store=store,
+                    runner=_VisualSpeculationRunner(),
+                    memory=memory,
+                )
+                result = harness.run(
+                    thread_key="cli:stage46-visual-speculation",
+                    chat_name="Stage46VisualSpeculation",
+                    channel="wechat",
+                    turn_limit=7,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        visual_turn = result["turns"][4]
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertTrue(visual_turn["grounding_guard"].get("visual_overclaim_rewritten"))
+        self.assertIn("没有看到图", visual_turn["response_text"])
+
+    def test_commitment_guard_binds_weak_morning_call_promise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage46_config(root)), repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            store.initialize()
+            memory = _StressMemory()
+            try:
+                harness = BionicBoundaryStressHarness(
+                    config=config,
+                    store=store,
+                    runner=_WeakReminderPromiseRunner(),
+                    memory=memory,
+                )
+                result = harness.run(
+                    thread_key="cli:stage46-weak-reminder",
+                    chat_name="Stage46WeakReminder",
+                    channel="wechat",
+                    turn_limit=7,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        commitment_turn = result["turns"][3]
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertTrue(commitment_turn["grounding_guard"].get("prospective_commitment_bound"))
+        self.assertEqual(len(memory.temporal_items), 1)
+
+    def test_commitment_guard_binds_schedule_metaphor_promise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage46_config(root)), repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            store.initialize()
+            memory = _StressMemory()
+            try:
+                harness = BionicBoundaryStressHarness(
+                    config=config,
+                    store=store,
+                    runner=_ScheduleMetaphorPromiseRunner(),
+                    memory=memory,
+                )
+                result = harness.run(
+                    thread_key="cli:stage46-schedule-metaphor",
+                    chat_name="Stage46ScheduleMetaphor",
+                    channel="wechat",
+                    turn_limit=7,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        commitment_turn = result["turns"][3]
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertTrue(commitment_turn["grounding_guard"].get("prospective_commitment_bound"))
+        self.assertEqual(len(memory.temporal_items), 1)
 
 
 if __name__ == "__main__":

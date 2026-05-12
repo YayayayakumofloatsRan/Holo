@@ -338,6 +338,7 @@ def update_temporal_item_status(
     if not normalized_thread_key:
         return {"status": "skipped", "reason": "missing_thread_key", "updated": 0, "items": []}
     next_status = _normalize_status(status)
+    now = utc_now()
     clauses = ["channel = ?", "thread_key = ?", "status IN ('open', 'scheduled', 'due')"]
     args: list[Any] = [normalized_channel, normalized_thread_key]
     if item_type:
@@ -354,7 +355,11 @@ def update_temporal_item_status(
         args.append(str(source_action_ref).strip())
     if len(args) <= 2:
         return {"status": "skipped", "reason": "missing_selector", "updated": 0, "items": []}
-    now = utc_now()
+    if next_status == "fulfilled" and _normalize_type(str(item_type or "")) != "commitment":
+        clauses.append(
+            "NOT (type = 'commitment' AND status = 'scheduled' AND ((due_at != '' AND due_at > ?) OR (revisit_after != '' AND revisit_after > ?)))"
+        )
+        args.extend([now, now])
     with self._lock:
         rows = [
             dict(row)
