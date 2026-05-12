@@ -173,6 +173,12 @@ Stage48: biomimetic memory scheduler
 - Exposes memory schedule mode, stable/dynamic token counts, dynamic pressure, salience score, and recall budget in context scheduling and Stage46 debug evidence.
 - Does not add a new memory store, start WeChat transport, write self-memory, or move decision authority out of the WSL subject runtime.
 
+Stage49: memory prompt diet and reconstruction priority
+- Makes the Stage48 scheduler replace duplicate legacy volatile prompt blocks instead of adding alongside them.
+- Drops empty scheduler slots and keeps voice/reply-style constraints in stable cortical schema when legacy blocks are suppressed.
+- Promotes recall reconstruction summaries and anchors ahead of generic activation metadata inside the hippocampal budget, preserving continuity under prompt diet.
+- Verified with a failing DeepSeek live intermediate run and a passing follow-up run; no self-memory writes, transport widening, new store, or second decision layer.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

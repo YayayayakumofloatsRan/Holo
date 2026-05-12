@@ -46,6 +46,73 @@ class BionicMemorySchedulerTests(unittest.TestCase):
         self.assertIn("memory_request", schedule["salience_gate"]["sources"])
         self.assertTrue(schedule["consolidation_targets"]["targets"])
 
+    def test_scheduler_drops_empty_slots_from_prompt_surfaces(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "identity_core": {"lines": ["identity=yes"]},
+                "reply_constraints": {"lines": ["never overclaim vision"]},
+                "active_thread_state": {"summary": "current thread is hot"},
+            },
+            query="plain continuation",
+        )
+
+        rendered = "\n".join(
+            [
+                *schedule["cortical_schema"]["stable_prefix_lines"],
+                *schedule["working_memory"]["dynamic_lines"],
+                *schedule["dynamic_context_lines"],
+            ]
+        )
+
+        self.assertIn("current thread is hot", rendered)
+        self.assertNotIn("memory_route=", rendered)
+        self.assertNotIn("tier=", rendered)
+        self.assertNotIn("latest_user_intent=", rendered)
+        self.assertNotIn("activation_heat=0.0", rendered)
+        self.assertNotIn("current_chapter=", rendered)
+        self.assertNotIn("identity_arc=", rendered)
+
+    def test_scheduler_preserves_voice_guard_when_identity_lines_are_absent(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "voice_guard": ["voice must stay concise and familiar"],
+                "reply_constraints": {"lines": ["never overclaim vision"]},
+            },
+            query="plain continuation",
+        )
+
+        rendered = "\n".join(schedule["cortical_schema"]["stable_prefix_lines"])
+
+        self.assertIn("voice must stay concise and familiar", rendered)
+        self.assertIn("never overclaim vision", rendered)
+
+    def test_hippocampal_budget_prioritizes_reconstruction_over_generic_activation(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "activation_state": {"heat": 0.9, "motifs": ["old_blue_clip", "rusted_screw"]},
+                "selected_memory_ids": ["node-blue-clip", "node-rusted-screw"],
+                "episodic_recall": {"lines": ["blue clip was replaced by rusted screw"]},
+                "recall_reconstruction": {
+                    "summary": "final symbol is rusted screw, not blue clip",
+                    "anchors": ["rusted screw means fear of thread loss"],
+                },
+                "affect_state": {"continuity_anxiety": 0.8},
+                "drive_state": {"seek_continuity": 0.9},
+            },
+            query="刚才那个符号最后改成什么了？",
+        )
+
+        lines = schedule["hippocampal_index"]["dynamic_lines"]
+        rendered = "\n".join(lines)
+
+        self.assertGreaterEqual(schedule["salience_gate"]["recall_budget"], 4)
+        self.assertIn("reconstruction_summary=final symbol is rusted screw, not blue clip", rendered)
+        self.assertIn("anchor=rusted screw means fear of thread loss", rendered)
+        self.assertLess(
+            lines.index("reconstruction_summary=final symbol is rusted screw, not blue clip"),
+            lines.index("motif=old_blue_clip"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

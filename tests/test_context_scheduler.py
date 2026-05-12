@@ -162,6 +162,65 @@ class ContextSchedulerTests(unittest.TestCase):
         self.assertGreater(first["memory_schedule_dynamic_tokens"], 0)
         self.assertGreater(first["memory_dynamic_pressure"], 0.0)
 
+    def test_bionic_memory_schedule_replaces_legacy_volatile_memory_blocks(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "identity_core": {"lines": ["identity=yes"]},
+                "reply_constraints": {"lines": ["never overclaim vision"], "human_recall_style": "recall naturally"},
+                "active_thread_state": {"summary": "current thread is hot"},
+                "activation_state": {"heat": 0.8, "motifs": ["rusted_screw"]},
+                "selected_memory_ids": ["node-rusted-screw"],
+                "episodic_recall": {"lines": ["rusted screw means fear of thread loss"]},
+                "recall_reconstruction": {
+                    "summary": "the thread symbol was reconstructed",
+                    "anchors": ["rusted screw"],
+                },
+                "vector_hits": [{"text": "vector echo duplicate"}],
+            },
+            query="do you remember the symbol?",
+        )
+        packet = {
+            "tier": "unit",
+            "identity_core": {"lines": ["identity=yes"]},
+            "reply_constraints": {"lines": ["never overclaim vision"], "human_recall_style": "recall naturally"},
+            "active_thread_state": {"summary": "current thread is hot"},
+            "activation_state": {"heat": 0.8, "motifs": ["rusted_screw"], "active_node_ids": ["node-rusted-screw"]},
+            "episodic_recall": {"lines": ["rusted screw means fear of thread loss"]},
+            "recall_reconstruction": {
+                "summary": "the thread symbol was reconstructed",
+                "anchors": ["rusted screw"],
+            },
+            "vector_hits": [{"text": "vector echo duplicate"}],
+            "bionic_memory_schedule": schedule,
+        }
+        context = TurnContext(
+            channel="wechat",
+            thread_key="cli:bionic-memory",
+            chat_name="BionicMemory",
+            sender="BionicMemory",
+            user_text="what did we keep from last turn?",
+            sidecar=packet,
+            mind_packet=packet,
+            attention_state=AttentionState(primary_focus="reply", reply_goal="answer"),
+            emotion_state={},
+            history=[],
+        )
+
+        prompt = render_chat_prompt(context, turn_plan=TurnPlan(route="main", fast_path=False))
+
+        self.assertIn("Cortical Memory Schema", prompt)
+        self.assertIn("Working Memory", prompt)
+        self.assertIn("Hippocampal Index", prompt)
+        self.assertNotIn("Bionic Memory Dynamic Context:", prompt)
+        self.assertEqual(prompt.count("active_summary=current thread is hot"), 1)
+        self.assertNotIn("Identity Guard:", prompt)
+        self.assertNotIn("Episodic Anchors:", prompt)
+        self.assertNotIn("Vector Echoes:", prompt)
+        self.assertNotIn("Activation State:", prompt)
+        self.assertNotIn("Recall Reconstruction:", prompt)
+        self.assertNotIn("Reply Constraints:", prompt)
+        self.assertIn("recall naturally", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

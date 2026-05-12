@@ -31,7 +31,7 @@ The scheduler maps the existing `mind_packet` into five biomimetic surfaces:
   - Attaches `bionic_memory_schedule` during `_finalize_stage2_packet()` after action/intention/state fields are available.
 - `holo_host/processors.py`
   - Renders `Cortical Memory Schema` before dynamic chat/thread fields so it contributes to DeepSeek provider-cache prefix.
-  - Renders `Working Memory`, `Hippocampal Index`, `Memory Salience Gate`, and `Bionic Memory Dynamic Context` inside dynamic prompt context.
+  - Stage48 originally rendered `Working Memory`, `Hippocampal Index`, `Memory Salience Gate`, and `Bionic Memory Dynamic Context` inside dynamic prompt context. Stage49 keeps the first three sectioned surfaces and stops rendering the compiled dynamic-context duplicate.
   - Preserves scheduler metadata in processor debug.
 - `holo_host/context_scheduler.py`
   - Accepts optional `memory_schedule`.

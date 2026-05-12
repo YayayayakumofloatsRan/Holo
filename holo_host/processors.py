@@ -462,6 +462,10 @@ def _bionic_memory_schedule(packet: dict[str, Any]) -> dict[str, Any]:
     return dict(schedule) if isinstance(schedule, dict) else {}
 
 
+def _bionic_memory_schedule_active(schedule: dict[str, Any]) -> bool:
+    return str(schedule.get("mode", "") or "") == "biomimetic_v1"
+
+
 def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]:
     section = schedule.get(key, {})
     if not isinstance(section, dict):
@@ -471,10 +475,6 @@ def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]
 
 def _schedule_provider_prefix_lines(schedule: dict[str, Any]) -> list[str]:
     return [compact_text(str(line).strip(), 220) for line in schedule.get("provider_prefix_lines", []) if str(line).strip()]
-
-
-def _schedule_dynamic_lines(schedule: dict[str, Any]) -> list[str]:
-    return [compact_text(str(line).strip(), 220) for line in schedule.get("dynamic_context_lines", []) if str(line).strip()]
 
 
 def _schedule_salience_lines(schedule: dict[str, Any]) -> list[str]:
@@ -1116,11 +1116,12 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     )
     utterance = context.utterance_plan or {}
     beat_line = " -> ".join(str(item) for item in utterance.get("beats", []) if str(item).strip()) or "receive -> landing"
+    memory_schedule = _bionic_memory_schedule(packet)
+    scheduler_active = _bionic_memory_schedule_active(memory_schedule)
     identity_block = _render_section(
         "Identity Guard:",
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),
-    )
-    memory_schedule = _bionic_memory_schedule(packet)
+    ) if not scheduler_active else ""
     cortical_memory_block = _render_section("Cortical Memory Schema:", _schedule_provider_prefix_lines(memory_schedule))
     working_memory_block = _render_section(
         "Working Memory:",
@@ -1131,7 +1132,6 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         _schedule_lines(memory_schedule, "hippocampal_index", "dynamic_lines"),
     )
     memory_salience_block = _render_section("Memory Salience Gate:", _schedule_salience_lines(memory_schedule))
-    memory_dynamic_block = _render_section("Bionic Memory Dynamic Context:", _schedule_dynamic_lines(memory_schedule))
     residual_fast_channel_block = _render_section(
         "Residual Fast Channel:",
         _residual_fast_channel_lines_for_prompt(packet),
@@ -1155,14 +1155,18 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     stream_influence_block = _render_section("Stream Influence:", _stream_influence_lines_for_prompt(packet))
     self_revision_block = _render_section("Self Revision State:", _self_revision_lines_for_prompt(packet))
     relationship_block = _render_section("Relationship Stance:", relationship_lines)
-    episodic_block = _render_section("Episodic Anchors:", list(packet.get("episodic_recall", {}).get("lines", [])))
+    episodic_block = (
+        _render_section("Episodic Anchors:", list(packet.get("episodic_recall", {}).get("lines", [])))
+        if not scheduler_active
+        else ""
+    )
     consciousness_lines = list(packet.get("consciousness_stream", {}).get("lines", []))
     thread_summary = str(packet.get("consciousness_stream", {}).get("thread_summary", "")).strip()
     if thread_summary:
         consciousness_lines = [thread_summary] + consciousness_lines
     consciousness_block = _render_section("Consciousness Lines:", consciousness_lines)
     vector_lines = [str(item.get("text", "")).strip() for item in packet.get("vector_hits", []) if str(item.get("text", "")).strip()]
-    vector_block = _render_section("Vector Echoes:", vector_lines[:4])
+    vector_block = _render_section("Vector Echoes:", vector_lines[:4]) if not scheduler_active else ""
     visual_block = _render_section("Visual Memory:", _visual_memory_lines_for_prompt(packet))
     situational_block = _render_section("Situational Field:", _situational_field_lines_for_prompt(packet))
     activation_state = dict(packet.get("activation_state", {}))
@@ -1171,7 +1175,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         *[f"motif: {item}" for item in activation_state.get("motifs", [])[:3]],
         *[f"active: {item}" for item in activation_state.get("active_node_ids", [])[:4]],
     ]
-    activation_block = _render_section("Activation State:", activation_lines)
+    activation_block = _render_section("Activation State:", activation_lines) if not scheduler_active else ""
     recall_reconstruction = dict(packet.get("recall_reconstruction", {}))
     recall_reconstruction_lines: list[str] = []
     summary = str(recall_reconstruction.get("summary", "")).strip()
@@ -1182,12 +1186,20 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         for item in recall_reconstruction.get("anchors", [])
         if str(item).strip()
     )
-    recall_reconstruction_block = _render_section("Recall Reconstruction:", recall_reconstruction_lines)
+    recall_reconstruction_block = (
+        _render_section("Recall Reconstruction:", recall_reconstruction_lines)
+        if not scheduler_active
+        else ""
+    )
     reply_constraint_lines = list(packet.get("reply_constraints", {}).get("lines", []))
     recall_style = str(packet.get("reply_constraints", {}).get("human_recall_style", "")).strip()
     if recall_style:
         reply_constraint_lines.append(recall_style)
-    reply_constraints_block = _render_section("Reply Constraints:", reply_constraint_lines)
+    reply_constraints_block = (
+        _render_section("Reply Constraints:", reply_constraint_lines)
+        if not scheduler_active
+        else ""
+    )
     history_label = "Thread Origin Window:" if str(packet.get("query_focus", "") or "") == "origin" else "Recent Thread Window:"
     sections = [
         identity_block,
@@ -1211,7 +1223,6 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         working_memory_block,
         hippocampal_index_block,
         memory_salience_block,
-        memory_dynamic_block,
         f"{history_label}\n{_history_block(context, turn_plan)}",
         episodic_block,
         vector_block,

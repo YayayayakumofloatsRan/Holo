@@ -208,3 +208,21 @@ Interpretation:
 
 - Stage48 increased stable provider-prefix size and live cache hits without damaging Stage46 correctness.
 - Miss tokens also increased because the dynamic working/hippocampal context is now explicit. The next refinement should make stable cortical schema replace volatile prompt material, not just add extra prompt material.
+
+## Stage49 Memory Prompt Diet
+
+Stage49 applies that refinement. When `bionic_memory_schedule.mode=biomimetic_v1`, the prompt renderer no longer duplicates scheduler-owned memory through legacy `Identity Guard`, `Episodic Anchors`, `Vector Echoes`, `Activation State`, `Recall Reconstruction`, and `Reply Constraints` blocks. It keeps the sectioned scheduler surfaces and moves `voice_guard` plus `human_recall_style` into cortical schema.
+
+The first DeepSeek live attempt showed the main risk:
+
+| Run | Status | Overall | Prefix tokens | Cache hit | Cache miss | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `cli:DeepSeekLiveBoundary-20260512W` | pass | `0.9635` | `943` | `4608` | `18707` | Stage48 scheduler, duplicate prompt material still present |
+| `cli:DeepSeekLiveBoundary-20260512X` | fail | `0.7640` | `975` | `4736` | `14682` | duplicate blocks suppressed, but continuity failed because reconstruction was not prioritized |
+| `cli:DeepSeekLiveBoundary-20260512Y` | pass | `0.9648` | `975` | `5376` | `14558` | reconstruction summary/anchors promoted in hippocampal budget |
+
+Interpretation:
+
+- Removing duplicate volatile prompt material improves cache behavior, but only if the scheduler preserves the high-value recall signal.
+- The X failure is useful evidence: a memory prompt diet that removes `Recall Reconstruction` without promoting reconstruction into `hippocampal_index` damages bionic continuity.
+- The Y repair restores all Stage46 bionic correctness metrics to `1.0` while improving live cache evidence from Stage48 W's `4608` hit / `18707` miss to `5376` hit / `14558` miss.

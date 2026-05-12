@@ -54,6 +54,11 @@ def _list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _field_line(label: str, value: Any, *, limit: int = 140) -> list[str]:
+    text = _text(value, limit)
+    return [f"{label}={text}"] if text else []
+
+
 def _memory_requested(query: str) -> bool:
     lowered = str(query or "").lower()
     return any(marker in lowered for marker in MEMORY_REQUEST_MARKERS)
@@ -64,23 +69,32 @@ def _cortical_schema_lines(packet: dict[str, Any]) -> list[str]:
     reply_constraints = _dict(packet.get("reply_constraints"))
     autobiographical = _dict(packet.get("autobiographical_state"))
     goal_state = _dict(packet.get("goal_state"))
+    chapter = _text(autobiographical.get("current_chapter"), 140)
+    identity_arc = _text(autobiographical.get("identity_arc"), 140)
+    recall_style = _text(reply_constraints.get("human_recall_style"), 160)
     stable_traits = [_text(item, 80) for item in _list(autobiographical.get("stable_traits")) if _text(item, 80)]
     active_goal_types = [
         _text(_dict(item).get("goal_type"), 80)
         for item in _list(goal_state.get("active_goals"))
         if _text(_dict(item).get("goal_type"), 80)
     ]
+    lines = [
+        "memory_architecture=working_memory + hippocampal_index + cortical_schema + salience_gate",
+        "cortical_schema_role=stable identity, policy, long-lived relationship and memory-shape priors",
+        *[_text(line, 160) for line in _list(identity.get("lines"))],
+        *[_text(line, 160) for line in _list(packet.get("voice_guard"))],
+        *[_text(line, 160) for line in _list(reply_constraints.get("lines"))],
+    ]
+    if recall_style:
+        lines.append(f"human_recall_style={recall_style}")
+    if chapter:
+        lines.append(f"current_chapter={chapter}")
+    if identity_arc:
+        lines.append(f"identity_arc={identity_arc}")
+    lines.extend(f"stable_trait={trait}" for trait in stable_traits[:4])
+    lines.extend(f"active_goal_type={goal_type}" for goal_type in active_goal_types[:4])
     return _unique(
-        [
-            "memory_architecture=working_memory + hippocampal_index + cortical_schema + salience_gate",
-            "cortical_schema_role=stable identity, policy, long-lived relationship and memory-shape priors",
-            *[_text(line, 160) for line in _list(identity.get("lines"))],
-            *[_text(line, 160) for line in _list(reply_constraints.get("lines"))],
-            f"current_chapter={_text(autobiographical.get('current_chapter'), 140)}",
-            f"identity_arc={_text(autobiographical.get('identity_arc'), 140)}",
-            *[f"stable_trait={trait}" for trait in stable_traits[:4]],
-            *[f"active_goal_type={goal_type}" for goal_type in active_goal_types[:4]],
-        ],
+        lines,
         limit=14,
     )
 
@@ -93,14 +107,14 @@ def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
     residual = _dict(packet.get("residual_fast_channel"))
     selected = _dict(packet.get("selected_action"))
     lines = [
-        f"memory_route={_text(packet.get('memory_route'), 60)}",
-        f"tier={_text(packet.get('tier'), 60)}",
-        f"active_summary={_text(active.get('summary') or active.get('continuity_summary'), 180)}",
-        f"latest_user_intent={_text(active.get('latest_user_intent'), 140)}",
-        f"selected_action={_text(selected.get('action_type'), 80)}",
-        f"temporal_resume_cue={_text(stage20.get('resume_cue'), 140)}",
-        f"scene_response_sketch={_text(stage24.get('response_sketch'), 140)}",
-        f"dense_reentry_hint={_text(stage25.get('reentry_hint'), 140)}",
+        *_field_line("memory_route", packet.get("memory_route"), limit=60),
+        *_field_line("tier", packet.get("tier"), limit=60),
+        *_field_line("active_summary", active.get("summary") or active.get("continuity_summary"), limit=180),
+        *_field_line("latest_user_intent", active.get("latest_user_intent"), limit=140),
+        *_field_line("selected_action", selected.get("action_type"), limit=80),
+        *_field_line("temporal_resume_cue", stage20.get("resume_cue"), limit=140),
+        *_field_line("scene_response_sketch", stage24.get("response_sketch"), limit=140),
+        *_field_line("dense_reentry_hint", stage25.get("reentry_hint"), limit=140),
     ]
     for line in _list(residual.get("lines"))[:4]:
         lines.append(f"residual={_text(line, 180)}")
@@ -111,6 +125,8 @@ def _hippocampal_index_lines(packet: dict[str, Any]) -> list[str]:
     activation = _dict(packet.get("activation_state"))
     episodic = _dict(packet.get("episodic_recall"))
     recall_reconstruction = _dict(packet.get("recall_reconstruction"))
+    heat = _metric(activation.get("heat"))
+    reconstruction_summary = _text(recall_reconstruction.get("summary"), 180)
     ids = [_text(item, 80) for item in _list(packet.get("selected_memory_ids")) + _list(packet.get("activation_trace_ids")) if _text(item, 80)]
     motifs = [_text(item, 80) for item in _list(activation.get("motifs")) if _text(item, 80)]
     vector_hits = [
@@ -119,12 +135,13 @@ def _hippocampal_index_lines(packet: dict[str, Any]) -> list[str]:
         if _text(_dict(item).get("text"), 160)
     ]
     lines = [
-        f"activation_heat={round(_metric(activation.get('heat')), 3)}",
-        *[f"motif={motif}" for motif in motifs[:4]],
-        *[f"memory_id={item}" for item in ids[:6]],
+        *([f"reconstruction_summary={reconstruction_summary}"] if reconstruction_summary else []),
         *[f"episodic={_text(line, 160)}" for line in _list(episodic.get("lines"))[:4]],
         *[f"anchor={_text(line, 120)}" for line in _list(recall_reconstruction.get("anchors"))[:3]],
+        *[f"memory_id={item}" for item in ids[:6]],
+        *[f"motif={motif}" for motif in motifs[:4]],
         *[f"vector={line}" for line in vector_hits[:3]],
+        *([f"activation_heat={round(heat, 3)}"] if heat > 0.0 else []),
     ]
     return _unique(lines, limit=16)
 

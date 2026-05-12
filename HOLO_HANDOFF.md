@@ -86,13 +86,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 81. `docs/ENGINEERING_HANDOFF_STAGE46.md`
 82. `docs/ENGINEERING_HANDOFF_STAGE47.md`
 83. `docs/ENGINEERING_HANDOFF_STAGE48.md`
-84. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-85. `HOLO_SYSTEM.md`
-86. `HOLO_HOST.md`
-87. `OPERATIONS.md`
-88. `docs/PUBLIC_RELEASE_HYGIENE.md`
-89. `holo_memory_library/MEMORY_LIBRARY.md`
-90. `windows_helper/README.md`
+84. `docs/ENGINEERING_HANDOFF_STAGE49.md`
+85. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+86. `HOLO_SYSTEM.md`
+87. `HOLO_HOST.md`
+88. `OPERATIONS.md`
+89. `docs/PUBLIC_RELEASE_HYGIENE.md`
+90. `holo_memory_library/MEMORY_LIBRARY.md`
+91. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -104,10 +105,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage48 bionic memory scheduler plus Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage48 bionic memory scheduler commit.
-- Current milestone: `stage48-bionic-memory-scheduler`
-- Current status: Stage48 is implemented as a prompt/context memory scheduler over existing memory stores; Stage46 has an introspective residual fast channel for temporal commitments and visual grounding, with live DeepSeek strict boundary stress passing.
+- Resume commit: Stage49 memory prompt diet and reconstruction-priority repair plus Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the Stage49 memory prompt diet commit.
+- Current milestone: `stage49-memory-prompt-diet`
+- Current status: Stage49 makes the Stage48 scheduler replace duplicate legacy volatile memory blocks, drops empty scheduler slots, and promotes recall reconstruction into the hippocampal budget; live DeepSeek strict boundary stress is passing.
 - Latest full verification evidence:
   - `python -m pytest -q tests\test_stage20_temporal_commitments.py tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `36` tests on `2026-05-12` after the residual fast channel repair.
   - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
@@ -129,11 +130,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `python -m pytest -q` passed with `387` tests on `2026-05-12` after Stage48 scheduler integration.
   - `python -m holo_host run-bionic-boundary-stress --thread-key cli:Stage48Offline-20260512 --chat-name Stage48Offline-20260512 --channel cli --turns 7 --offline` passed with `overall_score=0.9889`, all Stage46 bionic correctness metrics at `1.0`, and visible `bionic_memory_schedule.mode=biomimetic_v1`.
   - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512W --chat-name DeepSeekLiveBoundary-20260512W --channel cli --turns 7` passed with `overall_score=0.9635`, all Stage46 bionic correctness metrics at `1.0`, `provider_cache_hit_tokens=4608`, `prompt_cache_miss_tokens=18707`, and `provider_substrate_score=1.0`.
-  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context, increasing estimated prefix tokens from `627` to `943` and live cache hits from `3200` to `4608` over seven turns. Dynamic tokens also grew, so next work should make stable cortical schema replace volatile prompt material rather than merely add context.
+  - `python -m pytest -q tests\test_bionic_memory_scheduler.py tests\test_context_scheduler.py tests\test_memory_fabric.py tests\test_stage46_bionic_boundary_stress.py` passed with `34` tests on `2026-05-12` after Stage49 prompt diet and reconstruction-priority repair.
+  - `python -m pytest -q` passed with `391` tests on `2026-05-12` after Stage49.
+  - `python -m holo_host run-bionic-boundary-stress --thread-key cli:Stage49Offline-20260512B --chat-name Stage49Offline-20260512B --channel cli --turns 7 --offline` passed with `overall_score=0.9885`, all Stage46 bionic correctness metrics at `1.0`.
+  - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512Y --chat-name DeepSeekLiveBoundary-20260512Y --channel cli --turns 7` passed with `overall_score=0.9648`, all Stage46 bionic correctness metrics at `1.0`, `provider_cache_hit_tokens=5376`, `prompt_cache_miss_tokens=14558`, and `provider_substrate_score=1.0`.
+  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves the next refinement: duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. The failed intermediate X run scored `0.7640`; the repaired Y run passed with `5376` hit / `14558` miss tokens.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
-- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE48.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: empirical Stage48 calibration. Compare DeepSeek live cache reuse and Stage46 correctness before expanding cortical schema or adding consolidation-stream writeback.
+- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE49.md`, and do not assume any uncommitted chat-only state exists.
+- Next safe direction: add a scheduler-owned compression audit for dynamic prompt payload. Do not expand cortical schema or add consolidation-stream writeback until live DeepSeek cache/correctness evidence stays stable across repeated runs.
 - Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is
@@ -173,6 +178,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage42: an isolated bionic user-simulation performance harness now repeatedly probes first-time-user dialogue quality, high-intensity bionic pressure points, continuity/naturalness/capability honesty/mechanism leakage, and persists only operational eval evidence while the bionic capsule exposes observational `bionic_state`
   - Stage43: a bounded motivational dynamics field now computes replay-stable arousal, valence, uncertainty, curiosity, attachment pressure, fatigue, identity coherence, unfinished-loop pressure, diffuse attention, attention center, and small action-market deltas before action selection
   - Stage48: a biomimetic memory scheduler now separates working memory, hippocampal indices, cortical schemas, salience gates, and diagnostic consolidation targets before prompt/context scheduling without adding a new store or decision layer
+  - Stage49: scheduler-owned prompt diet removes duplicate legacy volatile memory blocks, drops empty scheduler slots, and prioritizes recall reconstruction inside the hippocampal budget
 - Post-Stage39 cache diagnostics: exact packet-cache reuse is confirmed live; cache-class homeostasis deficits now require enough packet-cache observations and are rebased from live cache stats instead of stale self-model metadata.
 - Post-Stage39 provider-response cache repair: stateless text API providers (`responses`, `openai_compatible`, `deepseek`) now use a bounded QueueStore cache for exact repeated prompts; cache hits are visible as `status=cache_hit` with zero new token cost.
 - Post-Stage39 self-dialogue Turing repair: internal CLI probes now guard trace-continuity labels, `revision` vs `vision` marker drift, visible-context questions, exact-memory/image boundaries, non-executable action demotion, theatrical provider wording, and action-market reason leakage before user-facing text. Verified with offline self-dialogue, cached DeepSeek provider probe, full tests, `accept-stage39`, public-release hygiene, and `git diff --check`.
@@ -182,6 +188,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Stage42 bionic structure: every bionic capsule exposes `bionic_state` as an observational surface with bionic-subject positioning, action-market authority, consciousness-field summary, somatic proxy, active intent, uncertainty, continuity pressure, and boundary conditions. It is not a second brain and does not grant runtime authority.
 - Stage43 motivational dynamics: every bionic capsule exposes `motivational_field` as a replay-stable internal control field. It can only add bounded action-market score deltas; it cannot select actions directly, write memory, start transport, or become a second decision layer.
 - Stage48 memory scheduler: every finalized mind packet exposes `bionic_memory_schedule` as a prompt/context scheduling surface. Cortical schema can enter provider-cache prefix; working memory and hippocampal indices stay dynamic; consolidation targets are diagnostic only and cannot write self-memory directly.
+- Stage49 prompt diet: when the scheduler is present, legacy memory blocks no longer duplicate scheduler-owned dynamic memory in the prompt. Recall reconstruction must be carried by `hippocampal_index`, not by restoring the old duplicate `Recall Reconstruction` block.
 - Stage42 manual free-dialogue review on `2026-05-10` fixed mechanical fallback phrasing in Chinese: action-market reason leakage, `We were at We...` continuity duplication, broad visual-boundary triggers, and English fallback on Chinese continuation turns. A provider-backed eight-turn probe timed out at `180s`, so long provider-dialogue probes need explicit timeout/cache hardening before being used as acceptance authority.
 - The next planned arc is:
   - Stage44+: explicit re-plan for broader provider/API compatibility, richer agent eval suites, replay-backed facade slimming, multimodal user-sim suites, or operator-approved live transport hardening
