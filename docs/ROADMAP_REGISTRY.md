@@ -191,6 +191,12 @@ Stage51: bionic memory lifecycle and consciousness flow
 - Exposes lifecycle/flow modes and token counts in context scheduling plus compact Stage46 evidence for consolidation priority, replay guard, and leakage guard.
 - Keeps `self_memory_write=false`, `background_loop_allowed=false`, `dream_replay_allowed=false`, and `user_visible=false`; no new store, transport widening, watcher authority, or second decision layer.
 
+Stage52: scheduler-owned prompt fusion
+- Fuses Stage51 lifecycle and consciousness-flow prompt material into the existing scheduler-owned dynamic memory budget.
+- Renders a single `Bionic Dynamic Frame` when fusion is active, while preserving lifecycle/flow packet and debug evidence.
+- Exposes fusion mode, saved line count, Stage51-equivalent dynamic token estimates, and saved token estimates in context scheduling and Stage46 evidence.
+- Keeps all changes prompt-scheduling/diagnostic only; no self-memory write, new store, transport widening, watcher authority, or second decision layer.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

@@ -121,6 +121,18 @@ def plan_processor_context(
     flow = dict(consciousness_flow or {}) if isinstance(consciousness_flow, dict) else {}
     flow_lines = flow.get("phase_lines", []) if isinstance(flow.get("phase_lines", []), list) else []
     flow_prompt = "\n".join(str(line).strip() for line in flow_lines if str(line).strip())
+    fusion = dict(schedule.get("dynamic_fusion", {})) if isinstance(schedule.get("dynamic_fusion", {}), dict) else {}
+    fusion_supplement_lines = (
+        fusion.get("supplement_lines", [])
+        if isinstance(fusion.get("supplement_lines", []), list)
+        else []
+    )
+    fusion_supplement_prompt = "\n".join(str(line).strip() for line in fusion_supplement_lines if str(line).strip())
+    fusion_supplement_tokens = estimate_tokens(fusion_supplement_prompt)
+    stage51_equivalent_dynamic_tokens = max(
+        schedule_dynamic_tokens,
+        schedule_dynamic_tokens - fusion_supplement_tokens + estimate_tokens(lifecycle_prompt) + estimate_tokens(flow_prompt),
+    )
     start_new_session = bool(current_session_id and pressure >= 0.72)
     reason = "context_pressure" if start_new_session else "reuse_session"
     max_history_messages = _history_limit(pressure=pressure, current=int(history_messages or 0))
@@ -154,4 +166,10 @@ def plan_processor_context(
         "consciousness_flow_mode": str(flow.get("mode", "") or ""),
         "consciousness_flow_prompt_lines": len([line for line in flow_lines if str(line).strip()]),
         "consciousness_flow_prompt_tokens": estimate_tokens(flow_prompt),
+        "dynamic_fusion_mode": str(fusion.get("mode", "") or ""),
+        "dynamic_fusion_saved_line_count": int(fusion.get("saved_line_count", 0) or 0),
+        "dynamic_fusion_supplement_lines": len([line for line in fusion_supplement_lines if str(line).strip()]),
+        "dynamic_fusion_supplement_tokens": fusion_supplement_tokens,
+        "stage51_equivalent_dynamic_tokens": stage51_equivalent_dynamic_tokens,
+        "dynamic_fusion_saved_tokens": max(0, stage51_equivalent_dynamic_tokens - schedule_dynamic_tokens),
     }

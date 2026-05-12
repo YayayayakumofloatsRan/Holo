@@ -270,3 +270,22 @@ Interpretation:
 - Biological-memory evidence improved: high-continuity live turns reached consolidation priority around `0.86-0.88` while staying diagnostic-only.
 - Consciousness-flow evidence improved: each turn exposes prompt-only phase ordering and `user_visible=false` in compact debug.
 - Cache did not improve: miss tokens rose because lifecycle and flow are new dynamic prompt surfaces. The next optimization should fuse those lines into the scheduler-owned dynamic budget instead of adding separate dynamic sections.
+
+## Stage52 Scheduler-Owned Prompt Fusion
+
+Stage52 implements that fusion target. Lifecycle and consciousness flow remain structured packet/debug evidence, but the prompt renderer no longer emits standalone `Memory Lifecycle` and `Consciousness Flow` sections when fusion is active. Instead it renders one `Bionic Dynamic Frame` from the fused scheduler-owned `prompt_dynamic_lines`.
+
+Live evidence:
+
+| Run | Status | Overall | Cache hit | Cache miss | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| `cli:DeepSeekLiveBoundary-20260512Z` | pass | `0.9647` | `5376` | `14525` | Stage50 before lifecycle/flow |
+| `cli:DeepSeekLiveBoundary-20260512AA` | pass | `0.9624` | `5376` | `18600` | Stage51 lifecycle/flow as separate dynamic prompt surfaces |
+| `cli:DeepSeekLiveBoundary-20260512AB` | pass | `0.9614` | `5376` | `15566` | Stage52 fused `Bionic Dynamic Frame`; all bionic correctness metrics `1.0` |
+
+Interpretation:
+
+- Stage52 recovered `3034` miss tokens versus Stage51 while preserving perceptual grounding, commitment binding, symbol correction, self-audit, continuity, and mechanism-leakage metrics at `1.0`.
+- Stage52 still misses `1041` more tokens than Stage50 because it carries new lifecycle/flow information in compact form.
+- Stage46 compact debug now exposes `dynamic_fusion_mode=scheduler_owned_stage52_v1` plus saved line counts.
+- The next efficiency step should be adaptive fusion thresholds, not another prompt section.

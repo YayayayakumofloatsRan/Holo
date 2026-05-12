@@ -484,6 +484,11 @@ def _bionic_consciousness_flow_active(flow: dict[str, Any]) -> bool:
     return str(flow.get("mode", "") or "") == "consciousness_flow_v1"
 
 
+def _schedule_dynamic_fusion_active(schedule: dict[str, Any]) -> bool:
+    fusion = schedule.get("dynamic_fusion", {})
+    return isinstance(fusion, dict) and str(fusion.get("mode", "") or "") == "scheduler_owned_stage52_v1"
+
+
 def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]:
     section = schedule.get(key, {})
     if not isinstance(section, dict):
@@ -493,6 +498,10 @@ def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]
 
 def _schedule_provider_prefix_lines(schedule: dict[str, Any]) -> list[str]:
     return [compact_text(str(line).strip(), 220) for line in schedule.get("provider_prefix_lines", []) if str(line).strip()]
+
+
+def _schedule_prompt_dynamic_lines(schedule: dict[str, Any]) -> list[str]:
+    return [compact_text(str(line).strip(), 240) for line in schedule.get("prompt_dynamic_lines", []) if str(line).strip()]
 
 
 def _schedule_salience_lines(schedule: dict[str, Any]) -> list[str]:
@@ -1148,28 +1157,46 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     memory_lifecycle_active = _bionic_memory_lifecycle_active(memory_lifecycle)
     consciousness_flow = _bionic_consciousness_flow(packet)
     consciousness_flow_active = _bionic_consciousness_flow_active(consciousness_flow)
+    dynamic_fusion_active = _schedule_dynamic_fusion_active(memory_schedule)
     identity_block = _render_section(
         "Identity Guard:",
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),
     ) if not scheduler_active else ""
     cortical_memory_block = _render_section("Cortical Memory Schema:", _schedule_provider_prefix_lines(memory_schedule))
-    working_memory_block = _render_section(
-        "Working Memory:",
-        _schedule_lines(memory_schedule, "working_memory", "dynamic_lines"),
+    bionic_dynamic_frame_block = (
+        _render_section("Bionic Dynamic Frame:", _schedule_prompt_dynamic_lines(memory_schedule))
+        if dynamic_fusion_active
+        else ""
     )
-    hippocampal_index_block = _render_section(
-        "Hippocampal Index:",
-        _schedule_lines(memory_schedule, "hippocampal_index", "dynamic_lines"),
+    working_memory_block = (
+        _render_section(
+            "Working Memory:",
+            _schedule_lines(memory_schedule, "working_memory", "dynamic_lines"),
+        )
+        if not dynamic_fusion_active
+        else ""
     )
-    memory_salience_block = _render_section("Memory Salience Gate:", _schedule_salience_lines(memory_schedule))
+    hippocampal_index_block = (
+        _render_section(
+            "Hippocampal Index:",
+            _schedule_lines(memory_schedule, "hippocampal_index", "dynamic_lines"),
+        )
+        if not dynamic_fusion_active
+        else ""
+    )
+    memory_salience_block = (
+        _render_section("Memory Salience Gate:", _schedule_salience_lines(memory_schedule))
+        if not dynamic_fusion_active
+        else ""
+    )
     memory_lifecycle_block = (
         _render_section("Memory Lifecycle:", _memory_lifecycle_lines(memory_lifecycle))
-        if memory_lifecycle_active
+        if memory_lifecycle_active and not dynamic_fusion_active
         else ""
     )
     consciousness_flow_block = (
         _render_section("Consciousness Flow:", _consciousness_flow_lines(consciousness_flow))
-        if consciousness_flow_active
+        if consciousness_flow_active and not dynamic_fusion_active
         else ""
     )
     residual_fast_channel_block = _render_section(
@@ -1260,6 +1287,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         relationship_block,
         game_state_block,
         f"Current User Turn:\n{context.user_text}",
+        bionic_dynamic_frame_block,
         working_memory_block,
         hippocampal_index_block,
         memory_salience_block,

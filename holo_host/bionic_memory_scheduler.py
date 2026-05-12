@@ -72,6 +72,10 @@ def _line_label(line: str) -> str:
     return str(line or "").split("=", 1)[0].strip()
 
 
+def _bool_text(value: Any) -> str:
+    return "true" if bool(value) else "false"
+
+
 def _memory_requested(query: str) -> bool:
     lowered = str(query or "").lower()
     return any(marker in lowered for marker in MEMORY_REQUEST_MARKERS)
@@ -343,3 +347,104 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         "prompt_dynamic_lines": prompt_dynamic,
         "dynamic_context_lines": prompt_dynamic,
     }
+
+
+def _phase_value(lines: list[Any], label: str, *, limit: int = 140) -> str:
+    prefix = f"{label}="
+    for raw in lines:
+        text = str(raw or "").strip()
+        if text.startswith(prefix):
+            return _text(text[len(prefix) :], limit)
+    return ""
+
+
+def _fusion_supplement_lines(
+    lifecycle: dict[str, Any],
+    consciousness_flow: dict[str, Any],
+    *,
+    limit: int,
+) -> list[str]:
+    consolidation = _dict(lifecycle.get("consolidation_intent"))
+    replay = _dict(lifecycle.get("replay_plan"))
+    forgetting = _dict(lifecycle.get("forgetting_gate"))
+    leakage = _dict(consciousness_flow.get("leakage_guard"))
+    phase_lines = _list(consciousness_flow.get("phase_lines"))
+    targets = ",".join(_text(item, 70) for item in _list(consolidation.get("targets"))[:4] if _text(item, 70)) or "none"
+    replay_state = "triggered" if bool(replay.get("triggered", False)) else "idle"
+    decay = ",".join(_text(item, 70) for item in _list(forgetting.get("decay_candidates"))[:4] if _text(item, 70)) or "none"
+    sensory_edge = _text(consciousness_flow.get("current_edge") or _phase_value(phase_lines, "sensory_edge"), 140)
+    memory_reactivation = _phase_value(phase_lines, "memory_reactivation", limit=120)
+    goal_pressure = _phase_value(phase_lines, "goal_pressure", limit=120)
+    dominant_phase = _text(consciousness_flow.get("dominant_phase"), 70) or "sensory_edge"
+    lines = [
+        (
+            f"lifecycle: priority={round(float(consolidation.get('priority', 0.0) or 0.0), 3)}; "
+            f"targets={targets}; self_memory_write={_bool_text(consolidation.get('self_memory_write', False))}; "
+            f"replay={replay_state}; background_loop_allowed={_bool_text(replay.get('background_loop_allowed', False))}"
+        ),
+        (
+            f"forgetting: decay_candidates={decay}; "
+            f"protected_line_dropped={_bool_text(forgetting.get('protected_line_dropped', False))}"
+        ),
+        (
+            f"flow: sensory_edge={sensory_edge or 'current turn'}; dominant_phase={dominant_phase}; "
+            f"user_visible={_bool_text(leakage.get('user_visible', False))}"
+        ),
+    ]
+    if memory_reactivation or goal_pressure:
+        lines.append(
+            f"flow_reentry: memory_reactivation={memory_reactivation or 'none'}; goal_pressure={goal_pressure or 'none'}"
+        )
+    return _unique(lines, limit=limit)
+
+
+def fuse_bionic_dynamic_prompt(
+    schedule: dict[str, Any],
+    lifecycle: dict[str, Any],
+    consciousness_flow: dict[str, Any],
+    *,
+    max_supplement_lines: int = 4,
+    max_prompt_dynamic_lines: int = 18,
+) -> dict[str, Any]:
+    """Fuse Stage51 lifecycle/flow prompt surfaces into scheduler-owned dynamic lines."""
+
+    result = dict(schedule or {})
+    base_lines = [
+        _text(line, 220)
+        for line in _list(result.get("prompt_dynamic_lines") or result.get("dynamic_context_lines"))
+        if _text(line, 220)
+    ]
+    lifecycle_lines = [_text(line, 220) for line in _list(lifecycle.get("prompt_lines")) if _text(line, 220)]
+    flow_lines = [_text(line, 220) for line in _list(consciousness_flow.get("phase_lines")) if _text(line, 220)]
+    supplement = _fusion_supplement_lines(
+        dict(lifecycle or {}),
+        dict(consciousness_flow or {}),
+        limit=max(1, int(max_supplement_lines or 1)),
+    )
+    fused = _unique(
+        [*base_lines, *supplement],
+        limit=max(1, int(max_prompt_dynamic_lines or 1)),
+    )
+    source_line_count = len(base_lines) + len(lifecycle_lines) + len(flow_lines)
+    saved_line_count = max(0, source_line_count - len(fused))
+    fusion = {
+        "mode": "scheduler_owned_stage52_v1",
+        "source_line_count": source_line_count,
+        "base_line_count": len(base_lines),
+        "source_lifecycle_line_count": len(lifecycle_lines),
+        "source_consciousness_line_count": len(flow_lines),
+        "supplement_line_count": len(supplement),
+        "supplement_lines": supplement,
+        "fused_line_count": len(fused),
+        "saved_line_count": saved_line_count,
+        "render_policy": "single_scheduler_dynamic_frame",
+    }
+    result["prompt_dynamic_lines"] = fused
+    result["dynamic_context_lines"] = fused
+    result["dynamic_fusion"] = fusion
+    compression = _dict(result.get("dynamic_compression_audit"))
+    compression["stage52_fusion_mode"] = fusion["mode"]
+    compression["prompt_dynamic_line_count"] = len(fused)
+    compression["fusion_saved_line_count"] = saved_line_count
+    result["dynamic_compression_audit"] = compression
+    return result

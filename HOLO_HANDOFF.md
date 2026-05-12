@@ -89,13 +89,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 84. `docs/ENGINEERING_HANDOFF_STAGE49.md`
 85. `docs/ENGINEERING_HANDOFF_STAGE50.md`
 86. `docs/ENGINEERING_HANDOFF_STAGE51.md`
-87. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-88. `HOLO_SYSTEM.md`
-89. `HOLO_HOST.md`
-90. `OPERATIONS.md`
-91. `docs/PUBLIC_RELEASE_HYGIENE.md`
-92. `holo_memory_library/MEMORY_LIBRARY.md`
-93. `windows_helper/README.md`
+87. `docs/ENGINEERING_HANDOFF_STAGE52.md`
+88. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+89. `HOLO_SYSTEM.md`
+90. `HOLO_HOST.md`
+91. `OPERATIONS.md`
+92. `docs/PUBLIC_RELEASE_HYGIENE.md`
+93. `holo_memory_library/MEMORY_LIBRARY.md`
+94. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -107,10 +108,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage51 bionic memory lifecycle and consciousness-flow integration plus Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage51 bionic memory lifecycle and consciousness-flow commit.
-- Current milestone: `stage51-bionic-lifecycle-flow`
-- Current status: Stage51 adds diagnostic consolidation/replay/forgetting gates and prompt-only consciousness-flow phase ordering while keeping live DeepSeek strict boundary stress passing. It improves biomimetic memory/consciousness surfaces, but miss tokens rose because the new surfaces are dynamic prompt material.
+- Resume commit: Stage52 scheduler-owned prompt fusion plus Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the Stage52 scheduler-owned prompt-fusion commit.
+- Current milestone: `stage52-prompt-fusion`
+- Current status: Stage52 fuses lifecycle/flow prompt material into a single scheduler-owned `Bionic Dynamic Frame`, preserving biomimetic debug surfaces while reducing live DeepSeek miss tokens versus Stage51.
 - Latest full verification evidence:
   - `python -m pytest -q tests\test_stage20_temporal_commitments.py tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `36` tests on `2026-05-12` after the residual fast channel repair.
   - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
@@ -146,7 +147,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `python -m holo_host run-bionic-boundary-stress --thread-key cli:Stage51Offline-20260512 --chat-name Stage51Offline-20260512 --channel cli --turns 7 --offline` passed with `overall_score=0.9883`, all Stage46 bionic correctness metrics at `1.0`, `memory_lifecycle_mode=biomimetic_lifecycle_v1`, and `consciousness_flow_mode=consciousness_flow_v1`.
   - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512AA --chat-name DeepSeekLiveBoundary-20260512AA --channel cli --turns 7` passed with `overall_score=0.9624`, all Stage46 bionic correctness metrics at `1.0`, `provider_substrate_score=1.0`, `provider_cache_hit_tokens=5376`, `prompt_cache_miss_tokens=18600`, `self_memory_write=false`, `background_loop_allowed=false`, and `bionic_consciousness_flow.user_visible=false`.
   - `python -m pytest -q` passed with `400` tests on `2026-05-12` after Stage51.
-  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. Stage50 adds the missing audit surface: DeepSeek Z preserved all bionic metrics with `5376` hit / `14525` miss tokens and `protected_line_dropped=false` every turn. Stage51 improves biological-memory lifecycle and consciousness-flow evidence while keeping all Stage46 bionic metrics at `1.0`, but DeepSeek AA miss tokens rose to `18600`, so Stage52 should fuse lifecycle/flow into the scheduler-owned dynamic budget.
+  - `python -m pytest -q tests\test_context_scheduler.py::ContextSchedulerTests::test_bionic_lifecycle_and_flow_render_as_internal_dynamic_surfaces tests\test_context_scheduler.py::ContextSchedulerTests::test_stage52_fusion_keeps_lifecycle_flow_inside_scheduler_dynamic_budget tests\test_stage46_bionic_boundary_stress.py::Stage46BionicBoundaryStressTests::test_compact_processor_debug_preserves_bionic_memory_schedule` passed with `3` tests on `2026-05-12`.
+  - `python -m pytest -q tests\test_bionic_memory_scheduler.py tests\test_bionic_memory_lifecycle.py tests\test_bionic_consciousness_flow.py tests\test_context_scheduler.py tests\test_memory_fabric.py tests\test_stage46_bionic_boundary_stress.py` passed with `44` tests on `2026-05-12` after Stage52.
+  - `python -m py_compile holo_host\bionic_memory_scheduler.py holo_host\bionic_memory_lifecycle.py holo_host\bionic_consciousness_flow.py holo_host\memory_bridge.py holo_host\processors.py holo_host\context_scheduler.py holo_host\bionic_boundary_stress.py` passed on `2026-05-12`.
+  - `python -m holo_host run-bionic-boundary-stress --thread-key cli:Stage52Offline-20260512 --chat-name Stage52Offline-20260512 --channel cli --turns 7 --offline` passed with `overall_score=0.9868`, all Stage46 bionic correctness metrics at `1.0`, and `dynamic_fusion_mode=scheduler_owned_stage52_v1`.
+  - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512AB --chat-name DeepSeekLiveBoundary-20260512AB --channel cli --turns 7` passed with `overall_score=0.9614`, all Stage46 bionic correctness metrics at `1.0`, `provider_substrate_score=1.0`, `provider_cache_hit_tokens=5376`, `prompt_cache_miss_tokens=15566`, and `dynamic_fusion_mode=scheduler_owned_stage52_v1`.
+  - `python -m pytest -q` passed with `401` tests on `2026-05-12` after Stage52.
+  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. Stage50 adds the missing audit surface: DeepSeek Z preserved all bionic metrics with `5376` hit / `14525` miss tokens and `protected_line_dropped=false` every turn. Stage51 improves biological-memory lifecycle and consciousness-flow evidence while keeping all Stage46 bionic metrics at `1.0`, but DeepSeek AA miss tokens rose to `18600`. Stage52 fused lifecycle/flow into scheduler dynamic lines and reduced miss tokens to `15566`, though it has not fully returned to Stage50's `14525`.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
 - First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE50.md`, and do not assume any uncommitted chat-only state exists.

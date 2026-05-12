@@ -502,6 +502,13 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
                     "provider_prefix_lines": ["identity=yes", "policy=stable"],
                     "dynamic_context_lines": ["working: active thread", "hippocampal: node-a"],
                     "prompt_dynamic_lines": ["working: active thread", "hippocampal: node-a"],
+                    "dynamic_fusion": {
+                        "mode": "scheduler_owned_stage52_v1",
+                        "source_line_count": 15,
+                        "fused_line_count": 9,
+                        "saved_line_count": 6,
+                        "supplement_line_count": 3,
+                    },
                     "dynamic_compression_audit": {
                         "mode": "scheduler_owned_dynamic_v1",
                         "raw_dynamic_line_count": 7,
@@ -520,6 +527,8 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
         self.assertEqual(compact["bionic_memory_schedule"]["compression_mode"], "scheduler_owned_dynamic_v1")
         self.assertEqual(compact["bionic_memory_schedule"]["dropped_dynamic_line_count"], 5)
         self.assertFalse(compact["bionic_memory_schedule"]["protected_line_dropped"])
+        self.assertEqual(compact["bionic_memory_schedule"]["dynamic_fusion_mode"], "scheduler_owned_stage52_v1")
+        self.assertEqual(compact["bionic_memory_schedule"]["dynamic_fusion_saved_line_count"], 6)
 
     def test_compact_processor_debug_preserves_memory_lifecycle_and_consciousness_flow(self) -> None:
         compact = _compact_processor_debug(

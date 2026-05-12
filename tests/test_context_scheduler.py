@@ -4,7 +4,7 @@ import unittest
 
 from holo_host.bionic_consciousness_flow import build_bionic_consciousness_flow
 from holo_host.bionic_memory_lifecycle import build_bionic_memory_lifecycle
-from holo_host.bionic_memory_scheduler import build_bionic_memory_schedule
+from holo_host.bionic_memory_scheduler import build_bionic_memory_schedule, fuse_bionic_dynamic_prompt
 from holo_host.context_scheduler import estimate_tokens, plan_processor_context
 from holo_host.models import AttentionState, TurnContext, TurnPlan
 from holo_host.processors import render_chat_prompt
@@ -282,9 +282,15 @@ class ContextSchedulerTests(unittest.TestCase):
                 "lines": ["legacy stream line"],
             },
         }
-        packet["bionic_memory_schedule"] = build_bionic_memory_schedule(packet, query="what changed?")
+        base_schedule = build_bionic_memory_schedule(packet, query="what changed?")
+        packet["bionic_memory_schedule"] = base_schedule
         packet["bionic_memory_lifecycle"] = build_bionic_memory_lifecycle(packet, query="what changed?")
         packet["bionic_consciousness_flow"] = build_bionic_consciousness_flow(packet, query="what changed?")
+        packet["bionic_memory_schedule"] = fuse_bionic_dynamic_prompt(
+            base_schedule,
+            packet["bionic_memory_lifecycle"],
+            packet["bionic_consciousness_flow"],
+        )
         context = TurnContext(
             channel="wechat",
             thread_key="cli:bionic-stage51",
@@ -310,14 +316,57 @@ class ContextSchedulerTests(unittest.TestCase):
             consciousness_flow=packet["bionic_consciousness_flow"],
         )
 
-        self.assertIn("Memory Lifecycle:", prompt)
-        self.assertIn("Consciousness Flow:", prompt)
+        self.assertIn("Bionic Dynamic Frame:", prompt)
+        self.assertNotIn("Memory Lifecycle:", prompt)
+        self.assertNotIn("Consciousness Flow:", prompt)
+        self.assertNotIn("Working Memory:", prompt)
+        self.assertNotIn("Hippocampal Index:", prompt)
         self.assertIn("self_memory_write=false", prompt)
+        self.assertIn("user_visible=false", prompt)
         self.assertIn("sensory_edge=what changed?", prompt)
         self.assertNotIn("Consciousness Lines:", prompt)
         self.assertEqual(plan["memory_lifecycle_mode"], "biomimetic_lifecycle_v1")
         self.assertEqual(plan["consciousness_flow_mode"], "consciousness_flow_v1")
         self.assertGreater(plan["consciousness_flow_prompt_tokens"], 0)
+        self.assertEqual(plan["dynamic_fusion_mode"], "scheduler_owned_stage52_v1")
+        self.assertGreater(plan["dynamic_fusion_saved_line_count"], 0)
+        self.assertGreater(plan["dynamic_fusion_saved_tokens"], 0)
+
+    def test_stage52_fusion_keeps_lifecycle_flow_inside_scheduler_dynamic_budget(self) -> None:
+        packet = {
+            "tier": "unit",
+            "active_thread_state": {
+                "summary": "current thread carries a symbol correction",
+                "latest_user_intent": "test prompt fusion",
+            },
+            "affect_state": {"curiosity": 0.7, "continuity_anxiety": 0.6},
+            "drive_state": {"seek_continuity": 0.8},
+            "activation_state": {"heat": 0.86, "motifs": ["rusted_screw"]},
+            "selected_memory_ids": ["node-rusted-screw"],
+            "recall_reconstruction": {"summary": "the corrected symbol is rusted screw"},
+            "goal_state": {"active_goals": [{"goal_type": "preserve_continuity"}]},
+            "selected_action": {"action_type": "reply_once"},
+        }
+        schedule = build_bionic_memory_schedule(packet, query="what changed?")
+        packet["bionic_memory_schedule"] = schedule
+        lifecycle = build_bionic_memory_lifecycle(packet, query="what changed?")
+        flow = build_bionic_consciousness_flow(packet, query="what changed?")
+
+        fused = fuse_bionic_dynamic_prompt(schedule, lifecycle, flow)
+
+        source_line_count = (
+            len(schedule["prompt_dynamic_lines"])
+            + len(lifecycle["prompt_lines"])
+            + len(flow["phase_lines"])
+        )
+        fusion = fused["dynamic_fusion"]
+
+        self.assertEqual(fusion["mode"], "scheduler_owned_stage52_v1")
+        self.assertLess(len(fused["prompt_dynamic_lines"]), source_line_count)
+        self.assertLessEqual(len(fusion["supplement_lines"]), 4)
+        self.assertGreater(fusion["saved_line_count"], 0)
+        self.assertIn("self_memory_write=false", "\n".join(fused["prompt_dynamic_lines"]))
+        self.assertIn("user_visible=false", "\n".join(fused["prompt_dynamic_lines"]))
 
 
 if __name__ == "__main__":

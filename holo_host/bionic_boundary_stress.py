@@ -356,6 +356,11 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
         if isinstance(memory_schedule.get("dynamic_compression_audit", {}), dict)
         else {}
     )
+    fusion = (
+        dict(memory_schedule.get("dynamic_fusion", {}))
+        if isinstance(memory_schedule.get("dynamic_fusion", {}), dict)
+        else {}
+    )
     consolidation = (
         dict(memory_lifecycle.get("consolidation_intent", {}))
         if isinstance(memory_lifecycle.get("consolidation_intent", {}), dict)
@@ -410,6 +415,9 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "prompt_dynamic_line_count": int(compression.get("prompt_dynamic_line_count", 0) or 0),
             "dropped_dynamic_line_count": int(compression.get("dropped_dynamic_line_count", 0) or 0),
             "protected_line_dropped": bool(compression.get("protected_line_dropped", False)),
+            "dynamic_fusion_mode": str(fusion.get("mode", "") or ""),
+            "dynamic_fusion_saved_line_count": int(fusion.get("saved_line_count", 0) or 0),
+            "dynamic_fusion_supplement_line_count": int(fusion.get("supplement_line_count", 0) or 0),
         },
         "bionic_memory_lifecycle": {
             "mode": str(memory_lifecycle.get("mode", "") or ""),

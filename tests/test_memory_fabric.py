@@ -198,6 +198,8 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertIn("bionic_consciousness_flow", packet)
             self.assertFalse(packet["bionic_memory_lifecycle"]["consolidation_intent"]["self_memory_write"])
             self.assertEqual(packet["bionic_consciousness_flow"]["mode"], "consciousness_flow_v1")
+            self.assertEqual(packet["bionic_memory_schedule"]["dynamic_fusion"]["mode"], "scheduler_owned_stage52_v1")
+            self.assertGreater(packet["bionic_memory_schedule"]["dynamic_fusion"]["saved_line_count"], 0)
             self.assertTrue(packet["activation_trace_ids"])
             self.assertEqual(packet["memory_route"], "hybrid")
             bridge.activation.close()
