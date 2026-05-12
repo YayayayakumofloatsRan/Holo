@@ -36,6 +36,7 @@
 - Stage53 is implemented as an upstream MCP tool substrate: reviewed stdio MCP servers can be discovered/called/read as bounded external observations through CLI and the Stage41 engineering-agent action market.
 - Stage54 is implemented as consciousness-flow visualization: Stage46 stress traces can be rendered into HTML/JSON/PNG compute heatmaps, high-dimensional compute vectors, turn-to-turn movement, attention-block allocation proxies, and internal/output token ratios.
 - Stage55 is implemented as a consciousness-manifold observatory: Stage46/54 traces can be transformed into delay embeddings, Poincare-style section families, local dynamics, hyperbolic proxies, recurrence-loop candidates, and topology cycle-rank proxies.
+- Stage56 is implemented as a dimensional-lift observatory: Stage55 vectors are lifted from 12 dimensions into 138 residual/dynamics/lag/interaction dimensions, with residual fast-channel preservation, multi-plane projections, effective-rank probes, sample-adequacy diagnostics, and section-stability checks.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -79,7 +80,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is comparative Stage55 calibration: render multiple Stage46 DeepSeek/live/offline runs, add run-to-run manifold diffs, and test perturbations without turning geometry into runtime decision authority; Holo remains WeChat-offline until live transport validation is explicitly approved.
+- The next implementation focus is Stage56 trace-depth calibration: generate longer offline/live DeepSeek geometry traces, compare lifted-space diffs, and test perturbations without turning geometry into runtime decision authority; Holo remains WeChat-offline until live transport validation is explicitly approved.
 - Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
 - Post-Stage39 provider-response caching is implemented in the processor fabric: `responses`, `openai_compatible`, and `deepseek` can reuse exact stateless text API responses through QueueStore, while `codex_cli`, image tasks, memory-writeback tasks, and shadow-write/operator tasks bypass the cache.
 - Verified post-Stage39 provider-response cache repair on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
@@ -140,13 +141,13 @@
 ## Active Program Index
 - `Stage23-27 bootstrap program`: `.agent/STAGE23_27_PROGRAM.md`
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
-- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE55.md`
+- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE56.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: comparative Stage55 manifold calibration and perturbation tests without live transport widening
-- `Current live runtime boundary`: Stage55 is implemented as an observational geometry layer over Stage46/54 traces; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, or second decision layer was added
-- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage55 handoff in `docs/ENGINEERING_HANDOFF_STAGE55.md`
+- `Active implementation priority`: Stage56 trace-depth calibration and perturbation tests without live transport widening
+- `Current live runtime boundary`: Stage56 is implemented as an observational dimensional-lift layer over Stage46/54/55 traces; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, or second decision layer was added
+- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage56 handoff in `docs/ENGINEERING_HANDOFF_STAGE56.md`
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.

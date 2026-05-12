@@ -8162,6 +8162,69 @@ def command_render_consciousness_manifold(config_path: str | None, *, suite: str
     return 0
 
 
+def command_render_consciousness_dimensional_lift(config_path: str | None, *, suite: str, output: str | None) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .consciousness_dimensional_lift import build_dimensional_lift_observatory, write_dimensional_lift_artifacts
+    from .consciousness_manifold import build_consciousness_manifold_observatory
+    from .consciousness_visualization import build_consciousness_visualization
+
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        latest = store.latest_agent_eval_run(stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE)
+    finally:
+        store.close()
+    if not latest:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "stage": "stage56-dimensional-lift-observatory",
+                    "error": "stage46_run_not_found",
+                    "suite": suite or DEFAULT_STAGE46_SUITE,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    run_payload = dict(latest.get("run", {})) if isinstance(latest.get("run", {}), dict) else {}
+    stage54_report = build_consciousness_visualization(run_payload)
+    stage55_observatory = build_consciousness_manifold_observatory(stage54_report)
+    observatory = build_dimensional_lift_observatory(stage55_observatory)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        eval_run_id = int(latest.get("eval_run_id", latest.get("id", 0)) or 0)
+        output_path = config.runtime.repo_root / "artifacts" / "stage56" / f"consciousness_dimensional_lift_{eval_run_id}.html"
+    written = write_dimensional_lift_artifacts(observatory, output_path)
+    lifted = dict(observatory.get("lifted_vector_space", {})) if isinstance(observatory.get("lifted_vector_space", {}), dict) else {}
+    sample = dict(observatory.get("sample_adequacy", {})) if isinstance(observatory.get("sample_adequacy", {}), dict) else {}
+    intrinsic = dict(observatory.get("intrinsic_dimension_probe", {})) if isinstance(observatory.get("intrinsic_dimension_probe", {}), dict) else {}
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "stage": observatory.get("stage", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "dimensional_lift_png_path": str(written["dimensional_lift_png"]),
+                "observatory": {
+                    "point_count": lifted.get("point_count", 0),
+                    "base_dimension": lifted.get("base_dimension", 0),
+                    "lifted_dimension": lifted.get("lifted_dimension", 0),
+                    "effective_rank_proxy": intrinsic.get("effective_rank_proxy", 0),
+                    "limited_by_trace_length": bool(sample.get("limited_by_trace_length", False)),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_show_visual_provider_readiness(config_path: str | None) -> int:
     payload, _transport = _visual_provider_readiness_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9486,6 +9549,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     consciousness_manifold_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
     consciousness_manifold_parser.add_argument("--output", default=None)
+    consciousness_lift_parser = subparsers.add_parser(
+        "render-consciousness-dimensional-lift",
+        help="Render Stage56 dimensional-lift observatory from the latest Stage46 run",
+    )
+    consciousness_lift_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    consciousness_lift_parser.add_argument("--output", default=None)
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     subparsers.add_parser("show-internal-runtime-readiness", help="Show internal DeepSeek runtime readiness without starting WeChat")
@@ -10007,6 +10076,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_render_consciousness_map(args.config, suite=args.suite, output=args.output)
     if args.command == "render-consciousness-manifold":
         return command_render_consciousness_manifold(args.config, suite=args.suite, output=args.output)
+    if args.command == "render-consciousness-dimensional-lift":
+        return command_render_consciousness_dimensional_lift(args.config, suite=args.suite, output=args.output)
     if args.command == "show-visual-provider-readiness":
         return command_show_visual_provider_readiness(args.config)
     if args.command == "show-debt-registry":
