@@ -34,7 +34,7 @@
 - Stage51 is implemented as bionic memory lifecycle and consciousness flow: diagnostic consolidation/replay/forgetting gates and prompt-only sensory/affective/memory/goal phase ordering are exposed while keeping `self_memory_write=false`, `background_loop_allowed=false`, and `user_visible=false`.
 - Stage52 is implemented as scheduler-owned prompt fusion: Stage51 lifecycle/flow prompt material is compacted into a single `Bionic Dynamic Frame`, keeping lifecycle/flow packet/debug evidence while reducing live DeepSeek miss tokens versus Stage51.
 - Stage53 is implemented as an upstream MCP tool substrate: reviewed stdio MCP servers can be discovered/called/read as bounded external observations through CLI and the Stage41 engineering-agent action market.
-- Stage54 is implemented as consciousness-flow visualization: Stage46 stress traces can be rendered into HTML/JSON compute heatmaps, high-dimensional compute vectors, turn-to-turn movement, attention-block allocation proxies, and internal/output token ratios.
+- Stage54 is implemented as consciousness-flow visualization: Stage46 stress traces can be rendered into HTML/JSON/PNG compute heatmaps, high-dimensional compute vectors, turn-to-turn movement, attention-block allocation proxies, and internal/output token ratios.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed

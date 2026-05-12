@@ -226,7 +226,17 @@ def write_consciousness_visualization_artifacts(report: dict[str, Any], output_p
     html_path = write_consciousness_visualization_html(report, output_path)
     json_path = html_path.with_suffix(".json")
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"html": html_path, "json": json_path}
+    png_paths = write_consciousness_visualization_pngs(report, html_path)
+    return {"html": html_path, "json": json_path, **png_paths}
+
+
+def write_consciousness_visualization_pngs(report: dict[str, Any], output_path: str | Path) -> dict[str, Path]:
+    path = Path(output_path).expanduser()
+    heatmap_path = path.with_name(f"{path.stem}_heatmap.png")
+    dashboard_path = path.with_name(f"{path.stem}_dashboard.png")
+    _write_heatmap_png(report, heatmap_path)
+    _write_dashboard_png(report, dashboard_path)
+    return {"heatmap_png": heatmap_path, "dashboard_png": dashboard_path}
 
 
 def _turn_compute_row(turn: dict[str, Any], *, index: int) -> dict[str, Any]:
@@ -580,6 +590,145 @@ def _render_token_svg(report: dict[str, Any]) -> str:
         parts.append(f'<text x="150" y="{y + 28}" font-size="9" fill="#5f6c72">{int(internal)} / {int(output)}</text>')
     parts.append("</svg>")
     return "\n".join(parts)
+
+
+def _write_heatmap_png(report: dict[str, Any], output_path: Path) -> None:
+    _matplotlib, pyplot, _numpy = _load_plotting_stack()
+    axes, turns, heat_values, raw_values = _heatmap_plot_data(report)
+    fig, axis = pyplot.subplots(figsize=(15.5, 6.4), dpi=160)
+    image = axis.imshow(heat_values, aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
+    axis.set_title("Stage54 Compute Distribution Heatmap")
+    axis.set_xticks(range(len(axes)))
+    axis.set_xticklabels(axes, rotation=42, ha="right")
+    axis.set_yticks(range(len(turns)))
+    axis.set_yticklabels(turns)
+    for row_index, row in enumerate(raw_values):
+        for col_index, raw in enumerate(row):
+            label = _plot_value_label(raw)
+            text_color = "white" if heat_values[row_index][col_index] < 0.55 else "#172026"
+            axis.text(col_index, row_index, label, ha="center", va="center", fontsize=6.5, color=text_color)
+    fig.colorbar(image, ax=axis, fraction=0.018, pad=0.012, label="normalized pressure")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    pyplot.close(fig)
+
+
+def _write_dashboard_png(report: dict[str, Any], output_path: Path) -> None:
+    _matplotlib, pyplot, numpy = _load_plotting_stack()
+    axes, turns, heat_values, _raw_values = _heatmap_plot_data(report)
+    fig = pyplot.figure(figsize=(16, 12), dpi=150)
+    grid = fig.add_gridspec(3, 1, height_ratios=[1.35, 1.0, 1.0], hspace=0.55)
+    heat_axis = fig.add_subplot(grid[0, 0])
+    heat_image = heat_axis.imshow(heat_values, aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
+    heat_axis.set_title("Compute Distribution Heatmap")
+    heat_axis.set_xticks(range(len(axes)))
+    heat_axis.set_xticklabels(axes, rotation=40, ha="right")
+    heat_axis.set_yticks(range(len(turns)))
+    heat_axis.set_yticklabels(turns)
+    fig.colorbar(heat_image, ax=heat_axis, fraction=0.018, pad=0.012)
+
+    block_axis = fig.add_subplot(grid[1, 0])
+    _plot_attention_blocks(block_axis, report, numpy)
+
+    manifold_axis = fig.add_subplot(grid[2, 0])
+    _plot_compute_manifold(manifold_axis, report, numpy)
+
+    summary = dict(report.get("summary", {})) if isinstance(report.get("summary", {}), dict) else {}
+    fig.suptitle(
+        "Stage54 Consciousness Flow Visualization"
+        f" | internal/output={summary.get('internal_output_ratio', 0)}"
+        f" | internal_share={summary.get('internal_token_share', 0)}"
+        f" | avg_latency_ms={summary.get('average_latency_ms', 0)}",
+        fontsize=14,
+        y=0.992,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    pyplot.close(fig)
+
+
+def _plot_attention_blocks(axis: Any, report: dict[str, Any], numpy: Any) -> None:
+    rows = [dict(row) for row in list(report.get("attention_blocks", []) or []) if isinstance(row, dict)]
+    block_names = ["cache_reuse", "dynamic_context", "memory_control", "latency_pressure", "output_surface"]
+    left = numpy.zeros(len(rows))
+    y_positions = numpy.arange(len(rows))
+    for block_name in block_names:
+        shares = []
+        for row in rows:
+            by_name = {str(item.get("name", "")): float(item.get("share", 0.0) or 0.0) for item in row.get("blocks", []) if isinstance(item, dict)}
+            shares.append(by_name.get(block_name, 0.0))
+        axis.barh(y_positions, shares, left=left, color=_block_color(block_name), label=block_name)
+        left += numpy.array(shares)
+    axis.set_yticks(y_positions)
+    axis.set_yticklabels([row.get("turn_id", "") for row in rows])
+    axis.invert_yaxis()
+    axis.set_xlim(0.0, 1.0)
+    axis.set_title("Attention Block Allocation Proxy")
+    axis.legend(loc="lower center", bbox_to_anchor=(0.5, -0.34), ncol=5, frameon=False)
+
+
+def _plot_compute_manifold(axis: Any, report: dict[str, Any], numpy: Any) -> None:
+    manifold = dict(report.get("compute_manifold", {})) if isinstance(report.get("compute_manifold", {}), dict) else {}
+    points = [dict(point) for point in list(manifold.get("points", []) or []) if isinstance(point, dict)]
+    coords = numpy.array([list(point.get("coordinate", [0.0, 0.0, 0.0]))[:3] for point in points], dtype=float) if points else numpy.zeros((0, 3))
+    if len(coords):
+        sizes = 90 + coords[:, 2] * 260
+        colors = [_block_color(str(point.get("dominant_block", "") or "")) for point in points]
+        axis.plot(coords[:, 0], coords[:, 1], color="#314148", linewidth=1.5, alpha=0.85)
+        axis.scatter(coords[:, 0], coords[:, 1], s=sizes, c=colors, edgecolors="#172026", linewidths=0.8)
+        for index, point in enumerate(points):
+            axis.annotate(
+                f"{index + 1}. {point.get('turn_id', '')}",
+                (coords[index, 0], coords[index, 1]),
+                xytext=(6, 4),
+                textcoords="offset points",
+                fontsize=8,
+            )
+    axis.set_xlim(-0.05, 1.05)
+    axis.set_ylim(-0.05, 1.05)
+    axis.set_xlabel("dynamic context / salience axis")
+    axis.set_ylabel("cache reuse / consolidation axis")
+    axis.set_title("High-Dimensional Compute Manifold Projection")
+    axis.grid(True, color="#d7dddc", linewidth=0.7, alpha=0.75)
+
+
+def _heatmap_plot_data(report: dict[str, Any]) -> tuple[list[str], list[str], Any, list[list[Any]]]:
+    _matplotlib, _pyplot, numpy = _load_plotting_stack()
+    heatmap = dict(report.get("heatmap", {})) if isinstance(report.get("heatmap", {}), dict) else {}
+    axes = [str(axis) for axis in list(heatmap.get("axes", []) or [])]
+    rows = [dict(row) for row in list(heatmap.get("rows", []) or []) if isinstance(row, dict)]
+    turns = [str(row.get("turn_id", "")) for row in rows]
+    heat_values = numpy.array(
+        [[float(dict(row.get("normalized", {})).get(axis, 0.0) or 0.0) for axis in axes] for row in rows],
+        dtype=float,
+    )
+    raw_values = [[dict(row.get("values", {})).get(axis, 0) for axis in axes] for row in rows]
+    if heat_values.size == 0:
+        heat_values = numpy.zeros((1, max(1, len(axes))))
+        turns = turns or ["no_turns"]
+        raw_values = raw_values or [[0 for _axis in axes]]
+    return axes, turns, heat_values, raw_values
+
+
+def _plot_value_label(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.2f}" if abs(value) < 10 else f"{value:.0f}"
+    if isinstance(value, int):
+        return str(value)
+    return str(value)
+
+
+def _load_plotting_stack() -> tuple[Any, Any, Any]:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as pyplot
+        import numpy
+    except ImportError as exc:
+        raise RuntimeError("Stage54 PNG export requires matplotlib and numpy") from exc
+    return matplotlib, pyplot, numpy
 
 
 def _compact_report_for_html(report: dict[str, Any]) -> dict[str, Any]:

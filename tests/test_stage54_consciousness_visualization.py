@@ -145,6 +145,29 @@ class Stage54ConsciousnessVisualizationTests(unittest.TestCase):
         self.assertIn("affective_pressure", html)
         self.assertIn("symbol_correction", html)
 
+    def test_writes_png_heatmap_and_dashboard_artifacts(self) -> None:
+        from holo_host.consciousness_visualization import (
+            build_consciousness_visualization,
+            write_consciousness_visualization_artifacts,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "stage54.html"
+            artifacts = write_consciousness_visualization_artifacts(
+                build_consciousness_visualization(_sample_stage46_run()),
+                output_path,
+            )
+
+            heatmap_png = artifacts["heatmap_png"]
+            dashboard_png = artifacts["dashboard_png"]
+
+            self.assertTrue(heatmap_png.exists())
+            self.assertTrue(dashboard_png.exists())
+            self.assertEqual(heatmap_png.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(dashboard_png.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertGreater(heatmap_png.stat().st_size, 1000)
+            self.assertGreater(dashboard_png.stat().st_size, 1000)
+
     def test_cli_renders_latest_stage46_visualization_artifacts(self) -> None:
         from holo_host.cli import main
 
@@ -184,12 +207,20 @@ api_port = 65510
             html = output_path.read_text(encoding="utf-8")
             json_path = output_path.with_suffix(".json")
             report_json = json.loads(json_path.read_text(encoding="utf-8"))
+            heatmap_png = output_path.with_name("map_heatmap.png")
+            dashboard_png = output_path.with_name("map_dashboard.png")
+            heatmap_png_header = heatmap_png.read_bytes()[:8]
+            dashboard_png_header = dashboard_png.read_bytes()[:8]
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["output_path"], str(output_path))
         self.assertEqual(payload["json_path"], str(json_path))
+        self.assertEqual(payload["heatmap_png_path"], str(heatmap_png))
+        self.assertEqual(payload["dashboard_png_path"], str(dashboard_png))
         self.assertEqual(payload["visualization"]["turn_count"], 2)
         self.assertEqual(payload["visualization"]["compute_manifold_projection"], "deterministic_stage54_compute_manifold_v1")
         self.assertIn("Attention Vector Trajectory", html)
         self.assertEqual(report_json["stage"], "stage54-consciousness-flow-visualization")
         self.assertEqual(len(report_json["compute_manifold"]["edges"]), 1)
+        self.assertEqual(heatmap_png_header, b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(dashboard_png_header, b"\x89PNG\r\n\x1a\n")

@@ -8085,6 +8085,8 @@ def command_render_consciousness_map(config_path: str | None, *, suite: str, out
                 "stage": report.get("stage", ""),
                 "output_path": str(written["html"]),
                 "json_path": str(written["json"]),
+                "heatmap_png_path": str(written["heatmap_png"]),
+                "dashboard_png_path": str(written["dashboard_png"]),
                 "visualization": {
                     "turn_count": report.get("turn_count", 0),
                     "summary": report.get("summary", {}),

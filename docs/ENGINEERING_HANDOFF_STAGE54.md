@@ -4,7 +4,7 @@
 
 Stage54 implements consciousness-flow and compute-distribution visualization over existing Stage46 stress-run evidence.
 
-The stage converts high-intensity bionic dialogue traces into HTML and JSON artifacts that show internal token pressure, provider cache behavior, memory scheduling, consciousness-flow phase movement, high-dimensional compute vectors, and operational attention-block allocation.
+The stage converts high-intensity bionic dialogue traces into HTML, JSON, and PNG artifacts that show internal token pressure, provider cache behavior, memory scheduling, consciousness-flow phase movement, high-dimensional compute vectors, and operational attention-block allocation.
 
 Hard boundaries remain unchanged:
 
@@ -22,24 +22,24 @@ Hard boundaries remain unchanged:
   - Adds `compute_manifold` with full high-dimensional normalized vectors, 3D projection coordinates, centroid, edge delta vectors, vector norms, cosine similarity, and movement distance.
   - Adds `attention_blocks` with cache reuse, dynamic context, memory control, latency pressure, and output surface shares.
   - Renders static HTML with SVG heatmap, trajectory, compute manifold, attention-block allocation, token bars, and compact source JSON.
-  - Writes a sibling JSON artifact beside the HTML artifact.
+  - Writes sibling JSON plus PNG heatmap and dashboard artifacts beside the HTML artifact.
 - `holo_host/cli.py`
   - Adds `render-consciousness-map`.
   - Reads the latest Stage46 run for the requested suite.
   - Writes `artifacts/stage54/consciousness_map_<eval_run_id>.html` by default or the operator-provided output path.
-  - Reports both `output_path` and `json_path` plus projection identifiers.
+  - Reports `output_path`, `json_path`, `heatmap_png_path`, and `dashboard_png_path` plus projection identifiers.
 - `tests/test_stage54_consciousness_visualization.py`
-  - Covers report construction, high-dimensional manifold structure, attention-block shares, HTML sections, and CLI HTML/JSON artifact generation.
+  - Covers report construction, high-dimensional manifold structure, attention-block shares, HTML sections, PNG file headers, and CLI HTML/JSON/PNG artifact generation.
 
 ## Verification
 
-- `python -m pytest -q tests\test_stage54_consciousness_visualization.py`: `4 passed`
+- `python -m pytest -q tests\test_stage54_consciousness_visualization.py`: `5 passed`
 - `python -m py_compile holo_host\consciousness_visualization.py holo_host\cli.py`: passed
-- `python -m pytest -q tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py`: `19 passed`
-- `python -m holo_host --config .holo_host.toml render-consciousness-map --output artifacts\stage54\stage54_current.html`: returned `ok=true`, `turn_count=7`, `internal_tokens=22345`, `output_tokens=222`, `internal_output_ratio=100.6532`, `internal_token_share=0.9902`, `average_latency_ms=8769.38`, and `compute_manifold_projection=deterministic_stage54_compute_manifold_v1`.
+- `python -m pytest -q tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py`: `20 passed`
+- `python -m holo_host --config .holo_host.toml render-consciousness-map --output artifacts\stage54\stage54_current.html`: returned `ok=true`, `turn_count=7`, `internal_tokens=22345`, `output_tokens=222`, `internal_output_ratio=100.6532`, `internal_token_share=0.9902`, `average_latency_ms=8769.38`, `heatmap_png_path=artifacts\stage54\stage54_current_heatmap.png`, `dashboard_png_path=artifacts\stage54\stage54_current_dashboard.png`, and `compute_manifold_projection=deterministic_stage54_compute_manifold_v1`.
 - `git diff --check`: no whitespace errors; Git emitted only CRLF conversion warnings.
 - `python scripts\check_public_release_hygiene.py`: passed.
-- `python -m pytest -q`: `414 passed`.
+- `python -m pytest -q`: `415 passed`.
 
 ## Empirical Reading
 

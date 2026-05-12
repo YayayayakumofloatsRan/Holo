@@ -114,15 +114,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Resume commit: Stage54 consciousness-flow visualization plus Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
 - Working tree at handoff time: clean immediately after the Stage54 consciousness-flow visualization commit.
 - Current milestone: `stage54-consciousness-flow-visualization`
-- Current status: Stage54 renders Stage46 high-intensity bionic dialogue traces into HTML and JSON artifacts with compute heatmaps, high-dimensional compute vectors, turn-to-turn vector movement, attention-block allocation proxies, internal/output token ratios, and explicit observational boundaries. Stage53's upstream MCP client remains available as bounded external observation substrate; downstream Holo-as-MCP-server exposure remains intentionally deferred.
+- Current status: Stage54 renders Stage46 high-intensity bionic dialogue traces into HTML, JSON, and PNG artifacts with compute heatmaps, high-dimensional compute vectors, turn-to-turn vector movement, attention-block allocation proxies, internal/output token ratios, and explicit observational boundaries. Stage53's upstream MCP client remains available as bounded external observation substrate; downstream Holo-as-MCP-server exposure remains intentionally deferred.
 - Latest full verification evidence:
-  - `python -m pytest -q tests\test_stage54_consciousness_visualization.py` passed with `4` tests on `2026-05-12`.
+  - `python -m pytest -q tests\test_stage54_consciousness_visualization.py` passed with `5` tests on `2026-05-12`.
   - `python -m py_compile holo_host\consciousness_visualization.py holo_host\cli.py` passed on `2026-05-12`.
   - `python -m pytest -q tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `19` tests on `2026-05-12`.
-  - `python -m holo_host --config .holo_host.toml render-consciousness-map --output artifacts\stage54\stage54_current.html` returned `ok=true`, `turn_count=7`, `internal_tokens=22345`, `output_tokens=222`, `internal_output_ratio=100.6532`, `internal_token_share=0.9902`, `average_latency_ms=8769.38`, and `compute_manifold_projection=deterministic_stage54_compute_manifold_v1`.
+  - `python -m holo_host --config .holo_host.toml render-consciousness-map --output artifacts\stage54\stage54_current.html` returned `ok=true`, `turn_count=7`, `internal_tokens=22345`, `output_tokens=222`, `internal_output_ratio=100.6532`, `internal_token_share=0.9902`, `average_latency_ms=8769.38`, `heatmap_png_path=artifacts\stage54\stage54_current_heatmap.png`, `dashboard_png_path=artifacts\stage54\stage54_current_dashboard.png`, and `compute_manifold_projection=deterministic_stage54_compute_manifold_v1`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git emitted only CRLF conversion warnings.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
-  - `python -m pytest -q` passed with `414` tests on `2026-05-12`.
+  - `python -m pytest -q` passed with `415` tests on `2026-05-12`.
   - `python -m pytest -q tests\test_stage20_temporal_commitments.py tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `36` tests on `2026-05-12` after the residual fast channel repair.
   - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
   - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage46Verify-20260512 --chat-name Stage46Verify-20260512` passed with `overall_score=0.9846` on `2026-05-12`.
