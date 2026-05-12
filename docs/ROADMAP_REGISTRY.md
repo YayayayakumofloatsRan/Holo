@@ -203,6 +203,12 @@ Stage53: upstream MCP tool substrate
 - Adds CLI diagnostics and Stage41 engineering-agent tools for `mcp_list_tools`, `mcp_call_tool`, and `mcp_read_resource` as `external_observation`.
 - Keeps MCP results as observations only; no shell execution through MCP, transport authority, watcher authority, self-memory write, policy mutation, or unbounded loop is added.
 
+Stage54: consciousness-flow visualization
+- Renders Stage46 bionic boundary stress traces into HTML and JSON artifacts.
+- Exposes compute heatmaps, high-dimensional compute vectors, turn-to-turn vector movement, attention-block allocation proxies, token internal/output ratios, and source summary JSON.
+- Uses operational trace evidence only; attention blocks are inspectable proxies, not provider-native neural attention weights.
+- Keeps all changes observational: no self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

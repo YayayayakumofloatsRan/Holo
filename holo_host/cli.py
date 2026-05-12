@@ -8045,6 +8045,60 @@ def command_read_mcp_resource(config_path: str | None, *, server: str, uri: str)
     return 0 if bool(payload.get("ok", False)) else 1
 
 
+def command_render_consciousness_map(config_path: str | None, *, suite: str, output: str | None) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .consciousness_visualization import build_consciousness_visualization, write_consciousness_visualization_artifacts
+
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        latest = store.latest_agent_eval_run(stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE)
+    finally:
+        store.close()
+    if not latest:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "stage": "stage54-consciousness-flow-visualization",
+                    "error": "stage46_run_not_found",
+                    "suite": suite or DEFAULT_STAGE46_SUITE,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    run_payload = dict(latest.get("run", {})) if isinstance(latest.get("run", {}), dict) else {}
+    report = build_consciousness_visualization(run_payload)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        eval_run_id = int(latest.get("eval_run_id", latest.get("id", 0)) or 0)
+        output_path = config.runtime.repo_root / "artifacts" / "stage54" / f"consciousness_map_{eval_run_id}.html"
+    written = write_consciousness_visualization_artifacts(report, output_path)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "visualization": {
+                    "turn_count": report.get("turn_count", 0),
+                    "summary": report.get("summary", {}),
+                    "trajectory_projection": dict(report.get("trajectory", {})).get("projection", ""),
+                    "compute_manifold_projection": dict(report.get("compute_manifold", {})).get("projection", ""),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_show_visual_provider_readiness(config_path: str | None) -> int:
     payload, _transport = _visual_provider_readiness_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9357,6 +9411,12 @@ def main(argv: list[str] | None = None) -> int:
     mcp_resource_parser = subparsers.add_parser("read-mcp-resource", help="Read one upstream MCP resource as a bounded observation")
     mcp_resource_parser.add_argument("--server", required=True)
     mcp_resource_parser.add_argument("--uri", required=True)
+    consciousness_map_parser = subparsers.add_parser(
+        "render-consciousness-map",
+        help="Render Stage54 compute and consciousness-flow visualization from the latest Stage46 run",
+    )
+    consciousness_map_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    consciousness_map_parser.add_argument("--output", default=None)
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     subparsers.add_parser("show-internal-runtime-readiness", help="Show internal DeepSeek runtime readiness without starting WeChat")
@@ -9874,6 +9934,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_call_mcp_tool(args.config, tool=args.tool, arguments_json=args.arguments_json)
     if args.command == "read-mcp-resource":
         return command_read_mcp_resource(args.config, server=args.server, uri=args.uri)
+    if args.command == "render-consciousness-map":
+        return command_render_consciousness_map(args.config, suite=args.suite, output=args.output)
     if args.command == "show-visual-provider-readiness":
         return command_show_visual_provider_readiness(args.config)
     if args.command == "show-debt-registry":

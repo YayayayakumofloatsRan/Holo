@@ -33,6 +33,8 @@
 - Stage50 is implemented as a dynamic compression audit: scheduler-owned prompt lines expose raw/selected/dropped counts, compression ratio, protected labels, and protected-drop status in context scheduling and Stage46 debug evidence.
 - Stage51 is implemented as bionic memory lifecycle and consciousness flow: diagnostic consolidation/replay/forgetting gates and prompt-only sensory/affective/memory/goal phase ordering are exposed while keeping `self_memory_write=false`, `background_loop_allowed=false`, and `user_visible=false`.
 - Stage52 is implemented as scheduler-owned prompt fusion: Stage51 lifecycle/flow prompt material is compacted into a single `Bionic Dynamic Frame`, keeping lifecycle/flow packet/debug evidence while reducing live DeepSeek miss tokens versus Stage51.
+- Stage53 is implemented as an upstream MCP tool substrate: reviewed stdio MCP servers can be discovered/called/read as bounded external observations through CLI and the Stage41 engineering-agent action market.
+- Stage54 is implemented as consciousness-flow visualization: Stage46 stress traces can be rendered into HTML/JSON compute heatmaps, high-dimensional compute vectors, turn-to-turn movement, attention-block allocation proxies, and internal/output token ratios.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -76,7 +78,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is a Stage53 adaptive fusion pass: reduce low-salience lifecycle/flow supplement lines while preserving high-salience reconstruction turns and Stage51/52 debug evidence; Holo remains WeChat-offline until live transport validation is explicitly approved.
+- The next implementation focus is comparative Stage54 calibration: render multiple Stage46 DeepSeek/live/offline runs and add run-to-run vector diffs without turning visualization into runtime decision authority; Holo remains WeChat-offline until live transport validation is explicitly approved.
 - Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
 - Post-Stage39 provider-response caching is implemented in the processor fabric: `responses`, `openai_compatible`, and `deepseek` can reuse exact stateless text API responses through QueueStore, while `codex_cli`, image tasks, memory-writeback tasks, and shadow-write/operator tasks bypass the cache.
 - Verified post-Stage39 provider-response cache repair on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
@@ -137,13 +139,13 @@
 ## Active Program Index
 - `Stage23-27 bootstrap program`: `.agent/STAGE23_27_PROGRAM.md`
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
-- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE52.md`
+- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE54.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage53 adaptive prompt fusion for lower miss-token pressure without live transport widening
-- `Current live runtime boundary`: Stage52 is implemented in code as scheduler-owned prompt fusion over internal diagnostic lifecycle/flow surfaces; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, or second decision layer was added
-- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage52 handoff in `docs/ENGINEERING_HANDOFF_STAGE52.md`
+- `Active implementation priority`: comparative Stage54 calibration across multiple Stage46 runs without live transport widening
+- `Current live runtime boundary`: Stage54 is implemented as an observational visualization layer over Stage46 traces; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, or second decision layer was added
+- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage54 handoff in `docs/ENGINEERING_HANDOFF_STAGE54.md`
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.

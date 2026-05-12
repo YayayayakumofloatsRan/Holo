@@ -1,0 +1,76 @@
+# Stage54 Consciousness Flow Visualization
+
+## Goal
+
+Stage54 makes Holo's internal bionic dialogue pressure inspectable as a trace-backed visualization layer.
+
+The target is the user's current research direction: high-intensity dialogue testing should not only return a score. It should expose how much compute is spent on internal prompt/cache/memory/flow processes, how that pressure moves across turns, and whether most tokens are being used internally rather than on final output.
+
+## Source Of Truth
+
+Stage54 reads the latest Stage46 `agent_eval_runs` payload from `QueueStore`.
+
+This is operational evidence only:
+
+- Stage46 turns carry provider usage, cache hit/miss tokens, latency, prompt partition data, memory scheduler data, memory lifecycle data, and consciousness-flow data.
+- Stage54 derives visualization structures from those fields.
+- Stage54 does not call a provider, start WeChat, write self-memory, mutate policy, select actions, or alter the runtime.
+
+## Visualization Surfaces
+
+`holo_host/consciousness_visualization.py` produces:
+
+- `heatmap`: normalized per-turn rows over cache, dynamic prompt, latency, memory salience, recall budget, fusion savings, consolidation, and consciousness-flow phase count.
+- `trajectory`: deterministic 2D projection of turn-level compute movement.
+- `compute_manifold`: full normalized high-dimensional vectors, 3D projection coordinates, centroids, edge deltas, vector norms, and cosine similarity.
+- `attention_blocks`: operational attention-allocation proxy across cache reuse, dynamic context, memory control, latency pressure, and output surface.
+- `summary`: internal tokens, output tokens, internal/output ratio, internal token share, average latency, average memory salience, and dominant consciousness phases.
+- `boundary`: explicit Stage54 safety limits.
+
+The attention and manifold fields are trace proxies, not provider-native neural attention weights. They are designed for engineering comparison between runs.
+
+## Operator Flow
+
+Run a Stage46 stress suite first, offline or live:
+
+```powershell
+python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage54Offline --chat-name Stage54Offline --channel cli --turns 7
+```
+
+Render the latest Stage46 suite:
+
+```powershell
+python -m holo_host --config .holo_host.toml render-consciousness-map --output artifacts\stage54\stage54_current.html
+```
+
+The command writes:
+
+- `artifacts\stage54\stage54_current.html`
+- `artifacts\stage54\stage54_current.json`
+
+`artifacts/` remains ignored by Git. The durable contract is the renderer, tests, and docs.
+
+## Interpretation
+
+For biomimetic work, high internal/output token ratios are not automatically bad. They can indicate that Holo is spending compute on memory scheduling, continuity, grounding, self-audit, and internal phase control before producing a compact reply.
+
+Stage54 turns that ratio into an inspectable signal:
+
+- High internal share with good Stage46 correctness supports the "internal process dominates output" hypothesis.
+- High miss-token pressure with low cache reuse points to context scheduling inefficiency.
+- Large vector movement between turns points to abrupt shifts in dynamic context, memory salience, latency, or flow phase pressure.
+- Attention-block dominance shows whether a turn is cache-driven, dynamic-context-driven, memory-control-driven, latency-bound, or output-heavy.
+
+## Boundaries
+
+Stage54 must remain observational:
+
+- no WeChat transport start
+- no watcher authority
+- no self-memory write
+- no policy mutation
+- no runtime decision authority
+- no downstream Holo MCP server
+- no unbounded loop
+
+The visualization is an engineering instrument for future bionic calibration, not a new subject layer.
