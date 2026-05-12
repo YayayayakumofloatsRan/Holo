@@ -16,6 +16,40 @@ from .config import HostConfig, ProcessorLaneConfig, TaskRoutingConfig
 from .models import CodexResult, ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
 from .provider_substrate import analyze_provider_substrate_conflicts
 
+
+def _windows_registry_env_value(name: str) -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+    except Exception:
+        return ""
+    targets = (
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    )
+    for hive, path in targets:
+        try:
+            with winreg.OpenKey(hive, path) as key:
+                value, _kind = winreg.QueryValueEx(key, name)
+        except OSError:
+            continue
+        current = str(value or "").strip()
+        if current:
+            return current
+    return ""
+
+
+def _environment_value_with_source(name: str) -> tuple[str, str]:
+    current = str(os.environ.get(name, "") or "").strip()
+    if current:
+        return current, "process"
+    current = _windows_registry_env_value(name)
+    if current:
+        return current, "windows_registry"
+    return "", ""
+
+
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
     "reply": {
         "description": "Generate the live user-facing reply.",
@@ -713,7 +747,8 @@ class DeepSeekProvider(ProcessorProvider):
 
     def _api_key(self, runner: "CodexRunner") -> str:
         env_name = runner.config.processor_fabric.deepseek_api_key_env or "DEEPSEEK_API_KEY"
-        return str(os.environ.get(env_name, "") or "").strip()
+        value, _source = _environment_value_with_source(env_name)
+        return value
 
     def availability(self) -> dict[str, Any]:
         return {"available": True, "reason": "", "capabilities": dict(self.capabilities)}
@@ -885,9 +920,11 @@ class CodexRunner:
         availability = dict(provider.availability())
         if provider_name == "deepseek":
             env_name = self.config.processor_fabric.deepseek_api_key_env or "DEEPSEEK_API_KEY"
+            api_key, source = _environment_value_with_source(env_name)
             availability["api_key_env"] = env_name
             availability["base_url"] = self.config.processor_fabric.deepseek_base_url or "https://api.deepseek.com"
-            if not str(os.environ.get(env_name, "") or "").strip():
+            availability["api_key_source"] = source
+            if not api_key:
                 availability["available"] = False
                 availability["reason"] = f"{env_name} is not set"
         return availability

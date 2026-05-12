@@ -19,6 +19,8 @@ This remains a diagnostic layer inside the processor fabric:
   - Detects unavailable active providers, unavailable configured primary providers, fallback provider use, and provider/model mismatches.
 - `holo_host/codex_runner.py`
   - Adds `provider_substrate_status()`.
+  - Resolves DeepSeek API keys from process env first and Windows user/machine environment registry second.
+  - Exposes `api_key_source` as `process`, `windows_registry`, or empty without printing the secret.
 - `holo_host/reply_api.py`
   - Adds `provider_substrate_status()` and HTTP `GET /provider-substrate-status`.
 - `holo_host/cli.py`
@@ -53,8 +55,28 @@ Stage46 uses this as an anterior-cingulate-style conflict signal: if declared pr
 - `python scripts\check_public_release_hygiene.py`: passed
 - `git diff --check`: no whitespace errors; Git reported only CRLF conversion warnings for existing text files
 
+## DeepSeek User-Environment Repair - 2026-05-12
+
+The apparent missing-key failure was a process-inheritance problem, not absence of a local key. `DEEPSEEK_API_KEY` existed in Windows User environment, but the current Codex/PowerShell/Python process did not inherit it through `os.environ`.
+
+Repair:
+
+- `DeepSeekProvider` now resolves the configured key env var through `os.environ` first, then the Windows environment registry.
+- Provider status reports `api_key_source=windows_registry` when the fallback path is used.
+- No status output prints the key value.
+
+Fresh verification after the repair:
+
+- `python -m pytest -q tests\test_processor_fabric.py -k "deepseek_provider_status or deepseek_provider_returns_standardized_result or deepseek_provider_reuses_cached_response"`: `4 passed, 9 deselected`
+- `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py`: `19 passed`
+- `python -m py_compile holo_host\codex_runner.py`: passed
+- `python -m holo_host show-provider-substrate-status`: `ok=true`, `score=1.0`, `deepseek.available=true`, `api_key_source=windows_registry`
+- `python -m holo_host processor-task --task-type reply --prompt "请用一句话回应：收到" --lane micro_fast --provider-hint deepseek --max-output-tokens 20`: returned through `provider=deepseek`, `model=deepseek-v4-flash`, `duration_ms=1642`, real token usage, and no fallback
+
+Note: `processor-task --json` can still create a separate `response_format=json_object` failure for non-JSON prompts and then fall back. That is not an API-key failure.
+
 ## Follow-Up
 
-- Restart the live API before trusting `/provider-substrate-status` from the server process.
-- Inject a real DeepSeek key, rerun Stage46, and compare `provider_substrate.ok=true` runs against prior offline scorecards.
+- Restart any live API process that predates this patch before trusting `/provider-status` or `/provider-substrate-status` from the server process.
+- Rerun Stage46 against live DeepSeek with `provider_substrate.ok=true` and compare against prior offline scorecards.
 - Extend the monitor with stable-prefix cache evidence: when provider cache miss tokens stay high despite stable prompt digests, mark it as context-scheduling evidence rather than response-quality evidence.

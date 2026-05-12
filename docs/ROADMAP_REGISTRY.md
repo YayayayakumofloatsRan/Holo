@@ -163,6 +163,7 @@ Stage46: bionic boundary stress and provider substrate diagnostics
 Stage47: provider substrate conflict monitor
 - Adds `show-provider-substrate-status` plus HTTP `/provider-substrate-status` for active-provider, lane-primary, fallback, and provider/model mismatch conflicts.
 - Stage46 scorecards now include `provider_substrate_score` and `provider_substrate_conflict`, so provider/key/model failures downgrade a run before it is treated as biomimetic evidence.
+- DeepSeek key lookup now accepts Windows user/machine environment registry fallback when the current process did not inherit `DEEPSEEK_API_KEY`, and exposes only the redacted `api_key_source`.
 - Keeps the signal diagnostic-only inside the processor fabric; no WeChat transport, watcher authority, self-memory mutation, or second decision layer is added.
 
 ## Next Program Arc (Planned)

@@ -102,22 +102,23 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage47 commit on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage47 commit.
+- Resume commit: Stage47 plus DeepSeek Windows user-env fallback commit on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the DeepSeek env fallback commit.
 - Current milestone: `stage47-provider-substrate-conflict-monitor`
 - Current status: Stage47 is implemented and verified as an internal provider-substrate conflict monitor that downgrades conflicted Stage46 biomimetic evidence.
 - Latest full verification evidence:
-  - `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `18` tests on `2026-05-12`.
+  - `python -m pytest -q tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `19` tests on `2026-05-12` after the DeepSeek env fallback repair.
   - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
   - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage46Verify-20260512 --chat-name Stage46Verify-20260512` passed with `overall_score=0.9846` on `2026-05-12`.
   - `python -m holo_host run-bionic-boundary-stress --offline --thread-key cli:Stage47Verify-20260512 --chat-name Stage47Verify-20260512` passed with `overall_score=0.9896` and `provider_substrate_score=1.0` on `2026-05-12`.
   - `python -m holo_host show-bionic-boundary-stress-scorecard` reported latest run `status=pass`, `overall_score=0.9846` on `2026-05-12`.
-  - Local direct provider-status construction reported `deepseek.available=False` because `DEEPSEEK_API_KEY` was not set in this process.
-  - `python -m holo_host show-provider-substrate-status` returned `ok=false` because `DEEPSEEK_API_KEY is not set`, which is correct substrate-diagnostic evidence.
+  - Local direct provider-status construction now reports `deepseek.available=True` and `api_key_source=windows_registry`; the key exists in Windows User environment even when the current process env did not inherit it.
+  - `python -m holo_host show-provider-substrate-status` returned `ok=true`, `score=1.0`, and `deepseek.api_key_source=windows_registry` after the fallback repair.
+  - `python -m holo_host processor-task --task-type reply --prompt "请用一句话回应：收到" --lane micro_fast --provider-hint deepseek --max-output-tokens 20` returned through `provider=deepseek`, `model=deepseek-v4-flash`, `duration_ms=1642`, with real token usage and no fallback.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
 - First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE47.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: restart the live API and rerun Stage46 against a real DeepSeek key, then add provider-aware stable-prefix reuse.
+- Next safe direction: restart any stale live API process before trusting `/provider-status`, then rerun Stage46 against live DeepSeek and add provider-aware stable-prefix reuse.
 - Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is

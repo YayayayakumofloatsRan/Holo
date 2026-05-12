@@ -417,6 +417,40 @@ deepseek_model = "deepseek-v4-pro"
             self.assertEqual(deepseek["api_key_env"], "TEST_MISSING_DEEPSEEK_KEY")
             self.assertIn("TEST_MISSING_DEEPSEEK_KEY", deepseek["reason"])
 
+    def test_deepseek_provider_status_accepts_windows_user_env_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_api_key_env = "TEST_USER_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+
+            def fake_windows_env(name: str) -> str:
+                return "unit-user-key" if name == "TEST_USER_DEEPSEEK_KEY" else ""
+
+            with patch.dict(os.environ, {"TEST_USER_DEEPSEEK_KEY": ""}, clear=False), patch(
+                "holo_host.codex_runner._windows_registry_env_value",
+                side_effect=fake_windows_env,
+            ):
+                status = runner.provider_status()
+
+            deepseek = status["providers"]["deepseek"]
+            self.assertTrue(deepseek["available"])
+            self.assertEqual(deepseek["api_key_source"], "windows_registry")
+
     def test_deepseek_to_codex_fallback_uses_codex_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
