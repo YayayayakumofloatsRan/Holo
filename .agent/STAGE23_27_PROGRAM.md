@@ -174,6 +174,12 @@
   - Stage59 does not start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
   - The current strict DeepSeek shadow smoke collected `2` real provider turns, `observed_total_tokens=5301`, `actual_providers=["deepseek"]`, `actual_models=["deepseek-v4-flash"]`, and `do_not_claim_real_manifold=true`
   - `python -m pytest -q tests\test_stage59_provider_trace.py` passed with `7` tests
+- Stage60 alignment state on `2026-05-13`:
+  - Stage60 adds an observational recoverable campaign orchestrator over Stage59 real provider traces
+  - `run-consciousness-trace-campaign` defaults to dry-run, requires `--execute` for provider calls, creates one Stage59 cell per model, defaults executed cells to shadow runtime state, writes campaign HTML/JSON/PNG, writes `campaign_manifest.json`, appends `campaign_events.jsonl`, preserves per-cell Stage59 journals, supports resume, aggregates token/cache/provider provenance, ranks models, and blocks major-breakthrough claims until replicated real-provider trace depth and Stage57 gates pass
+  - Stage60 does not start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
+  - The current strict DeepSeek shadow smoke compared `deepseek-v4-flash` and `deepseek-v4-pro`, collected `2` real provider turns, `observed_total_tokens=5128`, `real_provider_cell_count=2`, aggregate prompt-cache hit ratio `0.252117`, and `do_not_claim_major_breakthrough=true`
+  - `python -m pytest -q tests\test_stage60_trace_campaign.py` passed with `4` tests
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.

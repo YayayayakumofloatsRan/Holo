@@ -8454,6 +8454,91 @@ def command_run_consciousness_provider_trace(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_run_consciousness_trace_campaign(
+    config_path: str | None,
+    *,
+    campaign_id: str,
+    suite: str,
+    models: str,
+    runs_per_model: int,
+    turns: int,
+    max_total_tokens_per_cell: int,
+    provider_hint: str,
+    lane: str,
+    max_output_tokens: int | None,
+    output_root: str | None,
+    execute: bool,
+    resume: bool,
+    allow_provider_fallback: bool,
+    use_live_state: bool,
+) -> int:
+    from .consciousness_trace_campaign import (
+        DEFAULT_STAGE60_CAMPAIGN_ID,
+        run_provider_trace_campaign,
+        write_provider_trace_campaign_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    campaign_name = campaign_id or DEFAULT_STAGE60_CAMPAIGN_ID
+    if output_root:
+        root = Path(output_root).expanduser()
+    else:
+        root = config.runtime.repo_root / "artifacts" / "stage60" / campaign_name
+    report = run_provider_trace_campaign(
+        execute=execute,
+        config=config,
+        output_root=root,
+        campaign_id=campaign_name,
+        suite=suite,
+        models=models,
+        runs_per_model=runs_per_model,
+        turns=turns,
+        max_total_tokens_per_cell=max_total_tokens_per_cell,
+        provider_hint=provider_hint,
+        lane=lane,
+        max_output_tokens=max_output_tokens,
+        resume=resume,
+        allow_provider_fallback=allow_provider_fallback,
+        use_live_state=use_live_state,
+    )
+    written = write_provider_trace_campaign_artifacts(report, root / "campaign.html")
+    aggregate = dict(report.get("aggregate", {})) if isinstance(report.get("aggregate", {}), dict) else {}
+    ranking = dict(report.get("ranking", {})) if isinstance(report.get("ranking", {}), dict) else {}
+    breakthrough = dict(report.get("breakthrough_gate", {})) if isinstance(report.get("breakthrough_gate", {}), dict) else {}
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "campaign_id": report.get("campaign_id", ""),
+                "status": report.get("status", ""),
+                "campaign_html_path": str(written["html"]),
+                "campaign_json_path": str(written["json"]),
+                "campaign_png_path": str(written["campaign_png"]),
+                "manifest_path": str(root / "campaign_manifest.json"),
+                "events_path": str(root / "campaign_events.jsonl"),
+                "observatory": {
+                    "planned_cell_count": aggregate.get("planned_cell_count", 0),
+                    "planned_total_turns": aggregate.get("planned_total_turns", 0),
+                    "real_provider_cell_count": aggregate.get(
+                        "real_provider_cell_count", 0
+                    ),
+                    "collected_turn_count": aggregate.get("collected_turn_count", 0),
+                    "observed_total_tokens": aggregate.get("observed_total_tokens", 0),
+                    "top_model": ranking.get("top_model", ""),
+                    "top_score": ranking.get("top_score", 0.0),
+                    "do_not_claim_major_breakthrough": bool(
+                        breakthrough.get("do_not_claim_major_breakthrough", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def command_show_visual_provider_readiness(config_path: str | None) -> int:
     payload, _transport = _visual_provider_readiness_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9816,6 +9901,24 @@ def main(argv: list[str] | None = None) -> int:
     provider_trace_parser.add_argument("--resume", action="store_true")
     provider_trace_parser.add_argument("--allow-provider-fallback", action="store_true")
     provider_trace_parser.add_argument("--use-live-state", action="store_true")
+    trace_campaign_parser = subparsers.add_parser(
+        "run-consciousness-trace-campaign",
+        help="Plan or execute Stage60 recoverable multi-model provider trace campaigns",
+    )
+    trace_campaign_parser.add_argument("--campaign-id", default="stage60_provider_campaign")
+    trace_campaign_parser.add_argument("--suite", default="provider_longform_bionic_trace")
+    trace_campaign_parser.add_argument("--models", default="deepseek-v4-flash,deepseek-v4-pro")
+    trace_campaign_parser.add_argument("--runs-per-model", type=int, default=1)
+    trace_campaign_parser.add_argument("--turns", type=int, default=24)
+    trace_campaign_parser.add_argument("--max-total-tokens-per-cell", type=int, default=20_000)
+    trace_campaign_parser.add_argument("--provider-hint", default="deepseek")
+    trace_campaign_parser.add_argument("--lane", default="auto")
+    trace_campaign_parser.add_argument("--max-output-tokens", type=int, default=240)
+    trace_campaign_parser.add_argument("--output-root", default=None)
+    trace_campaign_parser.add_argument("--execute", action="store_true")
+    trace_campaign_parser.add_argument("--no-resume", dest="resume", action="store_false", default=True)
+    trace_campaign_parser.add_argument("--allow-provider-fallback", action="store_true")
+    trace_campaign_parser.add_argument("--use-live-state", action="store_true")
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     subparsers.add_parser("show-internal-runtime-readiness", help="Show internal DeepSeek runtime readiness without starting WeChat")
@@ -10370,6 +10473,24 @@ def main(argv: list[str] | None = None) -> int:
             allow_provider_fallback=args.allow_provider_fallback,
             use_live_state=args.use_live_state,
             resume=args.resume,
+        )
+    if args.command == "run-consciousness-trace-campaign":
+        return command_run_consciousness_trace_campaign(
+            args.config,
+            campaign_id=args.campaign_id,
+            suite=args.suite,
+            models=args.models,
+            runs_per_model=args.runs_per_model,
+            turns=args.turns,
+            max_total_tokens_per_cell=args.max_total_tokens_per_cell,
+            provider_hint=args.provider_hint,
+            lane=args.lane,
+            max_output_tokens=args.max_output_tokens,
+            output_root=args.output_root,
+            execute=args.execute,
+            resume=args.resume,
+            allow_provider_fallback=args.allow_provider_fallback,
+            use_live_state=args.use_live_state,
         )
     if args.command == "show-visual-provider-readiness":
         return command_show_visual_provider_readiness(args.config)

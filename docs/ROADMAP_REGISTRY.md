@@ -240,6 +240,13 @@ Stage59: provider long-form trace
 - Reports the current evidence conservatively: a strict DeepSeek `deepseek-v4-flash` shadow smoke collected `2` real provider turns and `5301` observed tokens, but Stage57 still has only `total_points=2`, so `do_not_claim_real_manifold=true`.
 - Keeps all changes observational: no WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage60: long-run provider trace campaign
+- Adds a recoverable campaign orchestrator over Stage59 for multi-model real-provider trace collection.
+- Defaults to dry-run; `--execute` is required for provider calls; each executed model cell defaults to its own shadow runtime and turn journal.
+- Writes campaign HTML/JSON/PNG, `campaign_manifest.json`, append-only `campaign_events.jsonl`, per-cell Stage59 artifacts, aggregate token/cache/provider provenance, cross-model ranking, and a conservative major-breakthrough evidence gate.
+- Reports the current evidence conservatively: a strict DeepSeek shadow smoke compared `deepseek-v4-flash` and `deepseek-v4-pro` for one turn each, collected `2` real provider turns and `5128` observed tokens, and kept `do_not_claim_major_breakthrough=true`.
+- Keeps all changes observational: no WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
