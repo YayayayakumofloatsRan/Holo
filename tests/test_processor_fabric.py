@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from holo_host.config import load_config
 from holo_host.codex_runner import CodexRunner
+from holo_host.context_scheduler import plan_processor_context
 from holo_host.models import ProcessorTaskRequest, ProcessorUsageRecord
 from holo_host.provider_substrate import analyze_provider_substrate_conflicts
 from holo_host.store import QueueStore
@@ -313,6 +314,77 @@ deepseek_fast_model = "deepseek-v4-flash"
             body = json.loads(request.data.decode("utf-8"))
             self.assertEqual(body["thinking"], {"type": "enabled"})
             self.assertEqual(body["reasoning_effort"], "max")
+
+    def test_deepseek_provider_partitions_stable_prefix_from_dynamic_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_api_key_env = "TEST_DEEPSEEK_KEY"
+deepseek_model = "deepseek-v4-pro"
+deepseek_fast_model = "deepseek-v4-flash"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+            stable_prefix = "Stable response contract:\n" + ("stable policy line\n" * 180)
+            dynamic_payload = "聊天名：CacheProbe\n当前用户：继续刚才的测试"
+            prompt = stable_prefix + dynamic_payload
+            context_schedule = plan_processor_context(
+                prompt=prompt,
+                lane_name="subject_main",
+                model="deepseek-v4-pro",
+                current_session_id="",
+                history_messages=4,
+            )
+
+            class _FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def read(self):
+                    return json.dumps(
+                        {
+                            "choices": [{"message": {"content": "agent reply"}}],
+                            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                        }
+                    ).encode("utf-8")
+
+            with patch.dict(os.environ, {"TEST_DEEPSEEK_KEY": "unit-key"}), patch(
+                "holo_host.codex_runner.urlopen",
+                return_value=_FakeResponse(),
+            ) as fake_urlopen:
+                result = runner.run_task(
+                    ProcessorTaskRequest(
+                        task_type="reply",
+                        prompt=prompt,
+                        provider_hint="deepseek",
+                        metadata={"context_schedule": context_schedule},
+                    )
+                )
+
+            request = fake_urlopen.call_args.args[0]
+            body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual([message["role"] for message in body["messages"]], ["system", "user"])
+            self.assertTrue(body["messages"][0]["content"].startswith("Stable response contract:"))
+            self.assertTrue(body["messages"][1]["content"].startswith("聊天名：CacheProbe"))
+            self.assertEqual(result.metadata["prompt_partition"]["mode"], "stable_prefix_messages")
+            self.assertEqual(
+                result.metadata["prompt_partition"]["provider_cache_prefix_digest"],
+                context_schedule["provider_cache_prefix_digest"],
+            )
 
     def test_deepseek_provider_reuses_cached_response_without_second_http_call(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

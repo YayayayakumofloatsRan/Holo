@@ -67,6 +67,10 @@ def _split_provider_cache_prefix(prompt: str) -> tuple[str, str]:
     return text[:split_at], text[split_at:]
 
 
+def split_provider_cache_prompt(prompt: str) -> tuple[str, str]:
+    return _split_provider_cache_prefix(prompt)
+
+
 def _history_limit(*, pressure: float, current: int) -> int:
     current_limit = max(0, int(current or 0))
     if pressure >= 0.72:

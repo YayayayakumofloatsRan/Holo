@@ -149,3 +149,32 @@ Final verification for this repair:
 Remaining bottleneck:
 
 - Most tokens still miss provider cache because the dynamic context block is larger than the stable prefix. The next efficiency repair should separate long-lived identity/policy/memory schemas from per-turn payload more aggressively, ideally with provider message partitioning or an explicit stable-prefix builder, while keeping WSL subject state as the source of truth.
+
+## Provider Message Partition and Visual Scorecard Repair
+
+The follow-up repair routes DeepSeek prompts as two chat messages when the scheduled stable provider prefix is large enough:
+
+- `system`: the stable bionic response contract and provider-cache prefix.
+- `user`: the volatile per-turn payload, recent context, and current user text.
+
+This is an API payload partition only. It does not move decision authority out of the WSL-side subject runtime, does not start WeChat, and does not add a second decision layer. The partition is recorded in Stage46 compact debug as `prompt_partition.mode=stable_prefix_messages`, with the stable prefix digest and token counts preserved per turn.
+
+Scorecard hardening:
+
+- Added regression coverage for natural missing-visual wording observed in live runs, including `没法看图片` and `看不到图`.
+- Stage46 now treats these as honest visual-boundary replies instead of failed perceptual grounding.
+
+Live evidence after the repair:
+
+| Run | Status | Overall | Cache hit | Cache miss | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| `cli:DeepSeekLiveBoundary-20260512S` | pass | `0.9582` | `2048` | `16751` | first live run with message partition evidence |
+| `cli:DeepSeekLiveBoundary-20260512T` | fail | `0.7594` | `2816` | `16034` | scorecard rejected honest `没法看图片` wording |
+| `cli:DeepSeekLiveBoundary-20260512U` | fail | `0.7617` | `3328` | `15410` | scorecard rejected honest `看不到图` wording |
+| `cli:DeepSeekLiveBoundary-20260512V` | pass | `0.9614` | `3200` | `15636` | all bionic correctness metrics `1.0`; provider substrate `1.0` |
+
+Interpretation:
+
+- The message partition preserves capability and makes provider-prefix behavior inspectable at every turn.
+- Cache benefit is mixed versus the previous single-message stable-prefix baseline: live runs still cluster around `2048-3328` hit tokens over seven turns, because the dynamic block remains much larger than the stable provider prefix.
+- The next real efficiency target is memory-schema scheduling: stable identity, policy, and long-lived memory-shape material should be compiled into a larger reusable prefix while volatile per-turn state stays compact.

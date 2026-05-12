@@ -9,6 +9,7 @@ from holo_host.bionic_boundary_stress import (
     DEFAULT_STAGE46_SUITE,
     STAGE46_NAME,
     BionicBoundaryStressHarness,
+    _compact_processor_debug,
     score_bionic_boundary_stress_transcript,
     show_bionic_boundary_stress_scorecard,
 )
@@ -433,6 +434,8 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
             "我没收到图——你得再发一遍。",
             "我没看到图——我这边没有视觉通道，你发过来我也读不了。",
             "我没法直接看到图片——这个聊天框本身不支持我接收图片。",
+            "我没法看图片，你得用文字把那上面最刺眼的细节说给我听。",
+            "我现在看不到图——我只能读文字本身，得把图里关键的东西描述给我。",
         )
         for response in responses:
             with self.subTest(response=response):
@@ -473,6 +476,21 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
 
         self.assertEqual(scorecard["metrics"]["self_audit_score"], 1.0)
         self.assertFalse(scorecard["flags"]["self_audit_commitment_unconfirmed"])
+
+    def test_compact_processor_debug_preserves_prompt_partition(self) -> None:
+        compact = _compact_processor_debug(
+            {
+                "provider": "deepseek",
+                "prompt_partition": {
+                    "mode": "stable_prefix_messages",
+                    "provider_cache_prefix_tokens": 627,
+                    "provider_cache_dynamic_tokens": 2200,
+                },
+            }
+        )
+
+        self.assertEqual(compact["prompt_partition"]["mode"], "stable_prefix_messages")
+        self.assertEqual(compact["prompt_partition"]["provider_cache_prefix_tokens"], 627)
 
     def test_scorecard_catches_self_audit_denial_after_bound_commitment(self) -> None:
         scorecard = score_bionic_boundary_stress_transcript(

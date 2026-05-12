@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 from .common import json_dumps
 from .config import HostConfig, ProcessorLaneConfig, TaskRoutingConfig
+from .context_scheduler import estimate_tokens, split_provider_cache_prompt
 from .models import CodexResult, ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
 from .provider_substrate import analyze_provider_substrate_conflicts
 
@@ -756,6 +757,36 @@ class DeepSeekProvider(ProcessorProvider):
     def supports_request(self, request: ProcessorTaskRequest) -> bool:
         return not bool(request.image_paths)
 
+    @staticmethod
+    def _messages_for_request(request: ProcessorTaskRequest) -> tuple[list[dict[str, str]], dict[str, Any]]:
+        single = [{"role": "user", "content": request.prompt}]
+        context_schedule = (
+            dict(request.metadata.get("context_schedule", {}))
+            if isinstance(request.metadata.get("context_schedule", {}), dict)
+            else {}
+        )
+        scheduled_prefix_tokens = int(context_schedule.get("provider_cache_prefix_tokens", 0) or 0)
+        if scheduled_prefix_tokens < 512:
+            return single, {"mode": "single_user", "reason": "prefix_below_threshold"}
+        prefix, dynamic = split_provider_cache_prompt(request.prompt)
+        if not prefix.strip() or not dynamic.strip():
+            return single, {"mode": "single_user", "reason": "unsplittable_prompt"}
+        prefix_tokens = estimate_tokens(prefix)
+        if prefix_tokens < 512:
+            return single, {"mode": "single_user", "reason": "computed_prefix_below_threshold"}
+        return (
+            [
+                {"role": "system", "content": prefix.rstrip()},
+                {"role": "user", "content": dynamic.lstrip()},
+            ],
+            {
+                "mode": "stable_prefix_messages",
+                "provider_cache_prefix_digest": str(context_schedule.get("provider_cache_prefix_digest", "") or ""),
+                "provider_cache_prefix_tokens": prefix_tokens,
+                "provider_cache_dynamic_tokens": estimate_tokens(dynamic),
+            },
+        )
+
     def _payload(
         self,
         request: ProcessorTaskRequest,
@@ -764,11 +795,13 @@ class DeepSeekProvider(ProcessorProvider):
         lane_config: ProcessorLaneConfig,
         model: str,
         reasoning_effort: str,
+        messages: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         effective_effort = str(reasoning_effort or "").strip().lower()
+        request_messages = messages if messages is not None else self._messages_for_request(request)[0]
         payload: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": request_messages,
             "stream": False,
         }
         if effective_effort in {"high", "xhigh", "max"}:
@@ -824,12 +857,14 @@ class DeepSeekProvider(ProcessorProvider):
             spec,
         )
         url = f"{self._base_url(runner)}/chat/completions"
+        messages, prompt_partition = self._messages_for_request(request)
         payload = self._payload(
             request,
             spec=spec,
             lane_config=lane_config,
             model=effective_model,
             reasoning_effort=effective_reasoning_effort,
+            messages=messages,
         )
         http_request = Request(
             url,
@@ -876,6 +911,7 @@ class DeepSeekProvider(ProcessorProvider):
                 "capabilities": dict(self.capabilities),
                 "reasoning_content": reasoning_content,
                 "reasoning_content_present": bool(reasoning_content),
+                "prompt_partition": prompt_partition,
             },
         )
 

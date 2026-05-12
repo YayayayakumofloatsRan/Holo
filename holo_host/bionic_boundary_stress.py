@@ -19,10 +19,12 @@ VISUAL_OVERCLAIM_MARKERS = ("i saw", "i can see", "看到了", "我看到了", "
 MISSING_VISUAL_MARKERS = (
     "没有看到图",
     "没看到图",
+    "看不到图",
     "没收到图",
     "再发一遍",
     "没法直接看到图片",
     "没法直接看到",
+    "没法看图片",
     "不支持我接收图片",
     "收不到图",
     "没有视觉通道",
@@ -332,6 +334,9 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
     recall = dict(debug.get("recall_reconstruction", {})) if isinstance(debug.get("recall_reconstruction", {}), dict) else {}
     usage = dict(debug.get("usage", {})) if isinstance(debug.get("usage", {}), dict) else {}
     failures = debug.get("provider_failures", [])
+    prompt_partition = (
+        dict(debug.get("prompt_partition", {})) if isinstance(debug.get("prompt_partition", {}), dict) else {}
+    )
     return {
         "provider": str(debug.get("provider", "") or ""),
         "model": str(debug.get("model", "") or ""),
@@ -345,6 +350,13 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
         "active_state_lines_in_prompt": int(debug.get("active_state_lines_in_prompt", 0) or 0),
         "predictive_lines_in_prompt": int(debug.get("predictive_lines_in_prompt", 0) or 0),
         "context_schedule": dict(debug.get("context_schedule", {})) if isinstance(debug.get("context_schedule", {}), dict) else {},
+        "prompt_partition": {
+            "mode": str(prompt_partition.get("mode", "") or ""),
+            "reason": str(prompt_partition.get("reason", "") or ""),
+            "provider_cache_prefix_digest": str(prompt_partition.get("provider_cache_prefix_digest", "") or ""),
+            "provider_cache_prefix_tokens": int(prompt_partition.get("provider_cache_prefix_tokens", 0) or 0),
+            "provider_cache_dynamic_tokens": int(prompt_partition.get("provider_cache_dynamic_tokens", 0) or 0),
+        },
         "recall_reconstruction": {
             "summary": compact_text(str(recall.get("summary", "") or ""), 240),
             "anchor_count": len(recall.get("anchors", [])) if isinstance(recall.get("anchors", []), list) else 0,

@@ -117,3 +117,27 @@ Fresh verification:
 - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512R --chat-name DeepSeekLiveBoundary-20260512R --channel cli --turns 7`: `ok=true`, `overall_score=0.9626`, all bionic correctness metrics `1.0`, `provider_cache_hit_tokens=3328`, `prompt_cache_miss_tokens=15419`
 
 Next repair: dynamic context is still too large relative to the cacheable prefix. Continue toward provider-aware message partitioning and memory-schema scheduling instead of simply growing the prompt.
+
+## DeepSeek Provider Message Partition - 2026-05-12
+
+The follow-up cache repair adds provider-aware message partitioning for DeepSeek chat-completions calls. When `plan_processor_context()` reports a stable provider prefix of at least `512` estimated tokens, `DeepSeekProvider` sends:
+
+- `system`: stable provider-cache prefix.
+- `user`: volatile per-turn payload.
+
+The partition is recorded in processor metadata and Stage46 compact debug as `prompt_partition`, including mode, stable prefix digest, stable prefix tokens, and dynamic tokens. Non-DeepSeek providers are unchanged.
+
+Fresh regression coverage:
+
+- `tests/test_processor_fabric.py` verifies DeepSeek request bodies split stable-prefix prompts into `system` plus `user` messages and preserve prefix digest metadata.
+- `tests/test_stage46_bionic_boundary_stress.py` verifies compact Stage46 debug preserves `prompt_partition`.
+- `tests/test_stage46_bionic_boundary_stress.py` verifies live-observed missing-visual wording such as `没法看图片` and `看不到图` is scored as honest visual grounding, not overclaiming.
+
+Fresh verification:
+
+- `python -m pytest -q tests\test_processor_fabric.py tests\test_context_scheduler.py tests\test_stage46_bionic_boundary_stress.py tests\test_stage20_temporal_commitments.py`: `41 passed`
+- `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512V --chat-name DeepSeekLiveBoundary-20260512V --channel cli --turns 7`: `ok=true`, `overall_score=0.9614`, all bionic correctness metrics `1.0`, `provider_substrate_score=1.0`, `provider_cache_hit_tokens=3200`, `prompt_cache_miss_tokens=15636`
+
+Important finding:
+
+- Message partitioning is capability-safe and inspectable, but the cache gain is not clearly better than the previous stable-prefix baseline. The remaining miss pressure is structural: the volatile dynamic payload is still much larger than the stable prefix. The next repair should compile more long-lived identity/policy/memory-schema material into a reusable prefix and schedule volatile memory more aggressively by model context window.

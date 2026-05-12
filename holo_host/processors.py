@@ -1382,6 +1382,9 @@ class CodexCliProcessor:
                 "prompt_excerpt": compact_text(prompt, 240),
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "residual_fast_channel": dict(context.mind_packet.get("residual_fast_channel", {})),
+                "prompt_partition": dict(result_metadata.get("prompt_partition", {}))
+                if isinstance(result_metadata.get("prompt_partition", {}), dict)
+                else {},
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
                 "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),
                 "predictive_lines_in_prompt": int(context.metadata.get("predictive_lines_in_prompt", 0) or 0),
