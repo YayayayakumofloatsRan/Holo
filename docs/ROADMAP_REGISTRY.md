@@ -227,6 +227,12 @@ Stage57: geometry calibration
 - Reports the current evidence conservatively: recent eight Stage46 runs have `total_points=56`, `longest_trace_points=7`, `geometry_score_correlation=0.7966`, `requires_longer_traces=true`, and `do_not_claim_manifold=true`.
 - Keeps all changes observational: no provider call, self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage58: long-form geometry lab
+- Generates bounded Stage46-compatible surrogate long traces from recent Stage46 seeds and feeds them through Stage57 calibration.
+- Adds perturbation programs, surrogate evidence gates, tool-readiness checks, and long-form lab PNG dashboards.
+- Reports the current toolchain evidence conservatively: five surrogate traces of `420` turns each produce `total_generated_turns=2100`, Stage57 `geometry_score_correlation=0.983`, and Stage58 `do_not_claim_real_manifold=true`.
+- Keeps all changes observational and surrogate-only: no provider call, self-memory write, policy mutation, transport widening, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

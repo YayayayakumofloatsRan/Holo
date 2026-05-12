@@ -162,6 +162,12 @@
   - Stage57 does not start WeChat, mutate self-memory, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
   - The current local Stage57 render over eight recent Stage46 runs produced `total_points=56`, `longest_trace_points=7`, `geometry_score_correlation=0.7966`, `requires_longer_traces=true`, and `do_not_claim_manifold=true`
   - `python -m pytest -q tests\test_stage57_geometry_calibration.py` passed with `3` tests
+- Stage58 alignment state on `2026-05-12`:
+  - Stage58 adds an observational surrogate long-form geometry lab over Stage46/54/55/56/57 traces
+  - `render-consciousness-longform-lab` writes HTML, JSON, and PNG artifacts with bounded surrogate traces, perturbation programs, Stage57 calibration, tool readiness, and surrogate evidence gates
+  - Stage58 does not start WeChat, mutate self-memory, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
+  - The current local Stage58 render generated five surrogate traces of `420` turns each, `total_generated_turns=2100`, Stage57 `geometry_score_correlation=0.983`, and Stage58 `do_not_claim_real_manifold=true`
+  - `python -m pytest -q tests\test_stage58_longform_geometry_lab.py` passed with `3` tests
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.

@@ -99,13 +99,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 94. `docs/ENGINEERING_HANDOFF_STAGE56.md`
 95. `docs/STAGE57_GEOMETRY_CALIBRATION.md`
 96. `docs/ENGINEERING_HANDOFF_STAGE57.md`
-97. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-98. `HOLO_SYSTEM.md`
-99. `HOLO_HOST.md`
-100. `OPERATIONS.md`
-101. `docs/PUBLIC_RELEASE_HYGIENE.md`
-102. `holo_memory_library/MEMORY_LIBRARY.md`
-103. `windows_helper/README.md`
+97. `docs/STAGE58_LONGFORM_GEOMETRY_LAB.md`
+98. `docs/ENGINEERING_HANDOFF_STAGE58.md`
+99. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+100. `HOLO_SYSTEM.md`
+101. `HOLO_HOST.md`
+102. `OPERATIONS.md`
+103. `docs/PUBLIC_RELEASE_HYGIENE.md`
+104. `holo_memory_library/MEMORY_LIBRARY.md`
+105. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -117,11 +119,16 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage57 geometry calibration plus Stage56 dimensional-lift observatory, Stage55 consciousness-manifold observatory, Stage54 consciousness-flow visualization, Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage57 geometry-calibration commit.
-- Current milestone: `stage57-geometry-calibration`
-- Current status: Stage57 compares recent Stage46-derived Stage56 lifted traces through pairwise lifted-centroid distances, baseline-relative perturbation response, geometry-vs-score predictive probes, and evidence gates. It reports useful cross-run geometry movement while keeping `do_not_claim_manifold=true` until trace depth is sufficient. It remains observational only; Stage53's upstream MCP client remains available as bounded external observation substrate; downstream Holo-as-MCP-server exposure remains intentionally deferred.
+- Resume commit: Stage58 long-form geometry lab plus Stage57 geometry calibration, Stage56 dimensional-lift observatory, Stage55 consciousness-manifold observatory, Stage54 consciousness-flow visualization, Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the Stage58 long-form geometry lab commit.
+- Current milestone: `stage58-longform-geometry-lab`
+- Current status: Stage58 generates bounded Stage46-compatible surrogate long traces from recent Stage46 seeds, labels perturbation programs, runs Stage57 calibration at long-trace scale, exports HTML/JSON/PNG artifacts, and keeps `do_not_claim_real_manifold=true` because surrogate traces are tool-readiness evidence rather than provider evidence. It remains observational only; Stage53's upstream MCP client remains available as bounded external observation substrate; downstream Holo-as-MCP-server exposure remains intentionally deferred.
 - Latest full verification evidence:
+  - `python -m pytest -q tests\test_stage58_longform_geometry_lab.py` passed with `3` tests on `2026-05-12`.
+  - `python -m holo_host --config .holo_host.toml render-consciousness-longform-lab --limit 8 --turns 420 --output artifacts\stage58\stage58_current.html` returned `ok=true`, `generated_trace_count=5`, `turns_per_trace=420`, `total_generated_turns=2100`, `geometry_score_correlation=0.983`, `surrogate_only=true`, and `do_not_claim_real_manifold=true` on `2026-05-12`.
+  - `python -m py_compile holo_host\consciousness_longform_lab.py holo_host\consciousness_geometry_calibration.py holo_host\consciousness_dimensional_lift.py holo_host\consciousness_manifold.py holo_host\consciousness_visualization.py holo_host\cli.py` passed on `2026-05-12`.
+  - `python -m pytest -q tests\test_stage58_longform_geometry_lab.py tests\test_stage57_geometry_calibration.py tests\test_stage56_dimensional_lift_observatory.py tests\test_stage55_consciousness_manifold_observatory.py tests\test_stage54_consciousness_visualization.py tests\test_stage46_bionic_boundary_stress.py` passed with `32` tests on `2026-05-12`.
+  - `python -m pytest -q` passed with `427` tests on `2026-05-12` after Stage58.
   - `python -m pytest -q tests\test_stage57_geometry_calibration.py` passed with `3` tests on `2026-05-12`.
   - `python -m holo_host --config .holo_host.toml render-consciousness-geometry-calibration --limit 8 --output artifacts\stage57\stage57_current.html` returned `ok=true`, `run_count=8`, `total_points=56`, `longest_trace_points=7`, `geometry_score_correlation=0.7966`, `requires_longer_traces=true`, and `do_not_claim_manifold=true` on `2026-05-12`.
   - `python -m py_compile holo_host\consciousness_geometry_calibration.py holo_host\consciousness_dimensional_lift.py holo_host\consciousness_manifold.py holo_host\consciousness_visualization.py holo_host\cli.py holo_host\store.py` passed on `2026-05-12`.
@@ -190,11 +197,11 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `python -m holo_host --help` includes `show-mcp-upstream-status`, `list-mcp-upstream-tools`, `call-mcp-tool`, and `read-mcp-resource` on `2026-05-12`.
   - `python -m pytest -q` passed with `410` tests on `2026-05-12` after Stage53.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12` after Stage53.
-  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. Stage50 adds the missing audit surface: DeepSeek Z preserved all bionic metrics with `5376` hit / `14525` miss tokens and `protected_line_dropped=false` every turn. Stage51 improves biological-memory lifecycle and consciousness-flow evidence while keeping all Stage46 bionic metrics at `1.0`, but DeepSeek AA miss tokens rose to `18600`. Stage52 fused lifecycle/flow into scheduler dynamic lines and reduced miss tokens to `15566`, though it has not fully returned to Stage50's `14525`. Stage53 shifts from prompt optimization to tool reach: Holo now treats upstream MCP tool/resource outputs as bounded observations and keeps external servers out of transport, memory, and decision authority. Stage56 shows the immediate geometry bottleneck is trace depth after lifting Stage55 vectors from 12 to 138 dimensions: the current seven-point trace has `effective_rank_proxy=3.2727`, `max_observable_rank=6`, and `limited_by_trace_length=true`. Stage57 shows lifted geometry has a useful cross-run score-movement signal (`geometry_score_correlation=0.7966` across eight recent Stage46 runs), but still keeps `do_not_claim_manifold=true` because the longest trace remains only seven points.
+  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. Stage50 adds the missing audit surface: DeepSeek Z preserved all bionic metrics with `5376` hit / `14525` miss tokens and `protected_line_dropped=false` every turn. Stage51 improves biological-memory lifecycle and consciousness-flow evidence while keeping all Stage46 bionic metrics at `1.0`, but DeepSeek AA miss tokens rose to `18600`. Stage52 fused lifecycle/flow into scheduler dynamic lines and reduced miss tokens to `15566`, though it has not fully returned to Stage50's `14525`. Stage53 shifts from prompt optimization to tool reach: Holo now treats upstream MCP tool/resource outputs as bounded observations and keeps external servers out of transport, memory, and decision authority. Stage56 shows the immediate geometry bottleneck is trace depth after lifting Stage55 vectors from 12 to 138 dimensions: the current seven-point trace has `effective_rank_proxy=3.2727`, `max_observable_rank=6`, and `limited_by_trace_length=true`. Stage57 shows lifted geometry has a useful cross-run score-movement signal (`geometry_score_correlation=0.7966` across eight recent Stage46 runs), but still keeps `do_not_claim_manifold=true` because the longest trace remains only seven points. Stage58 proves the toolchain can run at long-trace scale through five surrogate traces of `420` turns each (`total_generated_turns=2100`, surrogate Stage57 `geometry_score_correlation=0.983`), while correctly keeping `do_not_claim_real_manifold=true` until real provider long-form evidence exists.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
-- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE57.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: add bounded long-form offline geometry traces with perturbation labels and scorecards, then rerender Stage57 without live transport widening; resume reviewed upstream MCP server configs for filesystem/git/browser/search/document tooling when the geometry calibration arc is stable.
+- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE58.md`, and do not assume any uncommitted chat-only state exists.
+- Next safe direction: add an operator-approved real long-form provider trace runner with explicit provider/model/token budgets and provenance, without live transport widening; resume reviewed upstream MCP server configs for filesystem/git/browser/search/document tooling when the geometry calibration arc is stable.
 - Do not start WeChat, expose Holo as a downstream MCP server, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is

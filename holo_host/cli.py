@@ -8295,6 +8295,77 @@ def command_render_consciousness_geometry_calibration(
     return 0
 
 
+def command_render_consciousness_longform_lab(
+    config_path: str | None,
+    *,
+    suite: str,
+    limit: int,
+    turns: int,
+    output: str | None,
+) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .consciousness_longform_lab import build_longform_geometry_lab, write_longform_geometry_lab_artifacts
+
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        if hasattr(store, "list_agent_eval_runs"):
+            rows = store.list_agent_eval_runs(stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE, limit=limit)
+        else:
+            latest = store.latest_agent_eval_run(stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE)
+            rows = [latest] if latest else []
+    finally:
+        store.close()
+    if not rows:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "stage": "stage58-longform-geometry-lab",
+                    "error": "stage46_seed_runs_not_found",
+                    "suite": suite or DEFAULT_STAGE46_SUITE,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    seed_runs = [dict(row.get("run", {})) for row in reversed(rows) if isinstance(row.get("run", {}), dict)]
+    lab = build_longform_geometry_lab(seed_runs, turns=turns)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = config.runtime.repo_root / "artifacts" / "stage58" / "consciousness_longform_lab.html"
+    written = write_longform_geometry_lab_artifacts(lab, output_path)
+    trace_set = dict(lab.get("longform_trace_set", {})) if isinstance(lab.get("longform_trace_set", {}), dict) else {}
+    surrogate = dict(lab.get("surrogate_evidence_gate", {})) if isinstance(lab.get("surrogate_evidence_gate", {}), dict) else {}
+    calibration = dict(lab.get("stage57_calibration", {})) if isinstance(lab.get("stage57_calibration", {}), dict) else {}
+    predictive = dict(calibration.get("predictive_probe", {})) if isinstance(calibration.get("predictive_probe", {}), dict) else {}
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "stage": lab.get("stage", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "longform_lab_png_path": str(written["longform_lab_png"]),
+                "observatory": {
+                    "generated_trace_count": trace_set.get("generated_trace_count", 0),
+                    "turns_per_trace": trace_set.get("turns_per_trace", 0),
+                    "total_generated_turns": trace_set.get("total_generated_turns", 0),
+                    "geometry_score_correlation": predictive.get("geometry_score_correlation", 0),
+                    "surrogate_only": bool(surrogate.get("surrogate_only", True)),
+                    "do_not_claim_real_manifold": bool(surrogate.get("do_not_claim_real_manifold", True)),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_show_visual_provider_readiness(config_path: str | None) -> int:
     payload, _transport = _visual_provider_readiness_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9632,6 +9703,14 @@ def main(argv: list[str] | None = None) -> int:
     consciousness_calibration_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
     consciousness_calibration_parser.add_argument("--limit", type=int, default=8)
     consciousness_calibration_parser.add_argument("--output", default=None)
+    consciousness_longform_parser = subparsers.add_parser(
+        "render-consciousness-longform-lab",
+        help="Render Stage58 bounded long-form surrogate geometry lab from recent Stage46 seeds",
+    )
+    consciousness_longform_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    consciousness_longform_parser.add_argument("--limit", type=int, default=8)
+    consciousness_longform_parser.add_argument("--turns", type=int, default=420)
+    consciousness_longform_parser.add_argument("--output", default=None)
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     subparsers.add_parser("show-internal-runtime-readiness", help="Show internal DeepSeek runtime readiness without starting WeChat")
@@ -10160,6 +10239,14 @@ def main(argv: list[str] | None = None) -> int:
             args.config,
             suite=args.suite,
             limit=args.limit,
+            output=args.output,
+        )
+    if args.command == "render-consciousness-longform-lab":
+        return command_render_consciousness_longform_lab(
+            args.config,
+            suite=args.suite,
+            limit=args.limit,
+            turns=args.turns,
             output=args.output,
         )
     if args.command == "show-visual-provider-readiness":
