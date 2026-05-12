@@ -247,3 +247,26 @@ Interpretation:
 - Stage50 preserves the Stage49 live cache/correctness envelope while exposing the exact dynamic compression state.
 - Low-salience turns compress to seven scheduler dynamic lines; high-continuity turns expand to eleven lines without dropping protected reconstruction/current-state labels.
 - The next improvement should be repeated live soak and adaptive compression thresholds, not consolidation writeback or larger cortical schema.
+
+## Stage51 Bionic Memory Lifecycle and Consciousness Flow
+
+Stage51 prioritizes biomimetic capability over cache efficiency. It adds two internal prompt/context surfaces:
+
+- `bionic_memory_lifecycle`: diagnostic consolidation intent, hippocampal reactivation, synaptic-pruning style forgetting gate, and memory pressure.
+- `bionic_consciousness_flow`: sensory edge, affective tone, memory reactivation, goal pressure, response intention, and uncertainty monitor.
+
+The surfaces are bounded and non-autonomous. Stage51 still reports `self_memory_write=false`, `background_loop_allowed=false`, `dream_replay_allowed=false`, and `leakage_guard.user_visible=false`.
+
+Live evidence:
+
+| Run | Status | Overall | Cache hit | Cache miss | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| `cli:DeepSeekLiveBoundary-20260512Z` | pass | `0.9647` | `5376` | `14525` | Stage50 dynamic compression audit |
+| `cli:DeepSeekLiveBoundary-20260512AA` | pass | `0.9624` | `5376` | `18600` | Stage51 lifecycle/flow; all bionic correctness metrics `1.0` |
+
+Interpretation:
+
+- Capability held: perceptual grounding, commitment binding, symbol correction, self-audit, continuity, and mechanism-leakage metrics all stayed at `1.0`.
+- Biological-memory evidence improved: high-continuity live turns reached consolidation priority around `0.86-0.88` while staying diagnostic-only.
+- Consciousness-flow evidence improved: each turn exposes prompt-only phase ordering and `user_visible=false` in compact debug.
+- Cache did not improve: miss tokens rose because lifecycle and flow are new dynamic prompt surfaces. The next optimization should fuse those lines into the scheduler-owned dynamic budget instead of adding separate dynamic sections.

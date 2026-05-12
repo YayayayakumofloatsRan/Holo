@@ -88,6 +88,8 @@ def plan_processor_context(
     current_session_id: str = "",
     history_messages: int = 0,
     memory_schedule: dict[str, Any] | None = None,
+    memory_lifecycle: dict[str, Any] | None = None,
+    consciousness_flow: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     window_class = context_window_class_for(lane_name=lane_name, model=model)
     max_tokens = CONTEXT_WINDOWS[window_class]
@@ -109,6 +111,16 @@ def plan_processor_context(
         if isinstance(schedule.get("dynamic_compression_audit", {}), dict)
         else {}
     )
+    lifecycle = dict(memory_lifecycle or {}) if isinstance(memory_lifecycle, dict) else {}
+    lifecycle_lines = (
+        lifecycle.get("prompt_lines", [])
+        if isinstance(lifecycle.get("prompt_lines", []), list)
+        else []
+    )
+    lifecycle_prompt = "\n".join(str(line).strip() for line in lifecycle_lines if str(line).strip())
+    flow = dict(consciousness_flow or {}) if isinstance(consciousness_flow, dict) else {}
+    flow_lines = flow.get("phase_lines", []) if isinstance(flow.get("phase_lines", []), list) else []
+    flow_prompt = "\n".join(str(line).strip() for line in flow_lines if str(line).strip())
     start_new_session = bool(current_session_id and pressure >= 0.72)
     reason = "context_pressure" if start_new_session else "reuse_session"
     max_history_messages = _history_limit(pressure=pressure, current=int(history_messages or 0))
@@ -136,4 +148,10 @@ def plan_processor_context(
         "memory_compression_ratio": float(compression.get("compression_ratio", 1.0) or 1.0),
         "memory_protected_line_dropped": bool(compression.get("protected_line_dropped", False)),
         "memory_prompt_dynamic_tokens": schedule_dynamic_tokens,
+        "memory_lifecycle_mode": str(lifecycle.get("mode", "") or ""),
+        "memory_lifecycle_prompt_lines": len([line for line in lifecycle_lines if str(line).strip()]),
+        "memory_lifecycle_prompt_tokens": estimate_tokens(lifecycle_prompt),
+        "consciousness_flow_mode": str(flow.get("mode", "") or ""),
+        "consciousness_flow_prompt_lines": len([line for line in flow_lines if str(line).strip()]),
+        "consciousness_flow_prompt_tokens": estimate_tokens(flow_prompt),
     }

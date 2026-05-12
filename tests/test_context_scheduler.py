@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from holo_host.bionic_consciousness_flow import build_bionic_consciousness_flow
+from holo_host.bionic_memory_lifecycle import build_bionic_memory_lifecycle
 from holo_host.bionic_memory_scheduler import build_bionic_memory_schedule
 from holo_host.context_scheduler import estimate_tokens, plan_processor_context
 from holo_host.models import AttentionState, TurnContext, TurnPlan
@@ -259,6 +261,63 @@ class ContextSchedulerTests(unittest.TestCase):
         self.assertFalse(plan["memory_protected_line_dropped"])
         self.assertEqual(plan["memory_prompt_dynamic_lines"], len(schedule["prompt_dynamic_lines"]))
         self.assertGreater(plan["memory_prompt_dynamic_tokens"], 0)
+
+    def test_bionic_lifecycle_and_flow_render_as_internal_dynamic_surfaces(self) -> None:
+        packet = {
+            "tier": "unit",
+            "identity_core": {"lines": ["identity=yes"]},
+            "active_thread_state": {
+                "summary": "current thread carries a symbol correction",
+                "latest_user_intent": "test biological continuity",
+            },
+            "affect_state": {"curiosity": 0.7, "continuity_anxiety": 0.6},
+            "drive_state": {"seek_continuity": 0.8},
+            "activation_state": {"heat": 0.86, "motifs": ["rusted_screw"]},
+            "selected_memory_ids": ["node-rusted-screw"],
+            "recall_reconstruction": {"summary": "the corrected symbol is rusted screw"},
+            "goal_state": {"active_goals": [{"goal_type": "preserve_continuity"}]},
+            "selected_action": {"action_type": "reply_once"},
+            "consciousness_stream": {
+                "thread_summary": "legacy stream summary",
+                "lines": ["legacy stream line"],
+            },
+        }
+        packet["bionic_memory_schedule"] = build_bionic_memory_schedule(packet, query="what changed?")
+        packet["bionic_memory_lifecycle"] = build_bionic_memory_lifecycle(packet, query="what changed?")
+        packet["bionic_consciousness_flow"] = build_bionic_consciousness_flow(packet, query="what changed?")
+        context = TurnContext(
+            channel="wechat",
+            thread_key="cli:bionic-stage51",
+            chat_name="BionicStage51",
+            sender="BionicStage51",
+            user_text="what changed?",
+            sidecar=packet,
+            mind_packet=packet,
+            attention_state=AttentionState(primary_focus="reply", reply_goal="answer"),
+            emotion_state={},
+            history=[],
+        )
+
+        prompt = render_chat_prompt(context, turn_plan=TurnPlan(route="main", fast_path=False))
+        plan = plan_processor_context(
+            prompt=prompt,
+            lane_name="subject_main",
+            model="deepseek-v4-pro",
+            current_session_id="thread-123",
+            history_messages=8,
+            memory_schedule=packet["bionic_memory_schedule"],
+            memory_lifecycle=packet["bionic_memory_lifecycle"],
+            consciousness_flow=packet["bionic_consciousness_flow"],
+        )
+
+        self.assertIn("Memory Lifecycle:", prompt)
+        self.assertIn("Consciousness Flow:", prompt)
+        self.assertIn("self_memory_write=false", prompt)
+        self.assertIn("sensory_edge=what changed?", prompt)
+        self.assertNotIn("Consciousness Lines:", prompt)
+        self.assertEqual(plan["memory_lifecycle_mode"], "biomimetic_lifecycle_v1")
+        self.assertEqual(plan["consciousness_flow_mode"], "consciousness_flow_v1")
+        self.assertGreater(plan["consciousness_flow_prompt_tokens"], 0)
 
 
 if __name__ == "__main__":

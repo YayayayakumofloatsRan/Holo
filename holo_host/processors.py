@@ -466,6 +466,24 @@ def _bionic_memory_schedule_active(schedule: dict[str, Any]) -> bool:
     return str(schedule.get("mode", "") or "") == "biomimetic_v1"
 
 
+def _bionic_memory_lifecycle(packet: dict[str, Any]) -> dict[str, Any]:
+    lifecycle = packet.get("bionic_memory_lifecycle", {})
+    return dict(lifecycle) if isinstance(lifecycle, dict) else {}
+
+
+def _bionic_memory_lifecycle_active(lifecycle: dict[str, Any]) -> bool:
+    return str(lifecycle.get("mode", "") or "") == "biomimetic_lifecycle_v1"
+
+
+def _bionic_consciousness_flow(packet: dict[str, Any]) -> dict[str, Any]:
+    flow = packet.get("bionic_consciousness_flow", {})
+    return dict(flow) if isinstance(flow, dict) else {}
+
+
+def _bionic_consciousness_flow_active(flow: dict[str, Any]) -> bool:
+    return str(flow.get("mode", "") or "") == "consciousness_flow_v1"
+
+
 def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]:
     section = schedule.get(key, {})
     if not isinstance(section, dict):
@@ -487,6 +505,14 @@ def _schedule_salience_lines(schedule: dict[str, Any]) -> list[str]:
         f"sources={sources}",
         f"recall_budget={int(gate.get('recall_budget', 0) or 0)}",
     ]
+
+
+def _memory_lifecycle_lines(lifecycle: dict[str, Any]) -> list[str]:
+    return [compact_text(str(line).strip(), 220) for line in lifecycle.get("prompt_lines", []) if str(line).strip()]
+
+
+def _consciousness_flow_lines(flow: dict[str, Any]) -> list[str]:
+    return [compact_text(str(line).strip(), 220) for line in flow.get("phase_lines", []) if str(line).strip()]
 
 
 def _residual_fast_channel_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
@@ -1118,6 +1144,10 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     beat_line = " -> ".join(str(item) for item in utterance.get("beats", []) if str(item).strip()) or "receive -> landing"
     memory_schedule = _bionic_memory_schedule(packet)
     scheduler_active = _bionic_memory_schedule_active(memory_schedule)
+    memory_lifecycle = _bionic_memory_lifecycle(packet)
+    memory_lifecycle_active = _bionic_memory_lifecycle_active(memory_lifecycle)
+    consciousness_flow = _bionic_consciousness_flow(packet)
+    consciousness_flow_active = _bionic_consciousness_flow_active(consciousness_flow)
     identity_block = _render_section(
         "Identity Guard:",
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),
@@ -1132,6 +1162,16 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         _schedule_lines(memory_schedule, "hippocampal_index", "dynamic_lines"),
     )
     memory_salience_block = _render_section("Memory Salience Gate:", _schedule_salience_lines(memory_schedule))
+    memory_lifecycle_block = (
+        _render_section("Memory Lifecycle:", _memory_lifecycle_lines(memory_lifecycle))
+        if memory_lifecycle_active
+        else ""
+    )
+    consciousness_flow_block = (
+        _render_section("Consciousness Flow:", _consciousness_flow_lines(consciousness_flow))
+        if consciousness_flow_active
+        else ""
+    )
     residual_fast_channel_block = _render_section(
         "Residual Fast Channel:",
         _residual_fast_channel_lines_for_prompt(packet),
@@ -1164,7 +1204,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     thread_summary = str(packet.get("consciousness_stream", {}).get("thread_summary", "")).strip()
     if thread_summary:
         consciousness_lines = [thread_summary] + consciousness_lines
-    consciousness_block = _render_section("Consciousness Lines:", consciousness_lines)
+    consciousness_block = _render_section("Consciousness Lines:", consciousness_lines) if not consciousness_flow_active else ""
     vector_lines = [str(item.get("text", "")).strip() for item in packet.get("vector_hits", []) if str(item.get("text", "")).strip()]
     vector_block = _render_section("Vector Echoes:", vector_lines[:4]) if not scheduler_active else ""
     visual_block = _render_section("Visual Memory:", _visual_memory_lines_for_prompt(packet))
@@ -1223,11 +1263,13 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         working_memory_block,
         hippocampal_index_block,
         memory_salience_block,
+        memory_lifecycle_block,
         f"{history_label}\n{_history_block(context, turn_plan)}",
         episodic_block,
         vector_block,
         visual_block,
         activation_block,
+        consciousness_flow_block,
         consciousness_block,
         stream_influence_block,
         self_revision_block,
@@ -1363,6 +1405,12 @@ class CodexCliProcessor:
             memory_schedule=dict(context.mind_packet.get("bionic_memory_schedule", {}))
             if isinstance(context.mind_packet.get("bionic_memory_schedule", {}), dict)
             else {},
+            memory_lifecycle=dict(context.mind_packet.get("bionic_memory_lifecycle", {}))
+            if isinstance(context.mind_packet.get("bionic_memory_lifecycle", {}), dict)
+            else {},
+            consciousness_flow=dict(context.mind_packet.get("bionic_consciousness_flow", {}))
+            if isinstance(context.mind_packet.get("bionic_consciousness_flow", {}), dict)
+            else {},
         )
         max_history = int(context_schedule.get("max_history_messages", turn_plan.history_window) or 0)
         if 0 <= max_history < int(turn_plan.history_window):
@@ -1384,6 +1432,12 @@ class CodexCliProcessor:
                 history_messages=turn_plan.history_window,
                 memory_schedule=dict(context.mind_packet.get("bionic_memory_schedule", {}))
                 if isinstance(context.mind_packet.get("bionic_memory_schedule", {}), dict)
+                else {},
+                memory_lifecycle=dict(context.mind_packet.get("bionic_memory_lifecycle", {}))
+                if isinstance(context.mind_packet.get("bionic_memory_lifecycle", {}), dict)
+                else {},
+                consciousness_flow=dict(context.mind_packet.get("bionic_consciousness_flow", {}))
+                if isinstance(context.mind_packet.get("bionic_consciousness_flow", {}), dict)
                 else {},
             )
         effective_session_id = str(context_schedule.get("effective_session_id", session_id) or "")
@@ -1450,6 +1504,12 @@ class CodexCliProcessor:
                 "residual_fast_channel": dict(context.mind_packet.get("residual_fast_channel", {})),
                 "bionic_memory_schedule": dict(context.mind_packet.get("bionic_memory_schedule", {}))
                 if isinstance(context.mind_packet.get("bionic_memory_schedule", {}), dict)
+                else {},
+                "bionic_memory_lifecycle": dict(context.mind_packet.get("bionic_memory_lifecycle", {}))
+                if isinstance(context.mind_packet.get("bionic_memory_lifecycle", {}), dict)
+                else {},
+                "bionic_consciousness_flow": dict(context.mind_packet.get("bionic_consciousness_flow", {}))
+                if isinstance(context.mind_packet.get("bionic_consciousness_flow", {}), dict)
                 else {},
                 "prompt_partition": dict(result_metadata.get("prompt_partition", {}))
                 if isinstance(result_metadata.get("prompt_partition", {}), dict)

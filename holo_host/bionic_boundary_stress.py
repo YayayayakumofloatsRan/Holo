@@ -340,10 +340,40 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
     memory_schedule = (
         dict(debug.get("bionic_memory_schedule", {})) if isinstance(debug.get("bionic_memory_schedule", {}), dict) else {}
     )
+    memory_lifecycle = (
+        dict(debug.get("bionic_memory_lifecycle", {}))
+        if isinstance(debug.get("bionic_memory_lifecycle", {}), dict)
+        else {}
+    )
+    consciousness_flow = (
+        dict(debug.get("bionic_consciousness_flow", {}))
+        if isinstance(debug.get("bionic_consciousness_flow", {}), dict)
+        else {}
+    )
     salience_gate = dict(memory_schedule.get("salience_gate", {})) if isinstance(memory_schedule.get("salience_gate", {}), dict) else {}
     compression = (
         dict(memory_schedule.get("dynamic_compression_audit", {}))
         if isinstance(memory_schedule.get("dynamic_compression_audit", {}), dict)
+        else {}
+    )
+    consolidation = (
+        dict(memory_lifecycle.get("consolidation_intent", {}))
+        if isinstance(memory_lifecycle.get("consolidation_intent", {}), dict)
+        else {}
+    )
+    replay = (
+        dict(memory_lifecycle.get("replay_plan", {}))
+        if isinstance(memory_lifecycle.get("replay_plan", {}), dict)
+        else {}
+    )
+    forgetting = (
+        dict(memory_lifecycle.get("forgetting_gate", {}))
+        if isinstance(memory_lifecycle.get("forgetting_gate", {}), dict)
+        else {}
+    )
+    leakage = (
+        dict(consciousness_flow.get("leakage_guard", {}))
+        if isinstance(consciousness_flow.get("leakage_guard", {}), dict)
         else {}
     )
     return {
@@ -380,6 +410,27 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "prompt_dynamic_line_count": int(compression.get("prompt_dynamic_line_count", 0) or 0),
             "dropped_dynamic_line_count": int(compression.get("dropped_dynamic_line_count", 0) or 0),
             "protected_line_dropped": bool(compression.get("protected_line_dropped", False)),
+        },
+        "bionic_memory_lifecycle": {
+            "mode": str(memory_lifecycle.get("mode", "") or ""),
+            "consolidation_priority": float(consolidation.get("priority", 0.0) or 0.0),
+            "target_count": len(consolidation.get("targets", []))
+            if isinstance(consolidation.get("targets", []), list)
+            else 0,
+            "self_memory_write": bool(consolidation.get("self_memory_write", False)),
+            "write_policy": str(consolidation.get("write_policy", "") or ""),
+            "replay_triggered": bool(replay.get("triggered", False)),
+            "background_loop_allowed": bool(replay.get("background_loop_allowed", False)),
+            "protected_line_dropped": bool(forgetting.get("protected_line_dropped", False)),
+        },
+        "bionic_consciousness_flow": {
+            "mode": str(consciousness_flow.get("mode", "") or ""),
+            "dominant_phase": str(consciousness_flow.get("dominant_phase", "") or ""),
+            "phase_count": len(consciousness_flow.get("phases", []))
+            if isinstance(consciousness_flow.get("phases", []), list)
+            else 0,
+            "user_visible": bool(leakage.get("user_visible", True)),
+            "prompt_only": bool(leakage.get("prompt_only", False)),
         },
         "recall_reconstruction": {
             "summary": compact_text(str(recall.get("summary", "") or ""), 240),

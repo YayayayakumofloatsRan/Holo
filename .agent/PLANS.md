@@ -2,7 +2,7 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage43-motivational-dynamics-field`.
+- The live runtime milestone is now `stage51-bionic-lifecycle-flow`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
@@ -28,6 +28,10 @@
 - Stage45 is implemented as biomimetic grounding and context scheduling: current-image overclaims are guarded, explicit reminder promises bind to temporal state, and processor context scheduling exposes stable/volatile prompt digests plus exact-response cache diagnostics.
 - Stage46 is implemented as a bionic boundary stress and provider-substrate diagnostics slice: `run-bionic-boundary-stress` and `show-bionic-boundary-stress-scorecard` persist operational high-intensity scorecards, DeepSeek-to-Codex fallback uses provider-specific models, and local DeepSeek availability now requires the configured API key env var.
 - Stage47 is implemented as a provider-substrate conflict monitor: `show-provider-substrate-status` and `/provider-substrate-status` expose active-provider, lane-primary, fallback, and provider/model mismatch conflicts, and Stage46 scorecards now downgrade conflicted runs before treating them as biomimetic evidence.
+- Stage48 is implemented as a biomimetic memory scheduler: working memory, hippocampal indices, cortical schema, salience gates, and diagnostic consolidation targets are separated without adding a new memory store or self-memory write path.
+- Stage49 is implemented as a memory prompt diet and reconstruction-priority repair: scheduler-owned memory replaces duplicate legacy volatile blocks, while reconstruction summaries and anchors are promoted inside the hippocampal budget.
+- Stage50 is implemented as a dynamic compression audit: scheduler-owned prompt lines expose raw/selected/dropped counts, compression ratio, protected labels, and protected-drop status in context scheduling and Stage46 debug evidence.
+- Stage51 is implemented as bionic memory lifecycle and consciousness flow: diagnostic consolidation/replay/forgetting gates and prompt-only sensory/affective/memory/goal phase ordering are exposed while keeping `self_memory_write=false`, `background_loop_allowed=false`, and `user_visible=false`.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -71,7 +75,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is restarting the live API and rerunning Stage46 against a real DeepSeek key, then adding provider-aware stable-prefix reuse and broader biomimetic grounding tests; Holo remains WeChat-offline until live transport validation is explicitly approved.
+- The next implementation focus is a Stage52 prompt-fusion pass: fold Stage51 lifecycle/flow lines into the existing scheduler-owned dynamic budget, preserve all Stage51 debug evidence, and reduce DeepSeek miss-token pressure without losing bionic correctness; Holo remains WeChat-offline until live transport validation is explicitly approved.
 - Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
 - Post-Stage39 provider-response caching is implemented in the processor fabric: `responses`, `openai_compatible`, and `deepseek` can reuse exact stateless text API responses through QueueStore, while `codex_cli`, image tasks, memory-writeback tasks, and shadow-write/operator tasks bypass the cache.
 - Verified post-Stage39 provider-response cache repair on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
@@ -132,13 +136,13 @@
 ## Active Program Index
 - `Stage23-27 bootstrap program`: `.agent/STAGE23_27_PROGRAM.md`
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
-- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE47.md`
+- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE51.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: live API restart plus Stage46 real-DeepSeek stress, provider-aware stable-prefix reuse, and broader biomimetic grounding tests without live transport widening
-- `Current live runtime boundary`: Stage47 is implemented in code as an internal provider-substrate conflict monitor; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, or second decision layer was added
-- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage47 handoff in `docs/ENGINEERING_HANDOFF_STAGE47.md`
+- `Active implementation priority`: Stage52 prompt fusion for lifecycle/flow dynamic-token reduction without live transport widening
+- `Current live runtime boundary`: Stage51 is implemented in code as internal diagnostic memory lifecycle plus prompt-only consciousness flow; no live transport, transport authority change, self-memory mutation, default repo-write authority, direct runtime decision authority, or second decision layer was added
+- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage51 handoff in `docs/ENGINEERING_HANDOFF_STAGE51.md`
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.

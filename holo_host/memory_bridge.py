@@ -12,6 +12,8 @@ from types import ModuleType
 from typing import Any, Iterable
 
 from .activation_state import ActivationStateStore
+from .bionic_consciousness_flow import build_bionic_consciousness_flow
+from .bionic_memory_lifecycle import build_bionic_memory_lifecycle
 from .bionic_memory_scheduler import build_bionic_memory_schedule
 from .common import compact_text, utc_now
 from .mind_graph import MindGraph, TASK_WORLD_CUE_TO_OBJECT, _normalize_thread_key
@@ -1701,6 +1703,10 @@ class MemoryBridge:
         }
         packet["bionic_memory_schedule"] = build_bionic_memory_schedule(packet, query=query)
         packet["state"]["bionic_memory_schedule"] = dict(packet["bionic_memory_schedule"])
+        packet["bionic_memory_lifecycle"] = build_bionic_memory_lifecycle(packet, query=query)
+        packet["state"]["bionic_memory_lifecycle"] = dict(packet["bionic_memory_lifecycle"])
+        packet["bionic_consciousness_flow"] = build_bionic_consciousness_flow(packet, query=query)
+        packet["state"]["bionic_consciousness_flow"] = dict(packet["bionic_consciousness_flow"])
         self._store_packet_cache(query, context=context, packet=packet)
         return packet
 

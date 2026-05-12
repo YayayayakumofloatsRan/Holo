@@ -185,6 +185,12 @@ Stage50: dynamic compression audit
 - Exposes compression mode, dropped dynamic line count, compression ratio, and protected-line drop status in context scheduling and Stage46 debug evidence.
 - Keeps all changes diagnostic/prompt-scheduling only: no self-memory writes, new store, transport widening, or second decision layer.
 
+Stage51: bionic memory lifecycle and consciousness flow
+- Adds a diagnostic biological-memory lifecycle over the Stage50 scheduler: consolidation intent, hippocampal reactivation plan, synaptic-pruning style forgetting gate, and memory pressure.
+- Adds a prompt-only consciousness-flow layer ordered by sensory edge, affective tone, memory reactivation, goal pressure, response intention, and uncertainty monitor.
+- Exposes lifecycle/flow modes and token counts in context scheduling plus compact Stage46 evidence for consolidation priority, replay guard, and leakage guard.
+- Keeps `self_memory_write=false`, `background_loop_allowed=false`, `dream_replay_allowed=false`, and `user_visible=false`; no new store, transport widening, watcher authority, or second decision layer.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

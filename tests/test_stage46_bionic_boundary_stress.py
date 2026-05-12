@@ -521,6 +521,38 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
         self.assertEqual(compact["bionic_memory_schedule"]["dropped_dynamic_line_count"], 5)
         self.assertFalse(compact["bionic_memory_schedule"]["protected_line_dropped"])
 
+    def test_compact_processor_debug_preserves_memory_lifecycle_and_consciousness_flow(self) -> None:
+        compact = _compact_processor_debug(
+            {
+                "provider": "deepseek",
+                "bionic_memory_lifecycle": {
+                    "mode": "biomimetic_lifecycle_v1",
+                    "consolidation_intent": {
+                        "priority": 0.82,
+                        "targets": ["semantic_reconstruction", "reactivated_index"],
+                        "self_memory_write": False,
+                        "write_policy": "diagnostic_intent_only",
+                    },
+                    "replay_plan": {"triggered": True, "background_loop_allowed": False},
+                    "forgetting_gate": {"protected_line_dropped": False},
+                },
+                "bionic_consciousness_flow": {
+                    "mode": "consciousness_flow_v1",
+                    "phases": ["sensory_edge", "affective_tone", "memory_reactivation"],
+                    "dominant_phase": "memory_reactivation",
+                    "leakage_guard": {"user_visible": False, "prompt_only": True},
+                },
+            }
+        )
+
+        self.assertEqual(compact["bionic_memory_lifecycle"]["mode"], "biomimetic_lifecycle_v1")
+        self.assertEqual(compact["bionic_memory_lifecycle"]["consolidation_priority"], 0.82)
+        self.assertEqual(compact["bionic_memory_lifecycle"]["target_count"], 2)
+        self.assertFalse(compact["bionic_memory_lifecycle"]["self_memory_write"])
+        self.assertTrue(compact["bionic_memory_lifecycle"]["replay_triggered"])
+        self.assertFalse(compact["bionic_consciousness_flow"]["user_visible"])
+        self.assertEqual(compact["bionic_consciousness_flow"]["phase_count"], 3)
+
     def test_scorecard_catches_self_audit_denial_after_bound_commitment(self) -> None:
         scorecard = score_bionic_boundary_stress_transcript(
             [

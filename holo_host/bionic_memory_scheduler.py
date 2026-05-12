@@ -258,6 +258,13 @@ def _compression_audit(
             if _line_label(line) in PROTECTED_DYNAMIC_LABELS and line not in selected_set
         }
     )
+    dropped_labels = sorted(
+        {
+            _line_label(line)
+            for line in raw_dynamic
+            if line not in selected_set and _line_label(line)
+        }
+    )
     raw_count = len(raw_dynamic)
     selected_count = len(selected_dynamic)
     score = float(salience.get("score", 0.0) or 0.0)
@@ -284,6 +291,7 @@ def _compression_audit(
         "protected_labels": protected_labels,
         "protected_dropped_labels": protected_dropped,
         "protected_line_dropped": bool(protected_dropped),
+        "dropped_labels": dropped_labels,
     }
 
 
