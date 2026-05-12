@@ -90,13 +90,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 85. `docs/ENGINEERING_HANDOFF_STAGE50.md`
 86. `docs/ENGINEERING_HANDOFF_STAGE51.md`
 87. `docs/ENGINEERING_HANDOFF_STAGE52.md`
-88. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-89. `HOLO_SYSTEM.md`
-90. `HOLO_HOST.md`
-91. `OPERATIONS.md`
-92. `docs/PUBLIC_RELEASE_HYGIENE.md`
-93. `holo_memory_library/MEMORY_LIBRARY.md`
-94. `windows_helper/README.md`
+88. `docs/ENGINEERING_HANDOFF_STAGE53.md`
+89. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+90. `HOLO_SYSTEM.md`
+91. `HOLO_HOST.md`
+92. `OPERATIONS.md`
+93. `docs/PUBLIC_RELEASE_HYGIENE.md`
+94. `holo_memory_library/MEMORY_LIBRARY.md`
+95. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -108,10 +109,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage52 scheduler-owned prompt fusion plus Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage52 scheduler-owned prompt-fusion commit.
-- Current milestone: `stage52-prompt-fusion`
-- Current status: Stage52 fuses lifecycle/flow prompt material into a single scheduler-owned `Bionic Dynamic Frame`, preserving biomimetic debug surfaces while reducing live DeepSeek miss tokens versus Stage51.
+- Resume commit: Stage53 upstream MCP tool substrate plus Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: clean immediately after the Stage53 upstream MCP tool-substrate commit.
+- Current milestone: `stage53-upstream-mcp-tools`
+- Current status: Stage53 makes Holo an upstream MCP client over reviewed stdio servers. Downstream Holo-as-MCP-server exposure is intentionally deferred; Holo can discover/call/read upstream MCP tools as bounded external observations through CLI and the Stage41 engineering-agent action market.
 - Latest full verification evidence:
   - `python -m pytest -q tests\test_stage20_temporal_commitments.py tests\test_processor_fabric.py tests\test_stage33_provider_contracts.py tests\test_stage46_bionic_boundary_stress.py` passed with `36` tests on `2026-05-12` after the residual fast channel repair.
   - `python -m pytest -q` passed with `369` tests on `2026-05-12`.
@@ -153,12 +154,19 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `python -m holo_host run-bionic-boundary-stress --thread-key cli:Stage52Offline-20260512 --chat-name Stage52Offline-20260512 --channel cli --turns 7 --offline` passed with `overall_score=0.9868`, all Stage46 bionic correctness metrics at `1.0`, and `dynamic_fusion_mode=scheduler_owned_stage52_v1`.
   - `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512AB --chat-name DeepSeekLiveBoundary-20260512AB --channel cli --turns 7` passed with `overall_score=0.9614`, all Stage46 bionic correctness metrics at `1.0`, `provider_substrate_score=1.0`, `provider_cache_hit_tokens=5376`, `prompt_cache_miss_tokens=15566`, and `dynamic_fusion_mode=scheduler_owned_stage52_v1`.
   - `python -m pytest -q` passed with `401` tests on `2026-05-12` after Stage52.
-  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. Stage50 adds the missing audit surface: DeepSeek Z preserved all bionic metrics with `5376` hit / `14525` miss tokens and `protected_line_dropped=false` every turn. Stage51 improves biological-memory lifecycle and consciousness-flow evidence while keeping all Stage46 bionic metrics at `1.0`, but DeepSeek AA miss tokens rose to `18600`. Stage52 fused lifecycle/flow into scheduler dynamic lines and reduced miss tokens to `15566`, though it has not fully returned to Stage50's `14525`.
+  - `python -m pytest -q tests\test_stage53_mcp_upstream.py` passed with `9` tests on `2026-05-12` after Stage53 upstream MCP implementation.
+  - `python -m pytest -q tests\test_stage41_engineering_agent.py tests\test_stage53_mcp_upstream.py` passed with `15` tests on `2026-05-12` after Stage53 engineering-agent integration.
+  - `python -m py_compile holo_host\mcp_upstream.py holo_host\engineering_agent.py holo_host\cli.py` passed on `2026-05-12` after Stage53.
+  - `python -m holo_host show-mcp-upstream-status` returned an empty configured-server registry with Stage53 boundary fields on `2026-05-12`.
+  - `python -m holo_host --help` includes `show-mcp-upstream-status`, `list-mcp-upstream-tools`, `call-mcp-tool`, and `read-mcp-resource` on `2026-05-12`.
+  - `python -m pytest -q` passed with `410` tests on `2026-05-12` after Stage53.
+  - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12` after Stage53.
+  - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. Stage50 adds the missing audit surface: DeepSeek Z preserved all bionic metrics with `5376` hit / `14525` miss tokens and `protected_line_dropped=false` every turn. Stage51 improves biological-memory lifecycle and consciousness-flow evidence while keeping all Stage46 bionic metrics at `1.0`, but DeepSeek AA miss tokens rose to `18600`. Stage52 fused lifecycle/flow into scheduler dynamic lines and reduced miss tokens to `15566`, though it has not fully returned to Stage50's `14525`. Stage53 shifts from prompt optimization to tool reach: Holo now treats upstream MCP tool/resource outputs as bounded observations and keeps external servers out of transport, memory, and decision authority.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
-- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE50.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: repeat live soak and tune adaptive compression thresholds from `dynamic_compression_audit`. Do not expand cortical schema or add consolidation-stream writeback until live cache/correctness evidence stays stable across repeated runs.
-- Do not start WeChat, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
+- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE53.md`, and do not assume any uncommitted chat-only state exists.
+- Next safe direction: add reviewed upstream MCP server configs for filesystem/git/browser/search/document tooling, each disabled until its command, cwd, timeout, output cap, and `allowed_tools` are reviewed. Then run agent-loop tests against the chosen servers.
+- Do not start WeChat, expose Holo as a downstream MCP server, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is
 - Holo is not one long Codex conversation.
@@ -199,6 +207,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Stage48: a biomimetic memory scheduler now separates working memory, hippocampal indices, cortical schemas, salience gates, and diagnostic consolidation targets before prompt/context scheduling without adding a new store or decision layer
   - Stage49: scheduler-owned prompt diet removes duplicate legacy volatile memory blocks, drops empty scheduler slots, and prioritizes recall reconstruction inside the hippocampal budget
   - Stage50: scheduler-owned dynamic compression audit exposes prompt dynamic lines, dropped line counts, compression ratio, and protected-line drop status while preserving DeepSeek live correctness
+  - Stage53: upstream MCP tool substrate lets Holo discover and call reviewed stdio MCP tools/resources as external observations through CLI and the Stage41 engineering-agent action market while downstream Holo-as-MCP-server exposure remains deferred
 - Post-Stage39 cache diagnostics: exact packet-cache reuse is confirmed live; cache-class homeostasis deficits now require enough packet-cache observations and are rebased from live cache stats instead of stale self-model metadata.
 - Post-Stage39 provider-response cache repair: stateless text API providers (`responses`, `openai_compatible`, `deepseek`) now use a bounded QueueStore cache for exact repeated prompts; cache hits are visible as `status=cache_hit` with zero new token cost.
 - Post-Stage39 self-dialogue Turing repair: internal CLI probes now guard trace-continuity labels, `revision` vs `vision` marker drift, visible-context questions, exact-memory/image boundaries, non-executable action demotion, theatrical provider wording, and action-market reason leakage before user-facing text. Verified with offline self-dialogue, cached DeepSeek provider probe, full tests, `accept-stage39`, public-release hygiene, and `git diff --check`.

@@ -45,6 +45,26 @@ response_cache_enabled = true
 response_cache_ttl_seconds = 3600
 response_cache_max_entries = 512
 
+# Upstream MCP tool servers. Holo is the MCP client here: external MCP servers
+# provide tools/resources, but Holo keeps action choice, memory, and transport
+# authority inside the WSL subject kernel.
+#
+# Each server uses stdio argv, never a shell command string. Keep servers
+# disabled until their command and allowlist are reviewed.
+# [mcp_servers.filesystem]
+# enabled = false
+# command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "D:/Holo"]
+# allowed_tools = ["read_file", "list_directory", "search_files"]
+# timeout_seconds = 30
+# max_response_bytes = 1000000
+#
+# [mcp_servers.git]
+# enabled = false
+# command = ["npx", "-y", "@modelcontextprotocol/server-git", "--repository", "D:/Holo"]
+# allowed_tools = ["git_status", "git_diff", "git_log"]
+# timeout_seconds = 30
+# max_response_bytes = 1000000
+
 [provider_backends.kernel_xhigh]
 primary_provider = "codex_cli"
 backup_provider = "responses"

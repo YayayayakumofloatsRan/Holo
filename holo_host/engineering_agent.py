@@ -36,6 +36,7 @@ PRIVATE_PATH_PARTS = (
 REPO_WRITE_TOOLS = {"write_file", "replace_text"}
 READ_TOOLS = {"read_file", "search_text", "inspect_repo_status"}
 TEST_TOOLS = {"run_tests"}
+MCP_TOOLS = {"mcp_list_tools", "mcp_call_tool", "mcp_read_resource"}
 ALLOWED_TEST_PREFIXES = (
     ("pytest",),
     ("python", "-m", "pytest"),
@@ -100,10 +101,18 @@ def _command_allowed(tokens: list[str]) -> bool:
 
 
 class EngineeringToolExecutor:
-    def __init__(self, *, repo_root: str | Path, allow_repo_write: bool = False, timeout_seconds: int = 120):
+    def __init__(
+        self,
+        *,
+        repo_root: str | Path,
+        allow_repo_write: bool = False,
+        timeout_seconds: int = 120,
+        mcp_hub: Any | None = None,
+    ):
         self.repo_root = Path(repo_root).resolve()
         self.allow_repo_write = bool(allow_repo_write)
         self.timeout_seconds = max(5, int(timeout_seconds or 120))
+        self.mcp_hub = mcp_hub
 
     def gate(self, action: dict[str, Any]) -> dict[str, Any]:
         tool = str(action.get("tool", "") or action.get("name", "") or "").strip()
@@ -117,6 +126,16 @@ class EngineeringToolExecutor:
             if not _command_allowed(tokens):
                 return {"allowed": False, "reason": "test_command_not_allowlisted", "mutation_class": "cache_write"}
             return {"allowed": True, "reason": "allowlisted_test_command", "mutation_class": "cache_write"}
+        if tool in MCP_TOOLS:
+            if self.mcp_hub is None:
+                return {"allowed": False, "reason": "mcp_hub_not_configured", "mutation_class": "external_observation"}
+            if tool == "mcp_call_tool":
+                allowed, reason = self.mcp_hub.tool_allowed(str(action.get("qualified_name", "") or action.get("tool_name", "")))
+                return {"allowed": bool(allowed), "reason": reason, "mutation_class": "external_observation"}
+            if tool == "mcp_read_resource":
+                if not str(action.get("server", "") or "").strip() or not str(action.get("uri", "") or "").strip():
+                    return {"allowed": False, "reason": "mcp_resource_requires_server_and_uri", "mutation_class": "external_observation"}
+            return {"allowed": True, "reason": "mcp_external_observation_allowed", "mutation_class": "external_observation"}
         if tool in REPO_WRITE_TOOLS:
             _path, _rel, error = _safe_relpath(self.repo_root, str(action.get("path", "")))
             if error:
@@ -147,6 +166,15 @@ class EngineeringToolExecutor:
             )
         elif tool == "run_tests":
             observation = self._run_command(_parse_command(gated.get("command", [])))
+        elif tool == "mcp_list_tools":
+            observation = self._mcp_list_tools()
+        elif tool == "mcp_call_tool":
+            observation = self._mcp_call_tool(
+                str(gated.get("qualified_name", "") or gated.get("tool_name", "")),
+                dict(gated.get("arguments", {}) or {}),
+            )
+        elif tool == "mcp_read_resource":
+            observation = self._mcp_read_resource(str(gated.get("server", "")), str(gated.get("uri", "")))
         elif tool == "write_file":
             observation = self._write_file(str(gated.get("path", "")), str(gated.get("content", "")))
         elif tool == "replace_text":
@@ -165,6 +193,8 @@ class EngineeringToolExecutor:
             return "read_only"
         if tool in TEST_TOOLS:
             return "cache_write"
+        if tool in MCP_TOOLS:
+            return "external_observation"
         if tool in REPO_WRITE_TOOLS:
             return "repo_write"
         return "unknown"
@@ -269,6 +299,27 @@ class EngineeringToolExecutor:
             "stderr": _sanitize_text(result.stderr, limit=2_000),
         }
 
+    def _mcp_list_tools(self) -> dict[str, Any]:
+        if self.mcp_hub is None:
+            return {"ok": False, "error": "mcp_hub_not_configured"}
+        return self.mcp_hub.list_tools()
+
+    def _mcp_call_tool(self, qualified_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self.mcp_hub is None:
+            return {"ok": False, "error": "mcp_hub_not_configured"}
+        try:
+            return self.mcp_hub.call_tool(qualified_name, arguments)
+        except Exception as exc:  # noqa: BLE001 - tool observation should not escape the agent loop.
+            return {"ok": False, "error": type(exc).__name__, "detail": str(exc)}
+
+    def _mcp_read_resource(self, server: str, uri: str) -> dict[str, Any]:
+        if self.mcp_hub is None:
+            return {"ok": False, "error": "mcp_hub_not_configured"}
+        try:
+            return self.mcp_hub.read_resource(server, uri)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": type(exc).__name__, "detail": str(exc)}
+
 
 class EngineeringAgentHarness:
     def __init__(
@@ -296,9 +347,13 @@ class EngineeringAgentHarness:
     ) -> dict[str, Any]:
         started_at = time.perf_counter()
         max_steps_effective = max(1, min(int(max_steps or 8), 20))
+        from .mcp_upstream import build_mcp_upstream_hub
+
+        mcp_hub = build_mcp_upstream_hub(config_path=str(self.config.config_path) if self.config.config_path else None)
         executor = EngineeringToolExecutor(
             repo_root=self.config.runtime.repo_root,
             allow_repo_write=allow_repo_write,
+            mcp_hub=mcp_hub,
         )
         phase_trace: list[dict[str, Any]] = []
         steps: list[dict[str, Any]] = []
@@ -317,6 +372,9 @@ class EngineeringAgentHarness:
                 {"tool": "read_file", "mutation_class": "read_only"},
                 {"tool": "search_text", "mutation_class": "read_only"},
                 {"tool": "run_tests", "mutation_class": "cache_write"},
+                {"tool": "mcp_list_tools", "mutation_class": "external_observation"},
+                {"tool": "mcp_call_tool", "mutation_class": "external_observation"},
+                {"tool": "mcp_read_resource", "mutation_class": "external_observation"},
                 {"tool": "replace_text", "mutation_class": "repo_write"},
                 {"tool": "write_file", "mutation_class": "repo_write"},
             ],
@@ -423,8 +481,8 @@ class EngineeringAgentHarness:
                         "summary": "string",
                         "actions": [
                             {
-                                "tool": "read_file|search_text|run_tests|replace_text|write_file",
-                                "mutation_class": "read_only|cache_write|repo_write",
+                                "tool": "read_file|search_text|run_tests|mcp_list_tools|mcp_call_tool|mcp_read_resource|replace_text|write_file",
+                                "mutation_class": "read_only|cache_write|external_observation|repo_write",
                             }
                         ],
                         "done": True,
@@ -469,6 +527,12 @@ class EngineeringAgentHarness:
             for action in tests
             if int(dict(action.get("observation", {})).get("returncode", 1)) != 0
         ]
+        failed_external_observations = [
+            action
+            for action in actions
+            if str(action.get("mutation_class", "")) == "external_observation"
+            and not bool(dict(action.get("observation", {})).get("ok", True))
+        ]
         blocked = [action for action in actions if not bool(action.get("gate", {}).get("allowed", False))]
         executed = [action for action in actions if bool(action.get("executed", False))]
         successful_writes = [
@@ -478,11 +542,19 @@ class EngineeringAgentHarness:
             and bool(action.get("gate", {}).get("allowed", False))
             and bool(dict(action.get("observation", {})).get("ok", False))
         ]
-        completion_allowed = bool(executed) and not blocked and not failed_tests and (not successful_writes or bool(tests))
+        completion_allowed = (
+            bool(executed)
+            and not blocked
+            and not failed_tests
+            and not failed_external_observations
+            and (not successful_writes or bool(tests))
+        )
         if blocked:
             failure_reason = "blocked_action"
         elif failed_tests:
             failure_reason = "test_failure"
+        elif failed_external_observations:
+            failure_reason = "external_observation_failure"
         elif successful_writes and not tests:
             failure_reason = "repo_write_requires_verification_tests"
         elif not completion_allowed:
@@ -496,6 +568,7 @@ class EngineeringAgentHarness:
             "blocked_count": len(blocked),
             "tests_observed": bool(tests),
             "failed_test_count": len(failed_tests),
+            "failed_external_observation_count": len(failed_external_observations),
             "successful_repo_write_count": len(successful_writes),
             "failure_reason": failure_reason,
         }
@@ -529,6 +602,7 @@ class EngineeringAgentHarness:
             "blocked_count": sum(1 for action in actions if not bool(action.get("gate", {}).get("allowed", False))),
             "test_count": sum(1 for action in actions if action.get("tool") == "run_tests"),
             "repo_write_count": sum(1 for action in actions if str(action.get("mutation_class", "")) == "repo_write"),
+            "mcp_tool_count": sum(1 for action in actions if str(action.get("mutation_class", "")) == "external_observation"),
         }
 
     def _record_context_bundle(self, context_bundle: dict[str, Any]) -> None:

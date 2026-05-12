@@ -197,6 +197,12 @@ Stage52: scheduler-owned prompt fusion
 - Exposes fusion mode, saved line count, Stage51-equivalent dynamic token estimates, and saved token estimates in context scheduling and Stage46 evidence.
 - Keeps all changes prompt-scheduling/diagnostic only; no self-memory write, new store, transport widening, watcher authority, or second decision layer.
 
+Stage53: upstream MCP tool substrate
+- Implements Holo as an upstream MCP client, not a downstream Holo server.
+- Loads reviewed stdio MCP servers from `[mcp_servers.<name>]`, namespaces tools as `server.tool`, and filters discovery/calls through `allowed_tools`.
+- Adds CLI diagnostics and Stage41 engineering-agent tools for `mcp_list_tools`, `mcp_call_tool`, and `mcp_read_resource` as `external_observation`.
+- Keeps MCP results as observations only; no shell execution through MCP, transport authority, watcher authority, self-memory write, policy mutation, or unbounded loop is added.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

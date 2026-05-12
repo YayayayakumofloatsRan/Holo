@@ -7973,6 +7973,78 @@ def command_show_provider_contracts(config_path: str | None) -> int:
     return 0
 
 
+def command_show_mcp_upstream_status(config_path: str | None) -> int:
+    from .mcp_upstream import build_mcp_upstream_hub
+
+    payload = build_mcp_upstream_hub(config_path=config_path).status()
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_list_mcp_upstream_tools(config_path: str | None) -> int:
+    from .mcp_upstream import build_mcp_upstream_hub
+
+    payload = build_mcp_upstream_hub(config_path=config_path).list_tools()
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if not payload.get("errors") else 1
+
+
+def command_call_mcp_tool(config_path: str | None, *, tool: str, arguments_json: str) -> int:
+    from .mcp_upstream import McpUpstreamError, build_mcp_upstream_hub
+
+    try:
+        arguments = json.loads(arguments_json or "{}")
+    except json.JSONDecodeError as exc:
+        print(
+            json.dumps(
+                {"ok": False, "stage": "stage53-mcp-upstream-tools", "error": "invalid_arguments_json", "detail": str(exc)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 2
+    if not isinstance(arguments, dict):
+        print(
+            json.dumps(
+                {"ok": False, "stage": "stage53-mcp-upstream-tools", "error": "arguments_json_must_be_object"},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 2
+    try:
+        payload = build_mcp_upstream_hub(config_path=config_path).call_tool(tool, arguments)
+    except McpUpstreamError as exc:
+        print(
+            json.dumps(
+                {"ok": False, "stage": "stage53-mcp-upstream-tools", "error": type(exc).__name__, "detail": str(exc)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
+def command_read_mcp_resource(config_path: str | None, *, server: str, uri: str) -> int:
+    from .mcp_upstream import McpUpstreamError, build_mcp_upstream_hub
+
+    try:
+        payload = build_mcp_upstream_hub(config_path=config_path).read_resource(server, uri)
+    except McpUpstreamError as exc:
+        print(
+            json.dumps(
+                {"ok": False, "stage": "stage53-mcp-upstream-tools", "error": type(exc).__name__, "detail": str(exc)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if bool(payload.get("ok", False)) else 1
+
+
 def command_show_visual_provider_readiness(config_path: str | None) -> int:
     payload, _transport = _visual_provider_readiness_payload(config_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -9277,6 +9349,14 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-provider-status", help="Show processor provider availability and configured lane backends")
     subparsers.add_parser("show-provider-substrate-status", help="Show provider substrate conflicts between configured and actual processor state")
     subparsers.add_parser("show-provider-contracts", help="Show processor provider API compatibility contracts")
+    subparsers.add_parser("show-mcp-upstream-status", help="Show configured upstream MCP stdio tool servers")
+    subparsers.add_parser("list-mcp-upstream-tools", help="Discover tools from enabled upstream MCP stdio servers")
+    mcp_call_parser = subparsers.add_parser("call-mcp-tool", help="Call one allowed upstream MCP tool as a bounded observation")
+    mcp_call_parser.add_argument("--tool", required=True, help="Qualified MCP tool name, e.g. server.tool")
+    mcp_call_parser.add_argument("--arguments-json", default="{}", help="JSON object passed as MCP tool arguments")
+    mcp_resource_parser = subparsers.add_parser("read-mcp-resource", help="Read one upstream MCP resource as a bounded observation")
+    mcp_resource_parser.add_argument("--server", required=True)
+    mcp_resource_parser.add_argument("--uri", required=True)
     subparsers.add_parser("show-visual-provider-readiness", help="Show bounded image-task provider readiness without live calls")
     subparsers.add_parser("show-debt-registry", help="Show classified offline and external technical debt")
     subparsers.add_parser("show-internal-runtime-readiness", help="Show internal DeepSeek runtime readiness without starting WeChat")
@@ -9786,6 +9866,14 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_provider_substrate_status(args.config)
     if args.command == "show-provider-contracts":
         return command_show_provider_contracts(args.config)
+    if args.command == "show-mcp-upstream-status":
+        return command_show_mcp_upstream_status(args.config)
+    if args.command == "list-mcp-upstream-tools":
+        return command_list_mcp_upstream_tools(args.config)
+    if args.command == "call-mcp-tool":
+        return command_call_mcp_tool(args.config, tool=args.tool, arguments_json=args.arguments_json)
+    if args.command == "read-mcp-resource":
+        return command_read_mcp_resource(args.config, server=args.server, uri=args.uri)
     if args.command == "show-visual-provider-readiness":
         return command_show_visual_provider_readiness(args.config)
     if args.command == "show-debt-registry":
