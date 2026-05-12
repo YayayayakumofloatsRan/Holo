@@ -167,6 +167,12 @@ Stage47: provider substrate conflict monitor
 - Live DeepSeek Stage46 calibration now preserves turn-level provider/model/usage metadata and fails self-audit when the verbal report contradicts or fails to confirm a real bound reminder commitment.
 - Keeps the signal diagnostic-only inside the processor fabric; no WeChat transport, watcher authority, self-memory mutation, or second decision layer is added.
 
+Stage48: biomimetic memory scheduler
+- Adds a scheduler that separates working memory, hippocampal indices, cortical schemas, salience gates, and diagnostic consolidation targets over the existing memory fabric.
+- Renders stable cortical schema into the provider-cache prefix while keeping working memory and hippocampal indices in dynamic prompt context.
+- Exposes memory schedule mode, stable/dynamic token counts, dynamic pressure, salience score, and recall budget in context scheduling and Stage46 debug evidence.
+- Does not add a new memory store, start WeChat transport, write self-memory, or move decision authority out of the WSL subject runtime.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

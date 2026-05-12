@@ -87,6 +87,7 @@ def plan_processor_context(
     model: str,
     current_session_id: str = "",
     history_messages: int = 0,
+    memory_schedule: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     window_class = context_window_class_for(lane_name=lane_name, model=model)
     max_tokens = CONTEXT_WINDOWS[window_class]
@@ -94,6 +95,10 @@ def plan_processor_context(
     pressure = float(token_estimate) / float(max_tokens) if max_tokens else 0.0
     stable, volatile = _split_stable_volatile_prompt(prompt)
     provider_cache_prefix, provider_cache_dynamic = _split_provider_cache_prefix(prompt)
+    schedule = dict(memory_schedule or {}) if isinstance(memory_schedule, dict) else {}
+    schedule_stable = "\n".join(str(line).strip() for line in schedule.get("provider_prefix_lines", []) if str(line).strip())
+    schedule_dynamic = "\n".join(str(line).strip() for line in schedule.get("dynamic_context_lines", []) if str(line).strip())
+    schedule_dynamic_tokens = estimate_tokens(schedule_dynamic)
     start_new_session = bool(current_session_id and pressure >= 0.72)
     reason = "context_pressure" if start_new_session else "reuse_session"
     max_history_messages = _history_limit(pressure=pressure, current=int(history_messages or 0))
@@ -111,4 +116,8 @@ def plan_processor_context(
         "provider_cache_prefix_digest": _digest(provider_cache_prefix),
         "provider_cache_prefix_tokens": estimate_tokens(provider_cache_prefix),
         "provider_cache_dynamic_tokens": estimate_tokens(provider_cache_dynamic),
+        "memory_schedule_mode": str(schedule.get("mode", "") or ""),
+        "memory_schedule_stable_tokens": estimate_tokens(schedule_stable),
+        "memory_schedule_dynamic_tokens": schedule_dynamic_tokens,
+        "memory_dynamic_pressure": round(float(schedule_dynamic_tokens) / float(max_tokens), 4) if max_tokens else 0.0,
     }

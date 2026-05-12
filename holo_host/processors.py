@@ -457,6 +457,38 @@ def _render_section(title: str, lines: list[str]) -> str:
     return f"{title}\n" + "\n".join(f"- {line}" for line in cleaned)
 
 
+def _bionic_memory_schedule(packet: dict[str, Any]) -> dict[str, Any]:
+    schedule = packet.get("bionic_memory_schedule", {})
+    return dict(schedule) if isinstance(schedule, dict) else {}
+
+
+def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]:
+    section = schedule.get(key, {})
+    if not isinstance(section, dict):
+        return []
+    return [compact_text(str(line).strip(), 220) for line in section.get(field, []) if str(line).strip()]
+
+
+def _schedule_provider_prefix_lines(schedule: dict[str, Any]) -> list[str]:
+    return [compact_text(str(line).strip(), 220) for line in schedule.get("provider_prefix_lines", []) if str(line).strip()]
+
+
+def _schedule_dynamic_lines(schedule: dict[str, Any]) -> list[str]:
+    return [compact_text(str(line).strip(), 220) for line in schedule.get("dynamic_context_lines", []) if str(line).strip()]
+
+
+def _schedule_salience_lines(schedule: dict[str, Any]) -> list[str]:
+    gate = schedule.get("salience_gate", {})
+    if not isinstance(gate, dict):
+        return []
+    sources = ", ".join(str(item).strip() for item in gate.get("sources", []) if str(item).strip()) or "baseline"
+    return [
+        f"score={round(float(gate.get('score', 0.0) or 0.0), 3)}",
+        f"sources={sources}",
+        f"recall_budget={int(gate.get('recall_budget', 0) or 0)}",
+    ]
+
+
 def _residual_fast_channel_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
     channel = packet.get("residual_fast_channel", {})
     if not isinstance(channel, dict) or not bool(channel.get("enabled", False)):
@@ -1088,6 +1120,18 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         "Identity Guard:",
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),
     )
+    memory_schedule = _bionic_memory_schedule(packet)
+    cortical_memory_block = _render_section("Cortical Memory Schema:", _schedule_provider_prefix_lines(memory_schedule))
+    working_memory_block = _render_section(
+        "Working Memory:",
+        _schedule_lines(memory_schedule, "working_memory", "dynamic_lines"),
+    )
+    hippocampal_index_block = _render_section(
+        "Hippocampal Index:",
+        _schedule_lines(memory_schedule, "hippocampal_index", "dynamic_lines"),
+    )
+    memory_salience_block = _render_section("Memory Salience Gate:", _schedule_salience_lines(memory_schedule))
+    memory_dynamic_block = _render_section("Bionic Memory Dynamic Context:", _schedule_dynamic_lines(memory_schedule))
     residual_fast_channel_block = _render_section(
         "Residual Fast Channel:",
         _residual_fast_channel_lines_for_prompt(packet),
@@ -1164,6 +1208,10 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         relationship_block,
         game_state_block,
         f"Current User Turn:\n{context.user_text}",
+        working_memory_block,
+        hippocampal_index_block,
+        memory_salience_block,
+        memory_dynamic_block,
         f"{history_label}\n{_history_block(context, turn_plan)}",
         episodic_block,
         vector_block,
@@ -1182,6 +1230,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         "你正在替 Holo 回复一条即时聊天消息。\n"
         "只输出最终要发送的聊天正文，不要编号，不要解释，不要提内部状态、记忆系统、线程续流或工具调用。\n"
         f"{STABLE_RESPONSE_CONTRACT}\n"
+        f"{cortical_memory_block}\n"
         f"聊天名：{context.chat_name}\n"
         f"发送者：{context.sender or context.chat_name}\n"
         f"线程键：{context.thread_key}\n"
@@ -1300,6 +1349,9 @@ class CodexCliProcessor:
             model=lane_model,
             current_session_id=session_id,
             history_messages=turn_plan.history_window,
+            memory_schedule=dict(context.mind_packet.get("bionic_memory_schedule", {}))
+            if isinstance(context.mind_packet.get("bionic_memory_schedule", {}), dict)
+            else {},
         )
         max_history = int(context_schedule.get("max_history_messages", turn_plan.history_window) or 0)
         if 0 <= max_history < int(turn_plan.history_window):
@@ -1319,6 +1371,9 @@ class CodexCliProcessor:
                 model=lane_model,
                 current_session_id=session_id,
                 history_messages=turn_plan.history_window,
+                memory_schedule=dict(context.mind_packet.get("bionic_memory_schedule", {}))
+                if isinstance(context.mind_packet.get("bionic_memory_schedule", {}), dict)
+                else {},
             )
         effective_session_id = str(context_schedule.get("effective_session_id", session_id) or "")
         started_at = time.perf_counter()
@@ -1382,6 +1437,9 @@ class CodexCliProcessor:
                 "prompt_excerpt": compact_text(prompt, 240),
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "residual_fast_channel": dict(context.mind_packet.get("residual_fast_channel", {})),
+                "bionic_memory_schedule": dict(context.mind_packet.get("bionic_memory_schedule", {}))
+                if isinstance(context.mind_packet.get("bionic_memory_schedule", {}), dict)
+                else {},
                 "prompt_partition": dict(result_metadata.get("prompt_partition", {}))
                 if isinstance(result_metadata.get("prompt_partition", {}), dict)
                 else {},

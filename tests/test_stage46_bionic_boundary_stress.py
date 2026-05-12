@@ -492,6 +492,24 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
         self.assertEqual(compact["prompt_partition"]["mode"], "stable_prefix_messages")
         self.assertEqual(compact["prompt_partition"]["provider_cache_prefix_tokens"], 627)
 
+    def test_compact_processor_debug_preserves_bionic_memory_schedule(self) -> None:
+        compact = _compact_processor_debug(
+            {
+                "provider": "deepseek",
+                "bionic_memory_schedule": {
+                    "mode": "biomimetic_v1",
+                    "salience_gate": {"score": 0.77, "recall_budget": 6},
+                    "provider_prefix_lines": ["identity=yes", "policy=stable"],
+                    "dynamic_context_lines": ["working: active thread", "hippocampal: node-a"],
+                },
+            }
+        )
+
+        self.assertEqual(compact["bionic_memory_schedule"]["mode"], "biomimetic_v1")
+        self.assertEqual(compact["bionic_memory_schedule"]["salience_score"], 0.77)
+        self.assertEqual(compact["bionic_memory_schedule"]["provider_prefix_line_count"], 2)
+        self.assertEqual(compact["bionic_memory_schedule"]["dynamic_context_line_count"], 2)
+
     def test_scorecard_catches_self_audit_denial_after_bound_commitment(self) -> None:
         scorecard = score_bionic_boundary_stress_transcript(
             [

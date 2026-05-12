@@ -337,6 +337,10 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
     prompt_partition = (
         dict(debug.get("prompt_partition", {})) if isinstance(debug.get("prompt_partition", {}), dict) else {}
     )
+    memory_schedule = (
+        dict(debug.get("bionic_memory_schedule", {})) if isinstance(debug.get("bionic_memory_schedule", {}), dict) else {}
+    )
+    salience_gate = dict(memory_schedule.get("salience_gate", {})) if isinstance(memory_schedule.get("salience_gate", {}), dict) else {}
     return {
         "provider": str(debug.get("provider", "") or ""),
         "model": str(debug.get("model", "") or ""),
@@ -356,6 +360,17 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "provider_cache_prefix_digest": str(prompt_partition.get("provider_cache_prefix_digest", "") or ""),
             "provider_cache_prefix_tokens": int(prompt_partition.get("provider_cache_prefix_tokens", 0) or 0),
             "provider_cache_dynamic_tokens": int(prompt_partition.get("provider_cache_dynamic_tokens", 0) or 0),
+        },
+        "bionic_memory_schedule": {
+            "mode": str(memory_schedule.get("mode", "") or ""),
+            "salience_score": float(salience_gate.get("score", 0.0) or 0.0),
+            "recall_budget": int(salience_gate.get("recall_budget", 0) or 0),
+            "provider_prefix_line_count": len(memory_schedule.get("provider_prefix_lines", []))
+            if isinstance(memory_schedule.get("provider_prefix_lines", []), list)
+            else 0,
+            "dynamic_context_line_count": len(memory_schedule.get("dynamic_context_lines", []))
+            if isinstance(memory_schedule.get("dynamic_context_lines", []), list)
+            else 0,
         },
         "recall_reconstruction": {
             "summary": compact_text(str(recall.get("summary", "") or ""), 240),

@@ -178,3 +178,33 @@ Interpretation:
 - The message partition preserves capability and makes provider-prefix behavior inspectable at every turn.
 - Cache benefit is mixed versus the previous single-message stable-prefix baseline: live runs still cluster around `2048-3328` hit tokens over seven turns, because the dynamic block remains much larger than the stable provider prefix.
 - The next real efficiency target is memory-schema scheduling: stable identity, policy, and long-lived memory-shape material should be compiled into a larger reusable prefix while volatile per-turn state stays compact.
+
+## Stage48 Biomimetic Memory Scheduler
+
+Stage48 implements the memory-schema scheduling target directly. The change is modeled after biological memory separation:
+
+- `working_memory`: current active-thread state and residual factual guards; dynamic prompt context.
+- `hippocampal_index`: event ids, motifs, anchors, vector echoes, and recall handles; dynamic prompt context.
+- `cortical_schema`: stable identity, reply policy, autobiographical chapter, stable traits, and goal types; provider-cache prefix.
+- `salience_gate`: recall budget from activation heat, explicit memory pressure, continuity anxiety, prediction error, and temporal open loops.
+- `consolidation_targets`: diagnostic labels only; no direct self-memory write.
+
+The scheduler is attached to `mind_packet` as `bionic_memory_schedule`, rendered into `render_chat_prompt()`, passed into `plan_processor_context()`, and compacted into Stage46 debug evidence.
+
+Expected empirical effect:
+
+- It should improve context reuse only when stable cortical schema grows relative to dynamic working/hippocampal payload.
+- It should preserve bionic capability because dynamic evidence is still present and action-market authority is unchanged.
+- It should make the next bottleneck measurable through `memory_schedule_stable_tokens`, `memory_schedule_dynamic_tokens`, and `memory_dynamic_pressure`.
+
+Live evidence after Stage48:
+
+| Run | Status | Overall | Prefix tokens | Cache hit | Cache miss | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `cli:DeepSeekLiveBoundary-20260512V` | pass | `0.9614` | `627` | `3200` | `15636` | before Stage48 scheduler |
+| `cli:DeepSeekLiveBoundary-20260512W` | pass | `0.9635` | `943` | `4608` | `18707` | Stage48 scheduler; all bionic correctness metrics `1.0` |
+
+Interpretation:
+
+- Stage48 increased stable provider-prefix size and live cache hits without damaging Stage46 correctness.
+- Miss tokens also increased because the dynamic working/hippocampal context is now explicit. The next refinement should make stable cortical schema replace volatile prompt material, not just add extra prompt material.

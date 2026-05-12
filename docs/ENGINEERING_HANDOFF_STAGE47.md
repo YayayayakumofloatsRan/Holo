@@ -141,3 +141,15 @@ Fresh verification:
 Important finding:
 
 - Message partitioning is capability-safe and inspectable, but the cache gain is not clearly better than the previous stable-prefix baseline. The remaining miss pressure is structural: the volatile dynamic payload is still much larger than the stable prefix. The next repair should compile more long-lived identity/policy/memory-schema material into a reusable prefix and schedule volatile memory more aggressively by model context window.
+
+## Stage48 Follow-Up
+
+Stage48 implements that next repair as a biomimetic memory scheduler over the existing memory fabric. See `docs/ENGINEERING_HANDOFF_STAGE48.md`.
+
+The key change is not another store. It separates:
+
+- stable `cortical_schema` into the provider-cache prefix
+- volatile `working_memory` and `hippocampal_index` into dynamic prompt context
+- `salience_gate` and `consolidation_targets` into diagnostic scheduling evidence
+
+The scheduler remains WSL-side, does not start WeChat, does not mutate self-memory, and does not add a second decision layer.
