@@ -8366,6 +8366,87 @@ def command_render_consciousness_longform_lab(
     return 0
 
 
+def command_run_bionic_simulation_lab(
+    config_path: str | None,
+    *,
+    suite: str,
+    limit: int,
+    scenarios: int,
+    turns: int,
+    output: str | None,
+) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .bionic_simulation_lab import (
+        build_bionic_simulation_lab,
+        write_bionic_simulation_lab_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        if hasattr(store, "list_agent_eval_runs"):
+            rows = store.list_agent_eval_runs(
+                stage=STAGE46_NAME,
+                suite=suite or DEFAULT_STAGE46_SUITE,
+                limit=limit,
+            )
+        else:
+            latest = store.latest_agent_eval_run(
+                stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE
+            )
+            rows = [latest] if latest else []
+    finally:
+        store.close()
+    seed_runs = [
+        dict(row.get("run", {}))
+        for row in reversed(rows or [])
+        if isinstance(row, dict) and isinstance(row.get("run", {}), dict)
+    ]
+    lab = build_bionic_simulation_lab(
+        seed_runs,
+        scenarios=scenarios,
+        turns_per_scenario=turns,
+    )
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = config.runtime.repo_root / "artifacts" / "stage61" / "bionic_simulation_lab.html"
+    written = write_bionic_simulation_lab_artifacts(lab, output_path)
+    simulation_set = dict(lab.get("simulation_set", {})) if isinstance(lab.get("simulation_set", {}), dict) else {}
+    telemetry = dict(lab.get("internal_telemetry", {})) if isinstance(lab.get("internal_telemetry", {}), dict) else {}
+    evidence = dict(lab.get("evidence_gate", {})) if isinstance(lab.get("evidence_gate", {}), dict) else {}
+    print(
+        json.dumps(
+            {
+                "ok": bool(lab.get("ok", False)),
+                "stage": lab.get("stage", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "simulation_png_path": str(written["simulation_png"]),
+                "turn_journal_path": str(written["turn_journal"]),
+                "observatory": {
+                    "scenario_count": simulation_set.get("scenario_count", 0),
+                    "turns_per_scenario": simulation_set.get("turns_per_scenario", 0),
+                    "total_simulated_turns": simulation_set.get("total_simulated_turns", 0),
+                    "observed_total_tokens": telemetry.get("observed_total_tokens", 0),
+                    "prompt_cache_hit_ratio": telemetry.get("prompt_cache_hit_ratio", 0),
+                    "average_latency_ms": telemetry.get("average_latency_ms", 0),
+                    "phase_entropy": telemetry.get("phase_entropy", 0),
+                    "improvement_count": len(lab.get("improvement_backlog", []) or []),
+                    "surrogate_only": bool(evidence.get("surrogate_only", True)),
+                    "do_not_claim_real_manifold": bool(
+                        evidence.get("do_not_claim_real_manifold", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(lab.get("ok", False)) else 1
+
+
 def command_run_consciousness_provider_trace(
     config_path: str | None,
     *,
@@ -9884,6 +9965,15 @@ def main(argv: list[str] | None = None) -> int:
     consciousness_longform_parser.add_argument("--limit", type=int, default=8)
     consciousness_longform_parser.add_argument("--turns", type=int, default=420)
     consciousness_longform_parser.add_argument("--output", default=None)
+    bionic_simulation_lab_parser = subparsers.add_parser(
+        "run-bionic-simulation-lab",
+        help="Run the Stage61 high-throughput surrogate bionic interaction lab",
+    )
+    bionic_simulation_lab_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    bionic_simulation_lab_parser.add_argument("--limit", type=int, default=8)
+    bionic_simulation_lab_parser.add_argument("--scenarios", type=int, default=7)
+    bionic_simulation_lab_parser.add_argument("--turns", type=int, default=180)
+    bionic_simulation_lab_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -10454,6 +10544,15 @@ def main(argv: list[str] | None = None) -> int:
             args.config,
             suite=args.suite,
             limit=args.limit,
+            turns=args.turns,
+            output=args.output,
+        )
+    if args.command == "run-bionic-simulation-lab":
+        return command_run_bionic_simulation_lab(
+            args.config,
+            suite=args.suite,
+            limit=args.limit,
+            scenarios=args.scenarios,
             turns=args.turns,
             output=args.output,
         )

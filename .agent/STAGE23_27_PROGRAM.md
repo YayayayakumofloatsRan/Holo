@@ -180,6 +180,12 @@
   - Stage60 does not start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
   - The current strict DeepSeek shadow smoke compared `deepseek-v4-flash` and `deepseek-v4-pro`, collected `2` real provider turns, `observed_total_tokens=5128`, `real_provider_cell_count=2`, aggregate prompt-cache hit ratio `0.252117`, and `do_not_claim_major_breakthrough=true`
   - `python -m pytest -q tests\test_stage60_trace_campaign.py` passed with `4` tests
+- Stage61 alignment state on `2026-05-13`:
+  - Stage61 adds an observational high-throughput surrogate bionic simulation lab for internal telemetry and improvement prioritization
+  - `run-bionic-simulation-lab` generates Stage46-compatible simulated interaction traces, writes HTML/JSON/PNG and per-turn JSONL, captures token/cache/latency/memory/consciousness-flow/tool/grounding telemetry, feeds Stage57 calibration, and emits non-auto-applied improvement backlog items
+  - Stage61 does not call providers, start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
+  - The current local simulation generated `9` scenarios, `2160` turns, `observed_total_tokens=5896580`, `prompt_cache_hit_ratio=0.203306`, `phase_entropy=0.999992`, `improvement_count=5`, and `do_not_claim_real_manifold=true`
+  - `python -m pytest -q tests\test_stage61_bionic_simulation_lab.py` passed with `3` tests
 
 ## Cross-Stage Constraints
 - Preserve `memory-is-self`, `processor-replaceable`, and `transport-eyes-hands`.

@@ -41,6 +41,7 @@
 - Stage58 is implemented as a long-form geometry lab: recent Stage46 seeds can generate bounded Stage46-compatible surrogate long traces with perturbation labels, feed them through Stage57 calibration, and export artifacts while keeping real-manifold claims blocked until real provider long-form evidence exists.
 - Stage59 is implemented as a provider long-form trace runner: `run-consciousness-provider-trace` can dry-run or execute strict provider long-form simulations through Holo's subject runtime, defaults execute mode to shadow state, writes HTML/JSON/PNG plus JSONL journals, supports resume, and feeds collected real provider traces into Stage57 calibration.
 - Stage60 is implemented as a recoverable long-run provider trace campaign orchestrator: `run-consciousness-trace-campaign` can dry-run or execute multi-model Stage59 cells, defaults executed cells to shadow state, writes campaign HTML/JSON/PNG plus manifest/events, supports per-cell resume, aggregates token/cache/provider provenance, ranks models, and blocks major-breakthrough claims until replicated real-provider trace depth and Stage57 gates pass.
+- Stage61 is implemented as a high-throughput bionic simulation lab: `run-bionic-simulation-lab` generates Stage46-compatible surrogate interaction traces, captures internal token/cache/latency/memory/consciousness-flow/tool/grounding telemetry, writes HTML/JSON/PNG plus per-turn JSONL, feeds Stage57 calibration, and emits non-auto-applied improvement backlog items.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -84,7 +85,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is a budget-approved Stage60 long campaign: keep provider calls inside processor fabric, make token/model budgets explicit, preserve provider provenance, keep WeChat-offline unless live transport validation is explicitly approved, and let Stage57/60 gates determine whether any geometry claim is allowed.
+- The next implementation focus is using Stage61's backlog to improve cache inheritance under context pressure, then re-running Stage61 for telemetry deltas and confirming with a budget-approved Stage60 real-provider campaign.
 - Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
 - Post-Stage39 provider-response caching is implemented in the processor fabric: `responses`, `openai_compatible`, and `deepseek` can reuse exact stateless text API responses through QueueStore, while `codex_cli`, image tasks, memory-writeback tasks, and shadow-write/operator tasks bypass the cache.
 - Verified post-Stage39 provider-response cache repair on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
@@ -145,13 +146,13 @@
 ## Active Program Index
 - `Stage23-27 bootstrap program`: `.agent/STAGE23_27_PROGRAM.md`
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
-- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE60.md`
+- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE61.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: budget-approved Stage60 long provider trace campaign in shadow state, then Stage57/60 geometry gate review
-- `Current live runtime boundary`: Stage60 is implemented as an observational provider campaign orchestrator over Stage59/Holo's subject runtime; executed cells default to shadow state, no live transport, transport authority change, live self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, unbounded loop, or second decision layer was added
-- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage60 handoff in `docs/ENGINEERING_HANDOFF_STAGE60.md`
+- `Active implementation priority`: Stage61 backlog-driven cache inheritance improvement, then Stage61 telemetry delta and Stage60 real-provider confirmation
+- `Current live runtime boundary`: Stage61 is implemented as an observational surrogate simulation lab; no provider call, live transport, transport authority change, live self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, unbounded loop, or second decision layer was added
+- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage61 handoff in `docs/ENGINEERING_HANDOFF_STAGE61.md`
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.

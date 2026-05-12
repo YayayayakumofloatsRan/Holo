@@ -247,6 +247,13 @@ Stage60: long-run provider trace campaign
 - Reports the current evidence conservatively: a strict DeepSeek shadow smoke compared `deepseek-v4-flash` and `deepseek-v4-pro` for one turn each, collected `2` real provider turns and `5128` observed tokens, and kept `do_not_claim_major_breakthrough=true`.
 - Keeps all changes observational: no WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage61: bionic simulation lab
+- Adds a high-throughput surrogate bionic interaction lab for internal telemetry collection and improvement prioritization.
+- Generates Stage46-compatible simulated runs, feeds them through Stage57 calibration, and writes HTML/JSON/PNG plus a per-turn JSONL journal.
+- Aggregates token/cache/latency/memory-schedule/prompt-partition/consciousness-flow/tool/grounding telemetry and emits non-auto-applied improvement backlog items.
+- Reports the current evidence conservatively: `9` scenarios with `240` turns each produced `2160` simulated turns, `5896580` simulated internal tokens, cache hit ratio `0.203306`, and `5` backlog items; `do_not_claim_real_manifold=true`.
+- Keeps all changes observational and surrogate-only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
