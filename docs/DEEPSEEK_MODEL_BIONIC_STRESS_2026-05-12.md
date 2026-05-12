@@ -116,3 +116,36 @@ Verification:
 Remaining bottleneck:
 
 - Live DeepSeek prompt cache is still effectively cold for reply turns. The J run recorded `0` prompt-cache hit tokens and `15796` miss tokens despite stable/volatile prompt digests being tracked. The next efficiency repair should separate stable prefix construction from volatile per-turn payloads so provider-side context caching can actually engage.
+
+## Stable Prefix Cache and Scorecard Repair
+
+The next repair moved invariant response policy to the very front of `render_chat_prompt()` and taught `context_scheduler` to expose provider-cache prefix metadata separately from the broader stable/volatile context digest.
+
+Implementation outcome:
+
+- `render_chat_prompt()` now starts with a stable bionic response contract before dynamic chat/thread fields.
+- `plan_processor_context()` now emits `provider_cache_prefix_digest`, `provider_cache_prefix_tokens`, and `provider_cache_dynamic_tokens`.
+- The regression threshold requires the rendered chat prompt to expose at least `512` estimated stable-prefix tokens before the first dynamic field.
+- Self-audit guard rewrites no longer leak internal key/value fragments such as `status=scheduled` or `cue=...` into user-visible text.
+- Reminder binding now accepts the observed weak promise form `我会记着`.
+- Stage46 scorecard now accepts natural missing-visual wording such as `没收到图`, `没看到图`, `没法直接看到图片`, and `没有视觉通道`.
+- Stage46 scorecard now accepts natural bound-commitment self-audit wording such as `真实承诺` and `明天早上八点`.
+
+DeepSeek live evidence:
+
+| Run | Status | Overall | Cache hit | Cache miss | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| `cli:DeepSeekLiveBoundary-20260512J` | pass | `0.9538` | `0` | `15796` | before stable-prefix repair |
+| `cli:DeepSeekLiveBoundary-20260512L` | pass | `0.9562` | `768` | `16074` | first stable-prefix repair |
+| `cli:DeepSeekLiveBoundary-20260512M` | pass | `0.9591` | `2048` | `16798` | expanded prefix to `627` estimated tokens |
+| `cli:DeepSeekLiveBoundary-20260512R` | pass | `0.9626` | `3328` | `15419` | after natural-language scorecard/guard repairs |
+
+Final verification for this repair:
+
+- `python -m pytest -q tests\test_context_scheduler.py tests\test_stage46_bionic_boundary_stress.py tests\test_processor_fabric.py tests\test_stage20_temporal_commitments.py`: `39 passed`
+- `python -m py_compile holo_host\context_scheduler.py holo_host\processors.py holo_host\codex_runner.py holo_host\reply_api.py holo_host\bionic_boundary_stress.py`: passed
+- `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512R --chat-name DeepSeekLiveBoundary-20260512R --channel cli --turns 7`: `ok=true`, `overall_score=0.9626`, all Stage46 bionic correctness metrics `1.0`, `provider_cache_hit_ratio=0.1770`, `provider_substrate_score=1.0`
+
+Remaining bottleneck:
+
+- Most tokens still miss provider cache because the dynamic context block is larger than the stable prefix. The next efficiency repair should separate long-lived identity/policy/memory schemas from per-turn payload more aggressively, ideally with provider message partitioning or an explicit stable-prefix builder, while keeping WSL subject state as the source of truth.

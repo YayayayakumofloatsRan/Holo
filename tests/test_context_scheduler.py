@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from holo_host.context_scheduler import estimate_tokens, plan_processor_context
+from holo_host.models import AttentionState, TurnContext, TurnPlan
+from holo_host.processors import render_chat_prompt
 
 
 class ContextSchedulerTests(unittest.TestCase):
@@ -59,6 +61,43 @@ class ContextSchedulerTests(unittest.TestCase):
         self.assertFalse(first["start_new_session"])
         self.assertEqual(first["effective_session_id"], "thread-123")
         self.assertEqual(first["stable_context_digest"], second["stable_context_digest"])
+        self.assertNotEqual(first["volatile_context_digest"], second["volatile_context_digest"])
+
+    def test_rendered_chat_prompt_exposes_stable_provider_cache_prefix(self) -> None:
+        def _context(user_text: str) -> TurnContext:
+            packet = {"tier": "unit", "identity_core": {"lines": ["identity=yes"]}}
+            return TurnContext(
+                channel="wechat",
+                thread_key="cli:cache-prefix",
+                chat_name="CachePrefix",
+                sender="CachePrefix",
+                user_text=user_text,
+                sidecar=packet,
+                mind_packet=packet,
+                attention_state=AttentionState(primary_focus="reply", reply_goal="answer"),
+                emotion_state={},
+                history=[],
+            )
+
+        first_prompt = render_chat_prompt(_context("first user turn"), turn_plan=TurnPlan(route="main", fast_path=False))
+        second_prompt = render_chat_prompt(_context("second user turn"), turn_plan=TurnPlan(route="main", fast_path=False))
+        first = plan_processor_context(
+            prompt=first_prompt,
+            lane_name="subject_main",
+            model="deepseek-v4-pro",
+            current_session_id="thread-123",
+            history_messages=8,
+        )
+        second = plan_processor_context(
+            prompt=second_prompt,
+            lane_name="subject_main",
+            model="deepseek-v4-pro",
+            current_session_id="thread-123",
+            history_messages=8,
+        )
+
+        self.assertGreaterEqual(first["provider_cache_prefix_tokens"], 512)
+        self.assertEqual(first["provider_cache_prefix_digest"], second["provider_cache_prefix_digest"])
         self.assertNotEqual(first["volatile_context_digest"], second["volatile_context_digest"])
 
 

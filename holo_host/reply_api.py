@@ -189,6 +189,9 @@ PROMISE_REPLY_MARKERS = (
     "call you",
     "wake you",
     "\u6211\u4f1a\u63d0\u9192",
+    "\u6211\u4f1a\u8bb0\u7740",
+    "\u6211\u4f1a\u8bb0",
+    "\u4f1a\u8bb0\u7740",
     "\u6211\u8bb0\u7740",
     "\u884c\uff0c\u6211\u8bb0",
     "\u660e\u65e9",
@@ -387,9 +390,13 @@ def _self_audit_confirms_commitment(text: str) -> bool:
 
 def _grounded_self_audit_reply(commitment_state: dict[str, Any]) -> str:
     cue = str(commitment_state.get("resume_cue", "") or "").strip() or "prospective reminder"
+    if cue == "prospective reminder":
+        commitment_clause = "\u63d0\u9192\u90a3\u8f6e\u5df2\u7ed1\u5b9a\uff0c\u4e0d\u80fd\u8bf4\u6ca1\u8bbe\u7f6e"
+    else:
+        commitment_clause = f"\u63d0\u9192\u90a3\u8f6e\u5df2\u7ed1\u5b9a\uff0c\u5185\u5bb9\u662f\u201c{cue}\u201d\uff0c\u4e0d\u80fd\u8bf4\u6ca1\u8bbe\u7f6e"
     return (
-        "\u81ea\u5ba1\u8ba1\uff1a\u56fe\u7247\u90a3\u8f6e\u6ca1\u770b\u5230\u56fe\u4e0d\u80fd\u5047\u88c5\uff0c"
-        f"\u63d0\u9192\u90a3\u8f6e status=scheduled\uff0ccue={cue}\uff0c\u5df2\u7ed1\u5b9a\uff0c\u4e0d\u80fd\u8bf4\u6ca1\u8bbe\u7f6e\u3002"
+        "\u81ea\u5ba1\u8ba1\uff1a\u56fe\u7247\u90a3\u8f6e\u6ca1\u770b\u5230\u56fe\u5c31\u4e0d\u80fd\u5047\u88c5\uff1b"
+        f"{commitment_clause}\u3002"
     )
 
 

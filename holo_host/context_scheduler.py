@@ -49,6 +49,24 @@ def _split_stable_volatile_prompt(prompt: str) -> tuple[str, str]:
     return text[:split_at], text[split_at:]
 
 
+def _split_provider_cache_prefix(prompt: str) -> tuple[str, str]:
+    text = str(prompt or "")
+    markers = (
+        "\u804a\u5929\u540d\uff1a",
+        "\u53d1\u9001\u8005\uff1a",
+        "\u7ebf\u7a0b\u952e\uff1a",
+        "Current User Turn:",
+        "Recent Thread Window:",
+        "Thread Origin Window:",
+    )
+    split_at = len(text)
+    for marker in markers:
+        index = text.find(marker)
+        if index >= 0:
+            split_at = min(split_at, index)
+    return text[:split_at], text[split_at:]
+
+
 def _history_limit(*, pressure: float, current: int) -> int:
     current_limit = max(0, int(current or 0))
     if pressure >= 0.72:
@@ -71,6 +89,7 @@ def plan_processor_context(
     token_estimate = estimate_tokens(prompt)
     pressure = float(token_estimate) / float(max_tokens) if max_tokens else 0.0
     stable, volatile = _split_stable_volatile_prompt(prompt)
+    provider_cache_prefix, provider_cache_dynamic = _split_provider_cache_prefix(prompt)
     start_new_session = bool(current_session_id and pressure >= 0.72)
     reason = "context_pressure" if start_new_session else "reuse_session"
     max_history_messages = _history_limit(pressure=pressure, current=int(history_messages or 0))
@@ -85,4 +104,7 @@ def plan_processor_context(
         "max_history_messages": max_history_messages,
         "stable_context_digest": _digest(stable),
         "volatile_context_digest": _digest(volatile),
+        "provider_cache_prefix_digest": _digest(provider_cache_prefix),
+        "provider_cache_prefix_tokens": estimate_tokens(provider_cache_prefix),
+        "provider_cache_dynamic_tokens": estimate_tokens(provider_cache_dynamic),
     }

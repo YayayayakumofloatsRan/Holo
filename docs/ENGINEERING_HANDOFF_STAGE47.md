@@ -95,4 +95,25 @@ Key outcome:
 - Residual fast channel repair added WSL-side introspective commitment/visual facts to reply prompts and post-generation guards.
 - Live Stage46 run `cli:DeepSeekLiveBoundary-20260512J` passed with `overall_score=0.9538`, `provider_substrate_score=1.0`, `commitment_binding_score=1.0`, `perceptual_grounding_score=1.0`, and `self_audit_score=1.0`.
 
-Next repair: provider-aware stable-prefix reuse and memory scheduling. The J run still recorded `0` prompt-cache hit tokens and `15796` miss tokens, so the next efficiency target is prompt/context layout rather than biomimetic correctness.
+## Stable Prefix Cache Repair - 2026-05-12
+
+The stable-prefix repair keeps the single-provider call path but moves invariant response policy ahead of volatile chat/thread fields so DeepSeek prefix caching can engage.
+
+Changes:
+
+- `render_chat_prompt()` adds a stable bionic response contract before `chat_name`, `sender`, `thread_key`, and current turn fields.
+- `plan_processor_context()` now reports `provider_cache_prefix_digest`, `provider_cache_prefix_tokens`, and `provider_cache_dynamic_tokens`.
+- The cache-prefix regression requires at least `512` estimated stable-prefix tokens and stable digest equality across different user turns.
+- Stage46 scorecard and grounding guard were hardened for natural-language variants found during live testing:
+  - weak reminder promises such as `我会记着`
+  - missing-visual wording such as `没收到图`, `没看到图`, and `没法直接看到图片`
+  - natural bound-commitment self-audit such as `真实承诺`
+  - no user-visible `status=scheduled` / `cue=...` leakage in guard rewrite text
+
+Fresh verification:
+
+- `python -m pytest -q tests\test_context_scheduler.py tests\test_stage46_bionic_boundary_stress.py tests\test_processor_fabric.py tests\test_stage20_temporal_commitments.py`: `39 passed`
+- `python -m py_compile holo_host\context_scheduler.py holo_host\processors.py holo_host\codex_runner.py holo_host\reply_api.py holo_host\bionic_boundary_stress.py`: passed
+- `python -m holo_host run-bionic-boundary-stress --thread-key cli:DeepSeekLiveBoundary-20260512R --chat-name DeepSeekLiveBoundary-20260512R --channel cli --turns 7`: `ok=true`, `overall_score=0.9626`, all bionic correctness metrics `1.0`, `provider_cache_hit_tokens=3328`, `prompt_cache_miss_tokens=15419`
+
+Next repair: dynamic context is still too large relative to the cacheable prefix. Continue toward provider-aware message partitioning and memory-schema scheduling instead of simply growing the prompt.
