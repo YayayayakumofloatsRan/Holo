@@ -8447,6 +8447,102 @@ def command_run_bionic_simulation_lab(
     return 0 if bool(lab.get("ok", False)) else 1
 
 
+def command_evaluate_bionic_capability_observatory(
+    config_path: str | None,
+    *,
+    suite: str,
+    limit: int,
+    scenarios: int,
+    turns: int,
+    output: str | None,
+) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .bionic_capability_observatory import (
+        build_bionic_capability_observatory,
+        write_bionic_capability_observatory_artifacts,
+    )
+    from .bionic_simulation_lab import build_bionic_simulation_lab
+
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        if hasattr(store, "list_agent_eval_runs"):
+            rows = store.list_agent_eval_runs(
+                stage=STAGE46_NAME,
+                suite=suite or DEFAULT_STAGE46_SUITE,
+                limit=limit,
+            )
+        else:
+            latest = store.latest_agent_eval_run(
+                stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE
+            )
+            rows = [latest] if latest else []
+    finally:
+        store.close()
+    seed_runs = [
+        dict(row.get("run", {}))
+        for row in reversed(rows or [])
+        if isinstance(row, dict) and isinstance(row.get("run", {}), dict)
+    ]
+    lab = build_bionic_simulation_lab(
+        seed_runs,
+        scenarios=scenarios,
+        turns_per_scenario=turns,
+    )
+    report = build_bionic_capability_observatory(lab)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage62"
+            / "bionic_capability_observatory.html"
+        )
+    written = write_bionic_capability_observatory_artifacts(report, output_path)
+    scorecard = (
+        dict(report.get("capability_scorecard", {}))
+        if isinstance(report.get("capability_scorecard", {}), dict)
+        else {}
+    )
+    reverse = (
+        dict(report.get("reverse_engineering", {}))
+        if isinstance(report.get("reverse_engineering", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "capability_png_path": str(written["capability_png"]),
+                "observatory": {
+                    "scenario_count": scorecard.get("scenario_count", 0),
+                    "turn_count": scorecard.get("turn_count", 0),
+                    "aggregate_score": scorecard.get("aggregate_score", 0),
+                    "bottleneck_count": len(reverse.get("ranked_bottlenecks", []) or []),
+                    "intervention_count": len(report.get("intervention_plan", []) or []),
+                    "surrogate_only": bool(evidence.get("surrogate_only", True)),
+                    "do_not_claim_real_manifold": bool(
+                        evidence.get("do_not_claim_real_manifold", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def command_run_consciousness_provider_trace(
     config_path: str | None,
     *,
@@ -9974,6 +10070,15 @@ def main(argv: list[str] | None = None) -> int:
     bionic_simulation_lab_parser.add_argument("--scenarios", type=int, default=7)
     bionic_simulation_lab_parser.add_argument("--turns", type=int, default=180)
     bionic_simulation_lab_parser.add_argument("--output", default=None)
+    bionic_capability_observatory_parser = subparsers.add_parser(
+        "evaluate-bionic-capability-observatory",
+        help="Evaluate Stage62 bionic capability and explainability from Stage61 surrogate telemetry",
+    )
+    bionic_capability_observatory_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    bionic_capability_observatory_parser.add_argument("--limit", type=int, default=8)
+    bionic_capability_observatory_parser.add_argument("--scenarios", type=int, default=7)
+    bionic_capability_observatory_parser.add_argument("--turns", type=int, default=180)
+    bionic_capability_observatory_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -10549,6 +10654,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "run-bionic-simulation-lab":
         return command_run_bionic_simulation_lab(
+            args.config,
+            suite=args.suite,
+            limit=args.limit,
+            scenarios=args.scenarios,
+            turns=args.turns,
+            output=args.output,
+        )
+    if args.command == "evaluate-bionic-capability-observatory":
+        return command_evaluate_bionic_capability_observatory(
             args.config,
             suite=args.suite,
             limit=args.limit,

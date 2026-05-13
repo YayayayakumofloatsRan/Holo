@@ -254,6 +254,12 @@ Stage61: bionic simulation lab
 - Reports the current evidence conservatively: `9` scenarios with `240` turns each produced `2160` simulated turns, `5896580` simulated internal tokens, cache hit ratio `0.203306`, and `5` backlog items; `do_not_claim_real_manifold=true`.
 - Keeps all changes observational and surrogate-only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage62: bionic capability observatory
+- Adds a capability and explainability observatory over Stage61 surrogate interaction telemetry.
+- Converts Stage61 telemetry into capability scorecards, forward scenario-to-signal explanation chains, reverse-engineered bottleneck rankings, validation-bound intervention targets, and HTML/JSON/PNG artifacts.
+- Reports the current evidence conservatively: `9` scenarios and `2160` simulated turns produced `aggregate_score=0.579427`, `9` ranked bottlenecks, and `8` non-auto-applied interventions; the top bottleneck is `cache_inheritance_low`; `do_not_claim_real_manifold=true`.
+- Keeps all changes observational and surrogate-only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
