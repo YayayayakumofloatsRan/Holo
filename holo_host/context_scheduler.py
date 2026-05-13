@@ -110,6 +110,11 @@ def plan_processor_context(
         if isinstance(schedule.get("residual_working_channel", {}), dict)
         else {}
     )
+    tool_scheduler = (
+        dict(schedule.get("tool_observation_scheduler", {}))
+        if isinstance(schedule.get("tool_observation_scheduler", {}), dict)
+        else {}
+    )
     schedule_stable = "\n".join(str(line).strip() for line in schedule.get("provider_prefix_lines", []) if str(line).strip())
     prompt_dynamic_lines = (
         schedule.get("prompt_dynamic_lines", [])
@@ -195,6 +200,33 @@ def plan_processor_context(
         "residual_channel_protected_line_dropped": bool(
             schedule.get("residual_channel_protected_line_dropped", False)
             or residual_channel.get("protected_line_dropped", False)
+        ),
+        "tool_observation_scheduler_mode": str(
+            schedule.get("tool_observation_scheduler_mode", "")
+            or tool_scheduler.get("mode", "")
+            or ""
+        ),
+        "tool_observation_needed": bool(
+            schedule.get("tool_observation_needed", False)
+            or tool_scheduler.get("needed", False)
+        ),
+        "tool_observation_requested_tool_count": int(
+            schedule.get("tool_observation_requested_tool_count", 0)
+            or tool_scheduler.get("requested_tool_count", 0)
+            or 0
+        ),
+        "tool_observation_budget": int(
+            schedule.get("tool_observation_budget", 0)
+            or tool_scheduler.get("observation_budget", 0)
+            or 0
+        ),
+        "tool_observation_runtime_decision_authority": bool(
+            schedule.get("tool_observation_runtime_decision_authority", False)
+            or tool_scheduler.get("runtime_decision_authority", False)
+        ),
+        "tool_observation_transport_decision_authority": bool(
+            schedule.get("tool_observation_transport_decision_authority", False)
+            or tool_scheduler.get("transport_decision_authority", False)
         ),
         "memory_schedule_mode": str(schedule.get("mode", "") or ""),
         "memory_schedule_stable_tokens": estimate_tokens(schedule_stable),

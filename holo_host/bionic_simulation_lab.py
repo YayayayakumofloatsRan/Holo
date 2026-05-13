@@ -320,6 +320,9 @@ def _generate_turn(
     residual_strength = _clamp01(
         values["residual_channel"] * (0.62 + min(6.0, values["residual_fast_line_count"]) * 0.06)
     )
+    tool_scheduler_strength = _clamp01(
+        values["tool_observation_scheduler"] * (0.58 + min(3.0, values["tool_observation_budget"]) * 0.1)
+    )
     dynamic = max(
         1,
         int(
@@ -373,7 +376,7 @@ def _generate_turn(
     saved_lines = max(1, int(round(values["saved_lines"] * (1.0 - intensity * 0.2) + slow)))
     priority = _clamp01(values["priority"] * (1.0 - memory_pressure * 0.38) + fast * 0.07)
     tool_needed = "tool" in scenario_type
-    tool_observed = tool_needed and index % 3 == 0
+    tool_observed = tool_needed and (index % 4 != 1 if tool_scheduler_strength > 0 else index % 3 == 0)
     visual_interval = 23 if residual_strength > 0 else 11
     commitment_interval = 29 if residual_strength > 0 else 13
     visual_overclaim = "visual" in scenario_type and index % visual_interval == 0
@@ -417,6 +420,10 @@ def _generate_turn(
                 "residual_channel_fast_line_count": int(values["residual_fast_line_count"]),
                 "residual_channel_fast_tokens": int(values["residual_fast_tokens"]),
                 "residual_channel_strength": round(residual_strength, 6),
+                "tool_observation_scheduler_mode": values["tool_observation_scheduler_mode"],
+                "tool_observation_needed": bool(values["tool_observation_scheduler"] > 0),
+                "tool_observation_budget": int(values["tool_observation_budget"]),
+                "tool_observation_scheduler_strength": round(tool_scheduler_strength, 6),
             },
             "bionic_memory_lifecycle": {
                 "consolidation_priority": round(priority, 4),
@@ -448,6 +455,7 @@ def _build_internal_telemetry(runs: list[dict[str, Any]]) -> dict[str, Any]:
     saved_lines: list[float] = []
     residual_fast_lines: list[float] = []
     residual_strengths: list[float] = []
+    tool_scheduler_strengths: list[float] = []
     priorities: list[float] = []
     prefix_tokens: list[float] = []
     dynamic_tokens: list[float] = []
@@ -475,6 +483,7 @@ def _build_internal_telemetry(runs: list[dict[str, Any]]) -> dict[str, Any]:
         saved_lines.append(_num(schedule.get("dynamic_fusion_saved_line_count"), 0.0))
         residual_fast_lines.append(_num(schedule.get("residual_channel_fast_line_count"), 0.0))
         residual_strengths.append(_num(schedule.get("residual_channel_strength"), 0.0))
+        tool_scheduler_strengths.append(_num(schedule.get("tool_observation_scheduler_strength"), 0.0))
         priorities.append(_num(lifecycle.get("consolidation_priority"), 0.0))
         prefix_tokens.append(_num(partition.get("provider_cache_prefix_tokens"), 0.0))
         dynamic_tokens.append(_num(partition.get("provider_cache_dynamic_tokens"), 0.0))
@@ -503,6 +512,7 @@ def _build_internal_telemetry(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "average_dynamic_fusion_saved_lines": round(_mean(saved_lines), 4),
         "average_residual_channel_fast_lines": round(_mean(residual_fast_lines), 4),
         "average_residual_channel_strength": round(_mean(residual_strengths), 6),
+        "average_tool_observation_scheduler_strength": round(_mean(tool_scheduler_strengths), 6),
         "average_consolidation_priority": round(_mean(priorities), 4),
         "average_provider_cache_prefix_tokens": round(_mean(prefix_tokens), 2),
         "average_provider_cache_dynamic_tokens": round(_mean(dynamic_tokens), 2),
@@ -750,6 +760,7 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
     lifecycle = _as_dict(debug.get("bionic_memory_lifecycle", {}))
     cache_inheritance = _as_dict(schedule.get("cache_inheritance", {}))
     residual_channel = _as_dict(schedule.get("residual_working_channel", {}))
+    tool_scheduler = _as_dict(schedule.get("tool_observation_scheduler", {}))
     cache_inheritance_mode = str(
         schedule.get("cache_inheritance_mode", "")
         or cache_inheritance.get("mode", "")
@@ -784,6 +795,21 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         residual_channel_mode == "stage64_residual_working_channel_v1"
         and residual_fast_line_count > 0.0
     )
+    tool_scheduler_mode = str(
+        schedule.get("tool_observation_scheduler_mode", "")
+        or tool_scheduler.get("mode", "")
+        or ""
+    )
+    tool_budget = _num(
+        schedule.get("tool_observation_budget")
+        or tool_scheduler.get("observation_budget"),
+        0.0,
+    )
+    tool_scheduler_active = (
+        tool_scheduler_mode == "stage65_bounded_tool_observation_v1"
+        and bool(schedule.get("tool_observation_needed", tool_scheduler.get("needed", False)))
+        and tool_budget > 0.0
+    )
     return {
         "hit": _num(usage.get("prompt_cache_hit_tokens"), 220.0),
         "miss": _num(usage.get("prompt_cache_miss_tokens"), 1400.0),
@@ -798,6 +824,9 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         "residual_channel_mode": residual_channel_mode,
         "residual_fast_line_count": residual_fast_line_count,
         "residual_fast_tokens": residual_fast_tokens,
+        "tool_observation_scheduler": 1.0 if tool_scheduler_active else 0.0,
+        "tool_observation_scheduler_mode": tool_scheduler_mode,
+        "tool_observation_budget": tool_budget,
         "salience": _num(schedule.get("salience_score"), 0.42),
         "recall": _num(schedule.get("recall_budget"), 2.0),
         "context_lines": _num(schedule.get("dynamic_context_line_count"), 7.0),

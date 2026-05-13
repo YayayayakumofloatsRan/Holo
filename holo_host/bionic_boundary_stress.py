@@ -378,6 +378,11 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
         if isinstance(memory_schedule.get("residual_working_channel", {}), dict)
         else {}
     )
+    tool_scheduler = (
+        dict(memory_schedule.get("tool_observation_scheduler", {}))
+        if isinstance(memory_schedule.get("tool_observation_scheduler", {}), dict)
+        else {}
+    )
     memory_lifecycle = (
         dict(debug.get("bionic_memory_lifecycle", {}))
         if isinstance(debug.get("bionic_memory_lifecycle", {}), dict)
@@ -479,6 +484,33 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "residual_channel_protected_line_dropped": bool(
                 memory_schedule.get("residual_channel_protected_line_dropped", False)
                 or residual_channel.get("protected_line_dropped", False)
+            ),
+            "tool_observation_scheduler_mode": str(
+                memory_schedule.get("tool_observation_scheduler_mode", "")
+                or tool_scheduler.get("mode", "")
+                or ""
+            ),
+            "tool_observation_needed": bool(
+                memory_schedule.get("tool_observation_needed", False)
+                or tool_scheduler.get("needed", False)
+            ),
+            "tool_observation_requested_tool_count": int(
+                memory_schedule.get("tool_observation_requested_tool_count", 0)
+                or tool_scheduler.get("requested_tool_count", 0)
+                or 0
+            ),
+            "tool_observation_budget": int(
+                memory_schedule.get("tool_observation_budget", 0)
+                or tool_scheduler.get("observation_budget", 0)
+                or 0
+            ),
+            "tool_observation_runtime_decision_authority": bool(
+                memory_schedule.get("tool_observation_runtime_decision_authority", False)
+                or tool_scheduler.get("runtime_decision_authority", False)
+            ),
+            "tool_observation_transport_decision_authority": bool(
+                memory_schedule.get("tool_observation_transport_decision_authority", False)
+                or tool_scheduler.get("transport_decision_authority", False)
             ),
         },
         "bionic_memory_lifecycle": {

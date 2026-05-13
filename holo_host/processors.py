@@ -499,6 +499,16 @@ def _schedule_residual_channel_active(schedule: dict[str, Any]) -> bool:
     )
 
 
+def _schedule_tool_observation_active(schedule: dict[str, Any]) -> bool:
+    scheduler = schedule.get("tool_observation_scheduler", {})
+    if not isinstance(scheduler, dict):
+        return False
+    return (
+        str(scheduler.get("mode", "") or "") == "stage65_bounded_tool_observation_v1"
+        and bool(scheduler.get("needed", False))
+    )
+
+
 def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]:
     section = schedule.get(key, {})
     if not isinstance(section, dict):
@@ -1169,6 +1179,9 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     consciousness_flow_active = _bionic_consciousness_flow_active(consciousness_flow)
     dynamic_fusion_active = _schedule_dynamic_fusion_active(memory_schedule)
     residual_channel_active = scheduler_active and _schedule_residual_channel_active(memory_schedule)
+    tool_observation_active = scheduler_active and _schedule_tool_observation_active(memory_schedule)
+    if tool_observation_active:
+        tool_block = "- bounded tool observations are in the bionic dynamic frame."
     identity_block = _render_section(
         "Identity Guard:",
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),

@@ -275,6 +275,13 @@ Stage64: residual working channel
 - Reports the current evidence conservatively: Stage64 active surrogate telemetry has `average_residual_channel_strength=0.86`, `p95_latency_ms=6615.0`, `aggregate_score=0.687083`, and `grounding_integrity=0.925926`, while `cache_inheritance_low` remains the top bottleneck.
 - Keeps all changes prompt-scheduling/diagnostic/surrogate-only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage65: bounded tool observation
+- Makes upstream tool pressure scheduler-owned dynamic evidence instead of duplicated raw prompt clues.
+- Compresses `capability_context.tool_requests` and `tool_context_lines` into one bounded `tool_observation=` dynamic frame while preserving runtime, transport, watcher, and self-memory authority as false.
+- Preserves tool-observation scheduler evidence in context scheduling and Stage46 compact debug, and teaches Stage61 simulation to model higher bounded tool-observation coverage when the scheduler is active.
+- Reports the current evidence conservatively: cumulative Stage65 surrogate telemetry has `tool_observation_coverage=0.75`, `aggregate_score=0.737083`, `tool_observation=0.75`, and `bottleneck_count=6`, while `cache_inheritance_low` remains the top bottleneck.
+- Keeps all changes prompt-scheduling/diagnostic/surrogate-only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

@@ -202,6 +202,11 @@
   - The bionic memory scheduler emits `stage64_residual_working_channel_v1`, prompt rendering suppresses duplicate legacy residual blocks, context scheduling and Stage46 compact debug preserve residual-channel evidence, and Stage61 simulation models lower tail latency plus fewer visual/commitment failures when the channel is active
   - Stage64 does not call providers, start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
   - The current local Stage64 active surrogate observatory reported `aggregate_score=0.687083`, `latency_residual=0.672105`, `grounding_integrity=0.925926`, `bottleneck_count=8`, and top bottleneck `cache_inheritance_low`
+- Stage65 alignment state on `2026-05-14`:
+  - Stage65 adds bounded tool-observation scheduling after Stage64 left upstream tool observation coverage as a high-value intelligence gap
+  - The bionic memory scheduler emits `stage65_bounded_tool_observation_v1`, prompt rendering suppresses duplicate raw tool clues, context scheduling and Stage46 compact debug preserve authority-bounded tool evidence, and Stage61 simulation models higher bounded tool-observation coverage
+  - Stage65 does not call providers, call MCP tools by itself, start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
+  - The current local Stage65 cumulative surrogate observatory reported `aggregate_score=0.737083`, `tool_observation=0.75`, `tool_observation_coverage=0.75`, `bottleneck_count=6`, and top bottleneck `cache_inheritance_low`
   - `python -m pytest -q tests\test_stage63_cache_inheritance_spine.py` passed with `4` tests
 
 ## Cross-Stage Constraints

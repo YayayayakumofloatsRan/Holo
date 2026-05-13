@@ -7,6 +7,7 @@ from .common import compact_text
 
 CACHE_INHERITANCE_MODE = "stage63_cortical_cache_spine_v1"
 RESIDUAL_WORKING_CHANNEL_MODE = "stage64_residual_working_channel_v1"
+TOOL_OBSERVATION_MODE = "stage65_bounded_tool_observation_v1"
 
 PROTECTED_DYNAMIC_LABELS = (
     "active_summary",
@@ -16,6 +17,7 @@ PROTECTED_DYNAMIC_LABELS = (
     "reconstruction_summary",
     "anchor",
     "residual_fast",
+    "tool_observation",
 )
 
 MEMORY_REQUEST_MARKERS = (
@@ -169,6 +171,64 @@ def _residual_fast_lines(packet: dict[str, Any]) -> list[str]:
         if _text(line, 180)
     ]
     return _unique(lines, limit=8)
+
+
+def _tool_observation_scheduler(packet: dict[str, Any]) -> dict[str, Any]:
+    capability = _dict(packet.get("capability_context"))
+    tool_requests = [
+        _dict(item)
+        for item in _list(capability.get("tool_requests"))
+        if isinstance(item, dict)
+    ]
+    context_lines = [
+        _text(line, 160)
+        for line in _list(capability.get("tool_context_lines"))
+        if _text(line, 160)
+    ]
+    request_names = _unique(
+        [
+            _text(item.get("name"), 80)
+            for item in tool_requests
+            if _text(item.get("name"), 80)
+        ],
+        limit=6,
+    )
+    needed = bool(tool_requests or context_lines)
+    observation_budget = min(3, max(1, len(tool_requests) or len(context_lines))) if needed else 0
+    return {
+        "mode": TOOL_OBSERVATION_MODE,
+        "needed": needed,
+        "requested_tool_count": len(tool_requests),
+        "context_line_count": len(context_lines),
+        "request_names": request_names,
+        "observation_budget": observation_budget,
+        "observation_lines": _unique(context_lines, limit=2),
+        "bounded_observation_only": True,
+        "runtime_decision_authority": False,
+        "transport_decision_authority": False,
+        "self_memory_write": False,
+        "watcher_decision_authority": False,
+        "render_policy": "scheduler_owned_dynamic_frame",
+    }
+
+
+def _tool_observation_lines(scheduler: dict[str, Any]) -> list[str]:
+    if not bool(scheduler.get("needed", False)):
+        return []
+    names = ",".join(_text(item, 60) for item in _list(scheduler.get("request_names")) if _text(item, 60)) or "none"
+    contexts = " | ".join(
+        _text(line, 100)
+        for line in _list(scheduler.get("observation_lines"))[:1]
+        if _text(line, 100)
+    )
+    line = (
+        f"tool_observation=requests={names}; "
+        f"budget={int(scheduler.get('observation_budget', 0) or 0)}; "
+        "bounded_observation_only=true"
+    )
+    if contexts:
+        line += f"; context={contexts}"
+    return [line]
 
 
 def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
@@ -387,6 +447,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
     raw_working = _working_memory_lines(source)
     raw_hippocampal = _hippocampal_index_lines(source)
     salience = _salience_gate(source, query=query)
+    tool_scheduler = _tool_observation_scheduler(source)
     cache_spine = _cache_inheritance_spine_lines(source, cortical=cortical, salience=salience)
     provider_prefix = _unique([*cortical, *cache_spine], limit=24)
     working_budget = int(salience.get("working_memory_budget", 4) or 4)
@@ -401,6 +462,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         [
             *[f"working: {line}" for line in working],
             *[f"hippocampal: {line}" for line in hippocampal],
+            *_tool_observation_lines(tool_scheduler),
             f"salience_score={salience['score']}; sources={','.join(salience['sources']) or 'baseline'}",
         ],
         limit=18,
@@ -452,6 +514,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         "consolidation_targets": consolidation,
         "dynamic_compression_audit": audit,
         "residual_working_channel": residual_channel,
+        "tool_observation_scheduler": tool_scheduler,
         "cache_inheritance": cache_inheritance,
         "provider_prefix_lines": provider_prefix,
         "prompt_dynamic_lines": prompt_dynamic,
