@@ -489,6 +489,16 @@ def _schedule_dynamic_fusion_active(schedule: dict[str, Any]) -> bool:
     return isinstance(fusion, dict) and str(fusion.get("mode", "") or "") == "scheduler_owned_stage52_v1"
 
 
+def _schedule_residual_channel_active(schedule: dict[str, Any]) -> bool:
+    channel = schedule.get("residual_working_channel", {})
+    if not isinstance(channel, dict):
+        return False
+    return (
+        str(channel.get("mode", "") or "") == "stage64_residual_working_channel_v1"
+        and int(channel.get("fast_line_count", 0) or 0) > 0
+    )
+
+
 def _schedule_lines(schedule: dict[str, Any], key: str, field: str) -> list[str]:
     section = schedule.get(key, {})
     if not isinstance(section, dict):
@@ -1158,6 +1168,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     consciousness_flow = _bionic_consciousness_flow(packet)
     consciousness_flow_active = _bionic_consciousness_flow_active(consciousness_flow)
     dynamic_fusion_active = _schedule_dynamic_fusion_active(memory_schedule)
+    residual_channel_active = scheduler_active and _schedule_residual_channel_active(memory_schedule)
     identity_block = _render_section(
         "Identity Guard:",
         list(packet.get("identity_core", {}).get("lines", [])) or list(packet.get("voice_guard", [])),
@@ -1202,7 +1213,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     residual_fast_channel_block = _render_section(
         "Residual Fast Channel:",
         _residual_fast_channel_lines_for_prompt(packet),
-    )
+    ) if not residual_channel_active else ""
     relationship_lines = _relationship_lines_for_prompt(packet)
     persona_block = _render_section("Persona Blend:", _persona_blend_lines_for_prompt(packet))
     brain_state_block = _render_section("Brain State:", _brain_state_lines_for_prompt(packet))

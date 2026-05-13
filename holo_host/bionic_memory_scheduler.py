@@ -6,6 +6,7 @@ from .common import compact_text
 
 
 CACHE_INHERITANCE_MODE = "stage63_cortical_cache_spine_v1"
+RESIDUAL_WORKING_CHANNEL_MODE = "stage64_residual_working_channel_v1"
 
 PROTECTED_DYNAMIC_LABELS = (
     "active_summary",
@@ -14,6 +15,7 @@ PROTECTED_DYNAMIC_LABELS = (
     "temporal_resume_cue",
     "reconstruction_summary",
     "anchor",
+    "residual_fast",
 )
 
 MEMORY_REQUEST_MARKERS = (
@@ -157,16 +159,29 @@ def _cache_inheritance_spine_lines(
     return _unique(lines, limit=10)
 
 
+def _residual_fast_lines(packet: dict[str, Any]) -> list[str]:
+    channel = _dict(packet.get("residual_fast_channel"))
+    if not bool(channel.get("enabled", False)):
+        return []
+    lines = [
+        f"residual_fast={_text(line, 180)}"
+        for line in _list(channel.get("lines"))[:8]
+        if _text(line, 180)
+    ]
+    return _unique(lines, limit=8)
+
+
 def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
     active = _dict(packet.get("active_thread_state"))
     stage20 = _dict(packet.get("stage20"))
     stage24 = _dict(packet.get("stage24"))
     stage25 = _dict(packet.get("stage25"))
-    residual = _dict(packet.get("residual_fast_channel"))
     selected = _dict(packet.get("selected_action"))
+    residual_lines = _residual_fast_lines(packet)
     lines = [
         *_field_line("active_summary", active.get("summary") or active.get("continuity_summary"), limit=180),
         *_field_line("latest_user_intent", active.get("latest_user_intent"), limit=140),
+        *residual_lines,
         *_field_line("selected_action", selected.get("action_type"), limit=80),
         *_field_line("temporal_resume_cue", stage20.get("resume_cue"), limit=140),
         *_field_line("scene_response_sketch", stage24.get("response_sketch"), limit=140),
@@ -174,8 +189,6 @@ def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
         *_field_line("memory_route", packet.get("memory_route"), limit=60),
         *_field_line("tier", packet.get("tier"), limit=60),
     ]
-    for line in _list(residual.get("lines"))[:4]:
-        lines.append(f"residual={_text(line, 180)}")
     return _unique(lines, limit=12)
 
 
@@ -340,6 +353,34 @@ def _compression_audit(
     }
 
 
+def _residual_working_channel_audit(
+    *,
+    packet: dict[str, Any],
+    raw_working: list[str],
+    selected_working: list[str],
+    prompt_dynamic_lines: list[str],
+) -> dict[str, Any]:
+    source_lines = _residual_fast_lines(packet)
+    selected = [line for line in selected_working if _line_label(line) == "residual_fast"]
+    dropped = [line for line in source_lines if line not in selected]
+    prompt_count = sum(1 for line in prompt_dynamic_lines if "residual_fast=" in line)
+    return {
+        "mode": RESIDUAL_WORKING_CHANNEL_MODE,
+        "source_enabled": bool(_dict(packet.get("residual_fast_channel")).get("enabled", False)),
+        "raw_line_count": len(source_lines),
+        "fast_line_count": len(source_lines),
+        "selected_fast_line_count": len(selected),
+        "prompt_line_count": prompt_count,
+        "fast_tokens": _estimate_tokens("\n".join(source_lines)),
+        "protected_line_dropped": bool(dropped),
+        "dropped_fast_line_count": len(dropped),
+        "render_policy": "scheduler_owned_dynamic_frame",
+        "self_memory_write": False,
+        "runtime_decision_authority": False,
+        "transport_decision_authority": False,
+    }
+
+
 def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> dict[str, Any]:
     source = dict(packet or {})
     cortical = _cortical_schema_lines(source)
@@ -350,6 +391,9 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
     provider_prefix = _unique([*cortical, *cache_spine], limit=24)
     working_budget = int(salience.get("working_memory_budget", 4) or 4)
     hippocampal_budget = int(salience.get("hippocampal_budget", 2) or 2)
+    residual_line_count = len(_residual_fast_lines(source))
+    if residual_line_count:
+        working_budget = max(working_budget, min(8, 2 + residual_line_count))
     working = raw_working[:working_budget]
     hippocampal = raw_hippocampal[:hippocampal_budget]
     consolidation = _consolidation_targets(source, salience=salience)
@@ -368,6 +412,12 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         selected_hippocampal=hippocampal,
         prompt_dynamic_lines=prompt_dynamic,
         salience=salience,
+    )
+    residual_channel = _residual_working_channel_audit(
+        packet=source,
+        raw_working=raw_working,
+        selected_working=working,
+        prompt_dynamic_lines=prompt_dynamic,
     )
     stable_tokens = _estimate_tokens("\n".join(provider_prefix))
     dynamic_tokens = _estimate_tokens("\n".join(prompt_dynamic))
@@ -401,6 +451,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         "salience_gate": salience,
         "consolidation_targets": consolidation,
         "dynamic_compression_audit": audit,
+        "residual_working_channel": residual_channel,
         "cache_inheritance": cache_inheritance,
         "provider_prefix_lines": provider_prefix,
         "prompt_dynamic_lines": prompt_dynamic,

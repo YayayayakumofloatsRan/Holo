@@ -197,6 +197,11 @@
   - The bionic memory scheduler emits `stage63_cortical_cache_spine_v1`, context scheduling and Stage46 compact debug preserve cache-inheritance evidence, and Stage61 simulation uses prefix/dynamic evidence to model cache-inheritance gain
   - Stage63 does not call providers, start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
   - The current local Stage62 latest-seed observatory reported `aggregate_score=0.659837`, `cache_inheritance=0.370993`, `latency_residual=0.578316`, `bottleneck_count=8`, and `do_not_claim_real_manifold=true`
+- Stage64 alignment state on `2026-05-14`:
+  - Stage64 adds a scheduler-owned residual working channel after Stage63 left dynamic prompt churn and boundary-pressure intelligence as the next safe targets
+  - The bionic memory scheduler emits `stage64_residual_working_channel_v1`, prompt rendering suppresses duplicate legacy residual blocks, context scheduling and Stage46 compact debug preserve residual-channel evidence, and Stage61 simulation models lower tail latency plus fewer visual/commitment failures when the channel is active
+  - Stage64 does not call providers, start WeChat, mutate live self-memory by default, mutate policy, add runtime decision authority, expose Holo as a downstream MCP server, add a second decision layer, or add an unbounded loop
+  - The current local Stage64 active surrogate observatory reported `aggregate_score=0.687083`, `latency_residual=0.672105`, `grounding_integrity=0.925926`, `bottleneck_count=8`, and top bottleneck `cache_inheritance_low`
   - `python -m pytest -q tests\test_stage63_cache_inheritance_spine.py` passed with `4` tests
 
 ## Cross-Stage Constraints

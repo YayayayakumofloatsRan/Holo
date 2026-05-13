@@ -105,6 +105,11 @@ def plan_processor_context(
         if isinstance(schedule.get("cache_inheritance", {}), dict)
         else {}
     )
+    residual_channel = (
+        dict(schedule.get("residual_working_channel", {}))
+        if isinstance(schedule.get("residual_working_channel", {}), dict)
+        else {}
+    )
     schedule_stable = "\n".join(str(line).strip() for line in schedule.get("provider_prefix_lines", []) if str(line).strip())
     prompt_dynamic_lines = (
         schedule.get("prompt_dynamic_lines", [])
@@ -172,6 +177,25 @@ def plan_processor_context(
             or provider_cache_dynamic_tokens
         ),
         "cache_spine_line_count": int(cache_inheritance.get("cache_spine_line_count", 0) or 0),
+        "residual_channel_mode": str(
+            schedule.get("residual_channel_mode", "")
+            or residual_channel.get("mode", "")
+            or ""
+        ),
+        "residual_channel_fast_line_count": int(
+            schedule.get("residual_channel_fast_line_count", 0)
+            or residual_channel.get("fast_line_count", 0)
+            or 0
+        ),
+        "residual_channel_fast_tokens": int(
+            schedule.get("residual_channel_fast_tokens", 0)
+            or residual_channel.get("fast_tokens", 0)
+            or 0
+        ),
+        "residual_channel_protected_line_dropped": bool(
+            schedule.get("residual_channel_protected_line_dropped", False)
+            or residual_channel.get("protected_line_dropped", False)
+        ),
         "memory_schedule_mode": str(schedule.get("mode", "") or ""),
         "memory_schedule_stable_tokens": estimate_tokens(schedule_stable),
         "memory_schedule_dynamic_tokens": schedule_dynamic_tokens,

@@ -267,6 +267,14 @@ Stage63: cache inheritance spine
 - Reports the current evidence conservatively: latest-seed Stage61 has `average_provider_cache_prefix_tokens=1202.54`, `prompt_cache_hit_ratio=0.204046`, and `improvement_count=4`; latest-seed Stage62 has `aggregate_score=0.659837`, `cache_inheritance=0.370993`, and `bottleneck_count=8`, but `cache_inheritance_low` remains the top bottleneck.
 - Keeps all changes prompt-scheduling/diagnostic only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage64: residual working channel
+- Makes the residual fast channel scheduler-owned dynamic working memory instead of a separate duplicate prompt block.
+- Prioritizes corrected symbols, visual availability, promise state, and risk flags over route/tier metadata under low-salience budgets.
+- Preserves residual-channel mode, fast-line counts, token estimates, and protected-drop status in context scheduling and Stage46 compact debug.
+- Teaches Stage61 simulation to model lower tail latency, stronger salience/recall, and fewer visual/commitment boundary failures when the residual channel is active.
+- Reports the current evidence conservatively: Stage64 active surrogate telemetry has `average_residual_channel_strength=0.86`, `p95_latency_ms=6615.0`, `aggregate_score=0.687083`, and `grounding_integrity=0.925926`, while `cache_inheritance_low` remains the top bottleneck.
+- Keeps all changes prompt-scheduling/diagnostic/surrogate-only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

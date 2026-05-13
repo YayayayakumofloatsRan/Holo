@@ -373,6 +373,11 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
         if isinstance(memory_schedule.get("cache_inheritance", {}), dict)
         else {}
     )
+    residual_channel = (
+        dict(memory_schedule.get("residual_working_channel", {}))
+        if isinstance(memory_schedule.get("residual_working_channel", {}), dict)
+        else {}
+    )
     memory_lifecycle = (
         dict(debug.get("bionic_memory_lifecycle", {}))
         if isinstance(debug.get("bionic_memory_lifecycle", {}), dict)
@@ -456,6 +461,25 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "cache_inheritance_stable_tokens": int(cache_inheritance.get("estimated_stable_prefix_tokens", 0) or 0),
             "cache_inheritance_dynamic_tokens": int(cache_inheritance.get("estimated_dynamic_tokens", 0) or 0),
             "cache_inheritance_prefix_share": float(cache_inheritance.get("prefix_share", 0.0) or 0.0),
+            "residual_channel_mode": str(
+                memory_schedule.get("residual_channel_mode", "")
+                or residual_channel.get("mode", "")
+                or ""
+            ),
+            "residual_channel_fast_line_count": int(
+                memory_schedule.get("residual_channel_fast_line_count", 0)
+                or residual_channel.get("fast_line_count", 0)
+                or 0
+            ),
+            "residual_channel_fast_tokens": int(
+                memory_schedule.get("residual_channel_fast_tokens", 0)
+                or residual_channel.get("fast_tokens", 0)
+                or 0
+            ),
+            "residual_channel_protected_line_dropped": bool(
+                memory_schedule.get("residual_channel_protected_line_dropped", False)
+                or residual_channel.get("protected_line_dropped", False)
+            ),
         },
         "bionic_memory_lifecycle": {
             "mode": str(memory_lifecycle.get("mode", "") or ""),
