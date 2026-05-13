@@ -383,6 +383,11 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
         if isinstance(memory_schedule.get("tool_observation_scheduler", {}), dict)
         else {}
     )
+    dynamic_delta = (
+        dict(memory_schedule.get("dynamic_delta_frame", {}))
+        if isinstance(memory_schedule.get("dynamic_delta_frame", {}), dict)
+        else {}
+    )
     memory_lifecycle = (
         dict(debug.get("bionic_memory_lifecycle", {}))
         if isinstance(debug.get("bionic_memory_lifecycle", {}), dict)
@@ -511,6 +516,33 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "tool_observation_transport_decision_authority": bool(
                 memory_schedule.get("tool_observation_transport_decision_authority", False)
                 or tool_scheduler.get("transport_decision_authority", False)
+            ),
+            "dynamic_delta_frame_mode": str(
+                memory_schedule.get("dynamic_delta_frame_mode", "")
+                or dynamic_delta.get("mode", "")
+                or ""
+            ),
+            "dynamic_delta_compressed_handle_count": int(
+                memory_schedule.get("dynamic_delta_compressed_handle_count", 0)
+                or dynamic_delta.get("compressed_handle_count", 0)
+                or 0
+            ),
+            "dynamic_delta_saved_tokens": int(
+                memory_schedule.get("dynamic_delta_saved_tokens", 0)
+                or dynamic_delta.get("estimated_saved_tokens", 0)
+                or 0
+            ),
+            "dynamic_delta_protected_line_dropped": bool(
+                memory_schedule.get("dynamic_delta_protected_line_dropped", False)
+                or dynamic_delta.get("protected_line_dropped", False)
+            ),
+            "dynamic_delta_runtime_decision_authority": bool(
+                memory_schedule.get("dynamic_delta_runtime_decision_authority", False)
+                or dynamic_delta.get("runtime_decision_authority", False)
+            ),
+            "dynamic_delta_transport_decision_authority": bool(
+                memory_schedule.get("dynamic_delta_transport_decision_authority", False)
+                or dynamic_delta.get("transport_decision_authority", False)
             ),
         },
         "bionic_memory_lifecycle": {

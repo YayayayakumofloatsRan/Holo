@@ -115,6 +115,11 @@ def plan_processor_context(
         if isinstance(schedule.get("tool_observation_scheduler", {}), dict)
         else {}
     )
+    dynamic_delta = (
+        dict(schedule.get("dynamic_delta_frame", {}))
+        if isinstance(schedule.get("dynamic_delta_frame", {}), dict)
+        else {}
+    )
     schedule_stable = "\n".join(str(line).strip() for line in schedule.get("provider_prefix_lines", []) if str(line).strip())
     prompt_dynamic_lines = (
         schedule.get("prompt_dynamic_lines", [])
@@ -227,6 +232,33 @@ def plan_processor_context(
         "tool_observation_transport_decision_authority": bool(
             schedule.get("tool_observation_transport_decision_authority", False)
             or tool_scheduler.get("transport_decision_authority", False)
+        ),
+        "dynamic_delta_frame_mode": str(
+            schedule.get("dynamic_delta_frame_mode", "")
+            or dynamic_delta.get("mode", "")
+            or ""
+        ),
+        "dynamic_delta_saved_tokens": int(
+            schedule.get("dynamic_delta_saved_tokens", 0)
+            or dynamic_delta.get("estimated_saved_tokens", 0)
+            or 0
+        ),
+        "dynamic_delta_compressed_handle_count": int(
+            schedule.get("dynamic_delta_compressed_handle_count", 0)
+            or dynamic_delta.get("compressed_handle_count", 0)
+            or 0
+        ),
+        "dynamic_delta_protected_line_dropped": bool(
+            schedule.get("dynamic_delta_protected_line_dropped", False)
+            or dynamic_delta.get("protected_line_dropped", False)
+        ),
+        "dynamic_delta_runtime_decision_authority": bool(
+            schedule.get("dynamic_delta_runtime_decision_authority", False)
+            or dynamic_delta.get("runtime_decision_authority", False)
+        ),
+        "dynamic_delta_transport_decision_authority": bool(
+            schedule.get("dynamic_delta_transport_decision_authority", False)
+            or dynamic_delta.get("transport_decision_authority", False)
         ),
         "memory_schedule_mode": str(schedule.get("mode", "") or ""),
         "memory_schedule_stable_tokens": estimate_tokens(schedule_stable),

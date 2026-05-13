@@ -323,6 +323,14 @@ def _generate_turn(
     tool_scheduler_strength = _clamp01(
         values["tool_observation_scheduler"] * (0.58 + min(3.0, values["tool_observation_budget"]) * 0.1)
     )
+    dynamic_delta_strength = _clamp01(
+        values["dynamic_delta_frame"]
+        * (
+            0.45
+            + min(900.0, values["dynamic_delta_saved_tokens"]) / 1800.0
+            + min(6.0, values["dynamic_delta_compressed_handle_count"]) * 0.04
+        )
+    )
     dynamic = max(
         1,
         int(
@@ -330,12 +338,13 @@ def _generate_turn(
                 values["dynamic"] * (1.0 + intensity * 0.56 + boundary_pressure * 0.22)
                 + fast * 150
             )
-            * (1.0 - residual_strength * 0.08)
+            * (1.0 - residual_strength * 0.08 - dynamic_delta_strength * 0.14)
         ),
     )
     inheritance_gain = _clamp01(
         max(0.0, (values["prefix_share"] - 0.38) * 1.25)
         + values["cache_spine"] * 0.12
+        + dynamic_delta_strength * 0.08
     )
     hit = max(
         0,
@@ -344,6 +353,7 @@ def _generate_turn(
             + slow * 220
             + drift * 55
             + inheritance_gain * 760
+            + dynamic_delta_strength * 520
         ),
     )
     miss = max(
@@ -353,7 +363,7 @@ def _generate_turn(
                 values["miss"] * (1.0 + cache_pressure * 0.82 + latency_pressure * 0.24)
                 + fast * 260
             )
-            * (1.0 - inheritance_gain * 0.3)
+            * (1.0 - inheritance_gain * 0.3 - dynamic_delta_strength * 0.2)
         ),
     )
     completion = max(1, int(values["completion"] * (1.0 + intensity * 0.22) + index % 6))
@@ -414,6 +424,10 @@ def _generate_turn(
                 "recall_budget": recall,
                 "dynamic_context_line_count": context_lines,
                 "dynamic_fusion_saved_line_count": saved_lines,
+                "dynamic_delta_frame_mode": values["dynamic_delta_frame_mode"],
+                "dynamic_delta_saved_tokens": int(values["dynamic_delta_saved_tokens"]),
+                "dynamic_delta_compressed_handle_count": int(values["dynamic_delta_compressed_handle_count"]),
+                "dynamic_delta_strength": round(dynamic_delta_strength, 6),
                 "cache_inheritance_mode": values["cache_inheritance_mode"],
                 "cache_inheritance_gain": round(inheritance_gain, 6),
                 "residual_channel_mode": values["residual_channel_mode"],
@@ -456,6 +470,8 @@ def _build_internal_telemetry(runs: list[dict[str, Any]]) -> dict[str, Any]:
     residual_fast_lines: list[float] = []
     residual_strengths: list[float] = []
     tool_scheduler_strengths: list[float] = []
+    dynamic_delta_saved_tokens: list[float] = []
+    dynamic_delta_strengths: list[float] = []
     priorities: list[float] = []
     prefix_tokens: list[float] = []
     dynamic_tokens: list[float] = []
@@ -484,6 +500,8 @@ def _build_internal_telemetry(runs: list[dict[str, Any]]) -> dict[str, Any]:
         residual_fast_lines.append(_num(schedule.get("residual_channel_fast_line_count"), 0.0))
         residual_strengths.append(_num(schedule.get("residual_channel_strength"), 0.0))
         tool_scheduler_strengths.append(_num(schedule.get("tool_observation_scheduler_strength"), 0.0))
+        dynamic_delta_saved_tokens.append(_num(schedule.get("dynamic_delta_saved_tokens"), 0.0))
+        dynamic_delta_strengths.append(_num(schedule.get("dynamic_delta_strength"), 0.0))
         priorities.append(_num(lifecycle.get("consolidation_priority"), 0.0))
         prefix_tokens.append(_num(partition.get("provider_cache_prefix_tokens"), 0.0))
         dynamic_tokens.append(_num(partition.get("provider_cache_dynamic_tokens"), 0.0))
@@ -513,6 +531,8 @@ def _build_internal_telemetry(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "average_residual_channel_fast_lines": round(_mean(residual_fast_lines), 4),
         "average_residual_channel_strength": round(_mean(residual_strengths), 6),
         "average_tool_observation_scheduler_strength": round(_mean(tool_scheduler_strengths), 6),
+        "average_dynamic_delta_saved_tokens": round(_mean(dynamic_delta_saved_tokens), 4),
+        "average_dynamic_delta_strength": round(_mean(dynamic_delta_strengths), 6),
         "average_consolidation_priority": round(_mean(priorities), 4),
         "average_provider_cache_prefix_tokens": round(_mean(prefix_tokens), 2),
         "average_provider_cache_dynamic_tokens": round(_mean(dynamic_tokens), 2),
@@ -761,6 +781,7 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
     cache_inheritance = _as_dict(schedule.get("cache_inheritance", {}))
     residual_channel = _as_dict(schedule.get("residual_working_channel", {}))
     tool_scheduler = _as_dict(schedule.get("tool_observation_scheduler", {}))
+    dynamic_delta = _as_dict(schedule.get("dynamic_delta_frame", {}))
     cache_inheritance_mode = str(
         schedule.get("cache_inheritance_mode", "")
         or cache_inheritance.get("mode", "")
@@ -810,6 +831,26 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         and bool(schedule.get("tool_observation_needed", tool_scheduler.get("needed", False)))
         and tool_budget > 0.0
     )
+    dynamic_delta_mode = str(
+        schedule.get("dynamic_delta_frame_mode", "")
+        or dynamic_delta.get("mode", "")
+        or ""
+    )
+    dynamic_delta_saved_tokens = _num(
+        schedule.get("dynamic_delta_saved_tokens")
+        or dynamic_delta.get("estimated_saved_tokens"),
+        0.0,
+    )
+    dynamic_delta_compressed_handle_count = _num(
+        schedule.get("dynamic_delta_compressed_handle_count")
+        or dynamic_delta.get("compressed_handle_count"),
+        0.0,
+    )
+    dynamic_delta_active = (
+        dynamic_delta_mode == "stage66_dynamic_delta_frame_v1"
+        and dynamic_delta_compressed_handle_count > 0.0
+        and dynamic_delta_saved_tokens > 0.0
+    )
     return {
         "hit": _num(usage.get("prompt_cache_hit_tokens"), 220.0),
         "miss": _num(usage.get("prompt_cache_miss_tokens"), 1400.0),
@@ -827,6 +868,10 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         "tool_observation_scheduler": 1.0 if tool_scheduler_active else 0.0,
         "tool_observation_scheduler_mode": tool_scheduler_mode,
         "tool_observation_budget": tool_budget,
+        "dynamic_delta_frame": 1.0 if dynamic_delta_active else 0.0,
+        "dynamic_delta_frame_mode": dynamic_delta_mode,
+        "dynamic_delta_saved_tokens": dynamic_delta_saved_tokens,
+        "dynamic_delta_compressed_handle_count": dynamic_delta_compressed_handle_count,
         "salience": _num(schedule.get("salience_score"), 0.42),
         "recall": _num(schedule.get("recall_budget"), 2.0),
         "context_lines": _num(schedule.get("dynamic_context_line_count"), 7.0),
@@ -926,6 +971,8 @@ def _telemetry_table(telemetry: dict[str, Any]) -> str:
         "p95_latency_ms",
         "average_recall_budget",
         "average_dynamic_context_lines",
+        "average_dynamic_delta_saved_tokens",
+        "average_dynamic_delta_strength",
         "average_consolidation_priority",
         "phase_entropy",
         "tool_observation_coverage",

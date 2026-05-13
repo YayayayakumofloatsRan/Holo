@@ -282,6 +282,13 @@ Stage65: bounded tool observation
 - Reports the current evidence conservatively: cumulative Stage65 surrogate telemetry has `tool_observation_coverage=0.75`, `aggregate_score=0.737083`, `tool_observation=0.75`, and `bottleneck_count=6`, while `cache_inheritance_low` remains the top bottleneck.
 - Keeps all changes prompt-scheduling/diagnostic/surrogate-only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage66: dynamic delta frame
+- Adds a scheduler-owned `stage66_dynamic_delta_frame_v1` for low-value dynamic handle fanout.
+- Compresses `memory_id`, `motif`, `vector`, and `activation_heat` lines into one bounded `dynamic_delta=` frame while keeping protected active-state, reconstruction, residual, and tool-observation facts explicit.
+- Preserves dynamic-delta mode, saved-token estimate, compressed-handle count, protected-drop status, and authority flags in context scheduling and Stage46 compact debug.
+- Reports the current evidence conservatively: latest real offline Stage46 seed lifted `prompt_cache_hit_ratio` to `0.242774` and `cache_inheritance` to `0.441407`, but `cache_inheritance_low` remains the top bottleneck; active combined Stage63/64/65/66 surrogate reached `prompt_cache_hit_ratio=0.392096`, `cache_inheritance=0.712902`, `aggregate_score=0.785938`, and `tool_observation_coverage=0.75`.
+- Keeps all changes prompt-scheduling/diagnostic/surrogate-only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

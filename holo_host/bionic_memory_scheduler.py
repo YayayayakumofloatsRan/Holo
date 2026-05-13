@@ -8,6 +8,7 @@ from .common import compact_text
 CACHE_INHERITANCE_MODE = "stage63_cortical_cache_spine_v1"
 RESIDUAL_WORKING_CHANNEL_MODE = "stage64_residual_working_channel_v1"
 TOOL_OBSERVATION_MODE = "stage65_bounded_tool_observation_v1"
+DYNAMIC_DELTA_FRAME_MODE = "stage66_dynamic_delta_frame_v1"
 
 PROTECTED_DYNAMIC_LABELS = (
     "active_summary",
@@ -18,6 +19,13 @@ PROTECTED_DYNAMIC_LABELS = (
     "anchor",
     "residual_fast",
     "tool_observation",
+)
+
+DELTA_COMPRESSIBLE_LABELS = (
+    "memory_id",
+    "motif",
+    "vector",
+    "activation_heat",
 )
 
 MEMORY_REQUEST_MARKERS = (
@@ -76,6 +84,25 @@ def _field_line(label: str, value: Any, *, limit: int = 140) -> list[str]:
 
 def _line_label(line: str) -> str:
     return str(line or "").split("=", 1)[0].strip()
+
+
+def _prompt_line_body(line: str) -> str:
+    text = str(line or "").strip()
+    for prefix in ("working: ", "hippocampal: "):
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip()
+    return text
+
+
+def _prompt_line_label(line: str) -> str:
+    return _line_label(_prompt_line_body(line))
+
+
+def _prompt_line_value(line: str) -> str:
+    body = _prompt_line_body(line)
+    if "=" not in body:
+        return ""
+    return _text(body.split("=", 1)[1], 90)
 
 
 def _bool_text(value: Any) -> str:
@@ -229,6 +256,83 @@ def _tool_observation_lines(scheduler: dict[str, Any]) -> list[str]:
     if contexts:
         line += f"; context={contexts}"
     return [line]
+
+
+def _dynamic_delta_line(buckets: dict[str, list[str]], *, compressed_count: int) -> str:
+    parts: list[str] = []
+    ids = buckets.get("memory_id", [])
+    if ids:
+        parts.append(f"ids:{len(ids)}:first={_text(ids[0], 36)}")
+    motifs = buckets.get("motif", [])
+    if motifs:
+        parts.append(f"motifs:{len(motifs)}:first={_text(motifs[0], 32)}")
+    vectors = buckets.get("vector", [])
+    if vectors:
+        parts.append(f"vectors:{len(vectors)}")
+    heats = buckets.get("activation_heat", [])
+    if heats:
+        parts.append(f"heat={_text(heats[-1], 16)}")
+    parts.append(f"compressed_handles={compressed_count}")
+    return _text("dynamic_delta=" + "; ".join(parts), 180)
+
+
+def _apply_dynamic_delta_frame(prompt_dynamic_lines: list[str]) -> tuple[list[str], dict[str, Any]]:
+    source_lines = [_text(line, 220) for line in prompt_dynamic_lines if _text(line, 220)]
+    before_tokens = _estimate_tokens("\n".join(source_lines))
+    buckets: dict[str, list[str]] = {label: [] for label in DELTA_COMPRESSIBLE_LABELS}
+    compressed_lines: list[str] = []
+    kept_lines: list[str] = []
+    for line in source_lines:
+        label = _prompt_line_label(line)
+        if label in DELTA_COMPRESSIBLE_LABELS:
+            value = _prompt_line_value(line)
+            buckets.setdefault(label, []).append(value or label)
+            compressed_lines.append(line)
+            continue
+        kept_lines.append(line)
+
+    compressed_count = len(compressed_lines)
+    delta_line = _dynamic_delta_line(buckets, compressed_count=compressed_count) if compressed_count else ""
+    salience_lines = [line for line in kept_lines if _prompt_line_label(line) == "salience_score"]
+    non_salience = [line for line in kept_lines if _prompt_line_label(line) != "salience_score"]
+    fused_lines = _unique(
+        [*non_salience, *([delta_line] if delta_line else []), *salience_lines],
+        limit=max(1, len(source_lines)),
+    )
+    after_tokens = _estimate_tokens("\n".join(fused_lines))
+    if compressed_count and after_tokens >= before_tokens:
+        fused_lines = source_lines
+        delta_line = ""
+        compressed_count = 0
+        after_tokens = before_tokens
+    protected_source = [
+        line
+        for line in source_lines
+        if _prompt_line_label(line) in PROTECTED_DYNAMIC_LABELS
+    ]
+    protected_dropped = [
+        _prompt_line_label(line)
+        for line in protected_source
+        if line not in fused_lines
+    ]
+    frame = {
+        "mode": DYNAMIC_DELTA_FRAME_MODE,
+        "source_line_count": len(source_lines),
+        "delta_line_count": 1 if delta_line else 0,
+        "compressed_handle_count": compressed_count,
+        "protected_line_count": len(protected_source),
+        "estimated_before_tokens": before_tokens,
+        "estimated_after_tokens": after_tokens,
+        "estimated_saved_tokens": max(0, before_tokens - after_tokens),
+        "protected_dropped_labels": sorted(set(protected_dropped)),
+        "protected_line_dropped": bool(protected_dropped),
+        "runtime_decision_authority": False,
+        "transport_decision_authority": False,
+        "watcher_decision_authority": False,
+        "self_memory_write": False,
+        "render_policy": "scheduler_owned_dynamic_delta_frame",
+    }
+    return fused_lines, frame
 
 
 def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
@@ -458,7 +562,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
     working = raw_working[:working_budget]
     hippocampal = raw_hippocampal[:hippocampal_budget]
     consolidation = _consolidation_targets(source, salience=salience)
-    prompt_dynamic = _unique(
+    prompt_dynamic_base = _unique(
         [
             *[f"working: {line}" for line in working],
             *[f"hippocampal: {line}" for line in hippocampal],
@@ -467,6 +571,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         ],
         limit=18,
     )
+    prompt_dynamic, dynamic_delta_frame = _apply_dynamic_delta_frame(prompt_dynamic_base)
     audit = _compression_audit(
         raw_working=raw_working,
         selected_working=working,
@@ -474,6 +579,14 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         selected_hippocampal=hippocampal,
         prompt_dynamic_lines=prompt_dynamic,
         salience=salience,
+    )
+    audit["stage66_delta_mode"] = dynamic_delta_frame["mode"]
+    audit["delta_saved_tokens"] = int(dynamic_delta_frame.get("estimated_saved_tokens", 0) or 0)
+    audit["delta_compressed_handle_count"] = int(dynamic_delta_frame.get("compressed_handle_count", 0) or 0)
+    audit["delta_protected_line_dropped"] = bool(dynamic_delta_frame.get("protected_line_dropped", False))
+    audit["protected_line_dropped"] = bool(
+        audit.get("protected_line_dropped", False)
+        or dynamic_delta_frame.get("protected_line_dropped", False)
     )
     residual_channel = _residual_working_channel_audit(
         packet=source,
@@ -515,6 +628,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         "dynamic_compression_audit": audit,
         "residual_working_channel": residual_channel,
         "tool_observation_scheduler": tool_scheduler,
+        "dynamic_delta_frame": dynamic_delta_frame,
         "cache_inheritance": cache_inheritance,
         "provider_prefix_lines": provider_prefix,
         "prompt_dynamic_lines": prompt_dynamic,
