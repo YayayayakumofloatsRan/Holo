@@ -6,6 +6,7 @@ from typing import Any
 
 from .common import compact_text, stable_digest, utc_now
 from .config import HostConfig
+from .context_scheduler import estimate_tokens, split_provider_cache_prompt
 from .models import CodexResult, ProcessorTaskResult
 from .provider_substrate import analyze_provider_substrate_conflicts
 
@@ -121,6 +122,7 @@ STAGE46_STRESS_SCENARIO = (
 class _Stage46ScriptedRunner:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
+        self._seen_prefix_digests: set[str] = set()
 
     @staticmethod
     def _reply_for_prompt(prompt: str) -> str:
@@ -146,9 +148,33 @@ class _Stage46ScriptedRunner:
     def run_task(self, request: Any) -> ProcessorTaskResult:
         self.requests.append(request.to_dict() if hasattr(request, "to_dict") else {})
         prompt = str(getattr(request, "prompt", "") or "")
-        index = min(len(self.requests) - 1, 6)
-        hit_tokens = 700 if index >= 2 else 0
-        miss_tokens = 300 if index >= 2 else 1000
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        context_schedule = (
+            dict(metadata.get("context_schedule", {}))
+            if isinstance(metadata.get("context_schedule", {}), dict)
+            else {}
+        )
+        prefix, dynamic = split_provider_cache_prompt(prompt)
+        prefix_tokens = estimate_tokens(prefix)
+        dynamic_tokens = estimate_tokens(dynamic)
+        prefix_digest = str(context_schedule.get("provider_cache_prefix_digest", "") or "")
+        prefix_warm = bool(prefix_digest and prefix_digest in self._seen_prefix_digests)
+        if prefix_digest:
+            self._seen_prefix_digests.add(prefix_digest)
+        if prefix_tokens >= 512 and prefix.strip() and dynamic.strip():
+            hit_tokens = prefix_tokens if prefix_warm else 0
+            miss_tokens = dynamic_tokens + (0 if prefix_warm else prefix_tokens)
+            prompt_partition = {
+                "mode": "stable_prefix_messages",
+                "provider_cache_prefix_digest": prefix_digest,
+                "provider_cache_prefix_tokens": prefix_tokens,
+                "provider_cache_dynamic_tokens": dynamic_tokens,
+                "offline_cache_warm": prefix_warm,
+            }
+        else:
+            hit_tokens = 0
+            miss_tokens = estimate_tokens(prompt)
+            prompt_partition = {"mode": "single_user", "reason": "prefix_below_threshold"}
         return ProcessorTaskResult(
             task_type=str(getattr(request, "task_type", "reply")),
             text=self._reply_for_prompt(prompt),
@@ -165,6 +191,8 @@ class _Stage46ScriptedRunner:
                     "prompt_cache_miss_tokens": miss_tokens,
                     "prompt_cache_hit_ratio": round(hit_tokens / (hit_tokens + miss_tokens), 4),
                 },
+                "context_schedule": context_schedule,
+                "prompt_partition": prompt_partition,
                 "capabilities": {"text": True, "json_output": True, "image_support": False},
             },
         )
@@ -340,6 +368,11 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
     memory_schedule = (
         dict(debug.get("bionic_memory_schedule", {})) if isinstance(debug.get("bionic_memory_schedule", {}), dict) else {}
     )
+    cache_inheritance = (
+        dict(memory_schedule.get("cache_inheritance", {}))
+        if isinstance(memory_schedule.get("cache_inheritance", {}), dict)
+        else {}
+    )
     memory_lifecycle = (
         dict(debug.get("bionic_memory_lifecycle", {}))
         if isinstance(debug.get("bionic_memory_lifecycle", {}), dict)
@@ -418,6 +451,11 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
             "dynamic_fusion_mode": str(fusion.get("mode", "") or ""),
             "dynamic_fusion_saved_line_count": int(fusion.get("saved_line_count", 0) or 0),
             "dynamic_fusion_supplement_line_count": int(fusion.get("supplement_line_count", 0) or 0),
+            "cache_inheritance_mode": str(cache_inheritance.get("mode", "") or ""),
+            "cache_spine_line_count": int(cache_inheritance.get("cache_spine_line_count", 0) or 0),
+            "cache_inheritance_stable_tokens": int(cache_inheritance.get("estimated_stable_prefix_tokens", 0) or 0),
+            "cache_inheritance_dynamic_tokens": int(cache_inheritance.get("estimated_dynamic_tokens", 0) or 0),
+            "cache_inheritance_prefix_share": float(cache_inheritance.get("prefix_share", 0.0) or 0.0),
         },
         "bionic_memory_lifecycle": {
             "mode": str(memory_lifecycle.get("mode", "") or ""),

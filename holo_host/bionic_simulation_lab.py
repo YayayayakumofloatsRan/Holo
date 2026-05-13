@@ -316,21 +316,36 @@ def _generate_turn(
     latency_pressure = intensity if "latency" in scenario_type or "false_fact" in scenario_type else intensity * 0.42
     tool_pressure = intensity if "tool" in scenario_type else 0.0
     boundary_pressure = intensity if "visual" in scenario_type else 0.0
+    prefix = max(0, int(values["prefix"] * (1.0 - cache_pressure * 0.24) + drift * 80))
+    dynamic = max(1, int(values["dynamic"] * (1.0 + intensity * 0.56 + boundary_pressure * 0.22) + fast * 150))
+    inheritance_gain = _clamp01(
+        max(0.0, (values["prefix_share"] - 0.38) * 1.25)
+        + values["cache_spine"] * 0.12
+    )
     hit = max(
         0,
-        int(values["hit"] * (1.0 - cache_pressure * 0.78) + slow * 220 + drift * 55),
+        int(
+            values["hit"] * (1.0 - cache_pressure * 0.78)
+            + slow * 220
+            + drift * 55
+            + inheritance_gain * 760
+        ),
     )
     miss = max(
         1,
-        int(values["miss"] * (1.0 + cache_pressure * 0.82 + latency_pressure * 0.24) + fast * 260),
+        int(
+            (
+                values["miss"] * (1.0 + cache_pressure * 0.82 + latency_pressure * 0.24)
+                + fast * 260
+            )
+            * (1.0 - inheritance_gain * 0.3)
+        ),
     )
     completion = max(1, int(values["completion"] * (1.0 + intensity * 0.22) + index % 6))
     latency = max(
         1,
         int(values["latency"] * (1.0 + latency_pressure * 0.74 + tool_pressure * 0.2) + slow * 720),
     )
-    prefix = max(0, int(values["prefix"] * (1.0 - cache_pressure * 0.24) + drift * 80))
-    dynamic = max(1, int(values["dynamic"] * (1.0 + intensity * 0.56 + boundary_pressure * 0.22) + fast * 150))
     salience = _clamp01(values["salience"] * (1.0 - memory_pressure * 0.48) + slow * 0.09)
     recall = max(1, int(round(values["recall"] * (1.0 - memory_pressure * 0.58) + slow * 1.2)))
     context_lines = max(2, int(round(values["context_lines"] * (1.0 - memory_pressure * 0.35 + boundary_pressure * 0.16) + fast * 2.2)))
@@ -373,6 +388,8 @@ def _generate_turn(
                 "recall_budget": recall,
                 "dynamic_context_line_count": context_lines,
                 "dynamic_fusion_saved_line_count": saved_lines,
+                "cache_inheritance_mode": values["cache_inheritance_mode"],
+                "cache_inheritance_gain": round(inheritance_gain, 6),
             },
             "bionic_memory_lifecycle": {
                 "consolidation_priority": round(priority, 4),
@@ -695,15 +712,35 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
     debug = _as_dict(turn.get("processor_debug", {}))
     usage = _as_dict(turn.get("processor_usage", {}))
     partition = _as_dict(debug.get("prompt_partition", {}))
+    context_schedule = _as_dict(debug.get("context_schedule", {}))
     schedule = _as_dict(debug.get("bionic_memory_schedule", {}))
     lifecycle = _as_dict(debug.get("bionic_memory_lifecycle", {}))
+    cache_inheritance = _as_dict(schedule.get("cache_inheritance", {}))
+    cache_inheritance_mode = str(
+        schedule.get("cache_inheritance_mode", "")
+        or cache_inheritance.get("mode", "")
+        or ""
+    )
+    prefix = _num(
+        partition.get("provider_cache_prefix_tokens")
+        or context_schedule.get("provider_cache_prefix_tokens"),
+        680.0,
+    )
+    dynamic = _num(
+        partition.get("provider_cache_dynamic_tokens")
+        or context_schedule.get("provider_cache_dynamic_tokens"),
+        1080.0,
+    )
     return {
         "hit": _num(usage.get("prompt_cache_hit_tokens"), 220.0),
         "miss": _num(usage.get("prompt_cache_miss_tokens"), 1400.0),
         "completion": _num(usage.get("completion_tokens"), 28.0),
         "latency": _num(turn.get("latency_ms"), 4800.0),
-        "prefix": _num(partition.get("provider_cache_prefix_tokens"), 680.0),
-        "dynamic": _num(partition.get("provider_cache_dynamic_tokens"), 1080.0),
+        "prefix": prefix,
+        "dynamic": dynamic,
+        "prefix_share": prefix / max(1.0, prefix + dynamic),
+        "cache_spine": 1.0 if cache_inheritance_mode == "stage63_cortical_cache_spine_v1" else 0.0,
+        "cache_inheritance_mode": cache_inheritance_mode,
         "salience": _num(schedule.get("salience_score"), 0.42),
         "recall": _num(schedule.get("recall_budget"), 2.0),
         "context_lines": _num(schedule.get("dynamic_context_line_count"), 7.0),

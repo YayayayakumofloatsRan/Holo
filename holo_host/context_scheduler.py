@@ -97,7 +97,14 @@ def plan_processor_context(
     pressure = float(token_estimate) / float(max_tokens) if max_tokens else 0.0
     stable, volatile = _split_stable_volatile_prompt(prompt)
     provider_cache_prefix, provider_cache_dynamic = _split_provider_cache_prefix(prompt)
+    provider_cache_prefix_tokens = estimate_tokens(provider_cache_prefix)
+    provider_cache_dynamic_tokens = estimate_tokens(provider_cache_dynamic)
     schedule = dict(memory_schedule or {}) if isinstance(memory_schedule, dict) else {}
+    cache_inheritance = (
+        dict(schedule.get("cache_inheritance", {}))
+        if isinstance(schedule.get("cache_inheritance", {}), dict)
+        else {}
+    )
     schedule_stable = "\n".join(str(line).strip() for line in schedule.get("provider_prefix_lines", []) if str(line).strip())
     prompt_dynamic_lines = (
         schedule.get("prompt_dynamic_lines", [])
@@ -133,6 +140,10 @@ def plan_processor_context(
         schedule_dynamic_tokens,
         schedule_dynamic_tokens - fusion_supplement_tokens + estimate_tokens(lifecycle_prompt) + estimate_tokens(flow_prompt),
     )
+    cache_inheritance_prefix_share = round(
+        provider_cache_prefix_tokens / max(1, provider_cache_prefix_tokens + provider_cache_dynamic_tokens),
+        6,
+    )
     start_new_session = bool(current_session_id and pressure >= 0.72)
     reason = "context_pressure" if start_new_session else "reuse_session"
     max_history_messages = _history_limit(pressure=pressure, current=int(history_messages or 0))
@@ -148,8 +159,19 @@ def plan_processor_context(
         "stable_context_digest": _digest(stable),
         "volatile_context_digest": _digest(volatile),
         "provider_cache_prefix_digest": _digest(provider_cache_prefix),
-        "provider_cache_prefix_tokens": estimate_tokens(provider_cache_prefix),
-        "provider_cache_dynamic_tokens": estimate_tokens(provider_cache_dynamic),
+        "provider_cache_prefix_tokens": provider_cache_prefix_tokens,
+        "provider_cache_dynamic_tokens": provider_cache_dynamic_tokens,
+        "cache_inheritance_mode": str(cache_inheritance.get("mode", "") or ""),
+        "cache_inheritance_prefix_share": cache_inheritance_prefix_share,
+        "cache_inheritance_stable_tokens": int(
+            cache_inheritance.get("estimated_stable_prefix_tokens", 0)
+            or provider_cache_prefix_tokens
+        ),
+        "cache_inheritance_dynamic_tokens": int(
+            cache_inheritance.get("estimated_dynamic_tokens", 0)
+            or provider_cache_dynamic_tokens
+        ),
+        "cache_spine_line_count": int(cache_inheritance.get("cache_spine_line_count", 0) or 0),
         "memory_schedule_mode": str(schedule.get("mode", "") or ""),
         "memory_schedule_stable_tokens": estimate_tokens(schedule_stable),
         "memory_schedule_dynamic_tokens": schedule_dynamic_tokens,

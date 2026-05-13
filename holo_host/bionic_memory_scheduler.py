@@ -5,6 +5,8 @@ from typing import Any
 from .common import compact_text
 
 
+CACHE_INHERITANCE_MODE = "stage63_cortical_cache_spine_v1"
+
 PROTECTED_DYNAMIC_LABELS = (
     "active_summary",
     "latest_user_intent",
@@ -76,6 +78,15 @@ def _bool_text(value: Any) -> str:
     return "true" if bool(value) else "false"
 
 
+def _estimate_tokens(text: str) -> int:
+    value = str(text or "")
+    if not value:
+        return 0
+    ascii_chars = sum(1 for char in value if ord(char) < 128)
+    non_ascii_chars = len(value) - ascii_chars
+    return max(1, ((ascii_chars + 3) // 4) + non_ascii_chars)
+
+
 def _memory_requested(query: str) -> bool:
     lowered = str(query or "").lower()
     return any(marker in lowered for marker in MEMORY_REQUEST_MARKERS)
@@ -114,6 +125,36 @@ def _cortical_schema_lines(packet: dict[str, Any]) -> list[str]:
         lines,
         limit=14,
     )
+
+
+def _cache_inheritance_spine_lines(
+    packet: dict[str, Any],
+    *,
+    cortical: list[str],
+    salience: dict[str, Any],
+) -> list[str]:
+    reply_constraints = _dict(packet.get("reply_constraints"))
+    goal_state = _dict(packet.get("goal_state"))
+    active_goals = [
+        _text(_dict(item).get("goal_type"), 80)
+        for item in _list(goal_state.get("active_goals"))
+        if _text(_dict(item).get("goal_type"), 80)
+    ]
+    constraint_count = len(_list(reply_constraints.get("lines")))
+    stable_schema_count = len([line for line in cortical if str(line).strip()])
+    lines = [
+        f"cache_spine_mode={CACHE_INHERITANCE_MODE}",
+        "cache_spine_role=long-lived identity, policy, memory-shape, grounding, and tool-boundary priors stay in provider prefix",
+        "cache_spine_dynamic_rule=current user turn, recent thread window, active working state, and per-turn recall stay in dynamic frame",
+        "cache_spine_grounding=visual claims, temporal commitments, and newest corrections must be evidence-bound before output",
+        "cache_spine_residual=fast residual channel carries corrected symbols, promise state, visual uncertainty, and latest risk flags",
+        "cache_spine_tool_boundary=upstream MCP and tools are bounded observations only, never runtime or transport authority",
+        "cache_spine_memory_boundary=self_memory_write=false; consolidation remains diagnostic intent until operator-approved paths",
+        f"cache_spine_schema_shape=stable_lines:{stable_schema_count}; reply_constraints:{constraint_count}",
+    ]
+    if active_goals:
+        lines.append(f"cache_spine_goal_types={','.join(active_goals[:4])}")
+    return _unique(lines, limit=10)
 
 
 def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
@@ -305,6 +346,8 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
     raw_working = _working_memory_lines(source)
     raw_hippocampal = _hippocampal_index_lines(source)
     salience = _salience_gate(source, query=query)
+    cache_spine = _cache_inheritance_spine_lines(source, cortical=cortical, salience=salience)
+    provider_prefix = _unique([*cortical, *cache_spine], limit=24)
     working_budget = int(salience.get("working_memory_budget", 4) or 4)
     hippocampal_budget = int(salience.get("hippocampal_budget", 2) or 2)
     working = raw_working[:working_budget]
@@ -326,6 +369,21 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         prompt_dynamic_lines=prompt_dynamic,
         salience=salience,
     )
+    stable_tokens = _estimate_tokens("\n".join(provider_prefix))
+    dynamic_tokens = _estimate_tokens("\n".join(prompt_dynamic))
+    cache_inheritance = {
+        "mode": CACHE_INHERITANCE_MODE,
+        "stable_schema_line_count": len(cortical),
+        "cache_spine_line_count": len(cache_spine),
+        "provider_prefix_line_count": len(provider_prefix),
+        "dynamic_line_count": len(prompt_dynamic),
+        "estimated_stable_prefix_tokens": stable_tokens,
+        "estimated_dynamic_tokens": dynamic_tokens,
+        "prefix_share": round(stable_tokens / max(1, stable_tokens + dynamic_tokens), 6),
+        "self_memory_write": False,
+        "runtime_decision_authority": False,
+        "transport_decision_authority": False,
+    }
     return {
         "mode": "biomimetic_v1",
         "working_memory": {
@@ -343,7 +401,8 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         "salience_gate": salience,
         "consolidation_targets": consolidation,
         "dynamic_compression_audit": audit,
-        "provider_prefix_lines": cortical,
+        "cache_inheritance": cache_inheritance,
+        "provider_prefix_lines": provider_prefix,
         "prompt_dynamic_lines": prompt_dynamic,
         "dynamic_context_lines": prompt_dynamic,
     }

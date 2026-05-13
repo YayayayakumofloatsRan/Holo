@@ -2,7 +2,7 @@
 
 ## Current Reality
 - Baseline date: `2026-04-11`.
-- The live runtime milestone is now `stage62-bionic-capability-observatory`.
+- The live runtime milestone is now `stage63-cache-inheritance-spine`.
 - Stage23 is implemented: semantic reply results are orthogonalized from Stage22 delivery suppression, artifact ingest is backward-compatible again, and replay gates consume raw metrics.
 - Stage24 is implemented: bounded per-thread `scene_state` now persists inside `active_thread_state`, fast-lane prompts read scene summaries before verbatim history, action-market candidates expose scene deltas, and scene diagnostics are inspectable through CLI and service surfaces.
 - Stage25 is implemented: bounded dense continuity now reuses existing stream runs to keep a small hot-thread working set warm between turns, persists `dense_working_set` and `thread_pulse_trace`, hydrates ingress before heavier recall, and exposes continuity-budget diagnostics plus `accept-stage25`.
@@ -43,6 +43,7 @@
 - Stage60 is implemented as a recoverable long-run provider trace campaign orchestrator: `run-consciousness-trace-campaign` can dry-run or execute multi-model Stage59 cells, defaults executed cells to shadow state, writes campaign HTML/JSON/PNG plus manifest/events, supports per-cell resume, aggregates token/cache/provider provenance, ranks models, and blocks major-breakthrough claims until replicated real-provider trace depth and Stage57 gates pass.
 - Stage61 is implemented as a high-throughput bionic simulation lab: `run-bionic-simulation-lab` generates Stage46-compatible surrogate interaction traces, captures internal token/cache/latency/memory/consciousness-flow/tool/grounding telemetry, writes HTML/JSON/PNG plus per-turn JSONL, feeds Stage57 calibration, and emits non-auto-applied improvement backlog items.
 - Stage62 is implemented as a bionic capability observatory: `evaluate-bionic-capability-observatory` converts Stage61 telemetry into capability scorecards, forward explainability chains, reverse-engineered bottlenecks, and non-auto-applied intervention targets with HTML/JSON/PNG artifacts.
+- Stage63 is implemented as a cache inheritance spine: the bionic memory scheduler now emits a stable cortical cache spine, context scheduling and Stage46 compact debug preserve cache-inheritance evidence, and Stage61 simulation responds to larger stable-prefix evidence while keeping current turns and per-turn recall dynamic.
 - Verified Stage34 on `2026-05-09`:
   - `pytest -q` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage34` passed
@@ -86,7 +87,7 @@
 - Verified Stage28 on `2026-04-28`:
   - `pytest -q tests/test_stage28_multimodal_homeostatic_kernel.py` passed
   - `python -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed
-- The next implementation focus is using Stage62's bottleneck ranking to improve cache inheritance under context pressure first, then re-running Stage61/62 for telemetry deltas and confirming important gains with a budget-approved Stage60 real-provider campaign.
+- The next implementation focus is reducing dynamic prompt churn after Stage63, then re-running Stage61/62 for telemetry deltas and confirming important gains with a budget-approved Stage60 real-provider campaign.
 - Verified on `2026-05-10`: exact packet-cache reuse works on tight repeated live `/inspect-mind` probes, but homeostasis/self-model cache deficits were over-reported from zero-sample or stale cache snapshots. Post-Stage39 cache diagnostics now require a packet-cache sample floor and rebase cache-class deficits from live cache stats before reporting `cache_coldness` or `cache_reuse_weak`.
 - Post-Stage39 provider-response caching is implemented in the processor fabric: `responses`, `openai_compatible`, and `deepseek` can reuse exact stateless text API responses through QueueStore, while `codex_cli`, image tasks, memory-writeback tasks, and shadow-write/operator tasks bypass the cache.
 - Verified post-Stage39 provider-response cache repair on `2026-05-10`: `pytest -q tests/test_processor_fabric.py tests/test_cache_diagnostics.py tests/test_stage33_provider_contracts.py tests/test_stage35_internal_runtime_readiness.py tests/test_stage37_bionic_self_eval.py tests/test_stage38_visual_provider_bridge.py tests/test_stage39_bionic_turing_benchmark.py` passed, `pytest -q` passed with `312` tests, `accept-stage39` passed, `show-provider-status` exposed `response_cache.enabled=true`, public-release hygiene passed, and `git diff --check` reported no whitespace errors.
@@ -147,13 +148,13 @@
 ## Active Program Index
 - `Stage23-27 bootstrap program`: `.agent/STAGE23_27_PROGRAM.md`
 - `Current live runtime handoff`: `HOLO_HANDOFF.md`
-- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE62.md`
+- `Latest engineering handoff`: `docs/ENGINEERING_HANDOFF_STAGE63.md`
 - `Architecture reference`: `docs/HOLO_ARCHITECTURE_MAP.md`
 - `Roadmap registry`: `docs/ROADMAP_REGISTRY.md`
 - `Public release hygiene`: `docs/PUBLIC_RELEASE_HYGIENE.md`
-- `Active implementation priority`: Stage62-ranked cache inheritance improvement, then Stage61/62 telemetry delta and Stage60 real-provider confirmation
-- `Current live runtime boundary`: Stage62 is implemented as an observational surrogate capability observatory over Stage61 data; no provider call, live transport, transport authority change, live self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, unbounded loop, or second decision layer was added
-- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage62 handoff in `docs/ENGINEERING_HANDOFF_STAGE62.md`
+- `Active implementation priority`: Stage63 follow-up dynamic prompt churn reduction, then Stage61/62 telemetry delta and Stage60 real-provider confirmation
+- `Current live runtime boundary`: Stage63 is implemented as a prompt-scheduling and diagnostic cache-inheritance spine; no provider call, live transport, transport authority change, live self-memory mutation, default repo-write authority, direct runtime decision authority, downstream MCP server, unbounded loop, or second decision layer was added
+- `New-thread resume point`: branch `codex/stage29-bionic-cli-agent`, Stage63 handoff in `docs/ENGINEERING_HANDOFF_STAGE63.md`
 
 ## Blocker Inventory
 - `Stage22 shell/core coupling`: `partially resolved through Stage24 and classified by Stage34`; semantic reply contracts are orthogonalized and scene-state logic stays bounded, but `holo_host/reply_api.py` remains large bounded structural debt that must only be split behind dedicated compatibility tests.

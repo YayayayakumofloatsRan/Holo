@@ -260,6 +260,13 @@ Stage62: bionic capability observatory
 - Reports the current evidence conservatively: `9` scenarios and `2160` simulated turns produced `aggregate_score=0.579427`, `9` ranked bottlenecks, and `8` non-auto-applied interventions; the top bottleneck is `cache_inheritance_low`; `do_not_claim_real_manifold=true`.
 - Keeps all changes observational and surrogate-only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage63: cache inheritance spine
+- Adds a stable cortical cache spine to the bionic memory scheduler after Stage62 ranked cache inheritance as the top bottleneck.
+- Preserves cache-inheritance mode, prefix share, stable/dynamic token estimates, and cache-spine line counts in context scheduling and Stage46 compact debug.
+- Teaches Stage61 simulation to use prompt partition or context-schedule prefix/dynamic token evidence when estimating cache-inheritance gain.
+- Reports the current evidence conservatively: latest-seed Stage61 has `average_provider_cache_prefix_tokens=1202.54`, `prompt_cache_hit_ratio=0.204046`, and `improvement_count=4`; latest-seed Stage62 has `aggregate_score=0.659837`, `cache_inheritance=0.370993`, and `bottleneck_count=8`, but `cache_inheritance_low` remains the top bottleneck.
+- Keeps all changes prompt-scheduling/diagnostic only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
