@@ -125,13 +125,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 120. `docs/STAGE68_REAL_PROVIDER_VALIDATION_2026-05-14.md`
 121. `docs/STAGE69_INNER_STREAM_CONSCIOUSNESS_CLOCK.md`
 122. `docs/ENGINEERING_HANDOFF_STAGE69.md`
-123. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-124. `HOLO_SYSTEM.md`
-125. `HOLO_HOST.md`
-126. `OPERATIONS.md`
-127. `docs/PUBLIC_RELEASE_HYGIENE.md`
-128. `holo_memory_library/MEMORY_LIBRARY.md`
-129. `windows_helper/README.md`
+123. `docs/STAGE69_DIALOGUE_VALIDATION_2026-05-14.md`
+124. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+125. `HOLO_SYSTEM.md`
+126. `HOLO_HOST.md`
+127. `OPERATIONS.md`
+128. `docs/PUBLIC_RELEASE_HYGIENE.md`
+129. `holo_memory_library/MEMORY_LIBRARY.md`
+130. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -159,6 +160,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `python -m pytest -q` passed with `476` tests on `2026-05-14` after the biomimetic field correction.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-14`.
   - `git diff --check` reported no whitespace errors on `2026-05-14`; Git printed only CRLF conversion warnings for existing text files.
+  - `python -m holo_host --config .holo_host.toml run-bionic-simulation-lab --limit 8 --scenarios 21 --turns 720 --output artifacts\stage69\stage69_dialogue_validation_lab.html` returned `scenario_count=21`, `total_simulated_turns=15120`, `observed_total_tokens=35133926`, `prompt_cache_hit_ratio=0.430122`, `average_latency_ms=3084.58`, and `improvement_count=1` on `2026-05-14`.
+  - `python -m holo_host --config .holo_host.toml evaluate-bionic-capability-observatory --limit 8 --scenarios 21 --turns 720 --output artifacts\stage69\stage69_dialogue_validation_capability.html` returned `aggregate_score=0.870835`, `bottleneck_count=1`, `grounding_integrity=1.0`, `explainability_coverage=1.0`, and `tool_observation=0.75` on `2026-05-14`.
+  - `python -m holo_host --config .holo_host.toml evaluate-bionic-memory-robustness --lab-json artifacts\stage69\stage69_dialogue_validation_lab.json --output artifacts\stage69\stage69_dialogue_validation_memory.html` returned `aggregate_score=0.863562`, `failure_count=0`, `self_memory_write_violation_count=0`, `boundary_stability=1.0`, and weakest dimension `correction_retention=0.748611` on `2026-05-14`.
+  - `python -m holo_host --config .holo_host.toml run-consciousness-trace-campaign --execute --campaign-id stage69_dialogue_validation_live_20260514 --models deepseek-v4-pro,deepseek-v4-flash --runs-per-model 1 --turns 6 --max-total-tokens-per-cell 30000 --max-output-tokens 160 --output-root artifacts\stage69\stage69_dialogue_validation_live` completed `12` real DeepSeek provider turns, `42080` observed tokens, `top_model=deepseek-v4-flash`, `top_score=0.9032`, and kept `do_not_claim_major_breakthrough=true` on `2026-05-14`.
   - `python -m pytest -q tests\test_stage65_bounded_tool_observation.py` passed with `4` tests on `2026-05-14`.
   - `python -m pytest -q tests\test_stage65_bounded_tool_observation.py tests\test_stage64_residual_working_channel.py tests\test_bionic_memory_scheduler.py tests\test_context_scheduler.py tests\test_stage46_bionic_boundary_stress.py tests\test_stage53_mcp_upstream.py tests\test_stage61_bionic_simulation_lab.py tests\test_stage62_bionic_capability_observatory.py` passed with `54` tests on `2026-05-14`.
   - `python -m py_compile holo_host\bionic_memory_scheduler.py holo_host\context_scheduler.py holo_host\processors.py holo_host\bionic_boundary_stress.py holo_host\bionic_simulation_lab.py holo_host\bionic_capability_observatory.py holo_host\mcp_upstream.py holo_host\cli.py` passed on `2026-05-14`.
