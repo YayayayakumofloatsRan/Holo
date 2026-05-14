@@ -335,6 +335,13 @@ Stage71: biomimetic causal ablation lab
 - Adds a real DeepSeek provider replication through Stage59: `30` collected turns, `132572` observed tokens, `decision=partial_support_real_provider`, `hippocampal_reactivation_delta=0.011206`, `correction_survival_proxy_delta=0.048457`, `flow_to_reply_coupling_delta=-0.438947`, and `boundary_violation_delta=0.0`.
 - Keeps all changes observational/counterfactual only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage72: correction reactivation marker
+- Adds a real scheduler/lifecycle mechanism for explicit correction cues: `correction_reactivation_marker` enters hippocampal dynamic lines, prompt dynamic lines, salience sources, consolidation targets, lifecycle replay sources, and consciousness-flow memory reactivation.
+- Keeps the marker prompt/diagnostic only; it raises replay pressure without writing self-memory or adding authority.
+- Reports the current DeepSeek provider result conservatively: `30` collected turns, `135043` observed tokens, one `617411.46ms` latency outlier, baseline `hippocampal_reactivation` improved from `0.897044` to `0.918328`, baseline `correction_survival_proxy` improved from `0.801491` to `0.830654`, and `boundary_violation_delta=0.0`.
+- The Stage71 evaluator still returns `decision=partial_support_real_provider`; Stage73 should separate absolute provider improvement from residual counterfactual headroom and run longer/repeated provider cells for geometry/attractor reliability.
+- Keeps all changes prompt-scheduling/diagnostic only: no WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

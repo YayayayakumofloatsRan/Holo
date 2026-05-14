@@ -78,8 +78,10 @@ def _candidate_streams(packet: dict[str, Any], targets: list[str]) -> list[str]:
     streams: list[str] = []
     if "semantic_reconstruction" in targets:
         streams.append("recall_reconstruction")
-    if "reactivated_index" in targets:
+    if "reactivated_index" in targets or "correction_reactivation_marker" in targets:
         streams.append("hippocampal_index")
+    if "correction_reactivation_marker" in targets:
+        streams.append("recent_dialogue_window")
     if "temporal_open_loop" in targets:
         streams.append("active_thread_state")
     if "salient_turn" in targets:

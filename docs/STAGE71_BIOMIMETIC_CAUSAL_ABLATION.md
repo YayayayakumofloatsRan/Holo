@@ -140,6 +140,19 @@ run more surrogate traces; it should close the provider-replay gap by adding a
 real correction-reactivation marker path to the scheduler or inner stream, then
 repeat the provider replication.
 
+## Stage72 Follow-Up
+
+Stage72 implements that marker path. The follow-up DeepSeek trace improved the
+absolute real-provider baseline:
+
+- baseline `hippocampal_reactivation`: `0.897044 -> 0.918328`
+- baseline `correction_survival_proxy`: `0.801491 -> 0.830654`
+- `boundary_violation_delta=0.0`
+
+The Stage71 evaluator still returns `partial_support_real_provider`, so the next
+metric change should separate absolute improvement from residual counterfactual
+headroom.
+
 ## Boundary
 
 Stage71 is observational/counterfactual only:

@@ -16,6 +16,7 @@ PROTECTED_DYNAMIC_LABELS = (
     "selected_action",
     "temporal_resume_cue",
     "reconstruction_summary",
+    "correction_reactivation_marker",
     "anchor",
     "residual_fast",
     "tool_observation",
@@ -44,6 +45,15 @@ MEMORY_REQUEST_MARKERS = (
     "还记得",
     "记得",
     "回忆",
+)
+
+CORRECTION_REACTIVATION_MARKERS = (
+    "correction:",
+    "replaces",
+    "replaced",
+    "corrected state",
+    "old marker",
+    "instead",
 )
 
 
@@ -125,6 +135,37 @@ def _estimate_tokens(text: str) -> int:
 def _memory_requested(query: str) -> bool:
     lowered = str(query or "").lower()
     return any(marker in lowered for marker in MEMORY_REQUEST_MARKERS)
+
+
+def _correction_reactivation_text(packet: dict[str, Any], *, query: str) -> str:
+    active = _dict(packet.get("active_thread_state"))
+    recall = _dict(packet.get("recall_reconstruction"))
+    stage20 = _dict(packet.get("stage20"))
+    stage24 = _dict(packet.get("stage24"))
+    direct_candidates = [
+        query,
+        active.get("latest_user_intent"),
+    ]
+    weak_candidates = [
+        active.get("summary"),
+        active.get("continuity_summary"),
+        recall.get("summary"),
+        stage20.get("resume_cue"),
+        stage24.get("response_sketch"),
+    ]
+    candidates = [*direct_candidates, *(weak_candidates if _memory_requested(query) else [])]
+    for raw in candidates:
+        text = _text(raw, 180)
+        lowered = text.lower()
+        if not text:
+            continue
+        if "not " in lowered and "anymore" in lowered:
+            return text
+        if "claim" in lowered and "still" in lowered:
+            return text
+        if any(marker in lowered for marker in CORRECTION_REACTIVATION_MARKERS):
+            return text
+    return ""
 
 
 def _cortical_schema_lines(packet: dict[str, Any]) -> list[str]:
@@ -372,12 +413,13 @@ def _working_memory_lines(packet: dict[str, Any]) -> list[str]:
     return _unique(lines, limit=12)
 
 
-def _hippocampal_index_lines(packet: dict[str, Any]) -> list[str]:
+def _hippocampal_index_lines(packet: dict[str, Any], *, query: str = "") -> list[str]:
     activation = _dict(packet.get("activation_state"))
     episodic = _dict(packet.get("episodic_recall"))
     recall_reconstruction = _dict(packet.get("recall_reconstruction"))
     heat = _metric(activation.get("heat"))
     reconstruction_summary = _text(recall_reconstruction.get("summary"), 180)
+    correction_marker = _correction_reactivation_text(packet, query=query)
     ids = [_text(item, 80) for item in _list(packet.get("selected_memory_ids")) + _list(packet.get("activation_trace_ids")) if _text(item, 80)]
     motifs = [_text(item, 80) for item in _list(activation.get("motifs")) if _text(item, 80)]
     vector_hits = [
@@ -386,6 +428,7 @@ def _hippocampal_index_lines(packet: dict[str, Any]) -> list[str]:
         if _text(_dict(item).get("text"), 160)
     ]
     lines = [
+        *([f"correction_reactivation_marker={correction_marker}"] if correction_marker else []),
         *([f"reconstruction_summary={reconstruction_summary}"] if reconstruction_summary else []),
         *[f"episodic={_text(line, 160)}" for line in _list(episodic.get("lines"))[:4]],
         *[f"anchor={_text(line, 120)}" for line in _list(recall_reconstruction.get("anchors"))[:3]],
@@ -413,6 +456,9 @@ def _salience_gate(packet: dict[str, Any], *, query: str) -> dict[str, Any]:
     if _memory_requested(query) or bool(intent.get("local_memory_requested", False)):
         sources.append("memory_request")
         score += 0.25
+    if _correction_reactivation_text(packet, query=query):
+        sources.append("correction_reactivation")
+        score += 0.42
     continuity_anxiety = _metric(affect.get("continuity_anxiety"))
     if continuity_anxiety >= 0.35:
         sources.append("continuity_anxiety")
@@ -455,8 +501,11 @@ def _salience_gate(packet: dict[str, Any], *, query: str) -> dict[str, Any]:
 
 def _consolidation_targets(packet: dict[str, Any], *, salience: dict[str, Any]) -> dict[str, Any]:
     targets: list[str] = []
+    salience_sources = set(_list(salience.get("sources")))
     if float(salience.get("score", 0.0) or 0.0) >= 0.55:
         targets.append("salient_turn")
+    if "correction_reactivation" in salience_sources:
+        targets.append("correction_reactivation_marker")
     if _dict(packet.get("stage20")).get("resume_cue"):
         targets.append("temporal_open_loop")
     if _list(packet.get("activation_trace_ids")) or _list(packet.get("selected_memory_ids")):
@@ -565,7 +614,7 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
     source = dict(packet or {})
     cortical = _cortical_schema_lines(source)
     raw_working = _working_memory_lines(source)
-    raw_hippocampal = _hippocampal_index_lines(source)
+    raw_hippocampal = _hippocampal_index_lines(source, query=query)
     salience = _salience_gate(source, query=query)
     tool_scheduler = _tool_observation_scheduler(source)
     cache_spine = _cache_inheritance_spine_lines(source, cortical=cortical, salience=salience)

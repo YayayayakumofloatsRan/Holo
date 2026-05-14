@@ -56,6 +56,28 @@ class BionicConsciousnessFlowTests(unittest.TestCase):
         self.assertIn("line one should survive", rendered)
         self.assertEqual(flow["continuity_state"]["thread_summary"], "thread summary should survive")
 
+    def test_flow_uses_correction_marker_as_memory_reactivation(self) -> None:
+        packet = {
+            "active_thread_state": {
+                "summary": "old marker may conflict with new marker",
+                "latest_user_intent": "Correction: rusted screw replaces blue paperclip",
+            },
+            "selected_action": {"action_type": "reply_once"},
+        }
+        packet["bionic_memory_schedule"] = build_bionic_memory_schedule(
+            packet,
+            query="Correction: it is not blue paperclip anymore. It is rusted screw.",
+        )
+
+        flow = build_bionic_consciousness_flow(
+            packet,
+            query="Correction: it is not blue paperclip anymore. It is rusted screw.",
+        )
+
+        self.assertEqual(flow["dominant_phase"], "memory_reactivation")
+        self.assertIn("correction_reactivation_marker", "\n".join(flow["phase_lines"]))
+        self.assertFalse(flow["leakage_guard"]["user_visible"])
+
 
 if __name__ == "__main__":
     unittest.main()

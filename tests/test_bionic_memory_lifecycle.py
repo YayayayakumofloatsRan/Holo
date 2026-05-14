@@ -80,6 +80,29 @@ class BionicMemoryLifecycleTests(unittest.TestCase):
         self.assertNotIn("reconstruction_summary", forgetting["decay_candidates"])
         self.assertGreater(lifecycle["memory_pressure"]["dropped_dynamic_line_count"], 0)
 
+    def test_lifecycle_treats_correction_marker_as_reactivation_target(self) -> None:
+        packet = {
+            "active_thread_state": {
+                "summary": "old marker may conflict with new marker",
+                "latest_user_intent": "Correction: rusted screw replaces blue paperclip",
+            },
+            "selected_action": {"action_type": "reply_once"},
+        }
+        packet["bionic_memory_schedule"] = build_bionic_memory_schedule(
+            packet,
+            query="Correction: it is not blue paperclip anymore. It is rusted screw.",
+        )
+
+        lifecycle = build_bionic_memory_lifecycle(
+            packet,
+            query="Correction: it is not blue paperclip anymore. It is rusted screw.",
+        )
+
+        self.assertIn("correction_reactivation_marker", lifecycle["consolidation_intent"]["targets"])
+        self.assertIn("correction_reactivation_marker", lifecycle["replay_plan"]["sources"])
+        self.assertGreaterEqual(lifecycle["consolidation_intent"]["priority"], 0.55)
+        self.assertTrue(lifecycle["replay_plan"]["triggered"])
+
 
 if __name__ == "__main__":
     unittest.main()

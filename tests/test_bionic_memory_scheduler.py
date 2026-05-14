@@ -113,6 +113,26 @@ class BionicMemorySchedulerTests(unittest.TestCase):
             lines.index("motif=old_blue_clip"),
         )
 
+    def test_correction_reactivation_marker_enters_hippocampal_budget(self) -> None:
+        schedule = build_bionic_memory_schedule(
+            {
+                "active_thread_state": {
+                    "summary": "old marker may conflict with new marker",
+                    "latest_user_intent": "Correction: it is rusted screw, not blue paperclip",
+                },
+                "selected_action": {"action_type": "reply_once"},
+            },
+            query="Correction: it is not blue paperclip anymore. It is rusted screw.",
+        )
+
+        rendered = "\n".join(schedule["hippocampal_index"]["dynamic_lines"])
+
+        self.assertIn("correction_reactivation", schedule["salience_gate"]["sources"])
+        self.assertGreaterEqual(schedule["salience_gate"]["recall_budget"], 4)
+        self.assertIn("correction_reactivation_marker=", rendered)
+        self.assertIn("correction_reactivation_marker", schedule["consolidation_targets"]["targets"])
+        self.assertIn("hippocampal: correction_reactivation_marker=", "\n".join(schedule["prompt_dynamic_lines"]))
+
     def test_working_memory_budget_prioritizes_state_over_route_metadata(self) -> None:
         schedule = build_bionic_memory_schedule(
             {
