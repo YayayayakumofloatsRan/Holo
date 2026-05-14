@@ -101,6 +101,80 @@ class Stage69InnerStreamTests(unittest.TestCase):
         self.assertEqual(second["field_state"]["dominant_attractor"], "symbolic edge")
         self.assertGreater(second["field_state"]["activation_energy"], first["field_state"]["activation_energy"])
 
+    def test_neuromodulators_neural_field_and_synaptic_trace_are_updated(self) -> None:
+        runtime = InnerStreamRuntime(max_ticks=4)
+
+        tick = runtime.tick(
+            mode="full_brain",
+            idle_seconds=4.0,
+            latest_activity_at="2026-05-14T10:00:00Z",
+            brain_status={"loops": []},
+            processor_result={
+                "status": "ok",
+                "text": '{"micro_thought":"novel conflict forms","attention_focus":"novel conflict","memory_echo":"edge A","goal_pressure":"resolve","inhibition_gate":"hold","candidate_action":"observe","prediction_error":0.75,"salience_delta":0.55,"affective_tension":0.66}',
+                "metadata": {"provider": "deepseek", "model": "deepseek-v4-pro", "lane": "subject_main"},
+            },
+        )
+
+        neuromodulators = tick["field_state"]["neuromodulators"]
+        neural_field = tick["field_state"]["neural_field"]
+        synaptic_trace = tick["plasticity_trace"]["synaptic_trace"]
+
+        self.assertGreater(neuromodulators["dopamine"], 0.2)
+        self.assertGreater(neuromodulators["norepinephrine"], 0.1)
+        self.assertGreater(neuromodulators["acetylcholine"], 0.1)
+        self.assertLess(neuromodulators["serotonin"], 0.5)
+        self.assertGreater(neural_field["excitatory_tone"], 0.0)
+        self.assertGreater(neural_field["inhibitory_tone"], 0.0)
+        self.assertIn("e_i_balance", neural_field)
+        self.assertGreater(neural_field["global_workspace_ignition"], 0.0)
+        self.assertEqual(synaptic_trace["potentiated_attractor"], "novel conflict")
+        self.assertGreater(synaptic_trace["ltp"], 0.0)
+        self.assertEqual(synaptic_trace["attractor_transition"], "baseline -> novel conflict")
+
+    def test_homeostatic_inhibition_rises_under_repeated_high_energy_ticks(self) -> None:
+        runtime = InnerStreamRuntime(max_ticks=6)
+
+        first = runtime.tick(
+            mode="full_brain",
+            idle_seconds=2.0,
+            latest_activity_at="2026-05-14T10:00:00Z",
+            brain_status={"loops": []},
+            processor_result={
+                "status": "ok",
+                "text": '{"micro_thought":"pressure one","attention_focus":"sustained pressure","memory_echo":"edge","goal_pressure":"resolve","inhibition_gate":"hold","candidate_action":"observe","prediction_error":0.88,"salience_delta":0.72,"affective_tension":0.8}',
+            },
+        )
+        runtime.tick(
+            mode="full_brain",
+            idle_seconds=3.0,
+            latest_activity_at="2026-05-14T10:00:00Z",
+            brain_status={"loops": []},
+            processor_result={
+                "status": "ok",
+                "text": '{"micro_thought":"pressure two","attention_focus":"sustained pressure","memory_echo":"edge","goal_pressure":"resolve","inhibition_gate":"hold","candidate_action":"observe","prediction_error":0.82,"salience_delta":0.68,"affective_tension":0.76}',
+            },
+        )
+        third = runtime.tick(
+            mode="full_brain",
+            idle_seconds=4.0,
+            latest_activity_at="2026-05-14T10:00:00Z",
+            brain_status={"loops": []},
+            processor_result={
+                "status": "ok",
+                "text": '{"micro_thought":"pressure three","attention_focus":"sustained pressure","memory_echo":"edge","goal_pressure":"resolve","inhibition_gate":"hold","candidate_action":"observe","prediction_error":0.78,"salience_delta":0.61,"affective_tension":0.72}',
+            },
+        )
+
+        first_neural = first["field_state"]["neural_field"]
+        third_neural = third["field_state"]["neural_field"]
+        third_synaptic = third["plasticity_trace"]["synaptic_trace"]
+
+        self.assertGreater(third_neural["inhibitory_tone"], first_neural["inhibitory_tone"])
+        self.assertGreater(third_neural["thalamic_gain"], first_neural["thalamic_gain"])
+        self.assertEqual(third_synaptic["homeostatic_response"], "increase_inhibition")
+        self.assertGreater(third_synaptic["ltd"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

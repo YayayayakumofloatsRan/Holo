@@ -314,7 +314,7 @@ Stage69: inner-stream consciousness clock
 - Adds `inner_stream`, a bounded always-on endogenous micro-tick inside the WSL daemon.
 - Calls the existing LLM processor fabric through `inner_stream_thought`, routed to `subject_main` by default with `micro_fast` fallback, so each due tick can produce a real internal micro-thought on the stronger configured model.
 - Emits volatile subject-state ticks with sensory edge, attention focus, affective tension, memory echo, goal pressure, inhibition, candidate action, and processor metadata phases.
-- Adds a recurrent biomimetic field over activation energy, prediction error, salience, affective tension, dominant attractor, recurrence depth, and short plasticity traces so each tick conditions the next one.
+- Adds a recurrent biomimetic field over activation energy, prediction error, salience, affective tension, dominant attractor, recurrence depth, neuromodulators, neural-field E/I balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and short synaptic plasticity traces so each tick conditions the next one.
 - Exposes `inner_stream_state` through brain status and records compact loop telemetry for dashboard and visualization sampling.
 - Hardens daemon loop execution so brain-loop runner exceptions become `status=error` telemetry instead of crashing the main cycle.
 - Keeps Stage69 bounded: no self-memory write, policy write, transport write, watcher authority, downstream MCP exposure, second decision layer, or autonomous long-term memory promotion. The model call is processing, not authority.

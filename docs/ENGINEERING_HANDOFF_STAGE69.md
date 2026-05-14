@@ -9,6 +9,7 @@ Stage69 adds the bounded inner-stream consciousness clock.
 - New config keys under `[memory]`: `inner_stream_enabled`, `inner_stream_tick_interval_seconds`, `inner_stream_ring_size`, `inner_stream_model_enabled`, and `inner_stream_model_max_output_tokens`.
 - New processor task: `inner_stream_thought`, routed to `subject_main` by default with `micro_fast` fallback.
 - New recurrent dynamics: `field_state`, `plasticity_trace`, and `recurrent_context` are carried across ticks and returned to the next processor prompt.
+- New biomimetic surrogate layer: neuromodulators, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces.
 - Brain status now exposes `inner_stream_state`.
 - Loop runner failures are recorded as `status=error` telemetry instead of escaping the daemon cycle.
 - New regression coverage: `tests/test_stage69_inner_stream.py` plus daemon/status coverage in `tests/test_holo_host.py`.
@@ -43,11 +44,13 @@ git diff --check
 ```
 
 The first two tests were written before implementation and failed on the missing inner-stream surface, then passed after implementation.
-The final full test run passed with `474` tests. Public-release hygiene passed. `git diff --check` passed with only Git CRLF conversion warnings.
+The final full test run passed with `476` tests. Public-release hygiene passed. `git diff --check` passed with only Git CRLF conversion warnings.
 
 Correction note: the first Stage69 commit added the volatile clock and ring buffer. The follow-up correction made each due tick processor-backed through `inner_stream_thought`, because the consciousness stream must actually use the LLM processor rather than only local bookkeeping.
 
-Biomimetic correction: the stream now carries a recurrent dynamic field instead of a standalone safety-wrapped telemetry row. Model output updates activation energy, prediction error, salience, affective tension, dominant attractor, and recent plasticity traces; the next prompt receives that state as substrate.
+Biomimetic correction: the stream now carries a recurrent dynamic field instead of a standalone safety-wrapped telemetry row. Model output updates activation energy, prediction error, salience, affective tension, dominant attractor, neuromodulators, neural-field E/I balance, hippocampal replay pressure, and synaptic plasticity traces; the next prompt receives that state as substrate.
+
+The biological variables are deterministic runtime surrogates, not claims of measured neural activity. They are meant to make inner-stream dynamics observable and testable: prediction error and attractor novelty potentiate dopamine-like response, salience and arousal tune acetylcholine/norepinephrine-like gain, high conflict reduces serotonin-like stability, and repeated high-energy recurrence raises inhibition through a homeostatic response.
 
 ## Operational Notes
 
