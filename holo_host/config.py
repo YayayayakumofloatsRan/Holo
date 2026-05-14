@@ -130,6 +130,9 @@ class MemoryConfig:
     private_memory_repo_path: str = ""
     brain_mode_default: str = "full_brain"
     heartbeat_interval_seconds: int = 1
+    inner_stream_enabled: bool = True
+    inner_stream_tick_interval_seconds: int = 1
+    inner_stream_ring_size: int = 64
     attention_tick_interval_seconds: int = 3
     dream_idle_threshold_seconds: int = 900
     self_revision_interval_seconds: int = 1800
@@ -464,6 +467,9 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         private_memory_repo_path=str(memory_data.get("private_memory_repo_path", "")).strip(),
         brain_mode_default=str(memory_data.get("brain_mode_default", "full_brain")).strip() or "full_brain",
         heartbeat_interval_seconds=int(memory_data.get("heartbeat_interval_seconds", 1)),
+        inner_stream_enabled=bool(memory_data.get("inner_stream_enabled", True)),
+        inner_stream_tick_interval_seconds=int(memory_data.get("inner_stream_tick_interval_seconds", 1)),
+        inner_stream_ring_size=int(memory_data.get("inner_stream_ring_size", 64)),
         attention_tick_interval_seconds=int(memory_data.get("attention_tick_interval_seconds", 3)),
         dream_idle_threshold_seconds=int(memory_data.get("dream_idle_threshold_seconds", 900)),
         self_revision_interval_seconds=int(memory_data.get("self_revision_interval_seconds", 1800)),

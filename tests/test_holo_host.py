@@ -2109,6 +2109,51 @@ class PolicyTests(unittest.TestCase):
 
 
 class DaemonFlowTests(unittest.TestCase):
+    def test_daemon_cycle_runs_inner_stream_without_inbound_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            gateway = MaildirGateway(config)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("No external input.")
+            memory = FakeMemory()
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
+            try:
+                result = daemon.run_cycle()
+                inner = result["inner_stream"]
+
+                self.assertEqual(inner["loop_name"], "inner_stream")
+                self.assertEqual(inner["status"], "flowing")
+                self.assertEqual(inner["sequence"], 1)
+                self.assertEqual(inner["authority"]["memory_write"], "volatile_ring_only")
+                self.assertFalse(inner["authority"]["self_memory_write"])
+                self.assertFalse(inner["authority"]["policy_write"])
+                self.assertFalse(inner["authority"]["transport_write"])
+                self.assertIn("processed_jobs", result)
+            finally:
+                close_daemon_handles(daemon)
+
+    def test_inner_stream_runner_error_is_recorded_without_crashing_daemon_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            gateway = MaildirGateway(config)
+            store = QueueStore(config.runtime.db_path)
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=FakeRunner(), memory=FakeMemory())
+            try:
+                result = daemon._run_loop(
+                    "inner_stream",
+                    mode="full_brain",
+                    runner=lambda: (_ for _ in ()).throw(RuntimeError("tick exploded")),
+                )
+
+                self.assertEqual(result["loop_name"], "inner_stream")
+                self.assertEqual(result["status"], "error")
+                self.assertEqual(result["blocked_reason"], "tick exploded")
+                self.assertEqual(result["record"]["status"], "error")
+            finally:
+                close_daemon_handles(daemon)
+
     def test_daemon_cycle_sends_reply_and_observes_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2973,6 +3018,7 @@ wechat_helper_config_path = ""
                 payload = service.brain_status()
                 loop_names = {str(item.get("loop_name", "")) for item in payload["loops"]}
 
+                self.assertIn("inner_stream", loop_names)
                 self.assertIn("self_model_refresh", loop_names)
                 self.assertIn("homeostasis_tick", loop_names)
                 self.assertIn("operator_planning", loop_names)

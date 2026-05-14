@@ -16,6 +16,7 @@ from .brain_ops import run_self_revision as run_self_revision_cycle
 from .common import atomic_write_text, compact_text, stable_digest, utc_now
 from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
+from .inner_stream import InnerStreamRuntime
 from .mail_gateway import MailGateway, build_mail_gateway
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .mind_graph import MindGraph
@@ -220,6 +221,7 @@ class HoloDaemon:
         )
         self.policy = policy or AutonomyPolicy(config)
         self.logger = logger or _build_logger(config.runtime.log_dir)
+        self.inner_stream = InnerStreamRuntime(max_ticks=max(1, int(self.config.memory.inner_stream_ring_size)))
         self._stop = False
         self._wechat_helper_settings: dict[str, Any] | None = None
         signal.signal(signal.SIGTERM, self._signal_stop)
@@ -406,6 +408,7 @@ class HoloDaemon:
         latest_activity_at = self.store.latest_activity_at(channel="wechat")
         payload["latest_activity_at"] = latest_activity_at
         payload["idle_seconds"] = max(0.0, time.time() - _parse_utc_timestamp(latest_activity_at))
+        payload["inner_stream_state"] = self.inner_stream.state()
         loops: list[dict[str, Any]] = []
         seen = {str(item.get("loop_name", "")) for item in payload.get("loops", []) if str(item.get("loop_name", ""))}
         for loop_name, meta in self._loop_definitions(mode).items():
@@ -427,6 +430,7 @@ class HoloDaemon:
     def _loop_definitions(self, mode: str) -> dict[str, dict[str, Any]]:
         definitions = {
             "heartbeat": {"interval_seconds": max(1, int(self.config.memory.heartbeat_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "inner_stream": {"interval_seconds": max(1, int(self.config.memory.inner_stream_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
             "attention_tick": {"interval_seconds": max(1, int(self.config.memory.attention_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "full_brain"}},
             "maintenance_stream": {"interval_seconds": 60, "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
             "association_stream": {"interval_seconds": 180, "enabled_modes": {"companion", "full_brain"}},
@@ -461,6 +465,8 @@ class HoloDaemon:
             definitions["continuity_audit"]["interval_seconds"] = max(60, int(definitions["continuity_audit"]["interval_seconds"] * 0.75))
             definitions["operator_planning"]["interval_seconds"] = max(90, int(definitions["operator_planning"]["interval_seconds"] * 0.75))
             definitions["operator_shadow_cycle"]["interval_seconds"] = max(60, int(definitions["operator_shadow_cycle"]["interval_seconds"] * 0.75))
+        if not bool(self.config.memory.inner_stream_enabled):
+            definitions.pop("inner_stream", None)
         return definitions
 
     def _loop_due(self, loop_name: str, *, mode: str) -> tuple[bool, str]:
@@ -491,6 +497,8 @@ class HoloDaemon:
 
     def _run_loop(self, loop_name: str, *, mode: str, runner) -> dict[str, Any]:
         definitions = self._loop_definitions(mode)
+        if loop_name not in definitions:
+            return {"loop_name": loop_name, "status": "blocked", "blocked_reason": "loop_disabled_or_unknown"}
         if mode not in definitions[loop_name]["enabled_modes"]:
             return {"loop_name": loop_name, "status": "blocked", "blocked_reason": f"mode:{mode}"}
         due, blocked_reason = self._loop_due(loop_name, mode=mode)
@@ -498,7 +506,23 @@ class HoloDaemon:
             return {"loop_name": loop_name, "status": "idle", "blocked_reason": blocked_reason}
         started_at = utc_now()
         started_ts = time.perf_counter()
-        payload = runner()
+        try:
+            payload = runner()
+        except Exception as exc:  # noqa: BLE001
+            blocked_reason = compact_text(str(exc), 180)
+            payload_dict = {"status": "error", "error": blocked_reason, "blocked_reason": blocked_reason}
+            record = self._record_loop(
+                loop_name,
+                mode=mode,
+                started_at=started_at,
+                started_ts=started_ts,
+                status="error",
+                influence_summary=blocked_reason,
+                blocked_reason=blocked_reason,
+                payload=payload_dict,
+            )
+            self.logger.exception("brain loop %s failed", loop_name)
+            return {"loop_name": loop_name, "status": "error", "blocked_reason": blocked_reason, "error": blocked_reason, "record": record}
         payload_dict = payload if isinstance(payload, dict) else {"value": str(payload)}
         status = "ok"
         blocked_reason = ""
@@ -552,6 +576,16 @@ class HoloDaemon:
             metadata={"current_mode": mode, "idle_seconds": round(idle_seconds, 2)},
         )
         heartbeat = self._run_loop("heartbeat", mode=mode, runner=lambda: {"status": "alive", "idle_seconds": round(idle_seconds, 2)})
+        inner_stream = self._run_loop(
+            "inner_stream",
+            mode=mode,
+            runner=lambda: self.inner_stream.tick(
+                mode=mode,
+                idle_seconds=idle_seconds,
+                latest_activity_at=latest_activity_at,
+                brain_status=self.memory.brain_status(),
+            ),
+        )
         attention = self._run_loop(
             "attention_tick",
             mode=mode,
@@ -590,6 +624,7 @@ class HoloDaemon:
         return {
             "mode": mode,
             "heartbeat": heartbeat,
+            "inner_stream": inner_stream,
             "attention_tick": attention,
             "ingested": ingested,
             "scheduled_followups": proactive,

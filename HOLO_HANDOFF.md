@@ -115,13 +115,23 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 110. `docs/ENGINEERING_HANDOFF_STAGE64.md`
 111. `docs/STAGE65_BOUNDED_TOOL_OBSERVATION.md`
 112. `docs/ENGINEERING_HANDOFF_STAGE65.md`
-113. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-114. `HOLO_SYSTEM.md`
-115. `HOLO_HOST.md`
-116. `OPERATIONS.md`
-117. `docs/PUBLIC_RELEASE_HYGIENE.md`
-118. `holo_memory_library/MEMORY_LIBRARY.md`
-119. `windows_helper/README.md`
+113. `docs/STAGE66_DYNAMIC_DELTA_FRAME.md`
+114. `docs/ENGINEERING_HANDOFF_STAGE66.md`
+115. `docs/STAGE67_CAPABILITY_AUDIT_REPAIRS.md`
+116. `docs/ENGINEERING_HANDOFF_STAGE67.md`
+117. `docs/STAGE67_DEEPSEEK_LIVE_CALL_EVIDENCE.md`
+118. `docs/STAGE68_BIONIC_MEMORY_ROBUSTNESS.md`
+119. `docs/ENGINEERING_HANDOFF_STAGE68.md`
+120. `docs/STAGE68_REAL_PROVIDER_VALIDATION_2026-05-14.md`
+121. `docs/STAGE69_INNER_STREAM_CONSCIOUSNESS_CLOCK.md`
+122. `docs/ENGINEERING_HANDOFF_STAGE69.md`
+123. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+124. `HOLO_SYSTEM.md`
+125. `HOLO_HOST.md`
+126. `OPERATIONS.md`
+127. `docs/PUBLIC_RELEASE_HYGIENE.md`
+128. `holo_memory_library/MEMORY_LIBRARY.md`
+129. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -135,9 +145,16 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Resume branch: `codex/stage29-bionic-cli-agent`
 - Resume commit: Stage65 bounded tool observation plus Stage64 residual working channel, Stage63 cache inheritance spine, Stage62 bionic capability observatory, Stage61 high-throughput bionic simulation lab, Stage60 recoverable long-run provider trace campaign, Stage59 provider long-form trace, Stage58 long-form geometry lab, Stage57 geometry calibration, Stage56 dimensional-lift observatory, Stage55 consciousness-manifold observatory, Stage54 consciousness-flow visualization, Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
 - Working tree at handoff time: clean immediately after the Stage65 bounded tool observation commit.
-- Current milestone: `stage65-bounded-tool-observation`
-- Current status: Stage65 makes upstream tool pressure scheduler-owned dynamic evidence. `capability_context.tool_requests` and `tool_context_lines` are compressed into one bounded `tool_observation=` frame; duplicate raw tool clues are suppressed in prompt rendering; context scheduling and Stage46 compact debug preserve authority-bounded evidence; Stage61 simulation models higher bounded tool-observation coverage when the scheduler is active. It remains prompt-scheduling/diagnostic/surrogate-only; it does not call MCP tools by itself; Stage60 remains the budget-approved real-provider confirmation path; Stage53's upstream MCP client remains the bounded external observation substrate; downstream Holo-as-MCP-server exposure remains intentionally deferred.
+- Current milestone: `stage69-inner-stream-consciousness-clock`
+- Current status: Stage69 adds a bounded always-on internal consciousness stream inside the WSL daemon. The new `inner_stream` micro-tick advances without external messages, exposes `inner_stream_state` through brain status, records compact loop telemetry, and stays volatile-only: no model calls, self-memory writes, policy writes, transport writes, watcher authority, downstream MCP exposure, or autonomous long-term memory promotion.
 - Latest verification evidence:
+  - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `1` test on `2026-05-14`.
+  - `python -m pytest -q tests\test_holo_host.py::DaemonFlowTests::test_daemon_cycle_runs_inner_stream_without_inbound_message tests\test_holo_host.py::DaemonFlowTests::test_inner_stream_runner_error_is_recorded_without_crashing_daemon_loop tests\test_holo_host.py::DaemonFlowTests::test_daemon_cycle_sends_reply_and_observes_memory tests\test_holo_host.py::ReplyServiceTests::test_brain_status_merges_stage3_loops_for_live_visibility` passed with `4` tests on `2026-05-14`.
+  - `python -m pytest -q tests\test_stage69_inner_stream.py tests\test_holo_host.py::DaemonFlowTests::test_daemon_cycle_runs_inner_stream_without_inbound_message tests\test_holo_host.py::DaemonFlowTests::test_inner_stream_runner_error_is_recorded_without_crashing_daemon_loop tests\test_holo_host.py::ReplyServiceTests::test_brain_status_merges_stage3_loops_for_live_visibility` passed with `4` tests on `2026-05-14`.
+  - `python -m py_compile holo_host\inner_stream.py holo_host\daemon.py holo_host\reply_api.py holo_host\config.py` passed on `2026-05-14`.
+  - `python -m pytest -q` passed with `473` tests on `2026-05-14` after Stage69.
+  - `python scripts\check_public_release_hygiene.py` passed on `2026-05-14`.
+  - `git diff --check` reported no whitespace errors on `2026-05-14`; Git printed only CRLF conversion warnings for existing text files.
   - `python -m pytest -q tests\test_stage65_bounded_tool_observation.py` passed with `4` tests on `2026-05-14`.
   - `python -m pytest -q tests\test_stage65_bounded_tool_observation.py tests\test_stage64_residual_working_channel.py tests\test_bionic_memory_scheduler.py tests\test_context_scheduler.py tests\test_stage46_bionic_boundary_stress.py tests\test_stage53_mcp_upstream.py tests\test_stage61_bionic_simulation_lab.py tests\test_stage62_bionic_capability_observatory.py` passed with `54` tests on `2026-05-14`.
   - `python -m py_compile holo_host\bionic_memory_scheduler.py holo_host\context_scheduler.py holo_host\processors.py holo_host\bionic_boundary_stress.py holo_host\bionic_simulation_lab.py holo_host\bionic_capability_observatory.py holo_host\mcp_upstream.py holo_host\cli.py` passed on `2026-05-14`.

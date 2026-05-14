@@ -822,6 +822,7 @@ class HoloReplyService:
     def _brain_loop_definitions(self, mode: str) -> dict[str, dict[str, Any]]:
         definitions = {
             "heartbeat": {"interval_seconds": max(1, int(self.config.memory.heartbeat_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
+            "inner_stream": {"interval_seconds": max(1, int(self.config.memory.inner_stream_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
             "attention_tick": {"interval_seconds": max(1, int(self.config.memory.attention_tick_interval_seconds)), "enabled_modes": {"silent", "companion", "full_brain"}},
             "maintenance_stream": {"interval_seconds": 60, "enabled_modes": {"silent", "companion", "dream_only", "full_brain"}},
             "association_stream": {"interval_seconds": 180, "enabled_modes": {"companion", "full_brain"}},
@@ -840,6 +841,8 @@ class HoloReplyService:
             definitions["self_revision"]["interval_seconds"] = max(600, int(definitions["self_revision"]["interval_seconds"] * 0.5))
             definitions["operator_planning"]["interval_seconds"] = max(90, int(definitions["operator_planning"]["interval_seconds"] * 0.75))
             definitions["operator_shadow_cycle"]["interval_seconds"] = max(60, int(definitions["operator_shadow_cycle"]["interval_seconds"] * 0.75))
+        if not bool(self.config.memory.inner_stream_enabled):
+            definitions.pop("inner_stream", None)
         return definitions
 
     def _brain_status_payload(self) -> dict[str, Any]:

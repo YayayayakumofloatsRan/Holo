@@ -310,6 +310,13 @@ Stage68: bionic memory robustness
 - Hardens Stage59 after the real run exposed a transient `IncompleteRead(0 bytes read)` path that produced an empty turn with processor ledger `status=error`; Stage59 now marks that condition as `provider_error` instead of silently completing the trace.
 - Keeps Stage68 core changes observational and surrogate-only; the separate follow-up DeepSeek campaigns were operator-gated real-provider validation. No MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop is added.
 
+Stage69: inner-stream consciousness clock
+- Adds `inner_stream`, a bounded always-on endogenous micro-tick inside the WSL daemon.
+- Emits volatile subject-state ticks with sensory edge, attention focus, affective tension, memory echo, goal pressure, inhibition, and candidate action phases.
+- Exposes `inner_stream_state` through brain status and records compact loop telemetry for dashboard and visualization sampling.
+- Hardens daemon loop execution so brain-loop runner exceptions become `status=error` telemetry instead of crashing the main cycle.
+- Keeps Stage69 bounded: no model call, self-memory write, policy write, transport write, watcher authority, downstream MCP exposure, second decision layer, or autonomous long-term memory promotion.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
