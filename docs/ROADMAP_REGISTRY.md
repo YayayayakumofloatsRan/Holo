@@ -342,6 +342,13 @@ Stage72: correction reactivation marker
 - The Stage71 evaluator still returns `decision=partial_support_real_provider`; Stage73 should separate absolute provider improvement from residual counterfactual headroom and run longer/repeated provider cells for geometry/attractor reliability.
 - Keeps all changes prompt-scheduling/diagnostic only: no WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage73: biomimetic provider progress
+- Adds a read-only provider-progress observatory that compares two Stage71 causal-ablation reports and separates absolute real-provider baseline improvement from residual counterfactual headroom.
+- Implements `evaluate-biomimetic-provider-progress`, HTML/JSON/PNG artifacts, provider-noise accounting, bounded publication claims, and an explicit `separates_absolute_from_residual` evidence gate.
+- Reports the current DeepSeek comparison conservatively: `decision=absolute_improved_residual_partial`, baseline `hippocampal_reactivation_delta=0.021284`, baseline `correction_survival_proxy_delta=0.029163`, residual `hippocampal_reactivation_headroom_change=-0.000001`, residual `correction_survival_headroom_change=0.0`, and `after_observed_total_tokens=135043`.
+- The result means Stage72 improved observed provider behavior but did not yet compress the Stage71 replay/correction headroom; Stage74 should run repeated or longer Stage59/60 DeepSeek cells and rerun Stage71/73.
+- Keeps all changes observational and report-only: no provider call inside Stage73, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

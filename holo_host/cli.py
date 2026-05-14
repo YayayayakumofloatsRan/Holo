@@ -8877,6 +8877,127 @@ def command_evaluate_biomimetic_causal_ablation(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_provider_progress(
+    config_path: str | None,
+    *,
+    before_json: str,
+    after_json: str,
+    before_trace_json: str | None,
+    after_trace_json: str | None,
+    output: str | None,
+) -> int:
+    from .biomimetic_provider_progress import (
+        build_biomimetic_provider_progress,
+        load_biomimetic_provider_progress_json,
+        write_biomimetic_provider_progress_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    before = load_biomimetic_provider_progress_json(before_json)
+    after = load_biomimetic_provider_progress_json(after_json)
+    before_trace = (
+        load_biomimetic_provider_progress_json(before_trace_json)
+        if before_trace_json
+        else None
+    )
+    after_trace = (
+        load_biomimetic_provider_progress_json(after_trace_json)
+        if after_trace_json
+        else None
+    )
+    report = build_biomimetic_provider_progress(
+        before,
+        after,
+        before_trace=before_trace,
+        after_trace=after_trace,
+    )
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage73"
+            / "biomimetic_provider_progress.html"
+        )
+    written = write_biomimetic_provider_progress_artifacts(report, output_path)
+    absolute = (
+        dict(report.get("absolute_progress", {}))
+        if isinstance(report.get("absolute_progress", {}), dict)
+        else {}
+    )
+    residual = (
+        dict(report.get("residual_headroom", {}))
+        if isinstance(report.get("residual_headroom", {}), dict)
+        else {}
+    )
+    noise = (
+        dict(report.get("provider_noise", {}))
+        if isinstance(report.get("provider_noise", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "progress_png_path": str(written["progress_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "provider_interpretation": decision.get("provider_interpretation", ""),
+                    "baseline_hippocampal_reactivation_delta": absolute.get(
+                        "baseline_hippocampal_reactivation_delta",
+                        0,
+                    ),
+                    "baseline_correction_survival_proxy_delta": absolute.get(
+                        "baseline_correction_survival_proxy_delta",
+                        0,
+                    ),
+                    "baseline_biomimetic_score_delta": absolute.get(
+                        "baseline_biomimetic_score_delta",
+                        0,
+                    ),
+                    "residual_hippocampal_headroom_change": residual.get(
+                        "hippocampal_reactivation_headroom_change",
+                        0,
+                    ),
+                    "residual_correction_headroom_change": residual.get(
+                        "correction_survival_headroom_change",
+                        0,
+                    ),
+                    "flow_to_reply_coupling_loss_reduction": residual.get(
+                        "flow_to_reply_coupling_loss_reduction",
+                        0,
+                    ),
+                    "after_latency_outlier": bool(noise.get("after_latency_outlier", False)),
+                    "after_observed_total_tokens": noise.get("after_observed_total_tokens", 0),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "causal_language_bounded": bool(evidence.get("causal_language_bounded", True)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -10453,6 +10574,15 @@ def main(argv: list[str] | None = None) -> int:
     biomimetic_causal_ablation_parser.add_argument("--scenarios", type=int, default=7)
     biomimetic_causal_ablation_parser.add_argument("--turns", type=int, default=180)
     biomimetic_causal_ablation_parser.add_argument("--output", default=None)
+    biomimetic_provider_progress_parser = subparsers.add_parser(
+        "evaluate-biomimetic-provider-progress",
+        help="Compare Stage71 real-provider reports and separate absolute gains from residual counterfactual headroom",
+    )
+    biomimetic_provider_progress_parser.add_argument("--before-json", required=True)
+    biomimetic_provider_progress_parser.add_argument("--after-json", required=True)
+    biomimetic_provider_progress_parser.add_argument("--before-trace-json", default=None)
+    biomimetic_provider_progress_parser.add_argument("--after-trace-json", default=None)
+    biomimetic_provider_progress_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11072,6 +11202,15 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             scenarios=args.scenarios,
             turns=args.turns,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-provider-progress":
+        return command_evaluate_biomimetic_provider_progress(
+            args.config,
+            before_json=args.before_json,
+            after_json=args.after_json,
+            before_trace_json=args.before_trace_json,
+            after_trace_json=args.after_trace_json,
             output=args.output,
         )
     if args.command == "run-consciousness-provider-trace":

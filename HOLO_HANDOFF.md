@@ -133,13 +133,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 128. `docs/ENGINEERING_HANDOFF_STAGE71.md`
 129. `docs/STAGE72_CORRECTION_REACTIVATION_MARKER.md`
 130. `docs/ENGINEERING_HANDOFF_STAGE72.md`
-131. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-132. `HOLO_SYSTEM.md`
-133. `HOLO_HOST.md`
-134. `OPERATIONS.md`
-135. `docs/PUBLIC_RELEASE_HYGIENE.md`
-136. `holo_memory_library/MEMORY_LIBRARY.md`
-137. `windows_helper/README.md`
+131. `docs/STAGE73_BIOMIMETIC_PROVIDER_PROGRESS.md`
+132. `docs/ENGINEERING_HANDOFF_STAGE73.md`
+133. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+134. `HOLO_SYSTEM.md`
+135. `HOLO_HOST.md`
+136. `OPERATIONS.md`
+137. `docs/PUBLIC_RELEASE_HYGIENE.md`
+138. `holo_memory_library/MEMORY_LIBRARY.md`
+139. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -151,11 +153,18 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage71 biomimetic causal ablation lab after Stage70 observatory, Stage69 inner stream, Stage68 memory robustness, Stage67 capability repairs, Stage66 dynamic delta frame, Stage65 bounded tool observation, Stage64 residual working channel, Stage63 cache inheritance spine, Stage62 bionic capability observatory, Stage61 high-throughput bionic simulation lab, Stage60 recoverable long-run provider trace campaign, and Stage59 provider long-form trace on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: Stage71 changes are expected to be committed immediately after verification.
-- Current milestone: `stage72-correction-reactivation-marker`
-- Current status: Stage70 reframes the next research arc around biological plausibility and consciousness-flow dynamics rather than safety-weighted capability scoring. Stage69 already adds a bounded always-on internal consciousness stream inside the WSL daemon: `inner_stream` advances without external messages, calls the existing processor fabric through `inner_stream_thought`, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. Stage70 adds a read-only biomimetic consciousness observatory that scores endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability from Stage61/69-style artifacts. Stage71 adds a paired counterfactual causal-ablation lab over the same artifacts: `correction_reactivation_boost` tests hippocampal replay/ACh-like precision for false-fact correction survival, and `global_workspace_ignition_ablation` tests whether flattening ignition removes reply-level coupling. Stage72 adds the first real mechanism response to the Stage71 provider gap: explicit correction cues now create `correction_reactivation_marker` in the scheduler/lifecycle/flow path. The Stage72 DeepSeek trace improved absolute provider `hippocampal_reactivation` and `correction_survival_proxy`, but the Stage71 evaluator still returns partial support because residual counterfactual headroom is small and the 30-turn provider trace remains weak for geometry/attractor claims. Safety/authority boundaries remain hard invalidators, not the primary research score.
+- Resume commit: Stage73 biomimetic provider-progress observatory after Stage72 correction-reactivation marker, Stage71 biomimetic causal ablation lab, Stage70 observatory, Stage69 inner stream, Stage68 memory robustness, Stage67 capability repairs, Stage66 dynamic delta frame, Stage65 bounded tool observation, Stage64 residual working channel, Stage63 cache inheritance spine, Stage62 bionic capability observatory, Stage61 high-throughput bionic simulation lab, Stage60 recoverable long-run provider trace campaign, and Stage59 provider long-form trace on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: Stage73 changes are expected to be committed immediately after verification.
+- Current milestone: `stage73-biomimetic-provider-progress`
+- Current status: Stage70 reframes the next research arc around biological plausibility and consciousness-flow dynamics rather than safety-weighted capability scoring. Stage69 already adds a bounded always-on internal consciousness stream inside the WSL daemon: `inner_stream` advances without external messages, calls the existing processor fabric through `inner_stream_thought`, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. Stage70 adds a read-only biomimetic consciousness observatory that scores endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability from Stage61/69-style artifacts. Stage71 adds a paired counterfactual causal-ablation lab over the same artifacts: `correction_reactivation_boost` tests hippocampal replay/ACh-like precision for false-fact correction survival, and `global_workspace_ignition_ablation` tests whether flattening ignition removes reply-level coupling. Stage72 adds the first real mechanism response to the Stage71 provider gap: explicit correction cues now create `correction_reactivation_marker` in the scheduler/lifecycle/flow path. Stage73 separates the Stage72 DeepSeek result into absolute provider gains and residual counterfactual headroom: baseline `hippocampal_reactivation` and `correction_survival_proxy` improved, while Stage71 replay/correction headroom remains measurable. Safety/authority boundaries remain hard invalidators, not the primary research score.
 - Latest verification evidence:
+  - `python -m pytest tests\test_stage73_biomimetic_provider_progress.py -q` passed with `3` tests on `2026-05-15`.
+  - `python -m pytest tests\test_stage73_biomimetic_provider_progress.py tests\test_stage71_biomimetic_causal_ablation.py tests\test_stage70_biomimetic_consciousness_observatory.py -q` passed with `10` tests on `2026-05-15`.
+  - `python -m py_compile holo_host\biomimetic_provider_progress.py holo_host\biomimetic_causal_ablation.py holo_host\biomimetic_consciousness_observatory.py holo_host\cli.py` passed on `2026-05-15`.
+  - `python -m pytest -q` passed with `489` tests on `2026-05-15`.
+  - `python scripts\check_public_release_hygiene.py` passed on `2026-05-15`.
+  - `git diff --check` reported no whitespace errors on `2026-05-15`; Git printed only CRLF conversion warnings for existing text files.
+  - `python -m holo_host --config .holo_host.toml evaluate-biomimetic-provider-progress --before-json artifacts\stage71\stage71_deepseek_reactivation_causal_ablation.json --after-json artifacts\stage72\stage72_current_deepseek_reactivation_marker_causal_ablation.json --before-trace-json artifacts\stage71\stage71_deepseek_reactivation_trace.json --after-trace-json artifacts\stage72\stage72_current_deepseek_reactivation_marker_trace.json --output artifacts\stage73\stage73_provider_progress.html` returned `decision=absolute_improved_residual_partial`, `baseline_hippocampal_reactivation_delta=0.021284`, `baseline_correction_survival_proxy_delta=0.029163`, `baseline_biomimetic_score_delta=0.004967`, `residual_hippocampal_headroom_change=-0.000001`, `residual_correction_headroom_change=0.0`, `flow_to_reply_coupling_loss_reduction=0.096521`, `after_latency_outlier=true`, `after_observed_total_tokens=135043`, `real_provider_trace=true`, and `causal_language_bounded=true` on `2026-05-15`.
   - `python -m pytest -q tests\test_bionic_memory_scheduler.py tests\test_bionic_memory_lifecycle.py tests\test_bionic_consciousness_flow.py` passed with `14` tests on `2026-05-15` after Stage72 correction-reactivation marker work.
   - `python -m pytest -q tests\test_bionic_memory_scheduler.py tests\test_bionic_memory_lifecycle.py tests\test_bionic_consciousness_flow.py tests\test_context_scheduler.py tests\test_stage46_bionic_boundary_stress.py` passed with `38` tests on `2026-05-15`.
   - `python -m py_compile holo_host\bionic_memory_scheduler.py holo_host\bionic_memory_lifecycle.py holo_host\bionic_consciousness_flow.py holo_host\context_scheduler.py holo_host\bionic_boundary_stress.py` passed on `2026-05-15`.
