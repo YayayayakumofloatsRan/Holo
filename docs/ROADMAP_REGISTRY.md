@@ -300,6 +300,14 @@ Stage67: capability audit repairs
 - Promotes strong-model validation to the default Stage60 campaign posture: `deepseek-v4-pro` is pro-first and auto-routed to `kernel_xhigh`; flash remains a second control cell. A strict `deepseek-v4-pro` live-runtime probe collected `3` real turns with `observed_total_tokens=13855`, `overall_score=0.8961`, and non-empty replies.
 - Keeps Stage67 capability repairs offline/surrogate/prompt-shaping only; the separate post-repair DeepSeek probes were operator-gated real-provider validation. No MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage68: bionic memory robustness
+- Adds a focused memory robustness observatory over Stage61 surrogate dialogue traces.
+- Scores memory survival, correction retention, memory sedimentation, priority extraction, self-growth safety, cache-context inheritance, and boundary stability.
+- Adds `evaluate-bionic-memory-robustness`, HTML/JSON/PNG artifacts, per-scenario memory-pressure observations, pressure-priority correlation, self-growth write-violation checks, and non-auto-applied intervention planning.
+- Repairs Stage61 memory-pressure projection so high-pressure memory loss, correction, grounding, tool, cache, latency, and residual scenarios raise diagnostic consolidation priority instead of inheriting seed-wave priority that can fall below baseline.
+- Reports the current evidence conservatively: corrected current-seed Stage61/68 over `21` scenarios and `15120` turns reached `aggregate_score=0.859316`, `memory_sedimentation=0.832068`, `pressure_priority_correlation=0.784654`, `boundary_stability=1.0`, and `self_memory_write_violation_count=0`.
+- Keeps all changes observational and surrogate-only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

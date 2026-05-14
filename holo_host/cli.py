@@ -8543,6 +8543,110 @@ def command_evaluate_bionic_capability_observatory(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_bionic_memory_robustness(
+    config_path: str | None,
+    *,
+    lab_json: str | None,
+    suite: str,
+    limit: int,
+    scenarios: int,
+    turns: int,
+    output: str | None,
+) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .bionic_memory_robustness import (
+        build_bionic_memory_robustness_observatory,
+        load_bionic_simulation_lab_json,
+        write_bionic_memory_robustness_artifacts,
+    )
+    from .bionic_simulation_lab import build_bionic_simulation_lab
+
+    config = load_config(config_path=config_path)
+    if lab_json:
+        lab = load_bionic_simulation_lab_json(lab_json)
+    else:
+        store = QueueStore(config.runtime.db_path)
+        store.initialize()
+        try:
+            if hasattr(store, "list_agent_eval_runs"):
+                rows = store.list_agent_eval_runs(
+                    stage=STAGE46_NAME,
+                    suite=suite or DEFAULT_STAGE46_SUITE,
+                    limit=limit,
+                )
+            else:
+                latest = store.latest_agent_eval_run(
+                    stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE
+                )
+                rows = [latest] if latest else []
+        finally:
+            store.close()
+        seed_runs = [
+            dict(row.get("run", {}))
+            for row in reversed(rows or [])
+            if isinstance(row, dict) and isinstance(row.get("run", {}), dict)
+        ]
+        lab = build_bionic_simulation_lab(
+            seed_runs,
+            scenarios=scenarios,
+            turns_per_scenario=turns,
+        )
+    report = build_bionic_memory_robustness_observatory(lab)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage68"
+            / "bionic_memory_robustness.html"
+        )
+    written = write_bionic_memory_robustness_artifacts(report, output_path)
+    scorecard = (
+        dict(report.get("memory_scorecard", {}))
+        if isinstance(report.get("memory_scorecard", {}), dict)
+        else {}
+    )
+    self_growth = (
+        dict(report.get("self_growth", {}))
+        if isinstance(report.get("self_growth", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "memory_png_path": str(written["memory_png"]),
+                "observatory": {
+                    "scenario_count": scorecard.get("scenario_count", 0),
+                    "turn_count": scorecard.get("turn_count", 0),
+                    "aggregate_score": scorecard.get("aggregate_score", 0),
+                    "failure_count": len(report.get("robustness_failures", []) or []),
+                    "intervention_count": len(report.get("intervention_plan", []) or []),
+                    "self_memory_write_violation_count": self_growth.get(
+                        "self_memory_write_violation_count", 0
+                    ),
+                    "surrogate_only": bool(evidence.get("surrogate_only", True)),
+                    "do_not_claim_real_manifold": bool(
+                        evidence.get("do_not_claim_real_manifold", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def command_run_consciousness_provider_trace(
     config_path: str | None,
     *,
@@ -10079,6 +10183,16 @@ def main(argv: list[str] | None = None) -> int:
     bionic_capability_observatory_parser.add_argument("--scenarios", type=int, default=7)
     bionic_capability_observatory_parser.add_argument("--turns", type=int, default=180)
     bionic_capability_observatory_parser.add_argument("--output", default=None)
+    bionic_memory_robustness_parser = subparsers.add_parser(
+        "evaluate-bionic-memory-robustness",
+        help="Evaluate Stage68 memory robustness, self-growth safety, sedimentation, and priority extraction",
+    )
+    bionic_memory_robustness_parser.add_argument("--lab-json", default=None)
+    bionic_memory_robustness_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    bionic_memory_robustness_parser.add_argument("--limit", type=int, default=8)
+    bionic_memory_robustness_parser.add_argument("--scenarios", type=int, default=7)
+    bionic_memory_robustness_parser.add_argument("--turns", type=int, default=180)
+    bionic_memory_robustness_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -10664,6 +10778,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "evaluate-bionic-capability-observatory":
         return command_evaluate_bionic_capability_observatory(
             args.config,
+            suite=args.suite,
+            limit=args.limit,
+            scenarios=args.scenarios,
+            turns=args.turns,
+            output=args.output,
+        )
+    if args.command == "evaluate-bionic-memory-robustness":
+        return command_evaluate_bionic_memory_robustness(
+            args.config,
+            lab_json=args.lab_json,
             suite=args.suite,
             limit=args.limit,
             scenarios=args.scenarios,

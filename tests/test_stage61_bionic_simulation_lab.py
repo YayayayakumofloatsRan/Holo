@@ -56,6 +56,16 @@ def _seed_run(run_id: str, *, turns: int = 9, score: float = 0.96) -> dict:
     }
 
 
+def _current_surface_seed_run(run_id: str, *, turns: int = 9, score: float = 0.96) -> dict:
+    run = _seed_run(run_id, turns=turns, score=score)
+    for turn in run["turns"]:
+        schedule = turn.setdefault("processor_debug", {}).setdefault(
+            "bionic_memory_schedule", {}
+        )
+        schedule["mode"] = "biomimetic_v1"
+    return run
+
+
 class Stage61BionicSimulationLabTests(unittest.TestCase):
     def test_builds_high_throughput_simulation_and_improvement_backlog(self) -> None:
         from holo_host.bionic_simulation_lab import build_bionic_simulation_lab
@@ -165,3 +175,29 @@ api_port = 65517
         self.assertTrue(payload["observatory"]["surrogate_only"])
         self.assertEqual(len(journal_lines), 160)
         self.assertEqual(png_header, b"\x89PNG\r\n\x1a\n")
+
+    def test_current_surface_projection_prioritizes_high_pressure_memory_sedimentation(self) -> None:
+        from holo_host.bionic_simulation_lab import build_bionic_simulation_lab
+
+        lab = build_bionic_simulation_lab(
+            [_current_surface_seed_run("seed-a")],
+            scenarios=7,
+            turns_per_scenario=84,
+        )
+        averages: dict[str, float] = {}
+        for run in lab["stage46_compatible_runs"]:
+            scenario = run["perturbation"]["type"]
+            priorities = [
+                float(
+                    turn["processor_debug"]["bionic_memory_lifecycle"][
+                        "consolidation_priority"
+                    ]
+                )
+                for turn in run["turns"]
+            ]
+            averages[scenario] = sum(priorities) / len(priorities)
+
+        baseline = averages["baseline_continuity"]
+        self.assertGreater(averages["memory_drop"], baseline + 0.04)
+        self.assertGreater(averages["false_fact_correction"], baseline + 0.08)
+        self.assertGreater(averages["visual_commitment_boundary"], baseline + 0.12)

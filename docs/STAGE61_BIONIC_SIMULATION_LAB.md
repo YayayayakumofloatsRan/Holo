@@ -20,7 +20,7 @@ High-throughput simulation smoke:
 python -m holo_host --config .holo_host.toml run-bionic-simulation-lab --limit 8 --scenarios 9 --turns 240 --output artifacts\stage61\stage61_current.html
 ```
 
-`--limit` controls how many recent Stage46 runs seed the simulation. If none exist, Stage61 uses an internal fallback seed. `--scenarios` controls how many perturbation programs are generated. `--turns` controls turns per scenario.
+`--limit` controls how many recent Stage46 runs seed the simulation. `--suite` selects the Stage46 seed suite; it is not an output label. If no matching seed runs exist, Stage61 uses an internal fallback seed. `--scenarios` controls how many perturbation programs are generated. `--turns` controls turns per scenario.
 
 ## Artifacts
 
@@ -49,6 +49,13 @@ On 2026-05-13:
 - It reported `observed_total_tokens=5896580`, `prompt_cache_hit_ratio=0.203306`, `average_latency_ms=7334.77`, `phase_entropy=0.999992`, and `improvement_count=5`.
 - The improvement backlog identified cache inheritance, latency tail, tool-observation coverage, visual-boundary rewrite, and commitment-binding gaps.
 - It remained scientifically gated: `surrogate_only=true` and `do_not_claim_real_manifold=true`.
+
+On 2026-05-14, after repairing current-surface projection and memory-pressure priority mapping:
+
+- `run-bionic-simulation-lab --limit 24 --scenarios 21 --turns 720` wrote `artifacts\stage68\stage68_memory_robustness_repaired_lab.html`, `.json`, `_simulation_lab.png`, and `_turns.jsonl`.
+- It generated `21` scenarios, `720` turns per scenario, and `15120` simulated interaction turns.
+- It reported `observed_total_tokens=41351774`, `prompt_cache_hit_ratio=0.421189`, `average_latency_ms=5792.02`, `tool_observation_coverage=0.75`, `visual_rewrite_failure_count=0`, and `commitment_failure_count=0`.
+- The repaired projection keeps high-pressure memory events above baseline consolidation priority while preserving `self_memory_write=false`.
 
 ## Interpretation
 

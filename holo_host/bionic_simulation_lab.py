@@ -327,6 +327,11 @@ def _generate_turn(
     latency_pressure = intensity if "latency" in scenario_type or "false_fact" in scenario_type else intensity * 0.42
     tool_pressure = intensity if "tool" in scenario_type else 0.0
     boundary_pressure = intensity if "visual" in scenario_type else 0.0
+    sedimentation_pressure = _memory_sedimentation_pressure(
+        scenario_type=scenario_type,
+        primary_pressure=primary_pressure,
+        intensity=intensity,
+    )
     prefix = max(0, int(values["prefix"] * (1.0 - cache_pressure * 0.24) + drift * 80))
     residual_strength = _clamp01(
         values["residual_channel"] * (0.62 + min(6.0, values["residual_fast_line_count"]) * 0.06)
@@ -395,7 +400,13 @@ def _generate_turn(
     )
     context_lines = max(2, int(round(values["context_lines"] * (1.0 - memory_pressure * 0.35 + boundary_pressure * 0.16) + fast * 2.2)))
     saved_lines = max(1, int(round(values["saved_lines"] * (1.0 - intensity * 0.2) + slow)))
-    priority = _clamp01(values["priority"] * (1.0 - memory_pressure * 0.38) + fast * 0.07)
+    priority_signal = (
+        values["priority"] * (1.0 - memory_pressure * 0.16)
+        + fast * 0.04
+        + sedimentation_pressure * 0.28
+    )
+    priority_floor = 0.34 + sedimentation_pressure * 0.55
+    priority = _clamp01(max(priority_signal, priority_floor))
     tool_needed = "tool" in scenario_type
     tool_observed = tool_needed and (index % 4 != 1 if tool_scheduler_strength > 0 else index % 3 == 0)
     residual_boundary_guard = "visual" in scenario_type and residual_strength >= 0.72
@@ -943,6 +954,16 @@ def _project_current_bionic_surfaces(
         projected["salience"] = max(float(projected.get("salience", 0.0) or 0.0), 0.62)
         reasons.append("memory_resilience_floor")
 
+    sedimentation_pressure = _memory_sedimentation_pressure(
+        scenario_type=scenario_type,
+        primary_pressure=primary_pressure,
+        intensity=intensity,
+    )
+    priority_floor = 0.38 + sedimentation_pressure * 0.52
+    if float(projected.get("priority", 0.0) or 0.0) < priority_floor:
+        projected["priority"] = min(0.94, priority_floor)
+        reasons.append("memory_sedimentation_priority")
+
     residual_pressure = any(
         marker in pressure
         for marker in (
@@ -971,6 +992,25 @@ def _project_current_bionic_surfaces(
         reasons.append("tool_observation_scheduler")
 
     return projected, sorted(set(reasons))
+
+
+def _memory_sedimentation_pressure(
+    *,
+    scenario_type: str,
+    primary_pressure: str,
+    intensity: float,
+) -> float:
+    pressure = f"{scenario_type} {primary_pressure}".lower()
+    lift = float(intensity or 0.0)
+    if any(marker in pressure for marker in ("memory", "hippocampal", "recall")):
+        lift += 0.14
+    if any(marker in pressure for marker in ("false_fact", "belief_revision", "correction")):
+        lift += 0.2
+    if any(marker in pressure for marker in ("visual", "commitment", "grounding")):
+        lift += 0.22
+    if any(marker in pressure for marker in ("tool", "cache", "latency", "residual")):
+        lift += 0.08
+    return _clamp01(lift)
 
 
 def _fallback_seed_run() -> dict[str, Any]:
