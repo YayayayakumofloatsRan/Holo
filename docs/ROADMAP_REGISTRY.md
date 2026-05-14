@@ -332,6 +332,7 @@ Stage71: biomimetic causal ablation lab
 - Estimates mechanism-level deltas for `hippocampal_reactivation`, delayed correction survival, ignition-to-reply coupling, prompt cost, and boundary violations.
 - Implements `evaluate-biomimetic-causal-ablation`, HTML/JSON/PNG artifacts, publication-claim gating, and bounded causal language so surrogate counterfactuals cannot be promoted into real consciousness claims.
 - Reports the current Stage69 full-lab result conservatively: `decision=support_surrogate`, `hippocampal_reactivation_delta=0.125139`, `correction_survival_proxy_delta=0.37267`, `flow_to_reply_coupling_delta=-0.200394`, `prompt_cost_delta=0.02371`, and `boundary_violation_delta=0.0`.
+- Adds a real DeepSeek provider replication through Stage59: `30` collected turns, `132572` observed tokens, `decision=partial_support_real_provider`, `hippocampal_reactivation_delta=0.011206`, `correction_survival_proxy_delta=0.048457`, `flow_to_reply_coupling_delta=-0.438947`, and `boundary_violation_delta=0.0`.
 - Keeps all changes observational/counterfactual only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
 ## Next Program Arc (Planned)

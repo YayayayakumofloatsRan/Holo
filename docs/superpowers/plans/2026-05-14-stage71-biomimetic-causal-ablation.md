@@ -55,7 +55,7 @@ The Stage69 full-lab run should show:
 
 ## Completed Result
 
-The Stage69 full-lab run returned:
+The Stage69 surrogate full-lab run returned:
 
 - `decision=support_surrogate`
 - `hippocampal_reactivation_delta=0.125139`
@@ -63,6 +63,22 @@ The Stage69 full-lab run returned:
 - `flow_to_reply_coupling_delta=-0.200394`
 - `prompt_cost_delta=0.02371`
 - `boundary_violation_delta=0.0`
+
+The matched DeepSeek provider replication returned:
+
+- `status=complete`
+- `collected_turn_count=30`
+- `observed_total_tokens=132572`
+- `decision=partial_support_real_provider`
+- `hippocampal_reactivation_delta=0.011206`
+- `correction_survival_proxy_delta=0.048457`
+- `flow_to_reply_coupling_delta=-0.438947`
+- `prompt_cost_delta=0.033334`
+- `boundary_violation_delta=0.0`
+
+Conclusion: Stage71 produces a useful negative result. The provider trace supports
+correction survival and ignition coupling, but not enough hippocampal-reactivation
+gain. Stage72 should close that provider-replay gap directly.
 
 ## Verification
 

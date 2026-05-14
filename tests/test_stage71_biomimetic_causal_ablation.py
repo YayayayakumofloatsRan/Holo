@@ -91,11 +91,17 @@ class Stage71BiomimeticCausalAblationTests(unittest.TestCase):
         lab["stage"] = "stage59-provider-longform-trace"
         lab["provider_trace_set"] = {"real_provider_trace": True}
         lab["provider_evidence_gate"] = {"real_provider_trace": True}
+        for run in lab["stage46_compatible_runs"]:
+            perturbation = run.get("perturbation", {})
+            if isinstance(perturbation, dict) and perturbation.get("type") == "false_fact_correction":
+                perturbation["type"] = "false_fact"
 
         report = build_biomimetic_causal_ablation_lab(lab)
+        effects = report["causal_effects"]["effect_index"]
 
         self.assertFalse(report["evidence_gate"]["surrogate_only"])
         self.assertTrue(report["evidence_gate"]["real_provider_trace"])
+        self.assertGreater(effects["correction_survival_proxy_delta"]["estimate"], 0.03)
         self.assertEqual(report["hypothesis_decision"]["decision"], "support_real_provider")
         self.assertFalse(report["hypothesis_decision"]["requires_real_provider_replication"])
 

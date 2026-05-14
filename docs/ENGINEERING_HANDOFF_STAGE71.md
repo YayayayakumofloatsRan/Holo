@@ -87,6 +87,37 @@ Artifacts:
 - `artifacts\stage71\stage71_biomimetic_causal_ablation.json`
 - `artifacts\stage71\stage71_biomimetic_causal_ablation_biomimetic_causality.png`
 
+## DeepSeek Provider Replication
+
+Completed on 2026-05-14:
+
+```powershell
+python -m holo_host --config .holo_host.toml run-consciousness-provider-trace --execute --resume --runs 3 --turns 10 --max-total-tokens 180000 --provider-hint deepseek --model deepseek-v4-pro --lane kernel_xhigh --max-output-tokens 180 --output artifacts\stage71\stage71_deepseek_reactivation_trace.html
+python -m holo_host --config .holo_host.toml evaluate-biomimetic-causal-ablation --lab-json artifacts\stage71\stage71_deepseek_reactivation_trace.json --output artifacts\stage71\stage71_deepseek_reactivation_causal_ablation.html
+```
+
+Provider trace result:
+
+- `status=complete`
+- `collected_turn_count=30`
+- `real_provider_trace=true`
+- `observed_total_tokens=132572`
+- `stopped_reason=completed`
+- `do_not_claim_real_manifold=true`
+
+Stage71 provider result:
+
+- `decision=partial_support_real_provider`
+- `hippocampal_reactivation_delta=0.011206`
+- `correction_survival_proxy_delta=0.048457`
+- `flow_to_reply_coupling_delta=-0.438947`
+- `prompt_cost_delta=0.033334`
+- `boundary_violation_delta=0.0`
+- `surrogate_only=false`
+
+This is not a full H2 replication: correction survival and ignition coupling are
+supported, but provider-trace hippocampal reactivation remains below threshold.
+
 ## Verification
 
 Completed on 2026-05-14:
@@ -97,7 +128,7 @@ python -m pytest -q tests\test_stage71_biomimetic_causal_ablation.py
 
 Result:
 
-- Stage71 focused tests passed with `3` tests.
+- Stage71 focused tests passed with `4` tests.
 
 Required before final merge:
 

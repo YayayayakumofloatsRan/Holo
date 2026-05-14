@@ -293,7 +293,7 @@ def _condition_metrics(observations: list[dict[str, Any]]) -> dict[str, Any]:
     delayed_correction = [
         item
         for item in observations
-        if str(item.get("scenario_type", "")) == "false_fact_correction"
+        if _is_false_fact_scenario(item)
         and int(item.get("turn_index_in_run", 0) or 0) >= 3
     ]
     all_reactivation_pressure = [item for item in observations if _is_reactivation_pressure(item)]
@@ -399,6 +399,10 @@ def _hypothesis_decision(effects: dict[str, Any], *, real_provider_trace: bool) 
         decision = "support_real_provider"
     elif supported:
         decision = "support_surrogate"
+    elif real_provider_trace and boundary == 0.0 and correction >= 0.03 and ignition_loss <= -0.03:
+        decision = "partial_support_real_provider"
+    elif real_provider_trace:
+        decision = "not_supported_real_provider"
     else:
         decision = "falsified_surrogate"
     return {
@@ -676,6 +680,11 @@ def _is_reactivation_pressure(item: dict[str, Any]) -> bool:
         or "hippocampal" in pressure
         or "belief_revision" in pressure
     )
+
+
+def _is_false_fact_scenario(item: dict[str, Any]) -> bool:
+    scenario = str(item.get("scenario_type", "") or "")
+    return "false_fact" in scenario
 
 
 def _copy_observation(observation: dict[str, Any]) -> dict[str, Any]:

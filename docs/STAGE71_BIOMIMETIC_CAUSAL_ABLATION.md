@@ -101,11 +101,50 @@ biological or consciousness claim. The next publishable step is a matched
 DeepSeek Stage59/60 provider replication with correction probes, topic-shift
 interference, and ignition-ablation controls.
 
+## DeepSeek Provider Replication
+
+Run:
+
+```powershell
+python -m holo_host --config .holo_host.toml run-consciousness-provider-trace --execute --resume --runs 3 --turns 10 --max-total-tokens 180000 --provider-hint deepseek --model deepseek-v4-pro --lane kernel_xhigh --max-output-tokens 180 --output artifacts\stage71\stage71_deepseek_reactivation_trace.html
+python -m holo_host --config .holo_host.toml evaluate-biomimetic-causal-ablation --lab-json artifacts\stage71\stage71_deepseek_reactivation_trace.json --output artifacts\stage71\stage71_deepseek_reactivation_causal_ablation.html
+```
+
+Trace result:
+
+- `status=complete`
+- `collected_turn_count=30`
+- `real_provider_trace=true`
+- `observed_total_tokens=132572`
+- `stopped_reason=completed`
+- `do_not_claim_real_manifold=true`
+
+Stage71 result:
+
+- `decision=partial_support_real_provider`
+- `hippocampal_reactivation_delta=0.011206`
+- `correction_survival_proxy_delta=0.048457`
+- `flow_to_reply_coupling_delta=-0.438947`
+- `prompt_cost_delta=0.033334`
+- `boundary_violation_delta=0.0`
+- `surrogate_only=false`
+- `causal_language_bounded=true`
+
+Interpretation:
+
+The real DeepSeek trace partially supports the Stage71 mechanism: delayed
+correction survival improves and ignition ablation removes strong reply-coupling
+signal, but hippocampal-reactivation does not cross the complete-support
+threshold. This is a useful negative result. It means Stage72 should not merely
+run more surrogate traces; it should close the provider-replay gap by adding a
+real correction-reactivation marker path to the scheduler or inner stream, then
+repeat the provider replication.
+
 ## Boundary
 
 Stage71 is observational/counterfactual only:
 
-- no provider call unless a future Stage59/60 replication is explicitly executed
+- no provider call inside Stage71 itself; provider replication must use Stage59/60
 - no runtime decision authority
 - no transport decision authority
 - no WeChat transport use
