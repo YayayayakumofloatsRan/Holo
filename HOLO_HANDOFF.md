@@ -127,13 +127,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 122. `docs/ENGINEERING_HANDOFF_STAGE69.md`
 123. `docs/STAGE69_DIALOGUE_VALIDATION_2026-05-14.md`
 124. `docs/STAGE70_BIOMIMETIC_CONSCIOUSNESS_RESEARCH_PROGRAM.md`
-125. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-126. `HOLO_SYSTEM.md`
-127. `HOLO_HOST.md`
-128. `OPERATIONS.md`
-129. `docs/PUBLIC_RELEASE_HYGIENE.md`
-130. `holo_memory_library/MEMORY_LIBRARY.md`
-131. `windows_helper/README.md`
+125. `docs/STAGE70_BIOMIMETIC_CONSCIOUSNESS_OBSERVATORY.md`
+126. `docs/ENGINEERING_HANDOFF_STAGE70.md`
+127. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+128. `HOLO_SYSTEM.md`
+129. `HOLO_HOST.md`
+130. `OPERATIONS.md`
+131. `docs/PUBLIC_RELEASE_HYGIENE.md`
+132. `holo_memory_library/MEMORY_LIBRARY.md`
+133. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -148,7 +150,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Resume commit: Stage65 bounded tool observation plus Stage64 residual working channel, Stage63 cache inheritance spine, Stage62 bionic capability observatory, Stage61 high-throughput bionic simulation lab, Stage60 recoverable long-run provider trace campaign, Stage59 provider long-form trace, Stage58 long-form geometry lab, Stage57 geometry calibration, Stage56 dimensional-lift observatory, Stage55 consciousness-manifold observatory, Stage54 consciousness-flow visualization, Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
 - Working tree at handoff time: clean immediately after the Stage65 bounded tool observation commit.
 - Current milestone: `stage70-biomimetic-consciousness-research-program`
-- Current status: Stage70 reframes the next research arc around biological plausibility and consciousness-flow dynamics rather than safety-weighted capability scoring. Stage69 already adds a bounded always-on internal consciousness stream inside the WSL daemon: `inner_stream` advances without external messages, calls the existing processor fabric through `inner_stream_thought`, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. The next implementation target is a Stage70 biomimetic consciousness observatory that scores endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability. Safety/authority boundaries remain hard invalidators, not the primary research score.
+- Current status: Stage70 reframes the next research arc around biological plausibility and consciousness-flow dynamics rather than safety-weighted capability scoring. Stage69 already adds a bounded always-on internal consciousness stream inside the WSL daemon: `inner_stream` advances without external messages, calls the existing processor fabric through `inner_stream_thought`, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. Stage70 now adds a read-only biomimetic consciousness observatory that scores endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability from Stage61/69-style artifacts. Safety/authority boundaries remain hard invalidators, not the primary research score.
 - Latest verification evidence:
   - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `1` test on `2026-05-14`.
   - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `2` tests on `2026-05-14` after the recurrent field correction.
@@ -164,6 +166,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `python -m holo_host --config .holo_host.toml run-bionic-simulation-lab --limit 8 --scenarios 21 --turns 720 --output artifacts\stage69\stage69_dialogue_validation_lab.html` returned `scenario_count=21`, `total_simulated_turns=15120`, `observed_total_tokens=35133926`, `prompt_cache_hit_ratio=0.430122`, `average_latency_ms=3084.58`, and `improvement_count=1` on `2026-05-14`.
   - `python -m holo_host --config .holo_host.toml evaluate-bionic-capability-observatory --limit 8 --scenarios 21 --turns 720 --output artifacts\stage69\stage69_dialogue_validation_capability.html` returned `aggregate_score=0.870835`, `bottleneck_count=1`, `grounding_integrity=1.0`, `explainability_coverage=1.0`, and `tool_observation=0.75` on `2026-05-14`.
   - `python -m holo_host --config .holo_host.toml evaluate-bionic-memory-robustness --lab-json artifacts\stage69\stage69_dialogue_validation_lab.json --output artifacts\stage69\stage69_dialogue_validation_memory.html` returned `aggregate_score=0.863562`, `failure_count=0`, `self_memory_write_violation_count=0`, `boundary_stability=1.0`, and weakest dimension `correction_retention=0.748611` on `2026-05-14`.
+  - `python -m pytest -q tests\test_stage70_biomimetic_consciousness_observatory.py` passed with `3` tests on `2026-05-14`.
+  - `python -m pytest -q tests\test_stage70_biomimetic_consciousness_observatory.py tests\test_stage68_bionic_memory_robustness.py tests\test_stage61_bionic_simulation_lab.py` passed with `10` tests on `2026-05-14`.
+  - `python -m holo_host --config .holo_host.toml evaluate-biomimetic-consciousness --lab-json artifacts\stage69\stage69_dialogue_validation_lab.json --output artifacts\stage70\stage70_biomimetic_consciousness.html` returned `biomimetic_consciousness_score=0.768129`, `turn_count=15120`, `run_count=21`, weakest dimension `hippocampal_reactivation`, `hippocampal_reactivation=0.317602`, and `flow_to_reply_coupling=0.38311` on `2026-05-14`.
   - `python -m holo_host --config .holo_host.toml run-consciousness-trace-campaign --execute --campaign-id stage69_dialogue_validation_live_20260514 --models deepseek-v4-pro,deepseek-v4-flash --runs-per-model 1 --turns 6 --max-total-tokens-per-cell 30000 --max-output-tokens 160 --output-root artifacts\stage69\stage69_dialogue_validation_live` completed `12` real DeepSeek provider turns, `42080` observed tokens, `top_model=deepseek-v4-flash`, `top_score=0.9032`, and kept `do_not_claim_major_breakthrough=true` on `2026-05-14`.
   - `python -m pytest -q tests\test_stage65_bounded_tool_observation.py` passed with `4` tests on `2026-05-14`.
   - `python -m pytest -q tests\test_stage65_bounded_tool_observation.py tests\test_stage64_residual_working_channel.py tests\test_bionic_memory_scheduler.py tests\test_context_scheduler.py tests\test_stage46_bionic_boundary_stress.py tests\test_stage53_mcp_upstream.py tests\test_stage61_bionic_simulation_lab.py tests\test_stage62_bionic_capability_observatory.py` passed with `54` tests on `2026-05-14`.

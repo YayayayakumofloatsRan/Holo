@@ -199,7 +199,7 @@ A result is publishable only if it has:
 
 ## Immediate Stage70 Implementation Scope
 
-Create:
+Implemented first:
 
 - `holo_host/biomimetic_consciousness_observatory.py`
 - `tests/test_stage70_biomimetic_consciousness_observatory.py`
@@ -208,7 +208,7 @@ Create:
   - `docs/STAGE70_BIOMIMETIC_CONSCIOUSNESS_OBSERVATORY.md`
   - `docs/ENGINEERING_HANDOFF_STAGE70.md`
 
-The first implementation should not change Holo's live behavior. It should only read existing Stage61/69 artifacts and produce a new biomimetic scorecard plus visualizations.
+This implementation does not change Holo's live behavior. It reads existing Stage61/69-style artifacts and produces a new biomimetic scorecard plus HTML/JSON/PNG visualizations.
 
 ## Expected First Experiment
 
@@ -272,4 +272,3 @@ If those fail, the honest conclusion is still valuable: LLM-backed agents can im
 - Jansen et al., 2024, "DISCOVERYWORLD: A Virtual Environment for Developing and Evaluating Automated Scientific Discovery Agents". https://arxiv.org/abs/2406.06769
 - Lu et al., 2024, "The AI Scientist: Towards Fully Automated Open-Ended Scientific Discovery". https://arxiv.org/abs/2408.06292
 - Yamada et al., 2025, "The AI Scientist-v2: Workshop-Level Automated Scientific Discovery via Agentic Tree Search". https://arxiv.org/abs/2504.08066
-

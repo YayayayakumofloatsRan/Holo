@@ -8647,6 +8647,115 @@ def command_evaluate_bionic_memory_robustness(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_consciousness(
+    config_path: str | None,
+    *,
+    lab_json: str | None,
+    suite: str,
+    limit: int,
+    scenarios: int,
+    turns: int,
+    output: str | None,
+) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .bionic_simulation_lab import build_bionic_simulation_lab
+    from .biomimetic_consciousness_observatory import (
+        build_biomimetic_consciousness_observatory,
+        load_bionic_simulation_lab_json,
+        write_biomimetic_consciousness_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    if lab_json:
+        lab = load_bionic_simulation_lab_json(lab_json)
+    else:
+        store = QueueStore(config.runtime.db_path)
+        store.initialize()
+        try:
+            if hasattr(store, "list_agent_eval_runs"):
+                rows = store.list_agent_eval_runs(
+                    stage=STAGE46_NAME,
+                    suite=suite or DEFAULT_STAGE46_SUITE,
+                    limit=limit,
+                )
+            else:
+                latest = store.latest_agent_eval_run(
+                    stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE
+                )
+                rows = [latest] if latest else []
+        finally:
+            store.close()
+        seed_runs = [
+            dict(row.get("run", {}))
+            for row in reversed(rows or [])
+            if isinstance(row, dict) and isinstance(row.get("run", {}), dict)
+        ]
+        lab = build_bionic_simulation_lab(
+            seed_runs,
+            scenarios=scenarios,
+            turns_per_scenario=turns,
+        )
+    report = build_biomimetic_consciousness_observatory(lab)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage70"
+            / "biomimetic_consciousness.html"
+        )
+    written = write_biomimetic_consciousness_artifacts(report, output_path)
+    scorecard = (
+        dict(report.get("scorecard", {}))
+        if isinstance(report.get("scorecard", {}), dict)
+        else {}
+    )
+    trajectory = (
+        dict(report.get("trajectory", {}))
+        if isinstance(report.get("trajectory", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "consciousness_png_path": str(written["consciousness_png"]),
+                "observatory": {
+                    "turn_count": scorecard.get("turn_count", 0),
+                    "run_count": scorecard.get("run_count", 0),
+                    "dimension_count": len(scorecard.get("dimensions", []) or []),
+                    "biomimetic_consciousness_score": scorecard.get(
+                        "biomimetic_consciousness_score",
+                        0,
+                    ),
+                    "weakest_dimension": scorecard.get("weakest_dimension", ""),
+                    "attractor_count": len(trajectory.get("attractor_counts", {}) or {}),
+                    "surrogate_only": bool(evidence.get("surrogate_only", True)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                    "do_not_claim_real_manifold": bool(
+                        evidence.get("do_not_claim_real_manifold", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def command_run_consciousness_provider_trace(
     config_path: str | None,
     *,
@@ -10193,6 +10302,16 @@ def main(argv: list[str] | None = None) -> int:
     bionic_memory_robustness_parser.add_argument("--scenarios", type=int, default=7)
     bionic_memory_robustness_parser.add_argument("--turns", type=int, default=180)
     bionic_memory_robustness_parser.add_argument("--output", default=None)
+    biomimetic_consciousness_parser = subparsers.add_parser(
+        "evaluate-biomimetic-consciousness",
+        help="Evaluate Stage70 biomimetic consciousness-flow indicators from Stage61 or Stage69 traces",
+    )
+    biomimetic_consciousness_parser.add_argument("--lab-json", default=None)
+    biomimetic_consciousness_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    biomimetic_consciousness_parser.add_argument("--limit", type=int, default=8)
+    biomimetic_consciousness_parser.add_argument("--scenarios", type=int, default=7)
+    biomimetic_consciousness_parser.add_argument("--turns", type=int, default=180)
+    biomimetic_consciousness_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -10786,6 +10905,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "evaluate-bionic-memory-robustness":
         return command_evaluate_bionic_memory_robustness(
+            args.config,
+            lab_json=args.lab_json,
+            suite=args.suite,
+            limit=args.limit,
+            scenarios=args.scenarios,
+            turns=args.turns,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-consciousness":
+        return command_evaluate_biomimetic_consciousness(
             args.config,
             lab_json=args.lab_json,
             suite=args.suite,

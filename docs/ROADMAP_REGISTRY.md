@@ -323,8 +323,9 @@ Stage70: biomimetic consciousness research program
 - Reframes the next research arc as a computational-neuroscience program instead of another safety-weighted capability scorecard.
 - Defines `biomimetic_consciousness_score` as the primary objective over endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability.
 - Treats safety and authority boundaries as run invalidators rather than primary dimensions of biological plausibility.
-- Proposes the first implementation target: a Stage70 observatory that reads Stage61/69 traces and renders neuromodulator heatmaps, attractor trajectories, and consciousness-flow scorecards without changing live behavior.
+- Implements the first Stage70 observatory through `evaluate-biomimetic-consciousness`; it reads Stage61/69-style traces and renders neuromodulator heatmaps, attractor trajectories, and consciousness-flow scorecards without changing live behavior.
 - Turns the weakest current evidence from Stage69 validation, `correction_retention=0.748611`, into a specific correction-reactivation hypothesis: false-fact corrections should raise hippocampal replay and acetylcholine-like precision pressure across delayed probes.
+- First Stage70 evaluation over the Stage69 dialogue-validation lab returned `biomimetic_consciousness_score=0.768129` across `15120` turns and `21` runs; weakest dimensions were `hippocampal_reactivation=0.317602` and `flow_to_reply_coupling=0.38311`.
 
 ## Next Program Arc (Planned)
 
