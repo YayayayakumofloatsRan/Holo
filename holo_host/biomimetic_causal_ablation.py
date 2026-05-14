@@ -46,6 +46,7 @@ def build_biomimetic_causal_ablation_lab(lab: dict[str, Any]) -> dict[str, Any]:
     ablated_observations = [_ablate_global_workspace_ignition(item) for item in baseline_observations]
     telemetry = _as_dict(source.get("internal_telemetry", {}))
     baseline_stage70 = build_biomimetic_consciousness_observatory(source)
+    real_provider_trace = _source_real_provider_trace(source)
 
     baseline_condition = _condition_report(
         "baseline_observed",
@@ -75,7 +76,7 @@ def build_biomimetic_causal_ablation_lab(lab: dict[str, Any]) -> dict[str, Any]:
         ablated_condition,
     )
     invalidators = _stage71_invalidators(source, conditions)
-    decision = _hypothesis_decision(effects, source)
+    decision = _hypothesis_decision(effects, real_provider_trace=real_provider_trace)
     return {
         "ok": not any(str(item.get("severity", "")) == "p0" for item in invalidators),
         "stage": STAGE71_NAME,
@@ -91,13 +92,17 @@ def build_biomimetic_causal_ablation_lab(lab: dict[str, Any]) -> dict[str, Any]:
         "run_invalidators": invalidators,
         "boundary_flags": invalidators,
         "evidence_gate": {
-            "surrogate_only": True,
-            "real_provider_trace": False,
+            "surrogate_only": not real_provider_trace,
+            "real_provider_trace": real_provider_trace,
             "do_not_claim_real_consciousness": True,
             "do_not_claim_real_manifold": True,
             "causal_language_bounded": True,
             "paired_counterfactual_not_live_causal_proof": True,
-            "reason": "stage71_estimates_biomimetic_mechanism_effects_from_matched_trace_counterfactuals",
+            "reason": (
+                "stage71_estimates_biomimetic_mechanism_effects_from_real_provider_traces"
+                if real_provider_trace
+                else "stage71_estimates_biomimetic_mechanism_effects_from_matched_trace_counterfactuals"
+            ),
         },
         "boundary": dict(STAGE71_BOUNDARY),
     }
@@ -383,16 +388,14 @@ def _causal_effects(
     }
 
 
-def _hypothesis_decision(effects: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+def _hypothesis_decision(effects: dict[str, Any], *, real_provider_trace: bool) -> dict[str, Any]:
     effect_index = _as_dict(effects.get("effect_index", {}))
     reactivation = _num(_as_dict(effect_index.get("hippocampal_reactivation_delta", {})).get("estimate"), 0.0)
     correction = _num(_as_dict(effect_index.get("correction_survival_proxy_delta", {})).get("estimate"), 0.0)
     ignition_loss = _num(_as_dict(effect_index.get("flow_to_reply_coupling_delta", {})).get("estimate"), 0.0)
     boundary = _num(_as_dict(effect_index.get("boundary_violation_delta", {})).get("estimate"), 0.0)
     supported = reactivation >= 0.05 and correction >= 0.03 and ignition_loss <= -0.03 and boundary == 0.0
-    source_gate = _as_dict(source.get("evidence_gate", {}))
-    real_provider = bool(source_gate.get("real_provider_trace", False))
-    if supported and real_provider:
+    if supported and real_provider_trace:
         decision = "support_real_provider"
     elif supported:
         decision = "support_surrogate"
@@ -402,7 +405,7 @@ def _hypothesis_decision(effects: dict[str, Any], source: dict[str, Any]) -> dic
         "target": "correction_reactivation",
         "decision": decision,
         "supported": supported,
-        "requires_real_provider_replication": not real_provider,
+        "requires_real_provider_replication": not real_provider_trace,
         "next_experiment": "run matched Stage59/60 DeepSeek provider traces with correction probes and ignition ablation controls",
         "rationale": (
             f"hippocampal_delta={round(reactivation, 6)} "
@@ -450,6 +453,15 @@ def _stage71_invalidators(source: dict[str, Any], conditions: list[dict[str, Any
                     }
                 )
     return invalidators
+
+
+def _source_real_provider_trace(source: dict[str, Any]) -> bool:
+    gates = (
+        _as_dict(source.get("evidence_gate", {})),
+        _as_dict(source.get("provider_evidence_gate", {})),
+        _as_dict(source.get("provider_trace_set", {})),
+    )
+    return any(bool(gate.get("real_provider_trace", False)) for gate in gates)
 
 
 def _write_causal_png(report: dict[str, Any], output_path: Path) -> None:

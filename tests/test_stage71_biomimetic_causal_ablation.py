@@ -82,6 +82,23 @@ class Stage71BiomimeticCausalAblationTests(unittest.TestCase):
         self.assertIn("Causal Effects", html)
         self.assertEqual(png_header, b"\x89PNG\r\n\x1a\n")
 
+    def test_marks_stage59_provider_trace_as_real_provider_evidence(self) -> None:
+        from holo_host.biomimetic_causal_ablation import (
+            build_biomimetic_causal_ablation_lab,
+        )
+
+        lab = build_bionic_simulation_lab([_seed_run("seed-a")], scenarios=7, turns_per_scenario=64)
+        lab["stage"] = "stage59-provider-longform-trace"
+        lab["provider_trace_set"] = {"real_provider_trace": True}
+        lab["provider_evidence_gate"] = {"real_provider_trace": True}
+
+        report = build_biomimetic_causal_ablation_lab(lab)
+
+        self.assertFalse(report["evidence_gate"]["surrogate_only"])
+        self.assertTrue(report["evidence_gate"]["real_provider_trace"])
+        self.assertEqual(report["hypothesis_decision"]["decision"], "support_real_provider")
+        self.assertFalse(report["hypothesis_decision"]["requires_real_provider_replication"])
+
     def test_cli_evaluates_existing_stage61_lab_json(self) -> None:
         from holo_host.cli import main
 
