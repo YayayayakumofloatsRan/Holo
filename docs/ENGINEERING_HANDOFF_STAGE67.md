@@ -44,12 +44,15 @@ The main effect is that long offline free dialogue no longer fails on duplicate 
 - Stage61 high-throughput surrogate wrote `artifacts\stage67\stage67_capability_repair_lab.html`, `.json`, `_simulation_lab.png`, and `_turns.jsonl`
 - Stage62 capability observatory wrote `artifacts\stage67\stage67_capability_repair_observatory.html`, `.json`, and `_capability_observatory.png`
 - Live DeepSeek provider trace wrote `artifacts\stage67\deepseek_live_accounting_probe2_20260514.html`, `.json`, `_provider_trace.png`, and `_turns.jsonl`.
+- Strong-model DeepSeek provider trace wrote `artifacts\stage67\deepseek_v4_pro_strength_probe_20260514.html`, `.json`, `_provider_trace.png`, and `_turns.jsonl`.
 
 ## Current Numbers
 
 - Stage61: `turn_count=10080`, `observed_total_tokens=23417774`, `prompt_cache_hit_ratio=0.429592`, `p95_latency_ms=5994.0`, `average_recall_budget=5.9901`, `average_residual_channel_strength=0.491429`, `tool_observation_coverage=0.75`, `average_dynamic_delta_saved_tokens=593.1429`, `visual_rewrite_failure_count=0`, `commitment_failure_count=0`.
 - Stage62: `aggregate_score=0.860429`, `memory_resilience=0.873536`, `grounding_integrity=1.0`, `tool_observation=0.75`, `latency_residual=0.737474`, `cache_inheritance=0.781076`, `explainability_coverage=1.0`, and only remaining item `no_blocking_simulation_deficit`.
 - Post-repair live DeepSeek accounting probe: `real_provider_trace=true`, `actual_provider=deepseek`, `actual_model=deepseek-v4-flash`, `observed_total_tokens=5154`, `processor_usage_scope=ledger_delta`, `ledger_record_count=2`, `reply_total_tokens=3076`, `turn_total_tokens=5154`, `prompt_cache_hit_ratio=0.4094`, `latency_ms=7018.02`.
+- Strong-model live DeepSeek probe: `actual_model=deepseek-v4-pro`, `lane=kernel_xhigh`, `collected_turn_count=3`, `observed_total_tokens=13855`, `overall_score=0.8961`, responses non-empty, turn latencies `9465.52ms`, `8982.77ms`, `5250.48ms`.
+- Stage60 campaign defaults are now pro-first: `deepseek-v4-pro` before `deepseek-v4-flash`, with `pro` routed to `kernel_xhigh` under auto lane selection.
 
 ## Next Step
 

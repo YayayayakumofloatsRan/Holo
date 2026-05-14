@@ -102,6 +102,39 @@ def _fake_stage59_artifact_writer(report: dict, output_path: str | Path) -> dict
 
 
 class Stage60TraceCampaignTests(unittest.TestCase):
+    def test_default_campaign_models_are_pro_first_for_capability_validation(
+        self,
+    ) -> None:
+        from holo_host.consciousness_trace_campaign import run_provider_trace_campaign
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir) / "campaign"
+            runner = _FakeStage59Runner()
+            report = run_provider_trace_campaign(
+                execute=False,
+                output_root=output_root,
+                campaign_id="stage60-defaults",
+                models=None,
+                runs_per_model=1,
+                turns=2,
+                max_total_tokens_per_cell=4000,
+                trace_runner=runner,
+                artifact_writer=_fake_stage59_artifact_writer,
+            )
+
+        self.assertEqual(
+            report["campaign_plan"]["models"],
+            ["deepseek-v4-pro", "deepseek-v4-flash"],
+        )
+        self.assertEqual(
+            [call["model"] for call in runner.calls],
+            ["deepseek-v4-pro", "deepseek-v4-flash"],
+        )
+        self.assertEqual(
+            [call["lane"] for call in runner.calls],
+            ["kernel_xhigh", "micro_fast"],
+        )
+
     def test_dry_run_builds_campaign_manifest_without_provider_execution(self) -> None:
         from holo_host.consciousness_trace_campaign import run_provider_trace_campaign
 
@@ -230,8 +263,6 @@ processor_backend = "deepseek"
                         "run-consciousness-trace-campaign",
                         "--campaign-id",
                         "stage60-cli",
-                        "--models",
-                        "deepseek-v4-flash,deepseek-v4-pro",
                         "--runs-per-model",
                         "1",
                         "--turns",
@@ -244,6 +275,9 @@ processor_backend = "deepseek"
                 )
             payload = json.loads(stdout.getvalue())
             png_header = Path(payload["campaign_png_path"]).read_bytes()[:8]
+            campaign_json = json.loads(
+                Path(payload["campaign_json_path"]).read_text(encoding="utf-8")
+            )
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "dry_run")
@@ -251,4 +285,8 @@ processor_backend = "deepseek"
         self.assertEqual(payload["observatory"]["planned_cell_count"], 2)
         self.assertEqual(payload["observatory"]["real_provider_cell_count"], 0)
         self.assertTrue(payload["observatory"]["do_not_claim_major_breakthrough"])
+        self.assertEqual(
+            campaign_json["campaign_plan"]["models"],
+            ["deepseek-v4-pro", "deepseek-v4-flash"],
+        )
         self.assertEqual(png_header, b"\x89PNG\r\n\x1a\n")

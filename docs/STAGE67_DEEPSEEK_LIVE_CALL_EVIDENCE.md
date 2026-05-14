@@ -26,6 +26,8 @@ Current local readiness before live probes:
 
 ## Live Probe Evidence
 
+Flash was used only as the initial dashboard and accounting smoke test. Capability calibration should use `deepseek-v4-pro` on `kernel_xhigh`; flash remains a latency/cost control, not the primary biomimetic benchmark.
+
 First live check:
 
 ```powershell
@@ -105,3 +107,35 @@ Main local usage ledger confirmation:
 The dashboard was quiet because the earlier work was not a live provider run. After switching to `--execute`, DeepSeek calls were confirmed. The more important engineering finding is that one Holo turn can contain multiple DeepSeek processor calls, so provider-trace accounting must use usage-ledger deltas rather than only the final reply metadata.
 
 This is now repaired for Stage59 traces and inherited by Stage60 campaigns because Stage60 consumes Stage59 cell artifacts.
+
+## Strong Model Probe
+
+After the accounting repair, Holo was tested with `deepseek-v4-pro` as the primary strong model:
+
+```powershell
+python -m holo_host --config .holo_host.toml run-consciousness-provider-trace --suite stage67_deepseek_v4_pro_strength_probe_20260514 --runs 1 --turns 3 --max-total-tokens 60000 --provider-hint deepseek --model deepseek-v4-pro --lane kernel_xhigh --max-output-tokens 1200 --output artifacts\stage67\deepseek_v4_pro_strength_probe_20260514.html --execute --use-live-state
+```
+
+Result:
+
+- `status=complete`
+- `actual_providers=["deepseek"]`
+- `actual_models=["deepseek-v4-pro"]`
+- `collected_turn_count=3`
+- `observed_total_tokens=13855`
+- `overall_score=0.8961`
+- All three responses were non-empty.
+- Turn-level latency: `9465.52ms`, `8982.77ms`, `5250.48ms`
+- Turn-level observed tokens: `5061`, `5471`, `3323`
+- Turn-level usage scopes: all `ledger_delta`
+- Ledger task mix: first two turns used `recall_reconstruct,reply`; third turn used `reply`
+
+Main local usage ledger confirmation:
+
+- `id=606`, `task_type=recall_reconstruct`, `lane=kernel_xhigh`, `model=deepseek-v4-pro`, `total_tokens=2031`
+- `id=607`, `task_type=reply`, `lane=kernel_xhigh`, `model=deepseek-v4-pro`, `total_tokens=3030`
+- `id=608`, `task_type=recall_reconstruct`, `lane=kernel_xhigh`, `model=deepseek-v4-pro`, `total_tokens=2354`
+- `id=609`, `task_type=reply`, `lane=kernel_xhigh`, `model=deepseek-v4-pro`, `total_tokens=3117`
+- `id=610`, `task_type=reply`, `lane=kernel_xhigh`, `model=deepseek-v4-pro`, `total_tokens=3323`
+
+Stage60 defaults were also changed to pro-first: `deepseek-v4-pro` now runs before `deepseek-v4-flash`, and auto lane selection maps `pro` models to `kernel_xhigh`.

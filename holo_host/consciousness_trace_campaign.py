@@ -18,7 +18,7 @@ from .consciousness_provider_trace import (
 
 STAGE60_NAME = "stage60-longrun-provider-campaign"
 DEFAULT_STAGE60_CAMPAIGN_ID = "stage60_provider_campaign"
-DEFAULT_STAGE60_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
+DEFAULT_STAGE60_MODELS = ("deepseek-v4-pro", "deepseek-v4-flash")
 
 TraceRunner = Callable[..., dict[str, Any]]
 TraceArtifactWriter = Callable[[dict[str, Any], str | Path], dict[str, Path]]
@@ -588,7 +588,7 @@ def _infer_lane(*, model: str, lane: str) -> str:
     lower = model.lower()
     if "flash" in lower or "lite" in lower:
         return "micro_fast"
-    if "reasoner" in lower or "r1" in lower:
+    if "pro" in lower or "reasoner" in lower or "r1" in lower:
         return "kernel_xhigh"
     return "subject_main"
 

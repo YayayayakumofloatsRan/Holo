@@ -10102,7 +10102,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     trace_campaign_parser.add_argument("--campaign-id", default="stage60_provider_campaign")
     trace_campaign_parser.add_argument("--suite", default="provider_longform_bionic_trace")
-    trace_campaign_parser.add_argument("--models", default="deepseek-v4-flash,deepseek-v4-pro")
+    trace_campaign_parser.add_argument("--models", default="deepseek-v4-pro,deepseek-v4-flash")
     trace_campaign_parser.add_argument("--runs-per-model", type=int, default=1)
     trace_campaign_parser.add_argument("--turns", type=int, default=24)
     trace_campaign_parser.add_argument("--max-total-tokens-per-cell", type=int, default=20_000)

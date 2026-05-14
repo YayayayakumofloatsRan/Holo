@@ -19,13 +19,13 @@ The goal is workflow continuity: run the same bionic perturbation program across
 Dry-run campaign:
 
 ```powershell
-python -m holo_host --config .holo_host.toml run-consciousness-trace-campaign --campaign-id stage60_plan --models deepseek-v4-flash,deepseek-v4-pro --runs-per-model 1 --turns 8 --max-total-tokens-per-cell 12000 --output-root artifacts\stage60\stage60_plan
+python -m holo_host --config .holo_host.toml run-consciousness-trace-campaign --campaign-id stage60_plan --models deepseek-v4-pro,deepseek-v4-flash --runs-per-model 1 --turns 8 --max-total-tokens-per-cell 12000 --output-root artifacts\stage60\stage60_plan
 ```
 
 Small strict DeepSeek shadow smoke:
 
 ```powershell
-python -m holo_host --config .holo_host.toml run-consciousness-trace-campaign --execute --campaign-id stage60_smoke_shadow --models deepseek-v4-flash,deepseek-v4-pro --runs-per-model 1 --turns 1 --max-total-tokens-per-cell 7000 --max-output-tokens 80 --output-root artifacts\stage60\stage60_smoke_shadow
+python -m holo_host --config .holo_host.toml run-consciousness-trace-campaign --execute --campaign-id stage60_smoke_shadow --models deepseek-v4-pro,deepseek-v4-flash --runs-per-model 1 --turns 1 --max-total-tokens-per-cell 7000 --max-output-tokens 80 --output-root artifacts\stage60\stage60_smoke_shadow
 ```
 
 Long campaigns use the same command shape with larger `--runs-per-model`, `--turns`, and `--max-total-tokens-per-cell`. Keep the campaign id and output root stable to resume after interruption; use `--no-resume` only when intentionally starting a fresh campaign event log.
@@ -68,7 +68,7 @@ On 2026-05-13:
 
 - Dry-run wrote `artifacts\stage60\stage60_plan\campaign.html`, `.json`, `_campaign.png`, `campaign_manifest.json`, `campaign_events.jsonl`, and two per-model Stage59 dry-run cells. It reported `planned_cell_count=2`, `planned_total_turns=16`, `real_provider_cell_count=0`, and `do_not_claim_major_breakthrough=true`.
 - Strict DeepSeek shadow smoke wrote `artifacts\stage60\stage60_smoke_shadow\campaign.html`, `.json`, `_campaign.png`, `campaign_manifest.json`, `campaign_events.jsonl`, two per-model Stage59 reports, two per-cell turn journals, and two per-cell shadow runtimes.
-- The smoke used `actual_providers=["deepseek"]`, `actual_models=["deepseek-v4-flash","deepseek-v4-pro"]`, `real_provider_cell_count=2`, `collected_turn_count=2`, `observed_total_tokens=5128`, and aggregate prompt-cache hit ratio `0.252117`.
+- The original smoke used `actual_providers=["deepseek"]`, `actual_models=["deepseek-v4-flash","deepseek-v4-pro"]`, `real_provider_cell_count=2`, `collected_turn_count=2`, `observed_total_tokens=5128`, and aggregate prompt-cache hit ratio `0.252117`. Current defaults are now pro-first for capability validation.
 - The smoke remained scientifically gated: the trace is only two turns, no cell passed Stage57 predictive or trace-depth gates, and `do_not_claim_major_breakthrough=true`.
 
 ## Interpretation
