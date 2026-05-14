@@ -35,3 +35,9 @@ This stage remains observational and surrogate-only. It adds no provider call pa
 ## Next Gate
 
 The next promotion gate is a pro-first Stage60 real-provider validation. Do not claim persistent self-growth or a real consciousness manifold from Stage68 alone.
+
+## Provider Follow-Up
+
+The 2026-05-14 follow-up gate collected `96` real DeepSeek turns and `437440` observed provider tokens across `deepseek-v4-pro` and `deepseek-v4-flash`. It found one transient pro empty-turn path after `IncompleteRead(0 bytes read)`, with processor ledger `status=error`.
+
+Stage59 now fails that condition as `provider_error` instead of letting the provider trace complete silently. The post-fix pro smoke collected `2` turns and `7923` observed tokens with no empty replies, no fallback, and no self-memory writes. See `docs/STAGE68_REAL_PROVIDER_VALIDATION_2026-05-14.md`.

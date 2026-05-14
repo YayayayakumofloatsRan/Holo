@@ -105,6 +105,8 @@ class _FakeUsageStore:
         total_tokens: int,
         provider: str = "deepseek",
         model: str = "deepseek-v4-flash",
+        status: str = "ok",
+        estimated: bool = False,
     ) -> None:
         self.rows.append(
             {
@@ -120,8 +122,8 @@ class _FakeUsageStore:
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
-                "estimated": 0,
-                "status": "ok",
+                "estimated": 1 if estimated else 0,
+                "status": status,
                 "metadata_json": json.dumps(
                     {
                         "usage": {
@@ -167,6 +169,67 @@ class _FakeUsageStore:
         if thread_key:
             rows = [row for row in rows if row["thread_key"] == thread_key]
         return list(reversed(rows))[: max(1, int(limit))]
+
+
+class _LedgerErrorEmptyTurnExecutor(_FakeTurnExecutor):
+    def __init__(self, store: _FakeUsageStore) -> None:
+        super().__init__(total_tokens=0)
+        self.store = store
+
+    def run_turn(
+        self,
+        *,
+        user_text: str,
+        thread_key: str,
+        chat_name: str,
+        channel: str,
+        message_id: str,
+        metadata: dict,
+    ) -> dict:
+        self.calls.append(
+            {
+                "user_text": user_text,
+                "thread_key": thread_key,
+                "chat_name": chat_name,
+                "channel": channel,
+                "message_id": message_id,
+                "metadata": dict(metadata),
+            }
+        )
+        self.store.add_usage(
+            thread_key=thread_key,
+            event_id=message_id,
+            task_type="reply",
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            provider="",
+            model="deepseek-v4-pro",
+            status="error",
+            estimated=True,
+        )
+        return {
+            "text": "",
+            "route": "",
+            "selected_action": {
+                "action_type": "reply",
+                "score": 0.91,
+                "send_allowed": True,
+            },
+            "processor_debug": {
+                "provider": "",
+                "model": "",
+                "provider_failures": [],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "prompt_cache_hit_tokens": 0,
+                    "prompt_cache_miss_tokens": 0,
+                    "estimated": True,
+                },
+            },
+        }
 
 
 class _LedgerWritingTurnExecutor(_FakeTurnExecutor):
@@ -305,6 +368,35 @@ class Stage59ProviderTraceTests(unittest.TestCase):
             [row["task_type"] for row in turns[0]["processor_usage_ledger"]],
             ["recall_reconstruct", "reply"],
         )
+
+    def test_execute_treats_empty_ledger_error_turn_as_provider_error(self) -> None:
+        from holo_host.consciousness_provider_trace import run_provider_longform_trace
+
+        store = _FakeUsageStore()
+        executor = _LedgerErrorEmptyTurnExecutor(store)
+        report = run_provider_longform_trace(
+            execute=True,
+            runs=1,
+            turns=3,
+            max_total_tokens=5000,
+            provider_hint="deepseek",
+            model="deepseek-v4-pro",
+            max_output_tokens=120,
+            store=store,
+            executor=executor,
+        )
+        run = report["stage46_compatible_runs"][0]
+        turn = run["turns"][0]
+
+        self.assertEqual(report["status"], "stopped")
+        self.assertEqual(report["budget_guard"]["stopped_reason"], "provider_error")
+        self.assertEqual(len(executor.calls), 1)
+        self.assertIn("empty_response", turn["error"])
+        self.assertEqual(turn["processor_usage_scope"]["ledger_record_count"], 1)
+        self.assertEqual(turn["processor_usage_ledger"][0]["status"], "error")
+        self.assertFalse(run["scorecard"]["passed"])
+        self.assertTrue(run["scorecard"]["flags"]["provider_error"])
+        self.assertTrue(run["scorecard"]["flags"]["empty_response"])
 
     def test_writes_provider_trace_artifacts_and_turn_journal(self) -> None:
         from holo_host.consciousness_provider_trace import (

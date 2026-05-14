@@ -485,6 +485,10 @@ def run_provider_longform_trace(
                         actual_providers.add(row_provider)
                     if row_model:
                         actual_models.add(row_model)
+            turn_failure = _turn_provider_failure_reason(turn)
+            if turn_failure and not error:
+                error = turn_failure
+                turn["error"] = error
             observed_total += _turn_observed_total_tokens(turn)
             turn["budget_after_turn"] = {
                 "observed_total_tokens": observed_total,
@@ -1009,6 +1013,32 @@ def _attach_processor_usage_ledger(
         "reply_total_tokens": int(reply_usage.get("total_tokens", 0) or 0),
         "turn_total_tokens": int(observed.get("total_tokens", 0) or 0),
     }
+
+
+def _turn_provider_failure_reason(turn: dict[str, Any]) -> str:
+    if str(turn.get("error", "") or "").strip():
+        return str(turn.get("error", "") or "").strip()
+    response_text = str(turn.get("response_text", "") or "").strip()
+    ledger = [
+        dict(row)
+        for row in list(turn.get("processor_usage_ledger", []) or [])
+        if isinstance(row, dict)
+    ]
+    error_rows = [
+        row
+        for row in ledger
+        if str(row.get("status", "") or "").lower() not in ("", "ok", "success")
+    ]
+    if response_text:
+        return ""
+    if error_rows:
+        first = error_rows[0]
+        task = str(first.get("task_type", "") or "processor")
+        status = str(first.get("status", "") or "error")
+        model = str(first.get("model", "") or "")
+        suffix = f":{model}" if model else ""
+        return f"empty_response_after_{task}_{status}{suffix}"
+    return "empty_response_from_provider_trace"
 
 
 def _compact_usage_ledger_row(row: dict[str, Any]) -> dict[str, Any]:

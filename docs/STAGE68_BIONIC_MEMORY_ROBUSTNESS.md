@@ -73,3 +73,9 @@ After rerunning with a current Stage46 seed, Stage68 still found two real defici
 ## Interpretation
 
 Stage68 is the first dedicated memory robustness gate for Holo. It verifies that high-pressure dialogue events get higher diagnostic consolidation priority without turning self-growth into an autonomous write loop. The current passing result is strong surrogate evidence for kernel memory scheduling, not real provider proof and not a consciousness-manifold claim. Promotion still requires pro-first Stage60 real-provider validation.
+
+## Real Provider Follow-Up
+
+On 2026-05-14, Stage60 pro-first real provider validation collected `96` real DeepSeek turns and `437440` observed provider tokens across `deepseek-v4-pro` and `deepseek-v4-flash`. The run used shadow runtime state, did not start WeChat, did not use fallback, and did not write self-memory.
+
+The deeper campaign found one real robustness issue: a transient `IncompleteRead(0 bytes read)` produced an empty `deepseek-v4-pro` turn while the processor ledger correctly had `status=error`. Stage59 now treats that as `provider_error` instead of allowing a silent `complete` trace. See `docs/STAGE68_REAL_PROVIDER_VALIDATION_2026-05-14.md`.

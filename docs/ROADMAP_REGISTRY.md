@@ -306,7 +306,9 @@ Stage68: bionic memory robustness
 - Adds `evaluate-bionic-memory-robustness`, HTML/JSON/PNG artifacts, per-scenario memory-pressure observations, pressure-priority correlation, self-growth write-violation checks, and non-auto-applied intervention planning.
 - Repairs Stage61 memory-pressure projection so high-pressure memory loss, correction, grounding, tool, cache, latency, and residual scenarios raise diagnostic consolidation priority instead of inheriting seed-wave priority that can fall below baseline.
 - Reports the current evidence conservatively: corrected current-seed Stage61/68 over `21` scenarios and `15120` turns reached `aggregate_score=0.859316`, `memory_sedimentation=0.832068`, `pressure_priority_correlation=0.784654`, `boundary_stability=1.0`, and `self_memory_write_violation_count=0`.
-- Keeps all changes observational and surrogate-only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+- Adds real-provider follow-up evidence from Stage60: `96` DeepSeek turns and `437440` observed provider tokens across `deepseek-v4-pro` and `deepseek-v4-flash`, with no fallback and no self-memory writes.
+- Hardens Stage59 after the real run exposed a transient `IncompleteRead(0 bytes read)` path that produced an empty turn with processor ledger `status=error`; Stage59 now marks that condition as `provider_error` instead of silently completing the trace.
+- Keeps Stage68 core changes observational and surrogate-only; the separate follow-up DeepSeek campaigns were operator-gated real-provider validation. No MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop is added.
 
 ## Next Program Arc (Planned)
 
