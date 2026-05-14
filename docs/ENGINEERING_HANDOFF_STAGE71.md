@@ -1,0 +1,117 @@
+# Engineering Handoff Stage71
+
+Stage71 implements a biomimetic causal ablation lab over Stage61/69 traces.
+
+## Scope
+
+- New module: `holo_host/biomimetic_causal_ablation.py`.
+- New CLI command: `evaluate-biomimetic-causal-ablation`.
+- New regression tests: `tests/test_stage71_biomimetic_causal_ablation.py`.
+- New operator docs: `docs/STAGE71_BIOMIMETIC_CAUSAL_ABLATION.md`.
+- Stage71 reads Stage61/69-style lab JSON and emits HTML/JSON/PNG artifacts.
+
+## Boundary
+
+Stage71 is paired counterfactual analysis only:
+
+- no self-memory writes
+- no policy writes
+- no transport writes
+- no watcher authority
+- no downstream MCP exposure
+- no runtime decision authority
+- no unbounded loop
+
+The report must keep:
+
+```text
+surrogate_only = true
+causal_language_bounded = true
+do_not_claim_real_consciousness = true
+```
+
+## Runtime Surfaces
+
+- `build_biomimetic_causal_ablation_lab(lab)`
+  - consumes an in-memory Stage61/69 lab payload
+  - computes a Stage70 baseline
+  - builds paired counterfactual conditions
+  - returns causal effects, publication claims, evidence gate, and boundary flags
+- `write_biomimetic_causal_ablation_artifacts(report, output_path)`
+  - writes HTML, JSON, and PNG
+- `evaluate-biomimetic-causal-ablation`
+  - loads `--lab-json` when provided
+  - otherwise builds a bounded Stage61 simulation lab from the current seed-store path
+
+## Output Contract
+
+The report includes:
+
+- `baseline_stage70`
+- `paired_conditions.condition_index`
+- `causal_effects.effect_index`
+- `hypothesis_decision`
+- `publication_claims`
+- `run_invalidators`
+- `evidence_gate.causal_language_bounded = true`
+- `evidence_gate.do_not_claim_real_consciousness = true`
+
+Core effect keys:
+
+- `hippocampal_reactivation_delta`
+- `correction_survival_proxy_delta`
+- `flow_to_reply_coupling_delta`
+- `prompt_cost_delta`
+- `boundary_violation_delta`
+
+## Stage69 Full-Lab Evidence
+
+Completed on 2026-05-14:
+
+```powershell
+python -m holo_host --config .holo_host.toml evaluate-biomimetic-causal-ablation --lab-json artifacts\stage69\stage69_dialogue_validation_lab.json --output artifacts\stage71\stage71_biomimetic_causal_ablation.html
+```
+
+Results:
+
+- `decision=support_surrogate`
+- `hippocampal_reactivation_delta=0.125139`
+- `correction_survival_proxy_delta=0.37267`
+- `flow_to_reply_coupling_delta=-0.200394`
+- `prompt_cost_delta=0.02371`
+- `boundary_violation_delta=0.0`
+
+Artifacts:
+
+- `artifacts\stage71\stage71_biomimetic_causal_ablation.html`
+- `artifacts\stage71\stage71_biomimetic_causal_ablation.json`
+- `artifacts\stage71\stage71_biomimetic_causal_ablation_biomimetic_causality.png`
+
+## Verification
+
+Completed on 2026-05-14:
+
+```powershell
+python -m pytest -q tests\test_stage71_biomimetic_causal_ablation.py
+```
+
+Result:
+
+- Stage71 focused tests passed with `3` tests.
+
+Required before final merge:
+
+```powershell
+python -m pytest -q tests\test_stage71_biomimetic_causal_ablation.py tests\test_stage70_biomimetic_consciousness_observatory.py tests\test_stage68_bionic_memory_robustness.py tests\test_stage61_bionic_simulation_lab.py
+python -m py_compile holo_host\biomimetic_causal_ablation.py holo_host\biomimetic_consciousness_observatory.py holo_host\cli.py
+python scripts\check_public_release_hygiene.py
+git diff --check
+python -m pytest -q
+```
+
+## Next Gate
+
+Run a matched real-provider DeepSeek replication through the existing Stage59/60
+operator-gated trace path. The provider run should compare correction probes
+with topic-shift interference and an ignition-ablation control, then re-run
+Stage71 on the generated Stage61/69-compatible artifact.

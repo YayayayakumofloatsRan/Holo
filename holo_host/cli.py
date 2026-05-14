@@ -8756,6 +8756,137 @@ def command_evaluate_biomimetic_consciousness(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_causal_ablation(
+    config_path: str | None,
+    *,
+    lab_json: str | None,
+    suite: str,
+    limit: int,
+    scenarios: int,
+    turns: int,
+    output: str | None,
+) -> int:
+    from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+    from .bionic_simulation_lab import build_bionic_simulation_lab
+    from .biomimetic_causal_ablation import (
+        build_biomimetic_causal_ablation_lab,
+        load_bionic_simulation_lab_json,
+        write_biomimetic_causal_ablation_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    if lab_json:
+        lab = load_bionic_simulation_lab_json(lab_json)
+    else:
+        store = QueueStore(config.runtime.db_path)
+        store.initialize()
+        try:
+            if hasattr(store, "list_agent_eval_runs"):
+                rows = store.list_agent_eval_runs(
+                    stage=STAGE46_NAME,
+                    suite=suite or DEFAULT_STAGE46_SUITE,
+                    limit=limit,
+                )
+            else:
+                latest = store.latest_agent_eval_run(
+                    stage=STAGE46_NAME, suite=suite or DEFAULT_STAGE46_SUITE
+                )
+                rows = [latest] if latest else []
+        finally:
+            store.close()
+        seed_runs = [
+            dict(row.get("run", {}))
+            for row in reversed(rows or [])
+            if isinstance(row, dict) and isinstance(row.get("run", {}), dict)
+        ]
+        lab = build_bionic_simulation_lab(
+            seed_runs,
+            scenarios=scenarios,
+            turns_per_scenario=turns,
+        )
+    report = build_biomimetic_causal_ablation_lab(lab)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage71"
+            / "biomimetic_causal_ablation.html"
+        )
+    written = write_biomimetic_causal_ablation_artifacts(report, output_path)
+    effects = (
+        dict(report.get("causal_effects", {}))
+        if isinstance(report.get("causal_effects", {}), dict)
+        else {}
+    )
+    effect_index = (
+        dict(effects.get("effect_index", {}))
+        if isinstance(effects.get("effect_index", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "causal_png_path": str(written["causal_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "hippocampal_reactivation_delta": _effect_estimate(
+                        effect_index,
+                        "hippocampal_reactivation_delta",
+                    ),
+                    "correction_survival_proxy_delta": _effect_estimate(
+                        effect_index,
+                        "correction_survival_proxy_delta",
+                    ),
+                    "flow_to_reply_coupling_delta": _effect_estimate(
+                        effect_index,
+                        "flow_to_reply_coupling_delta",
+                    ),
+                    "prompt_cost_delta": _effect_estimate(effect_index, "prompt_cost_delta"),
+                    "boundary_violation_delta": _effect_estimate(
+                        effect_index,
+                        "boundary_violation_delta",
+                    ),
+                    "surrogate_only": bool(evidence.get("surrogate_only", True)),
+                    "causal_language_bounded": bool(evidence.get("causal_language_bounded", True)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
+def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
+    item = effect_index.get(key, {})
+    if not isinstance(item, dict):
+        return 0.0
+    try:
+        return float(item.get("estimate", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def command_run_consciousness_provider_trace(
     config_path: str | None,
     *,
@@ -10312,6 +10443,16 @@ def main(argv: list[str] | None = None) -> int:
     biomimetic_consciousness_parser.add_argument("--scenarios", type=int, default=7)
     biomimetic_consciousness_parser.add_argument("--turns", type=int, default=180)
     biomimetic_consciousness_parser.add_argument("--output", default=None)
+    biomimetic_causal_ablation_parser = subparsers.add_parser(
+        "evaluate-biomimetic-causal-ablation",
+        help="Evaluate Stage71 paired biomimetic counterfactuals for replay and ignition mechanisms",
+    )
+    biomimetic_causal_ablation_parser.add_argument("--lab-json", default=None)
+    biomimetic_causal_ablation_parser.add_argument("--suite", default=boundary_stress_cli.DEFAULT_STAGE46_SUITE)
+    biomimetic_causal_ablation_parser.add_argument("--limit", type=int, default=8)
+    biomimetic_causal_ablation_parser.add_argument("--scenarios", type=int, default=7)
+    biomimetic_causal_ablation_parser.add_argument("--turns", type=int, default=180)
+    biomimetic_causal_ablation_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -10915,6 +11056,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "evaluate-biomimetic-consciousness":
         return command_evaluate_biomimetic_consciousness(
+            args.config,
+            lab_json=args.lab_json,
+            suite=args.suite,
+            limit=args.limit,
+            scenarios=args.scenarios,
+            turns=args.turns,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-causal-ablation":
+        return command_evaluate_biomimetic_causal_ablation(
             args.config,
             lab_json=args.lab_json,
             suite=args.suite,

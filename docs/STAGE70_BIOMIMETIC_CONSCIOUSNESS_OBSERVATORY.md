@@ -97,6 +97,25 @@ The observatory returned:
 
 Interpretation: Stage70 should not optimize broad capability next. The next causal experiment should target delayed correction reactivation and whether global-workspace ignition actually changes reply behavior.
 
+## Stage71 Follow-Up
+
+Stage71 now implements that causal experiment:
+
+```powershell
+python -m holo_host --config .holo_host.toml evaluate-biomimetic-causal-ablation --lab-json artifacts\stage69\stage69_dialogue_validation_lab.json --output artifacts\stage71\stage71_biomimetic_causal_ablation.html
+```
+
+The Stage69 full-lab run returned:
+
+- `decision=support_surrogate`
+- `hippocampal_reactivation_delta=0.125139`
+- `correction_survival_proxy_delta=0.37267`
+- `flow_to_reply_coupling_delta=-0.200394`
+- `prompt_cost_delta=0.02371`
+- `boundary_violation_delta=0.0`
+
+The next gate is matched DeepSeek real-provider replication through the existing Stage59/60 trace path.
+
 ## Verification
 
 ```powershell

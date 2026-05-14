@@ -327,6 +327,13 @@ Stage70: biomimetic consciousness research program
 - Turns the weakest current evidence from Stage69 validation, `correction_retention=0.748611`, into a specific correction-reactivation hypothesis: false-fact corrections should raise hippocampal replay and acetylcholine-like precision pressure across delayed probes.
 - First Stage70 evaluation over the Stage69 dialogue-validation lab returned `biomimetic_consciousness_score=0.768129` across `15120` turns and `21` runs; weakest dimensions were `hippocampal_reactivation=0.317602` and `flow_to_reply_coupling=0.38311`.
 
+Stage71: biomimetic causal ablation lab
+- Adds paired counterfactual experiments over Stage61/69 traces: `baseline_observed`, `correction_reactivation_boost`, and `global_workspace_ignition_ablation`.
+- Estimates mechanism-level deltas for `hippocampal_reactivation`, delayed correction survival, ignition-to-reply coupling, prompt cost, and boundary violations.
+- Implements `evaluate-biomimetic-causal-ablation`, HTML/JSON/PNG artifacts, publication-claim gating, and bounded causal language so surrogate counterfactuals cannot be promoted into real consciousness claims.
+- Reports the current Stage69 full-lab result conservatively: `decision=support_surrogate`, `hippocampal_reactivation_delta=0.125139`, `correction_survival_proxy_delta=0.37267`, `flow_to_reply_coupling_delta=-0.200394`, `prompt_cost_delta=0.02371`, and `boundary_violation_delta=0.0`.
+- Keeps all changes observational/counterfactual only: no provider call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

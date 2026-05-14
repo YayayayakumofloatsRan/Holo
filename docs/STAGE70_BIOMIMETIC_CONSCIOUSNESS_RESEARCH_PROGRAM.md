@@ -210,6 +210,39 @@ Implemented first:
 
 This implementation does not change Holo's live behavior. It reads existing Stage61/69-style artifacts and produces a new biomimetic scorecard plus HTML/JSON/PNG visualizations.
 
+## Stage71 Follow-Up: Causal Ablation Lab
+
+Stage71 implements the first automatic hypothesis-test step after Stage70.
+
+It adds:
+
+- `holo_host/biomimetic_causal_ablation.py`
+- CLI command: `evaluate-biomimetic-causal-ablation`
+- paired conditions:
+  - `baseline_observed`
+  - `correction_reactivation_boost`
+  - `global_workspace_ignition_ablation`
+- effect estimates:
+  - `hippocampal_reactivation_delta`
+  - `correction_survival_proxy_delta`
+  - `flow_to_reply_coupling_delta`
+  - `prompt_cost_delta`
+  - `boundary_violation_delta`
+
+The Stage69 full-lab run returned:
+
+- `decision=support_surrogate`
+- `hippocampal_reactivation_delta=0.125139`
+- `correction_survival_proxy_delta=0.37267`
+- `flow_to_reply_coupling_delta=-0.200394`
+- `prompt_cost_delta=0.02371`
+- `boundary_violation_delta=0.0`
+
+Interpretation: the correction-reactivation mechanism is supported in surrogate
+counterfactuals and should move to matched DeepSeek real-provider replication.
+The result remains bounded by `do_not_claim_real_consciousness=true` and
+`causal_language_bounded=true`.
+
 ## Expected First Experiment
 
 Run:

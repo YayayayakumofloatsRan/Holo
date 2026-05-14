@@ -129,13 +129,15 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 124. `docs/STAGE70_BIOMIMETIC_CONSCIOUSNESS_RESEARCH_PROGRAM.md`
 125. `docs/STAGE70_BIOMIMETIC_CONSCIOUSNESS_OBSERVATORY.md`
 126. `docs/ENGINEERING_HANDOFF_STAGE70.md`
-127. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-128. `HOLO_SYSTEM.md`
-129. `HOLO_HOST.md`
-130. `OPERATIONS.md`
-131. `docs/PUBLIC_RELEASE_HYGIENE.md`
-132. `holo_memory_library/MEMORY_LIBRARY.md`
-133. `windows_helper/README.md`
+127. `docs/STAGE71_BIOMIMETIC_CAUSAL_ABLATION.md`
+128. `docs/ENGINEERING_HANDOFF_STAGE71.md`
+129. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+130. `HOLO_SYSTEM.md`
+131. `HOLO_HOST.md`
+132. `OPERATIONS.md`
+133. `docs/PUBLIC_RELEASE_HYGIENE.md`
+134. `holo_memory_library/MEMORY_LIBRARY.md`
+135. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -147,11 +149,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 ## New Thread Resume Snapshot
 - Resume workspace: `D:\Holo\_worktrees\holo-stage29-bionic-cli-agent`
 - Resume branch: `codex/stage29-bionic-cli-agent`
-- Resume commit: Stage65 bounded tool observation plus Stage64 residual working channel, Stage63 cache inheritance spine, Stage62 bionic capability observatory, Stage61 high-throughput bionic simulation lab, Stage60 recoverable long-run provider trace campaign, Stage59 provider long-form trace, Stage58 long-form geometry lab, Stage57 geometry calibration, Stage56 dimensional-lift observatory, Stage55 consciousness-manifold observatory, Stage54 consciousness-flow visualization, Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
-- Working tree at handoff time: clean immediately after the Stage65 bounded tool observation commit.
-- Current milestone: `stage70-biomimetic-consciousness-research-program`
-- Current status: Stage70 reframes the next research arc around biological plausibility and consciousness-flow dynamics rather than safety-weighted capability scoring. Stage69 already adds a bounded always-on internal consciousness stream inside the WSL daemon: `inner_stream` advances without external messages, calls the existing processor fabric through `inner_stream_thought`, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. Stage70 now adds a read-only biomimetic consciousness observatory that scores endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability from Stage61/69-style artifacts. Safety/authority boundaries remain hard invalidators, not the primary research score.
+- Resume commit: Stage71 biomimetic causal ablation lab after Stage70 observatory, Stage69 inner stream, Stage68 memory robustness, Stage67 capability repairs, Stage66 dynamic delta frame, Stage65 bounded tool observation, Stage64 residual working channel, Stage63 cache inheritance spine, Stage62 bionic capability observatory, Stage61 high-throughput bionic simulation lab, Stage60 recoverable long-run provider trace campaign, and Stage59 provider long-form trace on branch `codex/stage29-bionic-cli-agent`.
+- Working tree at handoff time: Stage71 changes are expected to be committed immediately after verification.
+- Current milestone: `stage71-biomimetic-causal-ablation-lab`
+- Current status: Stage70 reframes the next research arc around biological plausibility and consciousness-flow dynamics rather than safety-weighted capability scoring. Stage69 already adds a bounded always-on internal consciousness stream inside the WSL daemon: `inner_stream` advances without external messages, calls the existing processor fabric through `inner_stream_thought`, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. Stage70 adds a read-only biomimetic consciousness observatory that scores endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability from Stage61/69-style artifacts. Stage71 now adds a paired counterfactual causal-ablation lab over the same artifacts: `correction_reactivation_boost` tests hippocampal replay/ACh-like precision for false-fact correction survival, and `global_workspace_ignition_ablation` tests whether flattening ignition removes reply-level coupling. Safety/authority boundaries remain hard invalidators, not the primary research score.
 - Latest verification evidence:
+  - `python -m pytest -q tests\test_stage71_biomimetic_causal_ablation.py` passed with `3` tests on `2026-05-14`.
+  - `python -m holo_host --config .holo_host.toml evaluate-biomimetic-causal-ablation --lab-json artifacts\stage69\stage69_dialogue_validation_lab.json --output artifacts\stage71\stage71_biomimetic_causal_ablation.html` returned `decision=support_surrogate`, `hippocampal_reactivation_delta=0.125139`, `correction_survival_proxy_delta=0.37267`, `flow_to_reply_coupling_delta=-0.200394`, `prompt_cost_delta=0.02371`, `boundary_violation_delta=0.0`, `surrogate_only=true`, and `causal_language_bounded=true` on `2026-05-14`.
   - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `1` test on `2026-05-14`.
   - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `2` tests on `2026-05-14` after the recurrent field correction.
   - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `4` tests on `2026-05-14` after the biomimetic field correction.
