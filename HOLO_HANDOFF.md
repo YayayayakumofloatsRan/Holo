@@ -126,13 +126,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 121. `docs/STAGE69_INNER_STREAM_CONSCIOUSNESS_CLOCK.md`
 122. `docs/ENGINEERING_HANDOFF_STAGE69.md`
 123. `docs/STAGE69_DIALOGUE_VALIDATION_2026-05-14.md`
-124. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-125. `HOLO_SYSTEM.md`
-126. `HOLO_HOST.md`
-127. `OPERATIONS.md`
-128. `docs/PUBLIC_RELEASE_HYGIENE.md`
-129. `holo_memory_library/MEMORY_LIBRARY.md`
-130. `windows_helper/README.md`
+124. `docs/STAGE70_BIOMIMETIC_CONSCIOUSNESS_RESEARCH_PROGRAM.md`
+125. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+126. `HOLO_SYSTEM.md`
+127. `HOLO_HOST.md`
+128. `OPERATIONS.md`
+129. `docs/PUBLIC_RELEASE_HYGIENE.md`
+130. `holo_memory_library/MEMORY_LIBRARY.md`
+131. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -146,8 +147,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Resume branch: `codex/stage29-bionic-cli-agent`
 - Resume commit: Stage65 bounded tool observation plus Stage64 residual working channel, Stage63 cache inheritance spine, Stage62 bionic capability observatory, Stage61 high-throughput bionic simulation lab, Stage60 recoverable long-run provider trace campaign, Stage59 provider long-form trace, Stage58 long-form geometry lab, Stage57 geometry calibration, Stage56 dimensional-lift observatory, Stage55 consciousness-manifold observatory, Stage54 consciousness-flow visualization, Stage53 upstream MCP tool substrate, Stage52 scheduler-owned prompt fusion, Stage51 bionic memory lifecycle and consciousness-flow integration, Stage50 dynamic compression audit, Stage49 memory prompt diet, Stage48 bionic memory scheduler, Stage47 DeepSeek live bionic stress calibration, residual fast channel, stable-prefix cache repair, and DeepSeek provider message partition on branch `codex/stage29-bionic-cli-agent`.
 - Working tree at handoff time: clean immediately after the Stage65 bounded tool observation commit.
-- Current milestone: `stage69-inner-stream-consciousness-clock`
-- Current status: Stage69 adds a bounded always-on internal consciousness stream inside the WSL daemon. The new `inner_stream` micro-tick advances without external messages, calls the existing processor fabric through `inner_stream_thought` for a compact LLM-generated micro-thought, routes that task to `subject_main` by default with `micro_fast` fallback, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field now includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. It exposes `inner_stream_state` through brain status, records compact loop telemetry, and stays volatile-only: no self-memory writes, policy writes, transport writes, watcher authority, downstream MCP exposure, or autonomous long-term memory promotion.
+- Current milestone: `stage70-biomimetic-consciousness-research-program`
+- Current status: Stage70 reframes the next research arc around biological plausibility and consciousness-flow dynamics rather than safety-weighted capability scoring. Stage69 already adds a bounded always-on internal consciousness stream inside the WSL daemon: `inner_stream` advances without external messages, calls the existing processor fabric through `inner_stream_thought`, and carries a recurrent biomimetic `field_state` plus `plasticity_trace` across ticks. The field includes neuromodulator-like control variables, neural-field excitation/inhibition balance, thalamic gain, hippocampal replay pressure, global-workspace ignition, and synaptic LTP/LTD traces. The next implementation target is a Stage70 biomimetic consciousness observatory that scores endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability. Safety/authority boundaries remain hard invalidators, not the primary research score.
 - Latest verification evidence:
   - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `1` test on `2026-05-14`.
   - `python -m pytest -q tests\test_stage69_inner_stream.py` passed with `2` tests on `2026-05-14` after the recurrent field correction.

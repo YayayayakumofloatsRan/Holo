@@ -319,6 +319,13 @@ Stage69: inner-stream consciousness clock
 - Hardens daemon loop execution so brain-loop runner exceptions become `status=error` telemetry instead of crashing the main cycle.
 - Keeps Stage69 bounded: no self-memory write, policy write, transport write, watcher authority, downstream MCP exposure, second decision layer, or autonomous long-term memory promotion. The model call is processing, not authority.
 
+Stage70: biomimetic consciousness research program
+- Reframes the next research arc as a computational-neuroscience program instead of another safety-weighted capability scorecard.
+- Defines `biomimetic_consciousness_score` as the primary objective over endogenous flow, recurrent continuity, attractor dynamics, neuromodulator coupling, hippocampal reactivation, global-workspace ignition, flow-to-reply coupling, and geometry observability.
+- Treats safety and authority boundaries as run invalidators rather than primary dimensions of biological plausibility.
+- Proposes the first implementation target: a Stage70 observatory that reads Stage61/69 traces and renders neuromodulator heatmaps, attractor trajectories, and consciousness-flow scorecards without changing live behavior.
+- Turns the weakest current evidence from Stage69 validation, `correction_retention=0.748611`, into a specific correction-reactivation hypothesis: false-fact corrections should raise hippocampal replay and acetylcholine-like precision pressure across delayed probes.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
