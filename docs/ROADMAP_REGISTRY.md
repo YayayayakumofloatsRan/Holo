@@ -295,7 +295,9 @@ Stage67: capability audit repairs
 - Extends Stage66 dynamic-delta compression to low-value route/tier/scene/reentry volatile lines while preserving protected current-state, reconstruction, residual, and tool-observation facts.
 - Adds marked `surrogate_current_surface_projection` for `biomimetic_v1` legacy seeds in Stage61, including cache spine, residual, bounded tool observation, dynamic delta, and memory recall/salience floor projection.
 - Reports the current evidence conservatively: repaired Stage61/62 surrogate over `14` scenarios and `10080` turns reached `prompt_cache_hit_ratio=0.429592`, `average_recall_budget=5.9901`, `tool_observation_coverage=0.75`, `grounding_integrity=1.0`, `cache_inheritance=0.781076`, `aggregate_score=0.860429`, and only remaining item `no_blocking_simulation_deficit`.
-- Keeps all changes offline/surrogate/prompt-shaping only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+- Repairs Stage59 real-provider accounting after live DeepSeek probes showed one Holo turn can include multiple processor calls; Stage59 now records `processor_usage_ledger`, `processor_usage_observed`, and `processor_usage_scope=ledger_delta` so trace budgets match provider traffic.
+- Reports the current live-provider evidence conservatively: a strict `deepseek-v4-flash` live-runtime accounting probe collected `1` real turn with `observed_total_tokens=5154`, `ledger_record_count=2`, `prompt_cache_hit_ratio=0.4094`, and `do_not_claim_real_manifold=true`.
+- Keeps Stage67 capability repairs offline/surrogate/prompt-shaping only; the separate post-repair DeepSeek probes were operator-gated real-provider validation. No MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
 ## Next Program Arc (Planned)
 

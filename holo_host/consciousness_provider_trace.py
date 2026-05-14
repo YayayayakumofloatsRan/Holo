@@ -332,6 +332,7 @@ def run_provider_longform_trace(
             disable_provider_fallback=not bool(allow_provider_fallback),
         )
         owned_executor = True
+    record_store = store or getattr(executor, "store", None)
 
     journal = Path(checkpoint_path).expanduser() if checkpoint_path else None
     resumed_state = _load_turn_journal(journal) if journal and resume else {}
@@ -344,11 +345,7 @@ def run_provider_longform_trace(
             journal.unlink()
 
     observed_total = sum(
-        int(
-            dict(turn.get("processor_usage", {})).get("total_tokens", 0)
-            if isinstance(turn.get("processor_usage", {}), dict)
-            else 0
-        )
+        _turn_observed_total_tokens(turn)
         for run in resumed_state.values()
         for turn in list(run.get("turns", []) or [])
         if isinstance(turn, dict)
@@ -443,6 +440,7 @@ def run_provider_longform_trace(
                     "observed_before_turn": observed_total,
                 },
             }
+            usage_before_ids = _processor_usage_id_set(record_store, thread_key)
             started = time.perf_counter()
             try:
                 result = executor.run_turn(
@@ -473,12 +471,21 @@ def run_provider_longform_trace(
                 latency_ms=latency_ms,
                 error=error,
             )
-            usage = (
-                dict(turn.get("processor_usage", {}))
-                if isinstance(turn.get("processor_usage", {}), dict)
-                else {}
+            ledger_delta = _processor_usage_delta(
+                record_store,
+                thread_key,
+                before_ids=usage_before_ids,
             )
-            observed_total += int(usage.get("total_tokens", 0) or 0)
+            if ledger_delta:
+                _attach_processor_usage_ledger(turn, ledger_delta)
+                for row in ledger_delta:
+                    row_provider = str(row.get("provider", "") or "")
+                    row_model = str(row.get("model", "") or "")
+                    if row_provider:
+                        actual_providers.add(row_provider)
+                    if row_model:
+                        actual_models.add(row_model)
+            observed_total += _turn_observed_total_tokens(turn)
             turn["budget_after_turn"] = {
                 "observed_total_tokens": observed_total,
                 "remaining_tokens": max(0, safe_budget - observed_total),
@@ -560,7 +567,6 @@ def run_provider_longform_trace(
         journal_path=str(journal) if journal else "",
         resumed_turn_count=resumed_turn_count,
     )
-    record_store = store or getattr(executor, "store", None)
     if record_store is not None and hasattr(record_store, "record_agent_eval_run"):
         try:
             record_store.record_agent_eval_run(
@@ -905,8 +911,189 @@ def _turn_from_result(
         ),
         "processor_debug": compact_debug,
         "processor_usage": usage,
+        "processor_usage_observed": dict(usage),
+        "processor_usage_scope": {
+            "mode": "reply_result",
+            "ledger_record_count": 0,
+            "reply_total_tokens": int(usage.get("total_tokens", 0) or 0),
+            "turn_total_tokens": int(usage.get("total_tokens", 0) or 0),
+        },
         "error": error,
     }
+
+
+def _processor_usage_id_set(store: Any | None, thread_key: str) -> set[str]:
+    return {
+        _usage_row_id(row)
+        for row in _list_processor_usage_rows(store, thread_key)
+        if _usage_row_id(row)
+    }
+
+
+def _processor_usage_delta(
+    store: Any | None,
+    thread_key: str,
+    *,
+    before_ids: set[str],
+) -> list[dict[str, Any]]:
+    rows = _list_processor_usage_rows(store, thread_key)
+    if not rows:
+        return []
+    before = set(before_ids or set())
+    delta = [row for row in rows if _usage_row_id(row) not in before]
+    return sorted(delta, key=_usage_row_sort_key)
+
+
+def _list_processor_usage_rows(
+    store: Any | None,
+    thread_key: str,
+    *,
+    limit: int = 256,
+) -> list[dict[str, Any]]:
+    if store is None or not hasattr(store, "list_processor_usage"):
+        return []
+    normalized_thread = str(thread_key or "").strip()
+    try:
+        rows = store.list_processor_usage(limit=limit, thread_key=normalized_thread)
+    except TypeError:
+        try:
+            rows = store.list_processor_usage(limit=limit)
+        except Exception:  # noqa: BLE001
+            return []
+        rows = [
+            row
+            for row in rows
+            if str(dict(row).get("thread_key", "") or "").strip()
+            == normalized_thread
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+    compact_rows: list[dict[str, Any]] = []
+    for row in list(rows or []):
+        if isinstance(row, dict):
+            compact_rows.append(dict(row))
+        else:
+            try:
+                compact_rows.append(dict(row))
+            except (TypeError, ValueError):
+                continue
+    return compact_rows
+
+
+def _usage_row_id(row: dict[str, Any]) -> str:
+    return str(row.get("id", "") or "").strip()
+
+
+def _usage_row_sort_key(row: dict[str, Any]) -> tuple[int, str]:
+    try:
+        return (int(row.get("id", 0) or 0), str(row.get("created_at", "") or ""))
+    except (TypeError, ValueError):
+        return (0, str(row.get("created_at", "") or ""))
+
+
+def _attach_processor_usage_ledger(
+    turn: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> None:
+    observed = _ledger_usage_totals(rows)
+    reply_usage = (
+        dict(turn.get("processor_usage", {}))
+        if isinstance(turn.get("processor_usage", {}), dict)
+        else {}
+    )
+    turn["processor_usage_ledger"] = [_compact_usage_ledger_row(row) for row in rows]
+    turn["processor_usage_observed"] = observed
+    turn["processor_usage_scope"] = {
+        "mode": "ledger_delta",
+        "ledger_record_count": len(rows),
+        "reply_total_tokens": int(reply_usage.get("total_tokens", 0) or 0),
+        "turn_total_tokens": int(observed.get("total_tokens", 0) or 0),
+    }
+
+
+def _compact_usage_ledger_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(row.get("id", 0) or 0),
+        "task_type": str(row.get("task_type", "") or ""),
+        "lane": str(row.get("lane", "") or ""),
+        "provider": str(row.get("provider", "") or ""),
+        "model": str(row.get("model", "") or ""),
+        "reasoning_effort": str(row.get("reasoning_effort", "") or ""),
+        "thread_key": str(row.get("thread_key", "") or ""),
+        "event_id": str(row.get("event_id", "") or ""),
+        "duration_ms": int(row.get("duration_ms", 0) or 0),
+        "prompt_tokens": int(row.get("prompt_tokens", 0) or 0),
+        "completion_tokens": int(row.get("completion_tokens", 0) or 0),
+        "total_tokens": int(row.get("total_tokens", 0) or 0),
+        "estimated": bool(int(row.get("estimated", 0) or 0)),
+        "status": str(row.get("status", "") or ""),
+        "created_at": str(row.get("created_at", "") or ""),
+    }
+
+
+def _ledger_usage_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    totals: dict[str, Any] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 0,
+        "estimated": True,
+    }
+    saw_estimated = False
+    for row in rows:
+        totals["prompt_tokens"] += int(row.get("prompt_tokens", 0) or 0)
+        totals["completion_tokens"] += int(row.get("completion_tokens", 0) or 0)
+        totals["total_tokens"] += int(row.get("total_tokens", 0) or 0)
+        estimated = bool(int(row.get("estimated", 1) or 0))
+        totals["estimated"] = bool(totals["estimated"]) and estimated
+        saw_estimated = True
+        usage = _usage_from_ledger_metadata(row)
+        totals["prompt_cache_hit_tokens"] += int(
+            usage.get("prompt_cache_hit_tokens", 0) or 0
+        )
+        totals["prompt_cache_miss_tokens"] += int(
+            usage.get("prompt_cache_miss_tokens", 0) or 0
+        )
+    if not saw_estimated:
+        totals["estimated"] = False
+    prompt_tokens = int(totals.get("prompt_tokens", 0) or 0)
+    hit_tokens = int(totals.get("prompt_cache_hit_tokens", 0) or 0)
+    totals["prompt_cache_hit_ratio"] = (
+        round(hit_tokens / prompt_tokens, 4) if prompt_tokens > 0 else 0.0
+    )
+    return totals
+
+
+def _usage_from_ledger_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata", {})
+    metadata_json = str(row.get("metadata_json", "") or "").strip()
+    if (not isinstance(metadata, dict) or not metadata) and metadata_json:
+        try:
+            metadata = json.loads(metadata_json)
+        except json.JSONDecodeError:
+            metadata = {}
+    usage = metadata.get("usage", {}) if isinstance(metadata, dict) else {}
+    return dict(usage) if isinstance(usage, dict) else {}
+
+
+def _turn_observed_usage(turn: dict[str, Any]) -> dict[str, Any]:
+    observed = (
+        dict(turn.get("processor_usage_observed", {}))
+        if isinstance(turn.get("processor_usage_observed", {}), dict)
+        else {}
+    )
+    if observed:
+        return observed
+    return (
+        dict(turn.get("processor_usage", {}))
+        if isinstance(turn.get("processor_usage", {}), dict)
+        else {}
+    )
+
+
+def _turn_observed_total_tokens(turn: dict[str, Any]) -> int:
+    return int(_turn_observed_usage(turn).get("total_tokens", 0) or 0)
 
 
 def _compact_debug(debug: dict[str, Any]) -> dict[str, Any]:
@@ -1034,9 +1221,9 @@ def _score_run(
         sum(1 for turn in turns if str(turn.get("error", "") or "").strip()) / total
     )
     usage_rows = [
-        dict(turn.get("processor_usage", {}))
+        _turn_observed_usage(turn)
         for turn in turns
-        if isinstance(turn.get("processor_usage", {}), dict)
+        if isinstance(turn, dict) and _turn_observed_usage(turn)
     ]
     cache_ratio = _mean(
         [float(row.get("prompt_cache_hit_ratio", 0.0) or 0.0) for row in usage_rows],
@@ -1215,11 +1402,7 @@ def _usage_totals(turns: list[dict[str, Any]]) -> dict[str, int]:
         "prompt_cache_miss_tokens": 0,
     }
     for turn in turns:
-        usage = (
-            dict(turn.get("processor_usage", {}))
-            if isinstance(turn.get("processor_usage", {}), dict)
-            else {}
-        )
+        usage = _turn_observed_usage(turn)
         for key in totals:
             totals[key] += int(usage.get(key, 0) or 0)
     return totals

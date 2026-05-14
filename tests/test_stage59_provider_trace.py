@@ -89,6 +89,127 @@ class _FakeTurnExecutor:
         }
 
 
+class _FakeUsageStore:
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+        self._next_id = 1
+
+    def add_usage(
+        self,
+        *,
+        thread_key: str,
+        event_id: str,
+        task_type: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        provider: str = "deepseek",
+        model: str = "deepseek-v4-flash",
+    ) -> None:
+        self.rows.append(
+            {
+                "id": self._next_id,
+                "task_type": task_type,
+                "lane": "micro_fast",
+                "provider": provider,
+                "model": model,
+                "reasoning_effort": "low",
+                "thread_key": thread_key,
+                "event_id": event_id,
+                "duration_ms": 100,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "estimated": 0,
+                "status": "ok",
+                "metadata_json": json.dumps(
+                    {
+                        "usage": {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": total_tokens,
+                            "prompt_cache_hit_tokens": 64
+                            if task_type == "reply"
+                            else 0,
+                            "prompt_cache_miss_tokens": max(
+                                0,
+                                prompt_tokens
+                                - (64 if task_type == "reply" else 0),
+                            ),
+                            "estimated": False,
+                        }
+                    }
+                ),
+                "created_at": "2026-05-14T03:15:45Z",
+            }
+        )
+        self._next_id += 1
+
+    def list_processor_usage(
+        self,
+        *,
+        limit: int = 50,
+        task_type: str | None = None,
+        lane: str | None = None,
+        provider: str | None = None,
+        event_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> list[dict]:
+        rows = list(self.rows)
+        if task_type:
+            rows = [row for row in rows if row["task_type"] == task_type]
+        if lane:
+            rows = [row for row in rows if row["lane"] == lane]
+        if provider:
+            rows = [row for row in rows if row["provider"] == provider]
+        if event_id:
+            rows = [row for row in rows if row["event_id"] == event_id]
+        if thread_key:
+            rows = [row for row in rows if row["thread_key"] == thread_key]
+        return list(reversed(rows))[: max(1, int(limit))]
+
+
+class _LedgerWritingTurnExecutor(_FakeTurnExecutor):
+    def __init__(self, store: _FakeUsageStore) -> None:
+        super().__init__(total_tokens=1000)
+        self.store = store
+
+    def run_turn(
+        self,
+        *,
+        user_text: str,
+        thread_key: str,
+        chat_name: str,
+        channel: str,
+        message_id: str,
+        metadata: dict,
+    ) -> dict:
+        self.store.add_usage(
+            thread_key=thread_key,
+            event_id=message_id,
+            task_type="recall_reconstruct",
+            prompt_tokens=180,
+            completion_tokens=20,
+            total_tokens=200,
+        )
+        self.store.add_usage(
+            thread_key=thread_key,
+            event_id=message_id,
+            task_type="reply",
+            prompt_tokens=900,
+            completion_tokens=100,
+            total_tokens=1000,
+        )
+        return super().run_turn(
+            user_text=user_text,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            message_id=message_id,
+            metadata=metadata,
+        )
+
+
 class Stage59ProviderTraceTests(unittest.TestCase):
     def test_dry_run_plans_provider_trace_without_calling_executor(self) -> None:
         from holo_host.consciousness_provider_trace import run_provider_longform_trace
@@ -147,6 +268,43 @@ class Stage59ProviderTraceTests(unittest.TestCase):
         self.assertEqual(report["stage57_calibration"]["trace_set"]["total_points"], 3)
         self.assertFalse(report["boundary"]["wechat_transport_used"])
         self.assertFalse(report["boundary"]["self_memory_write_allowed"])
+
+    def test_execute_counts_all_processor_ledger_rows_for_turn_budget(self) -> None:
+        from holo_host.consciousness_provider_trace import run_provider_longform_trace
+
+        store = _FakeUsageStore()
+        executor = _LedgerWritingTurnExecutor(store)
+        report = run_provider_longform_trace(
+            execute=True,
+            runs=1,
+            turns=4,
+            max_total_tokens=1100,
+            provider_hint="deepseek",
+            model="deepseek-v4-flash",
+            max_output_tokens=120,
+            store=store,
+            executor=executor,
+        )
+        turns = report["stage46_compatible_runs"][0]["turns"]
+
+        self.assertEqual(report["status"], "stopped")
+        self.assertEqual(
+            report["budget_guard"]["stopped_reason"], "token_budget_exhausted"
+        )
+        self.assertEqual(report["budget_guard"]["observed_total_tokens"], 1200)
+        self.assertEqual(len(executor.calls), 1)
+        self.assertEqual(report["generated_runs"][0]["total_tokens"], 1200)
+        self.assertEqual(turns[0]["processor_usage_scope"]["mode"], "ledger_delta")
+        self.assertEqual(turns[0]["processor_usage_scope"]["ledger_record_count"], 2)
+        self.assertEqual(turns[0]["processor_usage_observed"]["total_tokens"], 1200)
+        self.assertEqual(
+            turns[0]["processor_usage_observed"]["prompt_cache_hit_tokens"],
+            64,
+        )
+        self.assertEqual(
+            [row["task_type"] for row in turns[0]["processor_usage_ledger"]],
+            ["recall_reconstruct", "reply"],
+        )
 
     def test_writes_provider_trace_artifacts_and_turn_journal(self) -> None:
         from holo_host.consciousness_provider_trace import (
