@@ -312,10 +312,11 @@ Stage68: bionic memory robustness
 
 Stage69: inner-stream consciousness clock
 - Adds `inner_stream`, a bounded always-on endogenous micro-tick inside the WSL daemon.
-- Emits volatile subject-state ticks with sensory edge, attention focus, affective tension, memory echo, goal pressure, inhibition, and candidate action phases.
+- Calls the existing LLM processor fabric through `inner_stream_thought`, routed to `subject_main` by default with `micro_fast` fallback, so each due tick can produce a real internal micro-thought on the stronger configured model.
+- Emits volatile subject-state ticks with sensory edge, attention focus, affective tension, memory echo, goal pressure, inhibition, candidate action, and processor metadata phases.
 - Exposes `inner_stream_state` through brain status and records compact loop telemetry for dashboard and visualization sampling.
 - Hardens daemon loop execution so brain-loop runner exceptions become `status=error` telemetry instead of crashing the main cycle.
-- Keeps Stage69 bounded: no model call, self-memory write, policy write, transport write, watcher authority, downstream MCP exposure, second decision layer, or autonomous long-term memory promotion.
+- Keeps Stage69 bounded: no self-memory write, policy write, transport write, watcher authority, downstream MCP exposure, second decision layer, or autonomous long-term memory promotion. The model call is processing, not authority.
 
 ## Next Program Arc (Planned)
 

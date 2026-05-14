@@ -133,6 +133,8 @@ class MemoryConfig:
     inner_stream_enabled: bool = True
     inner_stream_tick_interval_seconds: int = 1
     inner_stream_ring_size: int = 64
+    inner_stream_model_enabled: bool = True
+    inner_stream_model_max_output_tokens: int = 220
     attention_tick_interval_seconds: int = 3
     dream_idle_threshold_seconds: int = 900
     self_revision_interval_seconds: int = 1800
@@ -320,6 +322,7 @@ def _default_processor_routing() -> dict[str, TaskRoutingConfig]:
         "autobiographical_consolidation": TaskRoutingConfig(lane="subject_main", fallback_lane="micro_fast", budget_tag="autobiographical_consolidation"),
         "world_calibration": TaskRoutingConfig(lane="subject_main", fallback_lane="micro_fast", budget_tag="world_calibration"),
         "image_understand": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="image_understand"),
+        "inner_stream_thought": TaskRoutingConfig(lane="subject_main", fallback_lane="micro_fast", budget_tag="inner_stream"),
         "self_model_observe": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="self_model_observe"),
         "initiative_probe": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="initiative_probe"),
         "affect_reflect": TaskRoutingConfig(lane="micro_fast", fallback_lane="subject_main", budget_tag="affect_reflect"),
@@ -470,6 +473,8 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         inner_stream_enabled=bool(memory_data.get("inner_stream_enabled", True)),
         inner_stream_tick_interval_seconds=int(memory_data.get("inner_stream_tick_interval_seconds", 1)),
         inner_stream_ring_size=int(memory_data.get("inner_stream_ring_size", 64)),
+        inner_stream_model_enabled=bool(memory_data.get("inner_stream_model_enabled", True)),
+        inner_stream_model_max_output_tokens=int(memory_data.get("inner_stream_model_max_output_tokens", 220)),
         attention_tick_interval_seconds=int(memory_data.get("attention_tick_interval_seconds", 3)),
         dream_idle_threshold_seconds=int(memory_data.get("dream_idle_threshold_seconds", 900)),
         self_revision_interval_seconds=int(memory_data.get("self_revision_interval_seconds", 1800)),

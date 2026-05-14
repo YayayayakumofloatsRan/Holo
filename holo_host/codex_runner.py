@@ -125,6 +125,14 @@ PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
         "output_schema": "json",
         "default_reasoning_effort": "medium",
     },
+    "inner_stream_thought": {
+        "description": "Generate a bounded internal micro-thought for the continuous consciousness stream.",
+        "allow_session_resume": False,
+        "allowed_data_layers": ("brain_runtime_state", "brain_loop_runs", "consciousness_stream", "activation_state"),
+        "allow_memory_writeback": False,
+        "output_schema": "json",
+        "default_reasoning_effort": "low",
+    },
     "self_observe": {
         "description": "Observe drift, user corrections, and runtime pain points as bounded self-evidence.",
         "allow_session_resume": False,

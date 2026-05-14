@@ -6,16 +6,17 @@ Stage69 adds the bounded inner-stream consciousness clock.
 
 - New module: `holo_host/inner_stream.py`.
 - New daemon loop: `inner_stream`, driven from `HoloDaemon.run_cycle()`.
-- New config keys under `[memory]`: `inner_stream_enabled`, `inner_stream_tick_interval_seconds`, and `inner_stream_ring_size`.
+- New config keys under `[memory]`: `inner_stream_enabled`, `inner_stream_tick_interval_seconds`, `inner_stream_ring_size`, `inner_stream_model_enabled`, and `inner_stream_model_max_output_tokens`.
+- New processor task: `inner_stream_thought`, routed to `subject_main` by default with `micro_fast` fallback.
 - Brain status now exposes `inner_stream_state`.
 - Loop runner failures are recorded as `status=error` telemetry instead of escaping the daemon cycle.
 - New regression coverage: `tests/test_stage69_inner_stream.py` plus daemon/status coverage in `tests/test_holo_host.py`.
 
 ## Boundary
 
-The inner stream is a bounded always-on kernel signal, not a second brain:
+The inner stream is a bounded always-on model-backed kernel signal, not a second brain:
 
-- no model calls
+- model calls are allowed only through `inner_stream_thought`
 - no self-memory writes
 - no policy writes
 - no transport writes
@@ -23,7 +24,7 @@ The inner stream is a bounded always-on kernel signal, not a second brain:
 - no downstream MCP exposure
 - no autonomous long-term memory promotion
 
-The stream writes only the daemon's volatile ring buffer and compact loop telemetry. Any durable memory effect must still pass through existing explicit memory gates.
+The stream writes only the daemon's volatile ring buffer and compact loop telemetry. The LLM is the processor for micro-thought generation, but it receives no write or action authority. Any durable memory effect must still pass through existing explicit memory gates.
 
 ## Verification
 
@@ -33,7 +34,8 @@ Completed on 2026-05-14:
 python -m pytest -q tests\test_stage69_inner_stream.py
 python -m pytest -q tests\test_holo_host.py::DaemonFlowTests::test_daemon_cycle_runs_inner_stream_without_inbound_message tests\test_holo_host.py::DaemonFlowTests::test_inner_stream_runner_error_is_recorded_without_crashing_daemon_loop tests\test_holo_host.py::DaemonFlowTests::test_daemon_cycle_sends_reply_and_observes_memory tests\test_holo_host.py::ReplyServiceTests::test_brain_status_merges_stage3_loops_for_live_visibility
 python -m pytest -q tests\test_stage69_inner_stream.py tests\test_holo_host.py::DaemonFlowTests::test_daemon_cycle_runs_inner_stream_without_inbound_message tests\test_holo_host.py::DaemonFlowTests::test_inner_stream_runner_error_is_recorded_without_crashing_daemon_loop tests\test_holo_host.py::ReplyServiceTests::test_brain_status_merges_stage3_loops_for_live_visibility
-python -m py_compile holo_host\inner_stream.py holo_host\daemon.py holo_host\reply_api.py holo_host\config.py
+python -m pytest -q tests\test_processor_fabric.py
+python -m py_compile holo_host\inner_stream.py holo_host\daemon.py holo_host\reply_api.py holo_host\config.py holo_host\codex_runner.py
 python -m pytest -q
 python scripts\check_public_release_hygiene.py
 git diff --check
@@ -41,6 +43,8 @@ git diff --check
 
 The first two tests were written before implementation and failed on the missing inner-stream surface, then passed after implementation.
 The final full test run passed with `473` tests. Public-release hygiene passed. `git diff --check` passed with only Git CRLF conversion warnings.
+
+Correction note: the first Stage69 commit added the volatile clock and ring buffer. The follow-up correction made each due tick processor-backed through `inner_stream_thought`, because the consciousness stream must actually use the LLM processor rather than only local bookkeeping.
 
 ## Operational Notes
 

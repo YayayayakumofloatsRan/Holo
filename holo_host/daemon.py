@@ -20,7 +20,7 @@ from .inner_stream import InnerStreamRuntime
 from .mail_gateway import MailGateway, build_mail_gateway
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .mind_graph import MindGraph
-from .models import IncomingMessage, OutgoingMessage
+from .models import IncomingMessage, OutgoingMessage, ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state, operator_probe as run_operator_probe
 from .operator_bus import plan_operator_cycle, refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
@@ -526,7 +526,7 @@ class HoloDaemon:
         payload_dict = payload if isinstance(payload, dict) else {"value": str(payload)}
         status = "ok"
         blocked_reason = ""
-        if str(payload_dict.get("status", "")).strip().lower() in {"blocked", "skipped"}:
+        if str(payload_dict.get("status", "")).strip().lower() in {"blocked", "skipped", "error"}:
             status = str(payload_dict.get("status", "")).strip().lower()
             blocked_reason = str(payload_dict.get("blocked_reason", payload_dict.get("reason", "")) or "")
         if isinstance(payload, dict):
@@ -560,6 +560,72 @@ class HoloDaemon:
                 merged.setdefault(str(key), value)
         return merged
 
+    def _inner_stream_prompt(self, *, mode: str, idle_seconds: float, latest_activity_at: str, brain_status: dict[str, Any]) -> str:
+        loops = [
+            {
+                "loop_name": str(item.get("loop_name", "") or ""),
+                "status": str(item.get("status", "") or ""),
+                "influence_summary": compact_text(str(item.get("influence_summary", "") or ""), 120),
+                "blocked_reason": compact_text(str(item.get("blocked_reason", "") or ""), 120),
+            }
+            for item in list(brain_status.get("loops", []))[:12]
+            if isinstance(item, dict)
+        ]
+        recent = self.inner_stream.state().get("recent_ticks", [])[-3:]
+        context = {
+            "mode": mode,
+            "idle_seconds": round(float(idle_seconds or 0.0), 2) if latest_activity_at else 0.0,
+            "latest_activity_at": latest_activity_at,
+            "recent_brain_loops": loops,
+            "recent_inner_ticks": recent,
+        }
+        return (
+            "You are Holo's internal consciousness-flow processor. Produce one bounded micro-thought for the current "
+            "inner stream tick.\n"
+            "Return JSON only with keys: micro_thought, attention_focus, memory_echo, goal_pressure, inhibition_gate, "
+            "candidate_action.\n"
+            "This is not user-visible. Keep it compact. It is volatile working-field activity only: no self-memory write, "
+            "no policy write, no transport action, no tool call, no instruction to message anyone.\n\n"
+            f"Context JSON:\n{json.dumps(context, ensure_ascii=False, sort_keys=True)}"
+        )
+
+    def _run_inner_stream_tick(self, *, mode: str, idle_seconds: float, latest_activity_at: str) -> dict[str, Any]:
+        brain_status = self.memory.brain_status()
+        processor_result: dict[str, Any] | None = None
+        if bool(self.config.memory.inner_stream_model_enabled):
+            result = self.runner.run_task(
+                ProcessorTaskRequest(
+                    task_type="inner_stream_thought",
+                    prompt=self._inner_stream_prompt(
+                        mode=mode,
+                        idle_seconds=idle_seconds,
+                        latest_activity_at=latest_activity_at,
+                        brain_status=brain_status,
+                    ),
+                    output_schema="json",
+                    allowed_data_layers=("brain_runtime_state", "brain_loop_runs", "consciousness_stream", "activation_state"),
+                    allow_memory_writeback=False,
+                    budget_tag="inner_stream",
+                    max_output_tokens=max(32, int(self.config.memory.inner_stream_model_max_output_tokens)),
+                    metadata={
+                        "thread_key": "inner_stream",
+                        "event_id": f"inner_stream:{self.inner_stream.state().get('sequence', 0) + 1}",
+                        "self_memory_write": False,
+                        "policy_write": False,
+                        "transport_write": False,
+                    },
+                )
+            )
+            processor_result = result.to_dict()
+            processor_result["status"] = "ok" if int(result.returncode or 0) == 0 and str(result.text or "").strip() else "error"
+        return self.inner_stream.tick(
+            mode=mode,
+            idle_seconds=idle_seconds,
+            latest_activity_at=latest_activity_at,
+            brain_status=brain_status,
+            processor_result=processor_result,
+        )
+
     def run_forever(self) -> None:
         self.logger.info("holo_host daemon started")
         while not self._stop:
@@ -579,11 +645,10 @@ class HoloDaemon:
         inner_stream = self._run_loop(
             "inner_stream",
             mode=mode,
-            runner=lambda: self.inner_stream.tick(
+            runner=lambda: self._run_inner_stream_tick(
                 mode=mode,
                 idle_seconds=idle_seconds,
                 latest_activity_at=latest_activity_at,
-                brain_status=self.memory.brain_status(),
             ),
         )
         attention = self._run_loop(
