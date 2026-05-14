@@ -289,6 +289,14 @@ Stage66: dynamic delta frame
 - Reports the current evidence conservatively: latest real offline Stage46 seed lifted `prompt_cache_hit_ratio` to `0.242774` and `cache_inheritance` to `0.441407`, but `cache_inheritance_low` remains the top bottleneck; active combined Stage63/64/65/66 surrogate reached `prompt_cache_hit_ratio=0.392096`, `cache_inheritance=0.712902`, `aggregate_score=0.785938`, and `tool_observation_coverage=0.75`.
 - Keeps all changes prompt-scheduling/diagnostic/surrogate-only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage67: capability audit repairs
+- Repairs the 2026-05-14 high-intensity capability-audit blockers: long `free_dialogue` duplicate follow-up, stale Stage61 underreporting of current Stage64/65/66 surfaces, low dynamic-delta coverage, residual boundary failures, and memory resilience below threshold.
+- Extends Stage42 free dialogue to distinct 20-turn probes and adds deterministic non-repeating offline responses for the new probes.
+- Extends Stage66 dynamic-delta compression to low-value route/tier/scene/reentry volatile lines while preserving protected current-state, reconstruction, residual, and tool-observation facts.
+- Adds marked `surrogate_current_surface_projection` for `biomimetic_v1` legacy seeds in Stage61, including cache spine, residual, bounded tool observation, dynamic delta, and memory recall/salience floor projection.
+- Reports the current evidence conservatively: repaired Stage61/62 surrogate over `14` scenarios and `10080` turns reached `prompt_cache_hit_ratio=0.429592`, `average_recall_budget=5.9901`, `tool_observation_coverage=0.75`, `grounding_integrity=1.0`, `cache_inheritance=0.781076`, `aggregate_score=0.860429`, and only remaining item `no_blocking_simulation_deficit`.
+- Keeps all changes offline/surrogate/prompt-shaping only: no provider call, MCP call, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

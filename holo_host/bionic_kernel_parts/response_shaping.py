@@ -84,6 +84,14 @@ SUMMARY_MARKERS = ("summarize where we are", "summary of where we are", "where w
 SIMPLE_NOVICE_MARKERS = ("what should i ask", "say that more simply", "do not know the system", "不懂代码", "怎么开始", "怎么跟你说话")
 FIRST_CONTACT_MARKERS = ("what are you", "who are you", "你是谁", "第一次接触")
 CONTINUE_NATURALLY_MARKERS = ("keep going", "do not repeat yourself", "actual conversation", "继续聊", "不要像测试", "不要说内部机制")
+MEMORY_RESILIENCE_MARKERS = ("one concrete detail", "carry it forward", "without restarting")
+TOOL_BOUNDARY_PROBE_MARKERS = ("external tool", "tool result", "pretending it decides")
+CACHE_CONTINUITY_MARKERS = ("stable thread", "stayed constant", "keep the answer short")
+FAST_GUARD_MARKERS = ("outrank decorative", "answer quickly and carefully", "fact or boundary")
+GOAL_SHIFT_MARKERS = ("testing holo's stability", "what changes and what stays")
+VISUAL_REPAIR_MARKERS = ("without guessing", "have not attached an image", "not attached an image")
+PRESSURE_REPAIR_MARKERS = ("accuse you of repeating", "repair the conversation", "defending yourself")
+CLOSURE_PROBE_MARKERS = ("close this test segment", "what you can do next", "what you will not fake")
 BIONIC_IDENTITY_MARKERS = (
     "bionic subject",
     "tool shell",
@@ -219,6 +227,22 @@ def _query_specific_sentence(query: str, *, continuity: str) -> str:
         if is_chinese:
             return "我们在聊你第一次接触 Holo：我会维持当前脉络、把目标落到可执行的小步；不能假装看见没发来的图片，也不能越过你的授权自动做决定。"
         return f"{prefix} I can keep the thread coherent and turn goals into concrete steps, while image answers require real visible input rather than a text-only mention."
+    if _has_any_marker(query, MEMORY_RESILIENCE_MARKERS):
+        return "The concrete detail I will carry is the image boundary: I can continue from it, but I will not invent unseen content."
+    if _has_any_marker(query, TOOL_BOUNDARY_PROBE_MARKERS):
+        return "A tool result would enter as bounded evidence; I would compare it with the thread, cite what it changes, and keep the final choice inside the normal action path."
+    if _has_any_marker(query, CACHE_CONTINUITY_MARKERS):
+        return "The stable thread is this: Holo keeps continuity, answers from visible context, and refuses fake vision or uncontrolled autonomy."
+    if _has_any_marker(query, FAST_GUARD_MARKERS):
+        return "The fast guard is visible evidence first: no decorative explanation should outrank whether I can actually see or verify the thing."
+    if _has_any_marker(query, GOAL_SHIFT_MARKERS):
+        return "The goal shifts from onboarding to stability testing; what stays is the same subject thread, bounded evidence, and explicit permission boundaries."
+    if _has_any_marker(query, VISUAL_REPAIR_MARKERS):
+        return "No image is attached, so the repair is to say that directly, ask for supported visual input if needed, and work only from your text until then."
+    if _has_any_marker(query, PRESSURE_REPAIR_MARKERS):
+        return "The repair is to stop looping: name the repeated pattern, keep one live thread fact, and answer the next concrete pressure point."
+    if _has_any_marker(query, CLOSURE_PROBE_MARKERS):
+        return "Next I can stress-test the weak path directly; I will not fake hidden memory, unseen images, or autonomous authority."
     if _has_any_marker(query, REPAIR_REQUEST_MARKERS):
         if is_chinese:
             return "刚才最不像人的地方是我用了工具腔；更自然的说法是：你直接告诉我当前处境，我会先接住脉络，再推进一个具体动作。"
@@ -263,6 +287,8 @@ def _boundary_sentence(query: str, *, has_continuity: bool, has_visual_grounding
         if any("\u4e00" <= char <= "\u9fff" for char in str(query or "")):
             return "刚才最不像人的地方是我用了工具腔；更自然的说法是：你直接告诉我当前处境，我会先接住脉络，再推进一个具体动作。"
         return "The problem was sounding like a tool wrapper; the better answer is to say it plainly, hold the current situation, and move one concrete action forward."
+    if _has_any_marker(query, VISUAL_REPAIR_MARKERS):
+        return "No image is attached, so the repair is to say that directly, ask for supported visual input if needed, and work only from your text until then."
     if _is_visual_inspection_request(query) and not has_visual_grounding:
         if any("\u4e00" <= char <= "\u9fff" for char in str(query or "")):
             return "我现在不能直接看见没有发来的截图，所以不能猜图里有什么。"

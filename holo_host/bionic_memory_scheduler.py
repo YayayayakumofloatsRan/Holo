@@ -26,6 +26,10 @@ DELTA_COMPRESSIBLE_LABELS = (
     "motif",
     "vector",
     "activation_heat",
+    "scene_response_sketch",
+    "dense_reentry_hint",
+    "memory_route",
+    "tier",
 )
 
 MEMORY_REQUEST_MARKERS = (
@@ -272,8 +276,20 @@ def _dynamic_delta_line(buckets: dict[str, list[str]], *, compressed_count: int)
     heats = buckets.get("activation_heat", [])
     if heats:
         parts.append(f"heat={_text(heats[-1], 16)}")
+    route_parts: list[str] = []
+    for label, short in (
+        ("memory_route", "route"),
+        ("tier", "tier"),
+        ("scene_response_sketch", "scene"),
+        ("dense_reentry_hint", "reentry"),
+    ):
+        values = buckets.get(label, [])
+        if values:
+            route_parts.append(f"{short}:{len(values)}:{_text(values[0], 14)}")
+    if route_parts:
+        parts.append("volatile:" + "|".join(route_parts))
     parts.append(f"compressed_handles={compressed_count}")
-    return _text("dynamic_delta=" + "; ".join(parts), 180)
+    return _text("dynamic_delta=" + "; ".join(parts), 220)
 
 
 def _apply_dynamic_delta_frame(prompt_dynamic_lines: list[str]) -> tuple[list[str], dict[str, Any]]:
@@ -561,10 +577,18 @@ def build_bionic_memory_schedule(packet: dict[str, Any], *, query: str = "") -> 
         working_budget = max(working_budget, min(8, 2 + residual_line_count))
     working = raw_working[:working_budget]
     hippocampal = raw_hippocampal[:hippocampal_budget]
+    delta_only_working = [
+        line
+        for line in raw_working
+        if line not in working
+        and _line_label(line)
+        in {"scene_response_sketch", "dense_reentry_hint", "memory_route", "tier"}
+    ]
     consolidation = _consolidation_targets(source, salience=salience)
     prompt_dynamic_base = _unique(
         [
             *[f"working: {line}" for line in working],
+            *[f"working: {line}" for line in delta_only_working],
             *[f"hippocampal: {line}" for line in hippocampal],
             *_tool_observation_lines(tool_scheduler),
             f"salience_score={salience['score']}; sources={','.join(salience['sources']) or 'baseline'}",

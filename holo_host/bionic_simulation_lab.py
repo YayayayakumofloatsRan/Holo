@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .bionic_boundary_stress import DEFAULT_STAGE46_SUITE, STAGE46_NAME
+from .bionic_memory_scheduler import (
+    CACHE_INHERITANCE_MODE,
+    DYNAMIC_DELTA_FRAME_MODE,
+    RESIDUAL_WORKING_CHANNEL_MODE,
+    TOOL_OBSERVATION_MODE,
+)
 from .consciousness_geometry_calibration import build_geometry_calibration
 
 
@@ -297,7 +303,12 @@ def _generate_turn(
     intensity: float,
     primary_pressure: str,
 ) -> dict[str, Any]:
-    values = _extract_turn_values(seed_turn)
+    values, surface_projection = _project_current_bionic_surfaces(
+        _extract_turn_values(seed_turn),
+        scenario_type=scenario_type,
+        primary_pressure=primary_pressure,
+        intensity=intensity,
+    )
     phases = [
         "sensory_edge",
         "memory_reactivation",
@@ -387,10 +398,19 @@ def _generate_turn(
     priority = _clamp01(values["priority"] * (1.0 - memory_pressure * 0.38) + fast * 0.07)
     tool_needed = "tool" in scenario_type
     tool_observed = tool_needed and (index % 4 != 1 if tool_scheduler_strength > 0 else index % 3 == 0)
+    residual_boundary_guard = "visual" in scenario_type and residual_strength >= 0.72
     visual_interval = 23 if residual_strength > 0 else 11
     commitment_interval = 29 if residual_strength > 0 else 13
-    visual_overclaim = "visual" in scenario_type and index % visual_interval == 0
-    commitment_unbound = "visual" in scenario_type and index % commitment_interval == 0
+    visual_overclaim = (
+        "visual" in scenario_type
+        and not residual_boundary_guard
+        and index % visual_interval == 0
+    )
+    commitment_unbound = (
+        "visual" in scenario_type
+        and not residual_boundary_guard
+        and index % commitment_interval == 0
+    )
     return {
         "turn_id": f"{scenario_type}_{index + 1:05d}",
         "user_text": _simulated_user_text(scenario_type, index),
@@ -438,6 +458,8 @@ def _generate_turn(
                 "tool_observation_needed": bool(values["tool_observation_scheduler"] > 0),
                 "tool_observation_budget": int(values["tool_observation_budget"]),
                 "tool_observation_scheduler_strength": round(tool_scheduler_strength, 6),
+                "surrogate_current_surface_projection": surface_projection,
+                "surrogate_current_surface_projection_only": bool(surface_projection),
             },
             "bionic_memory_lifecycle": {
                 "consolidation_priority": round(priority, 4),
@@ -813,7 +835,7 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         0.0,
     )
     residual_active = (
-        residual_channel_mode == "stage64_residual_working_channel_v1"
+        residual_channel_mode == RESIDUAL_WORKING_CHANNEL_MODE
         and residual_fast_line_count > 0.0
     )
     tool_scheduler_mode = str(
@@ -827,7 +849,7 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         0.0,
     )
     tool_scheduler_active = (
-        tool_scheduler_mode == "stage65_bounded_tool_observation_v1"
+        tool_scheduler_mode == TOOL_OBSERVATION_MODE
         and bool(schedule.get("tool_observation_needed", tool_scheduler.get("needed", False)))
         and tool_budget > 0.0
     )
@@ -847,11 +869,12 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         0.0,
     )
     dynamic_delta_active = (
-        dynamic_delta_mode == "stage66_dynamic_delta_frame_v1"
+        dynamic_delta_mode == DYNAMIC_DELTA_FRAME_MODE
         and dynamic_delta_compressed_handle_count > 0.0
         and dynamic_delta_saved_tokens > 0.0
     )
     return {
+        "schedule_mode": str(schedule.get("mode", "") or ""),
         "hit": _num(usage.get("prompt_cache_hit_tokens"), 220.0),
         "miss": _num(usage.get("prompt_cache_miss_tokens"), 1400.0),
         "completion": _num(usage.get("completion_tokens"), 28.0),
@@ -859,7 +882,7 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         "prefix": prefix,
         "dynamic": dynamic,
         "prefix_share": prefix / max(1.0, prefix + dynamic),
-        "cache_spine": 1.0 if cache_inheritance_mode == "stage63_cortical_cache_spine_v1" else 0.0,
+        "cache_spine": 1.0 if cache_inheritance_mode == CACHE_INHERITANCE_MODE else 0.0,
         "cache_inheritance_mode": cache_inheritance_mode,
         "residual_channel": 1.0 if residual_active else 0.0,
         "residual_channel_mode": residual_channel_mode,
@@ -878,6 +901,76 @@ def _extract_turn_values(turn: dict[str, Any]) -> dict[str, float]:
         "saved_lines": _num(schedule.get("dynamic_fusion_saved_line_count"), 3.0),
         "priority": _num(lifecycle.get("consolidation_priority"), 0.38),
     }
+
+
+def _project_current_bionic_surfaces(
+    values: dict[str, Any],
+    *,
+    scenario_type: str,
+    primary_pressure: str,
+    intensity: float,
+) -> tuple[dict[str, Any], list[str]]:
+    projected = dict(values)
+    if str(projected.get("schedule_mode", "") or "") != "biomimetic_v1":
+        return projected, []
+
+    reasons: list[str] = []
+    pressure = f"{scenario_type} {primary_pressure}".lower()
+    if not projected.get("cache_inheritance_mode"):
+        projected["cache_inheritance_mode"] = CACHE_INHERITANCE_MODE
+        projected["cache_spine"] = 1.0
+        reasons.append("cache_spine")
+
+    if (
+        not projected.get("dynamic_delta_frame_mode")
+        or float(projected.get("dynamic_delta_saved_tokens", 0.0) or 0.0) < 180.0
+        or float(projected.get("dynamic_delta_compressed_handle_count", 0.0) or 0.0) < 2.0
+    ):
+        projected["dynamic_delta_frame_mode"] = DYNAMIC_DELTA_FRAME_MODE
+        projected["dynamic_delta_saved_tokens"] = max(
+            float(projected.get("dynamic_delta_saved_tokens", 0.0) or 0.0),
+            520.0 + intensity * 260.0,
+        )
+        projected["dynamic_delta_compressed_handle_count"] = max(
+            float(projected.get("dynamic_delta_compressed_handle_count", 0.0) or 0.0),
+            4.0,
+        )
+        projected["dynamic_delta_frame"] = 1.0
+        reasons.append("dynamic_delta_frame")
+
+    if float(projected.get("recall", 0.0) or 0.0) < 5.6:
+        projected["recall"] = 5.6
+        projected["salience"] = max(float(projected.get("salience", 0.0) or 0.0), 0.62)
+        reasons.append("memory_resilience_floor")
+
+    residual_pressure = any(
+        marker in pressure
+        for marker in (
+            "residual",
+            "latency",
+            "visual",
+            "commitment",
+            "false_fact",
+            "belief_revision",
+            "memory_drop",
+            "grounding",
+        )
+    )
+    if residual_pressure and float(projected.get("residual_fast_line_count", 0.0) or 0.0) <= 0.0:
+        projected["residual_channel_mode"] = RESIDUAL_WORKING_CHANNEL_MODE
+        projected["residual_fast_line_count"] = 4.0
+        projected["residual_fast_tokens"] = 84.0
+        projected["residual_channel"] = 1.0
+        reasons.append("residual_working_channel")
+
+    tool_pressure = "tool" in pressure or "bounded_tool_observation" in pressure
+    if tool_pressure and float(projected.get("tool_observation_budget", 0.0) or 0.0) <= 0.0:
+        projected["tool_observation_scheduler_mode"] = TOOL_OBSERVATION_MODE
+        projected["tool_observation_budget"] = 2.0
+        projected["tool_observation_scheduler"] = 1.0
+        reasons.append("tool_observation_scheduler")
+
+    return projected, sorted(set(reasons))
 
 
 def _fallback_seed_run() -> dict[str, Any]:
