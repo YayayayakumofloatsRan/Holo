@@ -2131,6 +2131,8 @@ class DaemonFlowTests(unittest.TestCase):
                 self.assertEqual(runner.task_calls[0]["output_schema"], "json")
                 self.assertFalse(runner.task_calls[0]["allow_memory_writeback"])
                 self.assertIn("volatile", runner.task_calls[0]["prompt"])
+                self.assertIn("field_state", runner.task_calls[0]["prompt"])
+                self.assertIn("plasticity_trace", runner.task_calls[0]["prompt"])
                 self.assertEqual(inner["authority"]["memory_write"], "volatile_ring_only")
                 self.assertFalse(inner["authority"]["self_memory_write"])
                 self.assertFalse(inner["authority"]["policy_write"])

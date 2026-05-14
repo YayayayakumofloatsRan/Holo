@@ -577,13 +577,17 @@ class HoloDaemon:
             "idle_seconds": round(float(idle_seconds or 0.0), 2) if latest_activity_at else 0.0,
             "latest_activity_at": latest_activity_at,
             "recent_brain_loops": loops,
+            "field_state": self.inner_stream.state().get("field_state", {}),
+            "plasticity_trace": self.inner_stream.state().get("plasticity_trace", {}),
             "recent_inner_ticks": recent,
         }
         return (
             "You are Holo's internal consciousness-flow processor. Produce one bounded micro-thought for the current "
             "inner stream tick.\n"
             "Return JSON only with keys: micro_thought, attention_focus, memory_echo, goal_pressure, inhibition_gate, "
-            "candidate_action.\n"
+            "candidate_action, prediction_error, salience_delta, affective_tension.\n"
+            "Treat field_state and plasticity_trace as the recurrent substrate: continue, perturb, or damp the current "
+            "attractor instead of making an isolated one-shot note.\n"
             "This is not user-visible. Keep it compact. It is volatile working-field activity only: no self-memory write, "
             "no policy write, no transport action, no tool call, no instruction to message anyone.\n\n"
             f"Context JSON:\n{json.dumps(context, ensure_ascii=False, sort_keys=True)}"

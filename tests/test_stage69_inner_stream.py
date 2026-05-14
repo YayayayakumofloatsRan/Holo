@@ -57,11 +57,49 @@ class Stage69InnerStreamTests(unittest.TestCase):
         self.assertTrue(third["processor_invoked"])
         self.assertEqual(third["micro_thought"], "hold the line without acting")
         self.assertEqual(third["processor"]["provider"], "deepseek")
+        self.assertEqual(third["field_state"]["dominant_attractor"], "homeostasis")
+        self.assertGreater(third["field_state"]["activation_energy"], 0.0)
+        self.assertGreater(third["field_state"]["prediction_error"], 0.0)
+        self.assertIn("hold the line without acting", third["plasticity_trace"]["recent_micro_thoughts"])
 
         state = runtime.state()
         self.assertEqual(state["sequence"], 3)
         self.assertEqual([item["sequence"] for item in state["recent_ticks"]], [2, 3])
         self.assertEqual(state["latest_tick"]["sequence"], 3)
+        self.assertEqual(state["field_state"]["dominant_attractor"], "homeostasis")
+        self.assertEqual(state["plasticity_trace"]["recent_micro_thoughts"][-1], "hold the line without acting")
+
+    def test_recurrent_field_carries_prior_micro_thought_into_next_tick(self) -> None:
+        runtime = InnerStreamRuntime(max_ticks=4)
+
+        first = runtime.tick(
+            mode="full_brain",
+            idle_seconds=2.0,
+            latest_activity_at="2026-05-14T10:00:00Z",
+            brain_status={"loops": []},
+            processor_result={
+                "status": "ok",
+                "text": '{"micro_thought":"first internal edge","attention_focus":"symbolic edge","memory_echo":"blue thread","goal_pressure":"continuity","inhibition_gate":"wait","candidate_action":"observe","prediction_error":0.62,"salience_delta":0.34,"affective_tension":0.41}',
+                "metadata": {"provider": "deepseek", "model": "deepseek-v4-pro", "lane": "subject_main"},
+            },
+        )
+        second = runtime.tick(
+            mode="full_brain",
+            idle_seconds=3.0,
+            latest_activity_at="2026-05-14T10:00:00Z",
+            brain_status={"loops": []},
+            processor_result={
+                "status": "ok",
+                "text": '{"micro_thought":"second internal edge","attention_focus":"symbolic edge","memory_echo":"blue thread returns","goal_pressure":"continuity","inhibition_gate":"wait","candidate_action":"observe","prediction_error":0.24,"salience_delta":0.18,"affective_tension":0.2}',
+                "metadata": {"provider": "deepseek", "model": "deepseek-v4-pro", "lane": "subject_main"},
+            },
+        )
+
+        self.assertEqual(first["field_state"]["dominant_attractor"], "symbolic edge")
+        self.assertEqual(second["recurrent_context"]["previous_micro_thought"], "first internal edge")
+        self.assertIn("first internal edge", second["plasticity_trace"]["recent_micro_thoughts"])
+        self.assertEqual(second["field_state"]["dominant_attractor"], "symbolic edge")
+        self.assertGreater(second["field_state"]["activation_energy"], first["field_state"]["activation_energy"])
 
 
 if __name__ == "__main__":

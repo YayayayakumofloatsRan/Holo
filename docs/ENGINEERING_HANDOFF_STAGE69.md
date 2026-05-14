@@ -8,6 +8,7 @@ Stage69 adds the bounded inner-stream consciousness clock.
 - New daemon loop: `inner_stream`, driven from `HoloDaemon.run_cycle()`.
 - New config keys under `[memory]`: `inner_stream_enabled`, `inner_stream_tick_interval_seconds`, `inner_stream_ring_size`, `inner_stream_model_enabled`, and `inner_stream_model_max_output_tokens`.
 - New processor task: `inner_stream_thought`, routed to `subject_main` by default with `micro_fast` fallback.
+- New recurrent dynamics: `field_state`, `plasticity_trace`, and `recurrent_context` are carried across ticks and returned to the next processor prompt.
 - Brain status now exposes `inner_stream_state`.
 - Loop runner failures are recorded as `status=error` telemetry instead of escaping the daemon cycle.
 - New regression coverage: `tests/test_stage69_inner_stream.py` plus daemon/status coverage in `tests/test_holo_host.py`.
@@ -24,7 +25,7 @@ The inner stream is a bounded always-on model-backed kernel signal, not a second
 - no downstream MCP exposure
 - no autonomous long-term memory promotion
 
-The stream writes only the daemon's volatile ring buffer and compact loop telemetry. The LLM is the processor for micro-thought generation, but it receives no write or action authority. Any durable memory effect must still pass through existing explicit memory gates.
+The stream writes only the daemon's volatile ring buffer and compact loop telemetry. The LLM is the processor for micro-thought generation and field perturbation, but it receives no external write or action authority. Any durable memory effect must still pass through existing explicit memory gates.
 
 ## Verification
 
@@ -42,9 +43,11 @@ git diff --check
 ```
 
 The first two tests were written before implementation and failed on the missing inner-stream surface, then passed after implementation.
-The final full test run passed with `473` tests. Public-release hygiene passed. `git diff --check` passed with only Git CRLF conversion warnings.
+The final full test run passed with `474` tests. Public-release hygiene passed. `git diff --check` passed with only Git CRLF conversion warnings.
 
 Correction note: the first Stage69 commit added the volatile clock and ring buffer. The follow-up correction made each due tick processor-backed through `inner_stream_thought`, because the consciousness stream must actually use the LLM processor rather than only local bookkeeping.
+
+Biomimetic correction: the stream now carries a recurrent dynamic field instead of a standalone safety-wrapped telemetry row. Model output updates activation energy, prediction error, salience, affective tension, dominant attractor, and recent plasticity traces; the next prompt receives that state as substrate.
 
 ## Operational Notes
 
