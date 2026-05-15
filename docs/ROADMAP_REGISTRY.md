@@ -371,6 +371,15 @@ Stage76: model-family stability
 - Stage76 model-family stability reports `decision=model_family_replay_correction_supported_flow_cell_unstable`: replay/correction compression survives model variation, while flow-coupling instability is within-model/cell unstable rather than clearly model-specific or mechanism-level impossible.
 - Keeps all changes observational/report-only after Stage60 collection: no provider call inside Stage76, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage77: ignition-to-reply coupling
+- Adds an explicit prompt-level `global_workspace_ignition` and `ignition_to_reply_coupling` mechanism inside `bionic_consciousness_flow`, then carries it through the existing Stage52 `Bionic Dynamic Frame`.
+- Makes Stage70 and Stage71 prefer explicit Stage77 ignition/coupling fields when they are present, while preserving legacy fallback behavior for older artifacts.
+- Runs a repeated Stage60 DeepSeek campaign across `deepseek-v4-pro` and `deepseek-v4-flash`: `84` collected real-provider turns, `393716` observed tokens, two shadow-runtime cells, no fallback, and `top_score=0.9046`.
+- Stage73 against Stage72 reports replay/correction residual headroom compression in both Stage77 model cells and improved flow-loss reduction in both new cells: Pro `flow_to_reply_coupling_loss_reduction=0.082128`, Flash `flow_to_reply_coupling_loss_reduction=0.13761`.
+- Stage75-style stability over Stage74, Stage75, Stage76-Pro, Stage76-Flash, Stage77-Pro, and Stage77-Flash reports `cell_count=6`, `replay_correction_compression_cell_count=6`, `flow_loss_reduction_cell_count=5`, and `observed_total_tokens=1176096`.
+- Stage76 model-family stability with Stage77 cells included still reports `decision=model_family_replay_correction_supported_flow_cell_unstable`, but flow improves from `3/4` to `5/6` positive cells overall while staying within-model/cell unstable rather than model-specific.
+- Keeps all changes bounded to prompt shaping, observatory consumption, and operator-gated provider evidence: no watcher authority, runtime decision authority, WeChat transport, self-memory writes, policy writes, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

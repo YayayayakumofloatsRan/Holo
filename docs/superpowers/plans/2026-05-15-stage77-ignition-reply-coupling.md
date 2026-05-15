@@ -104,11 +104,11 @@ python scripts\check_public_release_hygiene.py
 git diff --check
 ```
 
-- [ ] **Step 3: Update Stage77 docs with actual implementation and verification evidence**
+- [x] **Step 3: Update Stage77 docs with actual implementation and verification evidence**
 
 Record exact tests run, exact commit target, and the publication-bounded interpretation: Stage77 adds mechanism structure, but real-provider flow stabilization still requires the next evidence pass.
 
-- [ ] **Step 4: Commit the Stage77 checkpoint**
+- [x] **Step 4: Commit the Stage77 checkpoint**
 
 Commit with:
 
