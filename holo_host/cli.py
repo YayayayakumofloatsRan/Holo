@@ -9230,6 +9230,93 @@ def command_evaluate_biomimetic_theory_correspondence(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_falsification_controls(
+    config_path: str | None,
+    *,
+    theory_json: str,
+    causal_json: list[str],
+    output: str | None,
+) -> int:
+    from .biomimetic_falsification_controls import (
+        build_biomimetic_falsification_controls,
+        load_biomimetic_falsification_controls_json,
+        write_biomimetic_falsification_controls_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    theory = load_biomimetic_falsification_controls_json(theory_json)
+    causal_reports = []
+    for path in causal_json:
+        causal_report = load_biomimetic_falsification_controls_json(path)
+        if "cell_label" not in causal_report:
+            source_path = Path(path)
+            causal_report["cell_label"] = source_path.parent.name or source_path.stem
+        causal_reports.append(causal_report)
+    report = build_biomimetic_falsification_controls(theory, causal_reports)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage79"
+            / "biomimetic_falsification_controls.html"
+        )
+    written = write_biomimetic_falsification_controls_artifacts(report, output_path)
+    summary = (
+        dict(report.get("control_summary", {}))
+        if isinstance(report.get("control_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "control_png_path": str(written["control_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "control_count": summary.get("control_count", 0),
+                    "executed_control_count": summary.get("executed_control_count", 0),
+                    "pending_control_count": summary.get("pending_control_count", 0),
+                    "causal_report_count": summary.get("causal_report_count", 0),
+                    "replay_correction_intact": bool(
+                        summary.get("replay_correction_intact", False)
+                    ),
+                    "gnw_flow_control_narrows_instability": bool(
+                        summary.get("gnw_flow_control_narrows_instability", False)
+                    ),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "theory_language_bounded": bool(evidence.get("theory_language_bounded", True)),
+                    "direct_controls_incomplete": bool(
+                        evidence.get("direct_controls_incomplete", True)
+                    ),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -10844,6 +10931,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     biomimetic_theory_correspondence_parser.add_argument("--model-family-json", required=True)
     biomimetic_theory_correspondence_parser.add_argument("--output", default=None)
+    biomimetic_falsification_controls_parser = subparsers.add_parser(
+        "evaluate-biomimetic-falsification-controls",
+        help="Evaluate Stage79 targeted falsification controls over Stage78 and Stage71 reports",
+    )
+    biomimetic_falsification_controls_parser.add_argument("--theory-json", required=True)
+    biomimetic_falsification_controls_parser.add_argument(
+        "--causal-json",
+        action="append",
+        required=True,
+        default=[],
+    )
+    biomimetic_falsification_controls_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11490,6 +11589,13 @@ def main(argv: list[str] | None = None) -> int:
         return command_evaluate_biomimetic_theory_correspondence(
             args.config,
             model_family_json=args.model_family_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-falsification-controls":
+        return command_evaluate_biomimetic_falsification_controls(
+            args.config,
+            theory_json=args.theory_json,
+            causal_json=args.causal_json,
             output=args.output,
         )
     if args.command == "run-consciousness-provider-trace":
