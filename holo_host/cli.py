@@ -9075,6 +9075,87 @@ def command_evaluate_biomimetic_replication_stability(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_model_family_stability(
+    config_path: str | None,
+    *,
+    model_progress: list[str],
+    output: str | None,
+) -> int:
+    from .biomimetic_model_family_stability import (
+        build_biomimetic_model_family_stability,
+        load_biomimetic_model_family_progress,
+        write_biomimetic_model_family_stability_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    reports = [load_biomimetic_model_family_progress(path) for path in model_progress]
+    report = build_biomimetic_model_family_stability(reports)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage76"
+            / "biomimetic_model_family_stability.html"
+        )
+    written = write_biomimetic_model_family_stability_artifacts(report, output_path)
+    summary = (
+        dict(report.get("model_family_summary", {}))
+        if isinstance(report.get("model_family_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "model_family_png_path": str(written["model_family_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "model_count": summary.get("model_count", 0),
+                    "cell_count": summary.get("cell_count", 0),
+                    "real_provider_cell_count": summary.get("real_provider_cell_count", 0),
+                    "replay_correction_compression_cell_count": summary.get(
+                        "replay_correction_compression_cell_count",
+                        0,
+                    ),
+                    "flow_loss_reduction_cell_count": summary.get(
+                        "flow_loss_reduction_cell_count",
+                        0,
+                    ),
+                    "flow_instability_assessment": summary.get(
+                        "flow_instability_assessment",
+                        "",
+                    ),
+                    "observed_total_tokens": summary.get("observed_total_tokens", 0),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -10671,6 +10752,18 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
     )
     biomimetic_replication_stability_parser.add_argument("--output", default=None)
+    biomimetic_model_family_stability_parser = subparsers.add_parser(
+        "evaluate-biomimetic-model-family-stability",
+        help="Evaluate Stage76 model-family stability across model-labeled Stage73 progress reports",
+    )
+    biomimetic_model_family_stability_parser.add_argument(
+        "--model-progress",
+        action="append",
+        required=True,
+        default=[],
+        help="Model-labeled Stage73 report in the form model=path",
+    )
+    biomimetic_model_family_stability_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11305,6 +11398,12 @@ def main(argv: list[str] | None = None) -> int:
         return command_evaluate_biomimetic_replication_stability(
             args.config,
             progress_json=args.progress_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-model-family-stability":
+        return command_evaluate_biomimetic_model_family_stability(
+            args.config,
+            model_progress=args.model_progress,
             output=args.output,
         )
     if args.command == "run-consciousness-provider-trace":

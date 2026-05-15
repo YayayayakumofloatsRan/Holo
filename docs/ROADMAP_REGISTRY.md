@@ -363,6 +363,14 @@ Stage75: replication stability
 - Stage75 stability over Stage74 and Stage75 reports `decision=replicated_replay_correction_partial_flow`: both cells replicate replay/correction compression, but only one cell reduces flow-coupling loss.
 - Keeps all changes observational/report-only over existing gates: no provider call inside Stage75, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage76: model-family stability
+- Adds a read-only model-family stability observatory over model-labeled Stage73 provider-progress reports.
+- Runs a repeated Stage60 DeepSeek campaign across `deepseek-v4-pro` and `deepseek-v4-flash`: `84` collected real-provider turns, `395762` observed tokens, two shadow-runtime cells, no fallback, and `do_not_claim_major_breakthrough=true`.
+- Stage73 against Stage72 reports replay/correction residual headroom compression in both Stage76 model cells: Pro has `hippocampal_reactivation_headroom_change=-0.000861` and `correction_survival_headroom_change=-0.006242`; Flash has `hippocampal_reactivation_headroom_change=-0.000797` and `correction_survival_headroom_change=-0.006242`.
+- Stage75-style stability over Stage74, Stage75, Stage76-Pro, and Stage76-Flash reports `cell_count=4`, `replay_correction_compression_cell_count=4`, `flow_loss_reduction_cell_count=3`, and `observed_total_tokens=782380`.
+- Stage76 model-family stability reports `decision=model_family_replay_correction_supported_flow_cell_unstable`: replay/correction compression survives model variation, while flow-coupling instability is within-model/cell unstable rather than clearly model-specific or mechanism-level impossible.
+- Keeps all changes observational/report-only after Stage60 collection: no provider call inside Stage76, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
