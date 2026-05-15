@@ -442,6 +442,13 @@ Stage85: ignition report instrumentation
 - Keeps GNW language bounded: Stage85 validates instrumentation in one focused real-provider cell, not replicated subjective consciousness or a full Stage84 stream-lattice replication.
 - Keeps all authority boundaries intact: no live WeChat transport, watcher authority, runtime decision authority, self-memory write path, policy mutation, provider fallback, second decision layer, or unbounded loop.
 
+Stage86: interaction simulation audit
+- Runs the existing Stage39, Stage42, and Stage46 interaction benchmarks to answer whether Holo is actually useful and human-like enough for interaction-centered research.
+- Reports the current interaction evidence conservatively: Stage39 bionic Turing baseline `overall_score=1.0`, Stage42 novice intro `overall_score=1.0`, Stage42 free dialogue `overall_score=0.9203`, and Stage46 boundary stress `overall_score=0.9858`.
+- Identifies the main weakness behind the high scores: offline paths often use deterministic fallback, and the scorecards reward safe/non-leaky replies even when the answer is low-information or not practically useful.
+- Treats Holo as useful for boundary-aware, correction-stable, inspectable research interaction, but not yet useful enough as a strong human-facing companion or publication-grade interactive agent.
+- Sets the next gate as stricter usefulness scoring plus provider-backed interaction cells that penalize safe-but-unhelpful replies while preserving boundary honesty and WSL/kernel authority boundaries.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
