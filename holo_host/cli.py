@@ -9410,6 +9410,112 @@ def command_evaluate_biomimetic_marker_control(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_precision_control(
+    config_path: str | None,
+    *,
+    theory_json: str,
+    marker_control_json: str,
+    trace_json: list[str],
+    output: str | None,
+) -> int:
+    from .biomimetic_precision_control import (
+        build_biomimetic_precision_control,
+        load_biomimetic_precision_control_json,
+        write_biomimetic_precision_control_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    theory = load_biomimetic_precision_control_json(theory_json)
+    marker_report = load_biomimetic_precision_control_json(marker_control_json)
+    trace_reports = []
+    for path in trace_json:
+        trace_report = load_biomimetic_precision_control_json(path)
+        if "cell_label" not in trace_report:
+            source_path = Path(path)
+            trace_report["cell_label"] = source_path.parent.name or source_path.stem
+        trace_reports.append(trace_report)
+    report = build_biomimetic_precision_control(theory, marker_report, trace_reports)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage81"
+            / "biomimetic_precision_control.html"
+        )
+    written = write_biomimetic_precision_control_artifacts(report, output_path)
+    summary = (
+        dict(report.get("control_summary", {}))
+        if isinstance(report.get("control_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "precision_control_png_path": str(written["precision_control_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "control_count": summary.get("control_count", 0),
+                    "executed_control_count": summary.get("executed_control_count", 0),
+                    "pending_control_count": summary.get("pending_control_count", 0),
+                    "trace_report_count": summary.get("trace_report_count", 0),
+                    "marker_control_precondition_supported": bool(
+                        summary.get("marker_control_precondition_supported", False)
+                    ),
+                    "active_replay_correction_intact": bool(
+                        summary.get("active_replay_correction_intact", False)
+                    ),
+                    "neutral_salience_reduces_correction_survival": bool(
+                        summary.get("neutral_salience_reduces_correction_survival", False)
+                    ),
+                    "mean_neutral_salience_correction_survival_delta": summary.get(
+                        "mean_neutral_salience_correction_survival_delta",
+                        0.0,
+                    ),
+                    "mean_neutral_salience_prompt_cost_delta": summary.get(
+                        "mean_neutral_salience_prompt_cost_delta",
+                        0.0,
+                    ),
+                    "mean_neutral_salience_reactivation_phase_delta": summary.get(
+                        "mean_neutral_salience_reactivation_phase_delta",
+                        0.0,
+                    ),
+                    "theory_language_bounded": bool(
+                        summary.get("theory_language_bounded", False)
+                    ),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "direct_controls_incomplete": bool(
+                        evidence.get("direct_controls_incomplete", True)
+                    ),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -11048,6 +11154,19 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
     )
     biomimetic_marker_control_parser.add_argument("--output", default=None)
+    biomimetic_precision_control_parser = subparsers.add_parser(
+        "evaluate-biomimetic-precision-control",
+        help="Evaluate Stage81 neutral-salience precision controls over Stage78, Stage80, and Stage59/60 traces",
+    )
+    biomimetic_precision_control_parser.add_argument("--theory-json", required=True)
+    biomimetic_precision_control_parser.add_argument("--marker-control-json", required=True)
+    biomimetic_precision_control_parser.add_argument(
+        "--trace-json",
+        action="append",
+        required=True,
+        default=[],
+    )
+    biomimetic_precision_control_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11707,6 +11826,14 @@ def main(argv: list[str] | None = None) -> int:
         return command_evaluate_biomimetic_marker_control(
             args.config,
             theory_json=args.theory_json,
+            trace_json=args.trace_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-precision-control":
+        return command_evaluate_biomimetic_precision_control(
+            args.config,
+            theory_json=args.theory_json,
+            marker_control_json=args.marker_control_json,
             trace_json=args.trace_json,
             output=args.output,
         )

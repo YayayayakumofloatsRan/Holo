@@ -403,6 +403,14 @@ Stage80: biomimetic marker control
 - Keeps neutral-salience and gain-clamp/random-gain controls pending; Stage80 supports a bounded marker-dependent replay/correction claim but does not justify stronger consciousness or biological-neural claims.
 - Keeps all changes read-only over existing evidence: no provider call inside Stage80, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage81: biomimetic precision control
+- Adds a read-only direct neutral-salience observatory that consumes Stage78 theory correspondence, Stage80 marker-control evidence, and Stage59/60-gated real-provider traces.
+- Implements `evaluate-biomimetic-precision-control`, HTML/JSON/PNG artifacts, bounded publication claims, and an explicit separation between executed precision control and still-pending gain controls.
+- Reports the current Stage77/78/80-derived result conservatively: `decision=neutral_salience_supports_predictive_precision_control`, `control_count=2`, `executed_control_count=1`, `pending_control_count=1`, `trace_report_count=2`, `marker_control_precondition_supported=true`, `active_replay_correction_intact=true`, and `mean_neutral_salience_correction_survival_delta=-0.094301`.
+- Interprets the neutral-salience control as replicated in both Stage77 model cells: Pro baseline `0.874301` to neutral salience `0.78`, Flash baseline `0.874301` to neutral salience `0.78`, with prompt-cost, reactivation-phase, and boundary deltas at `0.0`.
+- Keeps gain-clamp/random-gain controls pending; Stage81 supports a bounded precision-dependent correction claim but does not justify stronger consciousness or biological-neural claims.
+- Keeps all changes read-only over existing evidence: no provider call inside Stage81, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
