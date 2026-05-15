@@ -380,6 +380,13 @@ Stage77: ignition-to-reply coupling
 - Stage76 model-family stability with Stage77 cells included still reports `decision=model_family_replay_correction_supported_flow_cell_unstable`, but flow improves from `3/4` to `5/6` positive cells overall while staying within-model/cell unstable rather than model-specific.
 - Keeps all changes bounded to prompt shaping, observatory consumption, and operator-gated provider evidence: no watcher authority, runtime decision authority, WeChat transport, self-memory writes, policy writes, second decision layer, or unbounded loop.
 
+Stage78: biomimetic theory correspondence
+- Adds a read-only theory-correspondence observatory that consumes the Stage77 model-family stability report and emits a falsifiable matrix for GNW ignition/broadcast, hippocampal indexing/CLS replay, predictive-processing precision, and neuromodulatory adaptive gain.
+- Implements `evaluate-biomimetic-theory-correspondence`, HTML/JSON/PNG artifacts, bounded publication claims, and explicit disconfirming controls for each theory row.
+- Reports the current Stage77-derived result conservatively: `decision=publishable_bounded_replay_correction_with_partial_flow`, `theory_count=4`, `falsifiable_theory_count=4`, `supported_theory_count=2`, `partial_theory_count=1`, `needs_control_theory_count=1`, and `publication_readiness=bounded_preprint_candidate`.
+- Interprets replay/correction as the stable bounded correspondence for hippocampal indexing/CLS and predictive-processing precision; GNW ignition-to-reply remains partial because flow is positive in `5/6` cells but still within-model/cell unstable; neuromodulatory gain is mapped but still needs a direct gain-clamp or random-gain control.
+- Keeps all changes read-only over existing evidence: no provider call inside Stage78, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

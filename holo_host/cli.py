@@ -9156,6 +9156,80 @@ def command_evaluate_biomimetic_model_family_stability(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_theory_correspondence(
+    config_path: str | None,
+    *,
+    model_family_json: str,
+    output: str | None,
+) -> int:
+    from .biomimetic_theory_correspondence import (
+        build_biomimetic_theory_correspondence,
+        load_biomimetic_theory_correspondence_json,
+        write_biomimetic_theory_correspondence_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    source = load_biomimetic_theory_correspondence_json(model_family_json)
+    report = build_biomimetic_theory_correspondence(source)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage78"
+            / "biomimetic_theory_correspondence.html"
+        )
+    written = write_biomimetic_theory_correspondence_artifacts(report, output_path)
+    summary = (
+        dict(report.get("theory_summary", {}))
+        if isinstance(report.get("theory_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "theory_png_path": str(written["theory_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "theory_count": summary.get("theory_count", 0),
+                    "falsifiable_theory_count": summary.get("falsifiable_theory_count", 0),
+                    "supported_theory_count": summary.get("supported_theory_count", 0),
+                    "partial_theory_count": summary.get("partial_theory_count", 0),
+                    "needs_control_theory_count": summary.get("needs_control_theory_count", 0),
+                    "publication_readiness": summary.get("publication_readiness", ""),
+                    "source_cell_count": summary.get("source_cell_count", 0),
+                    "source_observed_total_tokens": summary.get("source_observed_total_tokens", 0),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "theory_language_bounded": bool(evidence.get("theory_language_bounded", True)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -10764,6 +10838,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Model-labeled Stage73 report in the form model=path",
     )
     biomimetic_model_family_stability_parser.add_argument("--output", default=None)
+    biomimetic_theory_correspondence_parser = subparsers.add_parser(
+        "evaluate-biomimetic-theory-correspondence",
+        help="Evaluate Stage78 falsifiable neuroscience theory correspondence over Stage77 evidence",
+    )
+    biomimetic_theory_correspondence_parser.add_argument("--model-family-json", required=True)
+    biomimetic_theory_correspondence_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11404,6 +11484,12 @@ def main(argv: list[str] | None = None) -> int:
         return command_evaluate_biomimetic_model_family_stability(
             args.config,
             model_progress=args.model_progress,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-theory-correspondence":
+        return command_evaluate_biomimetic_theory_correspondence(
+            args.config,
+            model_family_json=args.model_family_json,
             output=args.output,
         )
     if args.command == "run-consciousness-provider-trace":
