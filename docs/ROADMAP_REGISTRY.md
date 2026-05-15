@@ -349,6 +349,13 @@ Stage73: biomimetic provider progress
 - The result means Stage72 improved observed provider behavior but did not yet compress the Stage71 replay/correction headroom; Stage74 should run repeated or longer Stage59/60 DeepSeek cells and rerun Stage71/73.
 - Keeps all changes observational and report-only: no provider call inside Stage73, WeChat transport, live transport widening, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage74: longer provider headroom compression
+- Uses the existing Stage59/71/73 path to run a longer DeepSeek V4 Pro correction-reactivation trace and test whether residual counterfactual headroom compresses.
+- Collects `42` real provider turns in shadow runtime with `194850` observed tokens, no provider fallback, `real_provider_trace=true`, and no 60s+ latency outlier.
+- Stage71 still reports `decision=partial_support_real_provider`, but residual deltas improve relative to Stage72: `hippocampal_reactivation_headroom_change=-0.000797`, `correction_survival_headroom_change=-0.006242`, and `flow_to_reply_coupling_loss_reduction=0.028034`.
+- Stage73 comparison reports continued absolute baseline gains: `baseline_hippocampal_reactivation_delta=0.017593`, `baseline_correction_survival_proxy_delta=0.043647`, and `baseline_biomimetic_score_delta=0.011601`.
+- Keeps all changes evidence/documentation-only over existing gates: no WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
