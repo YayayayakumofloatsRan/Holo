@@ -419,6 +419,14 @@ Stage82: biomimetic gain control
 - Completes the planned Stage78-82 direct-control matrix for GNW ignition-null, hippocampal/CLS marker removal, predictive-processing neutral salience, and neuromodulatory gain clamp; GNW remains partial because flow-coupling stability is still within-model/cell unstable.
 - Keeps all changes read-only over existing evidence: no provider call inside Stage82, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage83: biomimetic publication bundle
+- Adds a read-only publication-bundle observatory that consumes Stage78 theory, Stage79 falsification, Stage80 marker, Stage81 precision, Stage82 gain, Stage77 replication, and Stage77 model-family reports.
+- Implements `evaluate-biomimetic-publication-bundle`, HTML/JSON/PNG/Markdown artifacts, a manuscript-ready control matrix, and explicit publication-boundary gates.
+- Reports the current Stage78-82 result conservatively: `decision=bounded_publication_bundle_ready`, `publication_readiness=bounded_methods_preprint_ready`, `control_count=4`, `executed_control_count=4`, `supported_direct_control_count=4`, `direct_controls_complete=true`, `real_provider_trace=true`, `gnw_partial_flow_cell_unstable=true`, `replay_correction_replication_cell_count=6`, `flow_loss_reduction_cell_count=5`, and `observed_total_tokens=1176096`.
+- Interprets hippocampal/CLS marker removal, predictive precision, and neuromodulatory gain as supported operational correspondences while keeping GNW partial because ignition-to-reply flow remains within-model/cell unstable.
+- Adds `docs/STAGE84_CONSCIOUSNESS_STREAM_LITERATURE_PLAN.md` as the next research gate: build a latent stream-state observatory before spending tokens on broad provider repeats.
+- Keeps all changes report-only over existing evidence: no provider call inside Stage83, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

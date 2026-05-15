@@ -9633,6 +9633,110 @@ def command_evaluate_biomimetic_gain_control(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_publication_bundle(
+    config_path: str | None,
+    *,
+    theory_json: str,
+    falsification_json: str,
+    marker_control_json: str,
+    precision_control_json: str,
+    gain_control_json: str,
+    replication_json: str,
+    model_family_json: str,
+    output: str | None,
+) -> int:
+    from .biomimetic_publication_bundle import (
+        build_biomimetic_publication_bundle,
+        load_biomimetic_publication_bundle_json,
+        write_biomimetic_publication_bundle_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    report = build_biomimetic_publication_bundle(
+        load_biomimetic_publication_bundle_json(theory_json),
+        load_biomimetic_publication_bundle_json(falsification_json),
+        load_biomimetic_publication_bundle_json(marker_control_json),
+        load_biomimetic_publication_bundle_json(precision_control_json),
+        load_biomimetic_publication_bundle_json(gain_control_json),
+        load_biomimetic_publication_bundle_json(replication_json),
+        load_biomimetic_publication_bundle_json(model_family_json),
+    )
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage83"
+            / "biomimetic_publication_bundle.html"
+        )
+    written = write_biomimetic_publication_bundle_artifacts(report, output_path)
+    summary = (
+        dict(report.get("publication_summary", {}))
+        if isinstance(report.get("publication_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "control_matrix_png_path": str(written["control_matrix_png"]),
+                "manuscript_markdown_path": str(written["manuscript_markdown"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "publication_readiness": summary.get("publication_readiness", ""),
+                    "control_count": summary.get("control_count", 0),
+                    "executed_control_count": summary.get("executed_control_count", 0),
+                    "supported_direct_control_count": summary.get(
+                        "supported_direct_control_count",
+                        0,
+                    ),
+                    "direct_controls_complete": bool(
+                        summary.get("direct_controls_complete", False)
+                    ),
+                    "real_provider_trace": bool(summary.get("real_provider_trace", False)),
+                    "gnw_partial_flow_cell_unstable": bool(
+                        summary.get("gnw_partial_flow_cell_unstable", False)
+                    ),
+                    "replay_correction_replication_cell_count": summary.get(
+                        "replay_correction_replication_cell_count",
+                        0,
+                    ),
+                    "flow_loss_reduction_cell_count": summary.get(
+                        "flow_loss_reduction_cell_count",
+                        0,
+                    ),
+                    "observed_total_tokens": summary.get("observed_total_tokens", 0),
+                    "publication_language_bounded": bool(
+                        evidence.get("publication_language_bounded", False)
+                    ),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -11297,6 +11401,18 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
     )
     biomimetic_gain_control_parser.add_argument("--output", default=None)
+    biomimetic_publication_bundle_parser = subparsers.add_parser(
+        "evaluate-biomimetic-publication-bundle",
+        help="Package Stage79-82 biomimetic direct controls into a publication-bounded evidence bundle",
+    )
+    biomimetic_publication_bundle_parser.add_argument("--theory-json", required=True)
+    biomimetic_publication_bundle_parser.add_argument("--falsification-json", required=True)
+    biomimetic_publication_bundle_parser.add_argument("--marker-control-json", required=True)
+    biomimetic_publication_bundle_parser.add_argument("--precision-control-json", required=True)
+    biomimetic_publication_bundle_parser.add_argument("--gain-control-json", required=True)
+    biomimetic_publication_bundle_parser.add_argument("--replication-json", required=True)
+    biomimetic_publication_bundle_parser.add_argument("--model-family-json", required=True)
+    biomimetic_publication_bundle_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11973,6 +12089,18 @@ def main(argv: list[str] | None = None) -> int:
             theory_json=args.theory_json,
             precision_control_json=args.precision_control_json,
             trace_json=args.trace_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-publication-bundle":
+        return command_evaluate_biomimetic_publication_bundle(
+            args.config,
+            theory_json=args.theory_json,
+            falsification_json=args.falsification_json,
+            marker_control_json=args.marker_control_json,
+            precision_control_json=args.precision_control_json,
+            gain_control_json=args.gain_control_json,
+            replication_json=args.replication_json,
+            model_family_json=args.model_family_json,
             output=args.output,
         )
     if args.command == "run-consciousness-provider-trace":
