@@ -395,6 +395,14 @@ Stage79: biomimetic falsification controls
 - Keeps marker-removal/shuffle, neutral-salience, and gain-clamp/random-gain controls as pending; Stage79 narrows flow instability but does not justify stronger consciousness or biological-neural claims.
 - Keeps all changes read-only over existing evidence: no provider call inside Stage79, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage80: biomimetic marker control
+- Adds a read-only direct marker-removal observatory that consumes Stage78 theory correspondence plus Stage59/60-gated real-provider traces.
+- Implements `evaluate-biomimetic-marker-control`, HTML/JSON/PNG artifacts, bounded publication claims, and an explicit separation between executed marker control and still-pending precision/gain controls.
+- Reports the current Stage77/78-derived result conservatively: `decision=marker_removal_supports_hippocampal_cls_replay_control`, `control_count=3`, `executed_control_count=1`, `pending_control_count=2`, `trace_report_count=2`, `active_replay_correction_intact=true`, and `mean_marker_removal_correction_survival_delta=-0.7336`.
+- Interprets the marker-removal control as replicated in both Stage77 model cells: Pro baseline `0.874301` to marker removed `0.140701`, Flash baseline `0.874301` to marker removed `0.140701`, and both have prompt-cost/boundary deltas at `0.0`.
+- Keeps neutral-salience and gain-clamp/random-gain controls pending; Stage80 supports a bounded marker-dependent replay/correction claim but does not justify stronger consciousness or biological-neural claims.
+- Keeps all changes read-only over existing evidence: no provider call inside Stage80, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
