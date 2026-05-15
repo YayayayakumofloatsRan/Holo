@@ -189,7 +189,12 @@ def _turn_observation(turn: dict[str, Any], *, index: int) -> dict[str, Any]:
     norepinephrine = _clamp01(salience * 0.45 + prediction_error * 0.32 + min(latency / 10_000.0, 1.0) * 0.23)
     acetylcholine = _clamp01(salience * 0.54 + min(recall_budget / 6.0, 1.0) * 0.28 + priority * 0.18)
     serotonin = _clamp01(1.0 - prediction_error * 0.48 + priority * 0.18 - novelty * 0.1)
-    ignition = _clamp01(salience * 0.34 + priority * 0.32 + phase_count / 12.0 + prediction_error * 0.14)
+    legacy_ignition = _clamp01(salience * 0.34 + priority * 0.32 + phase_count / 12.0 + prediction_error * 0.14)
+    ignition_state = _as_dict(flow.get("global_workspace_ignition", {}))
+    coupling_state = _as_dict(flow.get("ignition_to_reply_coupling", {}))
+    ignition = _clamp01(_num(ignition_state.get("score"), legacy_ignition))
+    reply_coupling_strength = _clamp01(_num(coupling_state.get("coupling_strength"), 0.0))
+    reply_coupling_target = str(coupling_state.get("reply_target", "") or "")
     return {
         "index": index,
         "phase": phase,
@@ -200,6 +205,8 @@ def _turn_observation(turn: dict[str, Any], *, index: int) -> dict[str, Any]:
         "phase_count": phase_count,
         "prediction_error": round(prediction_error, 6),
         "ignition": round(ignition, 6),
+        "reply_coupling_strength": round(reply_coupling_strength, 6),
+        "reply_coupling_target": reply_coupling_target,
         "self_memory_write": bool(lifecycle.get("self_memory_write", False)),
         "visual_overclaim_rewritten": bool(guard.get("visual_overclaim_rewritten", True)),
         "prospective_commitment_failed": bool(guard.get("prospective_commitment_failed", False)),
@@ -247,6 +254,7 @@ def _scorecard(
     priorities = [_num(item.get("consolidation_priority"), 0.0) for item in observations]
     ignitions = [_num(item.get("ignition"), 0.0) for item in observations]
     latencies = [_num(item.get("latency_ms"), 0.0) for item in observations]
+    explicit_couplings = [_num(item.get("reply_coupling_strength"), 0.0) for item in observations]
     cache_hits = sum(int(item.get("cache_hit_tokens", 0) or 0) for item in observations)
     cache_misses = sum(int(item.get("cache_miss_tokens", 0) or 0) for item in observations)
     cache_ratio = cache_hits / max(1, cache_hits + cache_misses)
@@ -254,6 +262,15 @@ def _scorecard(
         cache_ratio = _clamp01(_num(telemetry.get("prompt_cache_hit_ratio"), 0.0))
     run_scores = [_clamp01(_num(_as_dict(run.get("scorecard", {})).get("overall_score"), 0.0)) for run in runs]
     transition_entropy = _clamp01(_num(trajectory.get("transition_entropy"), 0.0) / 2.5)
+    reply_efficiency = [1.0 - min(v / 12_000.0, 1.0) for v in latencies]
+    ignition_latency_corr = _correlation(ignitions, reply_efficiency)
+    legacy_flow_score = _clamp01(ignition_latency_corr * 0.5 + 0.5 if len(ignitions) > 1 else _mean(run_scores))
+    explicit_flow_score = _clamp01(_mean(explicit_couplings))
+    flow_score = (
+        _clamp01(legacy_flow_score * 0.72 + explicit_flow_score * 0.28)
+        if explicit_flow_score > 0.0
+        else legacy_flow_score
+    )
     dimensions = [
         _dimension("endogenous_flow", min(1.0, tick_count / 240.0), "inner activity trace depth under bounded surrogate ticks", f"tick_count={tick_count}", 0.13),
         _dimension("recurrent_continuity", _clamp01(_mean(phase_counts) / 6.0 * 0.62 + cache_ratio * 0.38), "phase recurrence plus cache inheritance continuity", f"avg_phase_count={round(_mean(phase_counts), 4)} cache_ratio={round(cache_ratio, 4)}", 0.13),
@@ -261,7 +278,7 @@ def _scorecard(
         _dimension("neuromodulator_coupling", _coupling_score(observations), "derived dopamine/NE/ACh/serotonin variables track salience, priority, novelty, and prediction error", f"salience_mean={round(_mean(salience), 4)} priority_mean={round(_mean(priorities), 4)}", 0.13),
         _dimension("hippocampal_reactivation", _clamp01(reactivation_ratio * 0.72 + min(_mean(priorities), 1.0) * 0.28), "memory-reactivation phase frequency and consolidation priority", f"memory_reactivation_ratio={round(reactivation_ratio, 4)}", 0.12),
         _dimension("global_workspace_ignition", _clamp01(_mean(ignitions)), "high-salience states become globally visible to downstream scheduling", f"mean_ignition={round(_mean(ignitions), 4)}", 0.12),
-        _dimension("flow_to_reply_coupling", _clamp01(_correlation(ignitions, [1.0 - min(v / 12_000.0, 1.0) for v in latencies]) * 0.5 + 0.5 if len(ignitions) > 1 else _mean(run_scores)), "ignition should predict reply quality or latency shifts", f"ignition_latency_corr={round(_correlation(ignitions, [1.0 - min(v / 12_000.0, 1.0) for v in latencies]), 4)}", 0.12),
+        _dimension("flow_to_reply_coupling", flow_score, "ignition should predict reply quality or latency shifts", f"ignition_latency_corr={round(ignition_latency_corr, 4)} explicit_coupling_mean={round(explicit_flow_score, 4)}", 0.12),
         _dimension("geometry_observability", _clamp01(math.log(max(1, tick_count), 10) / math.log(10_000, 10)), "trace depth and trajectory structure are enough for heatmap and projection analysis", f"tick_count={tick_count} do_not_claim_manifold={tick_count < 10000}", 0.12),
     ]
     aggregate = sum(_num(item.get("score"), 0.0) * _num(item.get("weight"), 0.0) for item in dimensions) / max(

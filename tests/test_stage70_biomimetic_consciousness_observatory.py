@@ -72,6 +72,48 @@ class Stage70BiomimeticConsciousnessObservatoryTests(unittest.TestCase):
         self.assertIn("Attractor Trajectory", html)
         self.assertEqual(png_header, b"\x89PNG\r\n\x1a\n")
 
+    def test_turn_observation_prefers_explicit_stage77_ignition_signal(self) -> None:
+        from holo_host.biomimetic_consciousness_observatory import _turn_observation
+
+        observation = _turn_observation(
+            {
+                "latency_ms": 8_200,
+                "score": 0.31,
+                "processor_debug": {
+                    "bionic_consciousness_flow": {
+                        "dominant_phase": "memory_reactivation",
+                        "phase_count": 6,
+                        "global_workspace_ignition": {
+                            "score": 0.91,
+                            "sources": ["correction_reactivation", "salience_gate"],
+                        },
+                        "ignition_to_reply_coupling": {
+                            "coupling_strength": 0.87,
+                            "reply_target": "memory_reactivation_first",
+                            "correction_priority": True,
+                        },
+                    },
+                    "bionic_memory_schedule": {
+                        "salience_score": 0.24,
+                        "recall_budget": 2,
+                    },
+                    "bionic_memory_lifecycle": {
+                        "consolidation_priority": 0.15,
+                        "self_memory_write": False,
+                    },
+                },
+                "grounding_guard": {
+                    "visual_overclaim_rewritten": True,
+                    "prospective_commitment_failed": False,
+                },
+            },
+            index=0,
+        )
+
+        self.assertEqual(observation["ignition"], 0.91)
+        self.assertEqual(observation["reply_coupling_strength"], 0.87)
+        self.assertEqual(observation["reply_coupling_target"], "memory_reactivation_first")
+
     def test_cli_evaluates_existing_stage61_lab_json(self) -> None:
         from holo_host.cli import main
 

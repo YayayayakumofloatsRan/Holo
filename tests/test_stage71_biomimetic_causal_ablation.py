@@ -105,6 +105,32 @@ class Stage71BiomimeticCausalAblationTests(unittest.TestCase):
         self.assertEqual(report["hypothesis_decision"]["decision"], "support_real_provider")
         self.assertFalse(report["hypothesis_decision"]["requires_real_provider_replication"])
 
+    def test_flow_proxy_uses_explicit_reply_coupling_strength_when_present(self) -> None:
+        from holo_host.biomimetic_causal_ablation import _condition_metrics
+
+        metrics = _condition_metrics(
+            [
+                {
+                    "ignition": 0.5,
+                    "latency_ms": 3_200,
+                    "reply_coupling_strength": 0.92,
+                    "recall_budget": 4,
+                    "phase": "response_intention",
+                    "neuromodulators": {},
+                },
+                {
+                    "ignition": 0.5,
+                    "latency_ms": 8_400,
+                    "reply_coupling_strength": 0.88,
+                    "recall_budget": 4,
+                    "phase": "response_intention",
+                    "neuromodulators": {},
+                },
+            ]
+        )
+
+        self.assertGreater(metrics["flow_to_reply_coupling_proxy"], 0.3)
+
     def test_cli_evaluates_existing_stage61_lab_json(self) -> None:
         from holo_host.cli import main
 

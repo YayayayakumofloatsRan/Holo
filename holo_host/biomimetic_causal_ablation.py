@@ -248,6 +248,10 @@ def _boost_correction_reactivation(observation: dict[str, Any]) -> dict[str, Any
 def _ablate_global_workspace_ignition(observation: dict[str, Any]) -> dict[str, Any]:
     item = _copy_observation(observation)
     item["ignition"] = 0.18
+    if "reply_coupling_strength" in item:
+        item["reply_coupling_strength"] = 0.12
+    if "reply_coupling_target" in item:
+        item["reply_coupling_target"] = "sensory_edge_first"
     item["counterfactual_marker"] = "global_workspace_ignition_ablation"
     return item
 
@@ -302,11 +306,15 @@ def _condition_metrics(observations: list[dict[str, Any]]) -> dict[str, Any]:
         1.0 - min(_num(item.get("latency_ms"), 0.0) / 12_000.0, 1.0)
         for item in observations
     ]
+    coupling_strengths = [_num(item.get("reply_coupling_strength"), 0.0) for item in observations]
     recall_budgets = [_num(item.get("recall_budget"), 0.0) for item in observations]
     return {
         "correction_survival_proxy": round(_correction_survival_proxy(delayed_correction), 6),
         "reactivation_pressure_turns": len(all_reactivation_pressure),
-        "flow_to_reply_coupling_proxy": round(_flow_to_reply_coupling_proxy(ignitions, reply_efficiency), 6),
+        "flow_to_reply_coupling_proxy": round(
+            _flow_to_reply_coupling_proxy(ignitions, reply_efficiency, coupling_strengths),
+            6,
+        ),
         "prompt_cost_proxy": round(_clamp01(_mean(recall_budgets) / 8.0), 6),
         "mean_ignition": round(_mean(ignitions), 6),
         "ignition_std": round(_std(ignitions), 6),
@@ -326,9 +334,16 @@ def _correction_survival_proxy(observations: list[dict[str, Any]]) -> float:
     return _mean(values)
 
 
-def _flow_to_reply_coupling_proxy(ignitions: list[float], reply_efficiency: list[float]) -> float:
+def _flow_to_reply_coupling_proxy(
+    ignitions: list[float],
+    reply_efficiency: list[float],
+    coupling_strengths: list[float] | None = None,
+) -> float:
     corr = abs(_correlation(ignitions, reply_efficiency))
     variance = min(_std(ignitions) / 0.28, 1.0)
+    explicit = _clamp01(_mean(list(coupling_strengths or [])))
+    if explicit > 0.0:
+        return _clamp01(corr * 0.42 + variance * 0.18 + explicit * 0.4)
     return _clamp01(corr * 0.72 + variance * 0.28)
 
 

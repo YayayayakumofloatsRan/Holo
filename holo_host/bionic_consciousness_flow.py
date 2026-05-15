@@ -49,6 +49,14 @@ def _active_goal_types(goal_state: dict[str, Any]) -> list[str]:
     return _unique(goals, limit=4)
 
 
+def _schedule(packet: dict[str, Any]) -> dict[str, Any]:
+    return _dict(packet.get("bionic_memory_schedule"))
+
+
+def _lifecycle(packet: dict[str, Any]) -> dict[str, Any]:
+    return _dict(packet.get("bionic_memory_lifecycle"))
+
+
 def _affective_tone(packet: dict[str, Any]) -> str:
     affect = _dict(packet.get("affect_state"))
     drive = _dict(packet.get("drive_state"))
@@ -98,6 +106,113 @@ def _legacy_stream_lines(packet: dict[str, Any]) -> list[str]:
     return _unique(lines, limit=4)
 
 
+def _has_correction_reactivation(packet: dict[str, Any], *, memory_line: str) -> bool:
+    schedule = _schedule(packet)
+    salience = _dict(schedule.get("salience_gate"))
+    hippocampal = _dict(schedule.get("hippocampal_index"))
+    sources = {str(item) for item in _list(salience.get("sources"))}
+    if "correction_reactivation" in sources:
+        return True
+    if "correction_reactivation_marker=" in str(memory_line or ""):
+        return True
+    for line in _list(hippocampal.get("dynamic_lines")):
+        if "correction_reactivation_marker=" in str(line or ""):
+            return True
+    return False
+
+
+def _global_workspace_ignition(
+    packet: dict[str, Any],
+    *,
+    memory_line: str,
+    response_intention: str,
+    uncertainty: float,
+) -> dict[str, Any]:
+    schedule = _schedule(packet)
+    lifecycle = _lifecycle(packet)
+    salience = _metric(_dict(schedule.get("salience_gate")).get("score"), 0.0)
+    priority = _metric(_dict(lifecycle.get("consolidation_intent")).get("priority"), 0.0)
+    recall_budget = max(0.0, float(_dict(schedule.get("salience_gate")).get("recall_budget", 0) or 0.0))
+    recall_norm = max(0.0, min(1.0, recall_budget / 6.0))
+    correction_active = _has_correction_reactivation(packet, memory_line=memory_line)
+    uncertainty_gate = max(0.0, min(1.0, 1.0 - uncertainty * 0.45))
+    goal_alignment = 1.0 if response_intention == "reply_once" else 0.76 if response_intention else 0.58
+    sources: list[str] = []
+    if salience >= 0.35:
+        sources.append("salience_gate")
+    if priority >= 0.35:
+        sources.append("consolidation_priority")
+    if recall_norm >= 0.5:
+        sources.append("recall_budget")
+    if correction_active:
+        sources.append("correction_reactivation")
+    if memory_line and memory_line != "none":
+        sources.append("memory_reactivation")
+    if uncertainty_gate >= 0.7:
+        sources.append("low_uncertainty_expression_gate")
+    score = max(
+        0.0,
+        min(
+            1.0,
+            salience * 0.36
+            + priority * 0.24
+            + recall_norm * 0.1
+            + goal_alignment * 0.14
+            + uncertainty_gate * 0.1
+            + (0.2 if correction_active else 0.0),
+        ),
+    )
+    return {
+        "mode": "stage77_global_workspace_ignition_v1",
+        "score": round(score, 6),
+        "sources": _unique(sources, limit=6),
+        "uncertainty_gate": round(uncertainty_gate, 6),
+        "correction_priority": correction_active,
+    }
+
+
+def _ignition_to_reply_coupling(
+    packet: dict[str, Any],
+    *,
+    memory_line: str,
+    goal_line: str,
+    response_intention: str,
+    uncertainty: float,
+    ignition: dict[str, Any],
+) -> dict[str, Any]:
+    score = _metric(ignition.get("score"), 0.0)
+    salience = _metric(_dict(_schedule(packet).get("salience_gate")).get("score"), 0.0)
+    priority = _metric(_dict(_lifecycle(packet).get("consolidation_intent")).get("priority"), 0.0)
+    correction_active = bool(ignition.get("correction_priority", False))
+    if correction_active and memory_line and memory_line != "none":
+        reply_target = "memory_reactivation_first"
+    elif uncertainty >= 0.58:
+        reply_target = "sensory_edge_with_uncertainty_guard"
+    elif goal_line and goal_line != "reply_goal=answer_current_edge":
+        reply_target = "goal_pressure_first"
+    else:
+        reply_target = "sensory_edge_first"
+    coupling_strength = max(
+        0.0,
+        min(
+            1.0,
+            score * 0.58
+            + salience * 0.16
+            + priority * 0.12
+            + (0.16 if correction_active else 0.0)
+            - uncertainty * 0.08,
+        ),
+    )
+    return {
+        "mode": "stage77_ignition_reply_coupling_v1",
+        "reply_target": reply_target,
+        "coupling_strength": round(coupling_strength, 6),
+        "selected_action": response_intention,
+        "correction_priority": correction_active,
+        "expression_mode": "direct_grounded_reply" if coupling_strength >= 0.55 else "bounded_reply",
+    }
+
+
 def build_bionic_consciousness_flow(packet: dict[str, Any], *, query: str = "") -> dict[str, Any]:
     source = dict(packet or {})
     active = _dict(source.get("active_thread_state"))
@@ -110,6 +225,20 @@ def build_bionic_consciousness_flow(packet: dict[str, Any], *, query: str = "") 
     goal_line = _goal_pressure(source)
     uncertainty = _metric(source.get("uncertainty_level"), 0.0)
     response_intention = _text(selected.get("action_type") or "reply_once", 100)
+    ignition = _global_workspace_ignition(
+        source,
+        memory_line=memory_line,
+        response_intention=response_intention,
+        uncertainty=uncertainty,
+    )
+    coupling = _ignition_to_reply_coupling(
+        source,
+        memory_line=memory_line,
+        goal_line=goal_line,
+        response_intention=response_intention,
+        uncertainty=uncertainty,
+        ignition=ignition,
+    )
     phases = [
         "sensory_edge",
         "affective_tone",
@@ -118,14 +247,21 @@ def build_bionic_consciousness_flow(packet: dict[str, Any], *, query: str = "") 
         "response_intention",
         "uncertainty_monitor",
     ]
-    legacy_lines = _legacy_stream_lines(source)
+    legacy_lines = [line for line in _legacy_stream_lines(source) if _text(line, 160) != _text(memory_line, 160)]
     phase_lines = _unique(
         [
             f"sensory_edge={current_edge}",
             f"affective_tone={affective_tone}",
             f"memory_reactivation={memory_line or 'none'}",
             f"goal_pressure={goal_line}",
-            f"response_intention={response_intention}",
+            "global_workspace_ignition="
+            + f"{round(_metric(ignition.get('score'), 0.0), 3)}; sources="
+            + f"{','.join(_list(ignition.get('sources'))[:4]) or 'baseline'}",
+            "ignition_to_reply_coupling="
+            + f"reply_target={_text(coupling.get('reply_target'), 80)}; "
+            + f"coupling_strength={round(_metric(coupling.get('coupling_strength'), 0.0), 3)}; "
+            + f"selected_action={response_intention}; "
+            + f"correction_priority={'true' if bool(coupling.get('correction_priority', False)) else 'false'}",
             f"uncertainty_monitor={round(uncertainty, 3)}",
             *[f"legacy_stream={line}" for line in legacy_lines],
         ],
@@ -146,6 +282,9 @@ def build_bionic_consciousness_flow(packet: dict[str, Any], *, query: str = "") 
         "dominant_phase": dominant_phase,
         "current_edge": current_edge,
         "phase_lines": phase_lines,
+        "phase_count": len(phases),
+        "global_workspace_ignition": ignition,
+        "ignition_to_reply_coupling": coupling,
         "continuity_state": continuity_state,
         "leakage_guard": {
             "user_visible": False,

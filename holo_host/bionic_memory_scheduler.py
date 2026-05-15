@@ -735,6 +735,8 @@ def _fusion_supplement_lines(
     sensory_edge = _text(consciousness_flow.get("current_edge") or _phase_value(phase_lines, "sensory_edge"), 140)
     memory_reactivation = _phase_value(phase_lines, "memory_reactivation", limit=120)
     goal_pressure = _phase_value(phase_lines, "goal_pressure", limit=120)
+    ignition_line = _phase_value(phase_lines, "global_workspace_ignition", limit=140)
+    coupling_line = _phase_value(phase_lines, "ignition_to_reply_coupling", limit=180)
     dominant_phase = _text(consciousness_flow.get("dominant_phase"), 70) or "sensory_edge"
     lines = [
         (
@@ -748,13 +750,18 @@ def _fusion_supplement_lines(
         ),
         (
             f"flow: sensory_edge={sensory_edge or 'current turn'}; dominant_phase={dominant_phase}; "
-            f"user_visible={_bool_text(leakage.get('user_visible', False))}"
+            f"user_visible={_bool_text(leakage.get('user_visible', False))}; "
+            f"global_workspace_ignition={ignition_line or 'derived'}"
         ),
     ]
-    if memory_reactivation or goal_pressure:
-        lines.append(
-            f"flow_reentry: memory_reactivation={memory_reactivation or 'none'}; goal_pressure={goal_pressure or 'none'}"
+    if memory_reactivation or goal_pressure or coupling_line:
+        line = (
+            f"flow_reentry: memory_reactivation={memory_reactivation or 'none'}; "
+            f"goal_pressure={goal_pressure or 'none'}"
         )
+        if coupling_line:
+            line += f"; ignition_to_reply_coupling={coupling_line}"
+        lines.append(line)
     return _unique(lines, limit=limit)
 
 

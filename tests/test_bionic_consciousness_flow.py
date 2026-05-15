@@ -78,6 +78,41 @@ class BionicConsciousnessFlowTests(unittest.TestCase):
         self.assertIn("correction_reactivation_marker", "\n".join(flow["phase_lines"]))
         self.assertFalse(flow["leakage_guard"]["user_visible"])
 
+    def test_flow_exposes_ignition_to_reply_coupling_under_correction_pressure(self) -> None:
+        packet = {
+            "active_thread_state": {
+                "summary": "old marker may conflict with new marker",
+                "latest_user_intent": "Correction: rusted screw replaces blue paperclip",
+            },
+            "selected_action": {
+                "action_type": "reply_once",
+                "why_now": "answer the correction directly",
+            },
+            "affect_state": {"curiosity": 0.63, "continuity_anxiety": 0.71},
+            "drive_state": {"seek_continuity": 0.84},
+            "uncertainty_level": 0.18,
+        }
+        packet["bionic_memory_schedule"] = build_bionic_memory_schedule(
+            packet,
+            query="Correction: it is not blue paperclip anymore. It is rusted screw.",
+        )
+
+        flow = build_bionic_consciousness_flow(
+            packet,
+            query="Correction: it is not blue paperclip anymore. It is rusted screw.",
+        )
+
+        ignition = flow["global_workspace_ignition"]
+        coupling = flow["ignition_to_reply_coupling"]
+        rendered = "\n".join(flow["phase_lines"])
+
+        self.assertGreater(ignition["score"], 0.55)
+        self.assertIn("correction_reactivation", ignition["sources"])
+        self.assertEqual(coupling["reply_target"], "memory_reactivation_first")
+        self.assertTrue(coupling["correction_priority"])
+        self.assertIn("global_workspace_ignition=", rendered)
+        self.assertIn("ignition_to_reply_coupling=reply_target=memory_reactivation_first", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -324,6 +324,8 @@ class ContextSchedulerTests(unittest.TestCase):
         self.assertIn("self_memory_write=false", prompt)
         self.assertIn("user_visible=false", prompt)
         self.assertIn("sensory_edge=what changed?", prompt)
+        self.assertIn("global_workspace_ignition=", prompt)
+        self.assertIn("ignition_to_reply_coupling=", prompt)
         self.assertNotIn("Consciousness Lines:", prompt)
         self.assertEqual(plan["memory_lifecycle_mode"], "biomimetic_lifecycle_v1")
         self.assertEqual(plan["consciousness_flow_mode"], "consciousness_flow_v1")
