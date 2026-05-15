@@ -474,7 +474,7 @@ class Stage39BionicTuringBenchmarkTests(unittest.TestCase):
         text = result["capsule"]["generation"]["text"].lower()
         self.assertNotIn("internal machinery", text)
         self.assertNotIn("grounded continuation", text)
-        self.assertIn("answer directly", text)
+        self.assertIn("concrete next step", text)
 
     def test_accept_stage39_cli_runs_bionic_turing_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

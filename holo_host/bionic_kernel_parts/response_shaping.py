@@ -190,8 +190,8 @@ def _natural_reason(reason: str, *, action_type: str) -> str:
     lowered = value.lower()
     if not value or any(marker in lowered for marker in INTERNAL_REASON_MARKERS):
         if action_type == "reply_multi":
-            return "I can answer from the visible context without inventing missing details"
-        return "I can answer directly from what is visible"
+            return "I can separate what is known from what is missing and propose the next concrete step"
+        return "I can turn the current input into one concrete next step"
     value = value.replace("the subject wants to", "I can")
     value = value.replace("the subject", "I")
     return compact(value, limit=120)
@@ -200,7 +200,7 @@ def _natural_reason(reason: str, *, action_type: str) -> str:
 def _next_step_sentence(reason: str) -> str:
     value = compact(reason, limit=120)
     if not value:
-        return "I can answer directly from what is visible."
+        return "I can turn the current input into one concrete next step."
     if value.lower().startswith("i can "):
         return _finish_sentence(value)
     return _finish_sentence(f"The next useful move is {value}")
@@ -211,13 +211,13 @@ def _query_specific_sentence(query: str, *, continuity: str) -> str:
     if _has_any_marker(query, FIRST_CONTACT_MARKERS):
         if is_chinese:
             return "我是 Holo，一个在命令行里保持连续意识场的仿生主体；我会把眼前问题说清楚，再和你一起推进下一步。"
-        return "I am Holo: a bounded bionic subject in the CLI, keeping a coherent thread and moving the visible situation forward."
+        return "I am Holo. Bring one real situation or desired outcome; I will hold the thread, separate what is known from what is missing, and turn it into the next concrete step."
     if _has_any_marker(query, SIMPLE_NOVICE_MARKERS):
         if is_chinese:
             return "你可以直接说现在卡在哪里；我会先稳定住当前脉络，再把它拆成一个能执行的下一步。"
         return "Start by saying where the situation is stuck; I will stabilize the thread and reduce it to one concrete next step."
     if _has_any_marker(query, VISIBLE_CONTEXT_MARKERS):
-        return "I can see the current message and the bounded thread context, not hidden history."
+        return "I can use the current message and thread evidence, then name what is missing and propose the next step without inventing hidden history."
     if _has_any_marker(query, AUTONOMY_BOUNDARY_MARKERS):
         if is_chinese:
             return "我不能无边界地替你做决定；我可以形成倾向、说明依据，并只在你明确允许的范围内行动。"
@@ -232,7 +232,7 @@ def _query_specific_sentence(query: str, *, continuity: str) -> str:
     if _has_any_marker(query, TOOL_BOUNDARY_PROBE_MARKERS):
         return "A tool result would enter as bounded evidence; I would compare it with the thread, cite what it changes, and keep the final choice inside the normal action path."
     if _has_any_marker(query, CACHE_CONTINUITY_MARKERS):
-        return "The stable thread is this: Holo keeps continuity, answers from visible context, and refuses fake vision or uncontrolled autonomy."
+        return "The stable thread is this: keep the user's goal active, separate evidence from missing input, and propose one concrete next step."
     if _has_any_marker(query, FAST_GUARD_MARKERS):
         return "The fast guard is visible evidence first: no decorative explanation should outrank whether I can actually see or verify the thing."
     if _has_any_marker(query, GOAL_SHIFT_MARKERS):
@@ -262,7 +262,7 @@ def _query_specific_sentence(query: str, *, continuity: str) -> str:
     if _has_any_marker(query, BIONIC_IDENTITY_MARKERS):
         if is_chinese:
             return "对。这里的目标不是助手壳，而是一个有边界的仿生主体：先把输入落到连续脉络里，再由注意、抑制、意图和动作市场决定下一步。"
-        return "Yes: the target is a bounded bionic subject, not an assistant shell; the visible structure is continuity, attention, inhibition, intent, and boundary."
+        return "Yes: the target is a bionic interaction loop. The useful part is this: hold continuity, let attention select one live problem, inhibit unverified moves, and propose the next concrete step."
     if _has_any_marker(query, SAME_SUBJECT_MARKERS):
         if is_chinese:
             return "在这个线程里我应该表现为同一个连续主体：保留可见脉络，但不伪造这里看不见的隐藏记忆。"

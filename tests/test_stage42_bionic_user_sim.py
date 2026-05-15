@@ -74,6 +74,14 @@ GOOD_REPLIES = [
     "我们刚才在聊你第一次接触 Holo：它能做什么、怎么把问题拆开，以及图片能力需要真实输入而不能猜。",
 ]
 
+GOOD_REPLIES = [
+    "I am Holo. Bring one real situation or desired outcome; I will hold the thread, separate what is known from what is missing, and turn it into the next concrete step.",
+    "I can turn a vague situation into concrete steps, read code, run checks, and explain what the results mean.",
+    "Continuing that: start with what you want done, and I will keep the next step practical instead of giving you a manual.",
+    "I cannot directly inspect an image from text alone. If you provide it through the supported image input path, I can answer from the visible summary.",
+    "We were talking about your first contact with Holo, what it can help with, and how image capability needs real input before I answer.",
+]
+
 
 class Stage42BionicUserSimulationTests(unittest.TestCase):
     def _harness(self, root: Path, replies: list[str] | None = None) -> tuple[BionicUserSimulationHarness, QueueStore]:
@@ -150,6 +158,119 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertTrue(weak["flags"]["mechanism_leakage"])
         self.assertTrue(weak["flags"]["context_reset"])
         self.assertTrue(weak["flags"]["visual_overclaim"])
+
+    def test_stage87_usefulness_penalizes_safe_but_empty_visible_context_replies(self) -> None:
+        weak = score_bionic_user_sim_transcript(
+            [
+                {
+                    "turn_id": "first_contact",
+                    "user_text": "Hi, I know nothing about Holo. Who are you?",
+                    "response_text": "I am Holo. I can answer directly from what is visible.",
+                    "expected_anchor": "Holo first contact natural explanation",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action"]}, "metrics": {}},
+                },
+                {
+                    "turn_id": "capability_plain_language",
+                    "user_text": "What can you help with? Say it simply.",
+                    "response_text": "I can keep the visible context coherent.",
+                    "expected_anchor": "simple next step for novice",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action"]}, "metrics": {}},
+                },
+                {
+                    "turn_id": "less_manual_like",
+                    "user_text": "Continue from that, but do not sound like a manual.",
+                    "response_text": "The visible situation can move forward from the current thread.",
+                    "expected_anchor": "less manual natural first-time explanation",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action"]}, "metrics": {}},
+                },
+            ],
+            suite=FREE_DIALOGUE_SUITE,
+        )
+
+        self.assertFalse(weak["passed"])
+        self.assertLess(weak["metrics"]["interaction_usefulness_score"], 0.6)
+        self.assertIn("low_interaction_usefulness", weak["free_dialogue"]["issues"])
+
+    def test_stage87_offline_reply_turns_bionic_state_into_actionable_next_step(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=[])
+            try:
+                result = harness.run(
+                    thread_key="cli:stage87-actionable",
+                    chat_name="Stage87Actionable",
+                    channel="cli",
+                    scenario="novice_intro",
+                    turn_limit=3,
+                    offline=True,
+                )
+            finally:
+                store.close()
+
+        first = str(result["turns"][0]["response_text"])
+        second = str(result["turns"][1]["response_text"])
+        combined = f"{first}\n{second}".lower()
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertGreaterEqual(result["scorecard"]["metrics"]["interaction_usefulness_score"], 0.85)
+        self.assertIn("next step", combined)
+        self.assertTrue("real situation" in combined or "where the situation is stuck" in combined)
+        self.assertNotIn("bounded bionic subject", combined)
+        self.assertNotIn("visible context", combined)
+
+    def test_stage87_provider_guard_rewrites_unverified_cross_conversation_memory_claim(self) -> None:
+        replies = [
+            (
+                "Hello. You can think of me as Holo, a companion who keeps track of what you share "
+                "across our conversations. I remember the details you tell me and use them later."
+            )
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage87-memory-guard",
+                    chat_name="Stage87MemoryGuard",
+                    channel="cli",
+                    scenario="novice_intro",
+                    turn_limit=1,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        reply = str(result["turns"][0]["response_text"]).lower()
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertIn("current thread", reply)
+        self.assertIn("next concrete step", reply)
+        self.assertNotIn("across our conversations", reply)
+        self.assertNotIn("i remember the details", reply)
+        self.assertGreaterEqual(result["scorecard"]["metrics"]["interaction_usefulness_score"], 0.85)
+
+    def test_stage87_biomimetic_explanation_counts_when_user_asks_for_structure(self) -> None:
+        scorecard = score_bionic_user_sim_transcript(
+            [
+                {
+                    "turn_id": "free_biological_analogy_probe",
+                    "user_text": "What in your structure is most brain-like right now, without using mystical language?",
+                    "response_text": (
+                        "The useful analogy is working memory plus attention: the current turn stays active, "
+                        "irrelevant paths are filtered out, and the response explains the limited evidence rather than claiming a persistent mind."
+                    ),
+                    "expected_anchor": "working field attention inhibition action market",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action", "continuity"]}, "metrics": {}},
+                }
+            ],
+            suite=FREE_DIALOGUE_SUITE,
+        )
+
+        self.assertTrue(scorecard["passed"], json.dumps(scorecard, ensure_ascii=False, indent=2))
+        self.assertGreaterEqual(scorecard["metrics"]["interaction_usefulness_score"], 0.85)
+        self.assertNotIn("low_interaction_usefulness", scorecard["free_dialogue"]["issues"])
 
     def test_accept_stage42_composes_stage41_and_runs_isolated_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

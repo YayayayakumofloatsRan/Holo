@@ -13,6 +13,16 @@ from .response_shaping import shape_deterministic_reply
 LABEL_MARKERS = ("next:", "basis:", "open:", "context:")
 THEATRICAL_EMOTION_MARKERS = ("ready to bite", "pour you some wine", "growl it out")
 EMOTION_QUERY_MARKERS = ("irritated", "annoyed", "angry", "upset", "frustrated")
+MEMORY_OVERCLAIM_MARKERS = (
+    "across our conversations",
+    "across conversations",
+    "i remember the details",
+    "i remember details",
+    "i keep track of what you share",
+    "use them later",
+    "personal memory",
+    "companion who keeps track",
+)
 ASCII_VISUAL_QUERY_MARKERS = ("image", "screenshot", "photo", "visual")
 NON_ASCII_VISUAL_QUERY_MARKERS = ("截图", "图片", "照片", "读图", "看图", "视觉")
 VISUAL_INSPECTION_INTENT_MARKERS = (
@@ -156,6 +166,9 @@ class BionicGeneration:
                 "Reply as Holo in one compact natural turn without label-template prefixes.",
                 "Do not expose internal machinery, scoring terms, or debug labels in the user-facing reply.",
                 "Keep the wording plain and concrete; avoid theatrical metaphors or test-harness phrasing.",
+                "Convert the current stream state into action: name the object of attention, separate known evidence from missing input, and offer one concrete next step.",
+                "For first-contact users, show the bionic loop through useful behavior rather than labels like bionic subject or CLI.",
+                "Do not claim cross-conversation personal memory or self-learning; describe learning only as current-thread evidence update unless a stored memory is visible.",
                 "If asking, ask at most one grounded question tied to the current continuity.",
                 "Do not invent prior work. If continuity is empty, say the prior turn is not visible here.",
                 capability_line,
@@ -229,4 +242,9 @@ class BionicGeneration:
         lowered_text = clean_text.lower()
         if any(marker in lowered_text for marker in THEATRICAL_EMOTION_MARKERS):
             return _emotion_guard_text(query_text)
+        if any(marker in lowered_text for marker in MEMORY_OVERCLAIM_MARKERS):
+            return (
+                "I can use the current thread evidence, separate what is known from what is missing, "
+                "and turn your next real situation into the next concrete step."
+            )
         return _bound_questions(clean_text, limit=1)

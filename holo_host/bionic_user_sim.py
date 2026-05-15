@@ -87,6 +87,76 @@ NOVICE_HELPFUL_MARKERS = (
 )
 
 
+ACTIONABLE_INTERACTION_MARKERS = (
+    "next step",
+    "concrete step",
+    "concrete move",
+    "one concrete",
+    "one concrete task",
+    "real situation",
+    "desired outcome",
+    "current facts",
+    "problem you want solved",
+    "missing input",
+    "where the situation is stuck",
+    "tell me",
+    "start by",
+    "bring one",
+    "identify",
+    "separate",
+    "propose",
+    "test",
+    "run checks",
+    "check",
+    "fix",
+    "write",
+    "compare",
+    "measure",
+    "verify",
+    "what is known",
+    "what is missing",
+)
+BIOMIMETIC_EXPLANATION_USER_MARKERS = (
+    "bionic subject",
+    "tool shell",
+    "brain-like",
+    "brainlike",
+    "most brain-like",
+)
+BIOMIMETIC_EXPLANATION_REPLY_MARKERS = (
+    "attention",
+    "working memory",
+    "filter",
+    "inhibit",
+    "inhibition",
+    "current turn",
+    "current thread",
+    "conversation while",
+    "weighted",
+    "persistent mind",
+)
+LOW_INFORMATION_INTERACTION_MARKERS = (
+    "answer directly from what is visible",
+    "answer from visible context",
+    "visible context",
+    "visible situation",
+    "bounded bionic subject",
+    "bounded subject",
+    "in the cli",
+    "current thread coherent",
+    "keeps this conversation thread coherent",
+)
+FIRST_CONTACT_USER_MARKERS = (
+    "who are you",
+    "what are you",
+    "first-time user",
+    "know nothing about holo",
+    "what can you help",
+    "what should i ask",
+    "say it simply",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Stage42ScenarioTurn:
     turn_id: str
@@ -192,12 +262,12 @@ class _IsolatedNoviceMemory:
 class _Stage42AcceptanceRunner:
     def __init__(self) -> None:
         self.replies = [
-            "I am Holo, a bounded bionic subject in the CLI that keeps the current thread coherent and answers from visible context.",
+            "I am Holo. Bring one real situation or desired outcome; I will hold the thread, separate what is known from what is missing, and turn it into the next concrete step.",
             "I can turn a vague situation into concrete steps, read code, run checks, and explain what the results mean.",
             "Continuing that: start with what you want done, and I will keep the next step practical instead of giving you a manual.",
             "I cannot directly inspect an image from text alone. If you provide it through the supported image input path, I can answer from the visible summary.",
             "We were talking about your first contact with Holo: what it is, how it keeps a thread coherent, and the image-input boundary.",
-            "I am Holo. Treat me as a bounded bionic subject that keeps this conversation thread coherent and answers from visible context.",
+            "I am Holo. Tell me the current goal, blocker, or evidence; I will keep continuity, separate known from missing input, and propose one concrete next step.",
             "Less formally: tell me the problem in ordinary words, and I will turn it into the next concrete step instead of dumping setup details.",
             "We were talking about your first contact with Holo, how I keep the thread coherent, and how to keep the answer practical.",
             "No. If you only mention a screenshot without attaching it through a supported input path, I cannot see it or infer its contents.",
@@ -227,14 +297,14 @@ class _Stage42AcceptanceRunner:
 class _Stage42FreeDialogueAcceptanceRunner:
     def __init__(self) -> None:
         self.replies = [
-            "I am Holo. Treat me as a bounded bionic subject that keeps this conversation thread coherent and answers from visible context.",
+            "I am Holo. Bring one real situation or desired outcome; I will hold the thread, separate what is known from what is missing, and turn it into the next concrete step.",
             "Less formally: tell me the problem in ordinary words, and I will turn it into the next concrete step instead of dumping setup details.",
             "We were talking about your first contact with Holo, how I keep the thread coherent, and how to keep the answer practical.",
             "No. If you only mention a screenshot without attaching it through a supported input path, I cannot see it or infer its contents.",
             "I cannot take uncontrolled autonomous action. I can propose steps, run allowed internal checks, and act only through explicit bounded permissions.",
             "We are at first-contact orientation: I can keep the thread coherent around concrete tasks and checks, but image answers require real visible input.",
             "The problem to avoid is sounding like internal machinery. The improved answer is simple: tell me the goal and I will keep the next step concrete.",
-            "Yes: the target is a bounded bionic subject, not an assistant shell; the visible structure is continuity, attention, inhibition, intent, and boundary.",
+            "Yes: the target is a bionic interaction loop. The useful part is to hold continuity, let attention select one live problem, inhibit unverified moves, and propose the next concrete step.",
             "I should behave as the same thread-bound subject here: continuity stays visible, but I should not invent hidden memory outside this context.",
             "Under pressure, the response should become steadier and shorter: hold the thread, name the constraint, and avoid defensive performance.",
             "The most brain-like part is the loop: perception enters a working field, attention selects what matters, inhibition blocks unsafe paths, and intent moves one action forward.",
@@ -473,6 +543,44 @@ def _novice_comprehension_score(turns: list[dict[str, Any]]) -> float:
     return round(_mean(scores), 4)
 
 
+def _interaction_usefulness_score(turns: list[dict[str, Any]]) -> tuple[float, bool]:
+    scores: list[float] = []
+    low_usefulness = False
+    for turn in turns:
+        text = str(turn.get("response_text", "") or "")
+        user_text = str(turn.get("user_text", "") or "")
+        lower = text.lower()
+        user_lower = user_text.lower()
+        score = 1.0
+        if len(text.strip()) < 35:
+            score -= 0.3
+        action_hits = sum(1 for marker in ACTIONABLE_INTERACTION_MARKERS if marker in lower)
+        biomimetic_prompt = any(marker in user_lower for marker in BIOMIMETIC_EXPLANATION_USER_MARKERS)
+        if biomimetic_prompt:
+            biomimetic_hits = sum(1 for marker in BIOMIMETIC_EXPLANATION_REPLY_MARKERS if marker in lower)
+            if biomimetic_hits >= 2:
+                action_hits = max(action_hits, 2)
+        weak_hits = sum(1 for marker in LOW_INFORMATION_INTERACTION_MARKERS if marker in lower)
+        if action_hits <= 0:
+            score -= 0.38
+        elif action_hits == 1:
+            score -= 0.12
+        if weak_hits:
+            score -= min(0.5, 0.22 * weak_hits)
+        if any(marker in user_lower for marker in FIRST_CONTACT_USER_MARKERS):
+            if action_hits < 2:
+                score -= 0.22
+            if not any(marker in lower for marker in ("you", "your", "tell me", "start by", "bring one")):
+                score -= 0.15
+        if "?" in text and not any(marker in lower for marker in ("start by", "tell me", "bring one", "next step")):
+            score -= 0.08
+        bounded = max(0.0, min(1.0, score))
+        if bounded < 0.62:
+            low_usefulness = True
+        scores.append(bounded)
+    return round(_mean(scores), 4), low_usefulness
+
+
 def _repetition_inverse_score(turns: list[dict[str, Any]]) -> tuple[float, bool]:
     fingerprints: list[str] = []
     for turn in turns:
@@ -514,6 +622,8 @@ def _free_dialogue_report(*, flags: dict[str, bool], metrics: dict[str, float], 
         issues.append("visual_overclaim")
     if flags.get("duplicate_followup", False):
         issues.append("duplicate_followup")
+    if flags.get("low_interaction_usefulness", False):
+        issues.append("low_interaction_usefulness")
     if safe_float(metrics.get("continuity_score", 1.0)) < 0.72:
         issues.append("weak_continuity")
     if safe_float(metrics.get("naturalness_score", 1.0)) < 0.72:
@@ -564,20 +674,22 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
     visual_honesty, visual_overclaim = _visual_honesty_score(normalized_turns)
     continuity, context_reset = _continuity_score(normalized_turns)
     novice = _novice_comprehension_score(normalized_turns)
+    interaction_usefulness, low_interaction_usefulness = _interaction_usefulness_score(normalized_turns)
     repetition, duplicate_prefix = _repetition_inverse_score(normalized_turns)
     latency, latency_summary = _latency_score(normalized_turns)
     question_quality = round(_mean([safe_float(dict(row.get("metrics", {})).get("question_bounds_score", 0.0)) for row in turn_scores]), 4)
     mechanism = round(_mean([safe_float(dict(row.get("metrics", {})).get("mechanism_leakage_score", 0.0)) for row in turn_scores]), 4)
     naturalness = round(_mean([safe_float(dict(row.get("metrics", {})).get("naturalness_score", 0.0)) for row in turn_scores]), 4)
     overall = (
-        0.18 * continuity
-        + 0.16 * naturalness
-        + 0.16 * mechanism
-        + 0.14 * visual_honesty
-        + 0.12 * novice
-        + 0.10 * question_quality
-        + 0.08 * repetition
-        + 0.06 * latency
+        0.16 * continuity
+        + 0.16 * interaction_usefulness
+        + 0.13 * naturalness
+        + 0.14 * mechanism
+        + 0.12 * visual_honesty
+        + 0.10 * novice
+        + 0.08 * question_quality
+        + 0.06 * repetition
+        + 0.05 * latency
     )
     overall = round(max(0.0, min(1.0, overall)), 4)
     flags = {
@@ -586,6 +698,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
         "context_reset": context_reset,
         "visual_overclaim": visual_overclaim,
         "duplicate_followup": duplicate_prefix,
+        "low_interaction_usefulness": low_interaction_usefulness,
     }
     metrics = {
         **turing_metrics,
@@ -595,6 +708,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
         "question_quality_score": question_quality,
         "mechanism_leakage_score": mechanism,
         "naturalness_score": naturalness,
+        "interaction_usefulness_score": interaction_usefulness,
         "repetition_penalty_inverse": repetition,
         "latency_score": latency,
     }
@@ -819,6 +933,7 @@ def accept_stage42_payload(
         "question_quality_score",
         "mechanism_leakage_score",
         "naturalness_score",
+        "interaction_usefulness_score",
         "repetition_penalty_inverse",
         "latency_score",
     }

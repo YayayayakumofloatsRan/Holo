@@ -449,6 +449,13 @@ Stage86: interaction simulation audit
 - Treats Holo as useful for boundary-aware, correction-stable, inspectable research interaction, but not yet useful enough as a strong human-facing companion or publication-grade interactive agent.
 - Sets the next gate as stricter usefulness scoring plus provider-backed interaction cells that penalize safe-but-unhelpful replies while preserving boundary honesty and WSL/kernel authority boundaries.
 
+Stage87: biomimetic interaction performance
+- Adds `interaction_usefulness_score` to Stage42 so safe but empty visible-context replies fail instead of passing on boundary honesty alone.
+- Reworks deterministic response shaping and provider prompts around a biomimetic active-inference loop: current thread evidence, missing input, attention target, inhibition of ungrounded paths, and one concrete next step.
+- Adds a provider guard for unverified cross-conversation memory/self-learning claims, converting them into current-thread evidence updates instead of false autobiographical memory.
+- Reports the current interaction evidence: offline novice `overall_score=0.9709` and `interaction_usefulness_score=0.818`; offline 20-turn free dialogue `overall_score=0.895`, `interaction_usefulness_score=0.774`, and `issue_count=0`; DeepSeek V4 Pro novice `overall_score=0.8596`, `interaction_usefulness_score=0.74`, and `passed=true`; DeepSeek V4 Pro 12-turn free dialogue `overall_score=0.9677`, `interaction_usefulness_score=0.9183`, and `issue_count=0`.
+- Keeps the research claim performance-centered: Stage87 improves useful biomimetic interaction, but does not claim persistent self-learning, human consciousness, or long-horizon companion robustness. Stage88 should implement within-thread self-organization through outcome-conditioned local adaptation.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
