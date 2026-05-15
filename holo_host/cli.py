@@ -9737,6 +9737,97 @@ def command_evaluate_biomimetic_publication_bundle(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_consciousness_stream_lattice(
+    config_path: str | None,
+    *,
+    publication_json: str,
+    trace_json: list[str],
+    output: str | None,
+) -> int:
+    from .consciousness_stream_lattice import (
+        build_consciousness_stream_lattice,
+        load_consciousness_stream_lattice_json,
+        write_consciousness_stream_lattice_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    publication = load_consciousness_stream_lattice_json(publication_json)
+    trace_reports = []
+    for path in trace_json:
+        trace_report = load_consciousness_stream_lattice_json(path)
+        if "cell_label" not in trace_report:
+            source_path = Path(path)
+            trace_report["cell_label"] = source_path.parent.name or source_path.stem
+        trace_reports.append(trace_report)
+    report = build_consciousness_stream_lattice(publication, trace_reports)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage84"
+            / "consciousness_stream_lattice.html"
+        )
+    written = write_consciousness_stream_lattice_artifacts(report, output_path)
+    summary = (
+        dict(report.get("stream_summary", {}))
+        if isinstance(report.get("stream_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "stream_lattice_png_path": str(written["stream_lattice_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "stage83_publication_precondition_supported": bool(
+                        summary.get("stage83_publication_precondition_supported", False)
+                    ),
+                    "cell_count": summary.get("cell_count", 0),
+                    "stream_state_count": summary.get("stream_state_count", 0),
+                    "unique_stream_state_count": summary.get("unique_stream_state_count", 0),
+                    "mean_dwell_time": summary.get("mean_dwell_time", 0.0),
+                    "transition_entropy": summary.get("transition_entropy", 0.0),
+                    "mean_event_boundary_score": summary.get("mean_event_boundary_score", 0.0),
+                    "reactivation_return_rate": summary.get("reactivation_return_rate", 0.0),
+                    "ignition_report_transfer": summary.get("ignition_report_transfer", 0.0),
+                    "active_inference_delta": summary.get("active_inference_delta", 0.0),
+                    "marker_control_narrows_reactivation": bool(
+                        summary.get("marker_control_narrows_reactivation", False)
+                    ),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "stream_language_bounded": bool(
+                        evidence.get("stream_language_bounded", False)
+                    ),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -11413,6 +11504,18 @@ def main(argv: list[str] | None = None) -> int:
     biomimetic_publication_bundle_parser.add_argument("--replication-json", required=True)
     biomimetic_publication_bundle_parser.add_argument("--model-family-json", required=True)
     biomimetic_publication_bundle_parser.add_argument("--output", default=None)
+    consciousness_stream_lattice_parser = subparsers.add_parser(
+        "evaluate-consciousness-stream-lattice",
+        help="Evaluate Stage84 latent consciousness-stream dynamics over Stage83 and Stage59/60 traces",
+    )
+    consciousness_stream_lattice_parser.add_argument("--publication-json", required=True)
+    consciousness_stream_lattice_parser.add_argument(
+        "--trace-json",
+        action="append",
+        required=True,
+        default=[],
+    )
+    consciousness_stream_lattice_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -12101,6 +12204,13 @@ def main(argv: list[str] | None = None) -> int:
             gain_control_json=args.gain_control_json,
             replication_json=args.replication_json,
             model_family_json=args.model_family_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-consciousness-stream-lattice":
+        return command_evaluate_consciousness_stream_lattice(
+            args.config,
+            publication_json=args.publication_json,
+            trace_json=args.trace_json,
             output=args.output,
         )
     if args.command == "run-consciousness-provider-trace":

@@ -427,6 +427,13 @@ Stage83: biomimetic publication bundle
 - Adds `docs/STAGE84_CONSCIOUSNESS_STREAM_LITERATURE_PLAN.md` as the next research gate: build a latent stream-state observatory before spending tokens on broad provider repeats.
 - Keeps all changes report-only over existing evidence: no provider call inside Stage83, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage84: consciousness stream lattice
+- Adds a read-only latent stream-state observatory that consumes the Stage83 publication bundle plus Stage59/60-gated real-provider traces.
+- Implements `evaluate-consciousness-stream-lattice`, HTML/JSON/PNG artifacts, per-turn compact stream vectors, dwell metrics, transition entropy, event-boundary scores, reactivation-return rates, ignition-report transfer, and active-action clamp controls.
+- Reports the current Stage77 Pro/Flash real-provider result conservatively: `decision=stream_lattice_supports_bounded_consciousness_flow_proxy`, `stream_state_count=84`, `unique_stream_state_count=3`, `mean_dwell_time=2.625`, `transition_entropy=2.261899`, `mean_event_boundary_score=0.223461`, `reactivation_return_rate=1.0`, `active_inference_delta=0.034264`, and `marker_control_narrows_reactivation=true`.
+- Keeps GNW partial because the current real-trace `ignition_report_transfer=0.0`; Stage85 should instrument ignition-to-report before broad provider repeats or stronger GNW language.
+- Keeps all changes report-only over existing evidence: no provider call inside Stage84, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
