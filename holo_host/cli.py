@@ -9516,6 +9516,123 @@ def command_evaluate_biomimetic_precision_control(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_gain_control(
+    config_path: str | None,
+    *,
+    theory_json: str,
+    precision_control_json: str,
+    trace_json: list[str],
+    output: str | None,
+) -> int:
+    from .biomimetic_gain_control import (
+        build_biomimetic_gain_control,
+        load_biomimetic_gain_control_json,
+        write_biomimetic_gain_control_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    theory = load_biomimetic_gain_control_json(theory_json)
+    precision_report = load_biomimetic_gain_control_json(precision_control_json)
+    trace_reports = []
+    for path in trace_json:
+        trace_report = load_biomimetic_gain_control_json(path)
+        if "cell_label" not in trace_report:
+            source_path = Path(path)
+            trace_report["cell_label"] = source_path.parent.name or source_path.stem
+        trace_reports.append(trace_report)
+    report = build_biomimetic_gain_control(theory, precision_report, trace_reports)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage82"
+            / "biomimetic_gain_control.html"
+        )
+    written = write_biomimetic_gain_control_artifacts(report, output_path)
+    summary = (
+        dict(report.get("control_summary", {}))
+        if isinstance(report.get("control_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "gain_control_png_path": str(written["gain_control_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "control_count": summary.get("control_count", 0),
+                    "executed_control_count": summary.get("executed_control_count", 0),
+                    "pending_control_count": summary.get("pending_control_count", 0),
+                    "trace_report_count": summary.get("trace_report_count", 0),
+                    "precision_control_precondition_supported": bool(
+                        summary.get("precision_control_precondition_supported", False)
+                    ),
+                    "active_replay_correction_intact": bool(
+                        summary.get("active_replay_correction_intact", False)
+                    ),
+                    "gain_clamp_reduces_neuromodulator_coupling": bool(
+                        summary.get("gain_clamp_reduces_neuromodulator_coupling", False)
+                    ),
+                    "gain_clamp_preserves_replay_phase": bool(
+                        summary.get("gain_clamp_preserves_replay_phase", False)
+                    ),
+                    "mean_gain_clamp_neuromodulator_coupling_delta": summary.get(
+                        "mean_gain_clamp_neuromodulator_coupling_delta",
+                        0.0,
+                    ),
+                    "mean_gain_clamp_correction_survival_delta": summary.get(
+                        "mean_gain_clamp_correction_survival_delta",
+                        0.0,
+                    ),
+                    "mean_gain_clamp_correction_survival_proxy": summary.get(
+                        "mean_gain_clamp_correction_survival_proxy",
+                        0.0,
+                    ),
+                    "mean_gain_clamp_prompt_cost_delta": summary.get(
+                        "mean_gain_clamp_prompt_cost_delta",
+                        0.0,
+                    ),
+                    "mean_gain_clamp_reactivation_phase_delta": summary.get(
+                        "mean_gain_clamp_reactivation_phase_delta",
+                        0.0,
+                    ),
+                    "direct_controls_incomplete": bool(
+                        summary.get("direct_controls_incomplete", True)
+                    ),
+                    "theory_language_bounded": bool(
+                        summary.get("theory_language_bounded", False)
+                    ),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -11167,6 +11284,19 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
     )
     biomimetic_precision_control_parser.add_argument("--output", default=None)
+    biomimetic_gain_control_parser = subparsers.add_parser(
+        "evaluate-biomimetic-gain-control",
+        help="Evaluate Stage82 neuromodulatory gain controls over Stage78, Stage81, and Stage59/60 traces",
+    )
+    biomimetic_gain_control_parser.add_argument("--theory-json", required=True)
+    biomimetic_gain_control_parser.add_argument("--precision-control-json", required=True)
+    biomimetic_gain_control_parser.add_argument(
+        "--trace-json",
+        action="append",
+        required=True,
+        default=[],
+    )
+    biomimetic_gain_control_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11834,6 +11964,14 @@ def main(argv: list[str] | None = None) -> int:
             args.config,
             theory_json=args.theory_json,
             marker_control_json=args.marker_control_json,
+            trace_json=args.trace_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-gain-control":
+        return command_evaluate_biomimetic_gain_control(
+            args.config,
+            theory_json=args.theory_json,
+            precision_control_json=args.precision_control_json,
             trace_json=args.trace_json,
             output=args.output,
         )

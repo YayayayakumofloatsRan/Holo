@@ -411,6 +411,14 @@ Stage81: biomimetic precision control
 - Keeps gain-clamp/random-gain controls pending; Stage81 supports a bounded precision-dependent correction claim but does not justify stronger consciousness or biological-neural claims.
 - Keeps all changes read-only over existing evidence: no provider call inside Stage81, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage82: biomimetic gain control
+- Adds a read-only neuromodulatory gain-clamp observatory that consumes Stage78 theory correspondence, Stage81 precision-control evidence, and Stage59/60-gated real-provider traces.
+- Implements `evaluate-biomimetic-gain-control`, HTML/JSON/PNG artifacts, bounded publication claims, and the final pending direct control row from the Stage78 falsification matrix.
+- Reports the current Stage77/78/81-derived result conservatively: `decision=gain_clamp_supports_neuromodulatory_adaptive_gain_control`, `control_count=1`, `executed_control_count=1`, `pending_control_count=0`, `trace_report_count=2`, `precision_control_precondition_supported=true`, `active_replay_correction_intact=true`, `mean_gain_clamp_neuromodulator_coupling_delta=-0.321447`, and `mean_gain_clamp_correction_survival_proxy=0.820294`.
+- Interprets the gain-clamp control as replicated in both Stage77 model cells: Pro coupling `0.818657` to `0.5`, Flash coupling `0.824236` to `0.5`, with correction survival remaining `0.820294` and prompt-cost, reactivation-phase, and boundary deltas at `0.0`.
+- Completes the planned Stage78-82 direct-control matrix for GNW ignition-null, hippocampal/CLS marker removal, predictive-processing neutral salience, and neuromodulatory gain clamp; GNW remains partial because flow-coupling stability is still within-model/cell unstable.
+- Keeps all changes read-only over existing evidence: no provider call inside Stage82, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
