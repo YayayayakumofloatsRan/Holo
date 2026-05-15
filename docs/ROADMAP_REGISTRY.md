@@ -434,6 +434,14 @@ Stage84: consciousness stream lattice
 - Keeps GNW partial because the current real-trace `ignition_report_transfer=0.0`; Stage85 should instrument ignition-to-report before broad provider repeats or stronger GNW language.
 - Keeps all changes report-only over existing evidence: no provider call inside Stage84, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage85: ignition report instrumentation
+- Repairs the Stage59/46 trace export schema so `global_workspace_ignition` and `ignition_to_reply_coupling` survive inside `processor_debug.bionic_consciousness_flow`.
+- Adds `evaluate-ignition-report-instrumentation`, HTML/JSON/PNG artifacts, and an observatory that separates archived trace-field gaps from structured GNW ignition-to-report transfer.
+- Reports the archived Stage77 Pro/Flash diagnostic conservatively: `decision=instrumentation_gap_blocks_gnw_upgrade`, `total_turn_count=84`, `structured_ignition_turn_count=0`, `structured_coupling_turn_count=0`, `observed_ignition_report_transfer=0.0`, and `current_trace_instrumentation_gap=true`.
+- Runs one focused post-repair DeepSeek V4 Pro shadow-runtime provider cell: `collected_turn_count=6`, `real_provider_trace=true`, `observed_total_tokens=20598`, then Stage85 reports `decision=bounded_ignition_report_instrumentation_supported`, `structured_ignition_turn_count=6`, `structured_coupling_turn_count=6`, and `observed_ignition_report_transfer=1.0`.
+- Keeps GNW language bounded: Stage85 validates instrumentation in one focused real-provider cell, not replicated subjective consciousness or a full Stage84 stream-lattice replication.
+- Keeps all authority boundaries intact: no live WeChat transport, watcher authority, runtime decision authority, self-memory write path, policy mutation, provider fallback, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

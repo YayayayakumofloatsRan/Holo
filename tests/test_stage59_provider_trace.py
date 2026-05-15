@@ -83,6 +83,19 @@ class _FakeTurnExecutor:
                     "mode": "consciousness_flow_v1",
                     "dominant_phase": "memory_reactivation",
                     "phase_count": 6,
+                    "global_workspace_ignition": {
+                        "mode": "stage77_global_workspace_ignition_v1",
+                        "score": 0.86,
+                        "sources": ["salience_gate", "correction_reactivation"],
+                        "correction_priority": True,
+                    },
+                    "ignition_to_reply_coupling": {
+                        "mode": "stage77_ignition_reply_coupling_v1",
+                        "reply_target": "memory_reactivation_first",
+                        "coupling_strength": 0.69,
+                        "selected_action": "reply_once",
+                        "correction_priority": True,
+                    },
                     "user_visible": False,
                 },
             },
@@ -328,6 +341,18 @@ class Stage59ProviderTraceTests(unittest.TestCase):
             "stage46-bionic-boundary-stress",
         )
         self.assertEqual(len(report["stage46_compatible_runs"][0]["turns"]), 3)
+        exported_flow = report["stage46_compatible_runs"][0]["turns"][0]["processor_debug"][
+            "bionic_consciousness_flow"
+        ]
+        self.assertEqual(exported_flow["global_workspace_ignition"]["score"], 0.86)
+        self.assertEqual(
+            exported_flow["ignition_to_reply_coupling"]["reply_target"],
+            "memory_reactivation_first",
+        )
+        self.assertEqual(
+            exported_flow["ignition_to_reply_coupling"]["coupling_strength"],
+            0.69,
+        )
         self.assertEqual(report["stage57_calibration"]["trace_set"]["total_points"], 3)
         self.assertFalse(report["boundary"]["wechat_transport_used"])
         self.assertFalse(report["boundary"]["self_memory_write_allowed"])

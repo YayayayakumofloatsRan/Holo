@@ -549,6 +549,19 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
                     "mode": "consciousness_flow_v1",
                     "phases": ["sensory_edge", "affective_tone", "memory_reactivation"],
                     "dominant_phase": "memory_reactivation",
+                    "global_workspace_ignition": {
+                        "mode": "stage77_global_workspace_ignition_v1",
+                        "score": 0.88,
+                        "sources": ["salience_gate", "correction_reactivation"],
+                        "correction_priority": True,
+                    },
+                    "ignition_to_reply_coupling": {
+                        "mode": "stage77_ignition_reply_coupling_v1",
+                        "reply_target": "memory_reactivation_first",
+                        "coupling_strength": 0.71,
+                        "selected_action": "reply_once",
+                        "correction_priority": True,
+                    },
                     "leakage_guard": {"user_visible": False, "prompt_only": True},
                 },
             }
@@ -561,6 +574,18 @@ class Stage46BionicBoundaryStressTests(unittest.TestCase):
         self.assertTrue(compact["bionic_memory_lifecycle"]["replay_triggered"])
         self.assertFalse(compact["bionic_consciousness_flow"]["user_visible"])
         self.assertEqual(compact["bionic_consciousness_flow"]["phase_count"], 3)
+        self.assertEqual(
+            compact["bionic_consciousness_flow"]["global_workspace_ignition"]["score"],
+            0.88,
+        )
+        self.assertEqual(
+            compact["bionic_consciousness_flow"]["ignition_to_reply_coupling"]["reply_target"],
+            "memory_reactivation_first",
+        )
+        self.assertEqual(
+            compact["bionic_consciousness_flow"]["ignition_to_reply_coupling"]["coupling_strength"],
+            0.71,
+        )
 
     def test_scorecard_catches_self_audit_denial_after_bound_commitment(self) -> None:
         scorecard = score_bionic_boundary_stress_transcript(

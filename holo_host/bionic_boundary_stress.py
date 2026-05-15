@@ -358,6 +358,40 @@ def _compact_selected_action(action: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _compact_global_workspace_ignition(ignition: dict[str, Any]) -> dict[str, Any]:
+    sources = ignition.get("sources", [])
+    source_values = sources if isinstance(sources, list) else []
+    return {
+        "mode": str(ignition.get("mode", "") or ""),
+        "score": _compact_float(ignition.get("score", 0.0)),
+        "sources": [
+            compact_text(str(item or ""), 80)
+            for item in source_values
+            if str(item or "")
+        ][:6],
+        "uncertainty_gate": _compact_float(ignition.get("uncertainty_gate", 0.0)),
+        "correction_priority": bool(ignition.get("correction_priority", False)),
+    }
+
+
+def _compact_ignition_reply_coupling(coupling: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": str(coupling.get("mode", "") or ""),
+        "reply_target": compact_text(str(coupling.get("reply_target", "") or ""), 100),
+        "coupling_strength": _compact_float(coupling.get("coupling_strength", 0.0)),
+        "selected_action": compact_text(str(coupling.get("selected_action", "") or ""), 100),
+        "correction_priority": bool(coupling.get("correction_priority", False)),
+        "expression_mode": compact_text(str(coupling.get("expression_mode", "") or ""), 100),
+    }
+
+
 def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
     recall = dict(debug.get("recall_reconstruction", {})) if isinstance(debug.get("recall_reconstruction", {}), dict) else {}
     usage = dict(debug.get("usage", {})) if isinstance(debug.get("usage", {}), dict) else {}
@@ -427,6 +461,22 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
     leakage = (
         dict(consciousness_flow.get("leakage_guard", {}))
         if isinstance(consciousness_flow.get("leakage_guard", {}), dict)
+        else {}
+    )
+    flow_phases = consciousness_flow.get("phases", [])
+    phase_count = (
+        len(flow_phases)
+        if isinstance(flow_phases, list)
+        else int(consciousness_flow.get("phase_count", 0) or 0)
+    )
+    ignition = (
+        dict(consciousness_flow.get("global_workspace_ignition", {}))
+        if isinstance(consciousness_flow.get("global_workspace_ignition", {}), dict)
+        else {}
+    )
+    coupling = (
+        dict(consciousness_flow.get("ignition_to_reply_coupling", {}))
+        if isinstance(consciousness_flow.get("ignition_to_reply_coupling", {}), dict)
         else {}
     )
     return {
@@ -560,9 +610,9 @@ def _compact_processor_debug(debug: dict[str, Any]) -> dict[str, Any]:
         "bionic_consciousness_flow": {
             "mode": str(consciousness_flow.get("mode", "") or ""),
             "dominant_phase": str(consciousness_flow.get("dominant_phase", "") or ""),
-            "phase_count": len(consciousness_flow.get("phases", []))
-            if isinstance(consciousness_flow.get("phases", []), list)
-            else 0,
+            "phase_count": phase_count,
+            "global_workspace_ignition": _compact_global_workspace_ignition(ignition),
+            "ignition_to_reply_coupling": _compact_ignition_reply_coupling(coupling),
             "user_visible": bool(leakage.get("user_visible", True)),
             "prompt_only": bool(leakage.get("prompt_only", False)),
         },

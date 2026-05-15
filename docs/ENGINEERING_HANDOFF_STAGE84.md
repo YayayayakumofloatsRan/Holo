@@ -123,7 +123,7 @@ Result:
 
 ## Next Gate
 
-Stage85 should target the current limiting result directly: explicit
-ignition-to-report instrumentation or a provider-matched active/passive episode
-design. Do not broaden provider repeats until the stream path receives a
-mechanism change that can make `ignition_report_transfer` observable.
+Stage85 has repaired ignition-to-report instrumentation and produced one
+focused post-repair real-provider cell with structured transfer. Stage86 should
+replicate this with marker-control-compatible Pro/Flash cells before any broad
+provider repeats or stronger GNW language.

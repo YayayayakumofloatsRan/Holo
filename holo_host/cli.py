@@ -9828,6 +9828,107 @@ def command_evaluate_consciousness_stream_lattice(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_ignition_report_instrumentation(
+    config_path: str | None,
+    *,
+    stream_lattice_json: str,
+    trace_json: list[str],
+    output: str | None,
+) -> int:
+    from .ignition_report_instrumentation import (
+        build_ignition_report_instrumentation,
+        load_ignition_report_instrumentation_json,
+        write_ignition_report_instrumentation_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    stream_lattice = load_ignition_report_instrumentation_json(stream_lattice_json)
+    trace_reports = []
+    for path in trace_json:
+        trace_report = load_ignition_report_instrumentation_json(path)
+        if "cell_label" not in trace_report:
+            source_path = Path(path)
+            trace_report["cell_label"] = source_path.parent.name or source_path.stem
+        trace_reports.append(trace_report)
+    report = build_ignition_report_instrumentation(stream_lattice, trace_reports)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage85"
+            / "ignition_report_instrumentation.html"
+        )
+    written = write_ignition_report_instrumentation_artifacts(report, output_path)
+    summary = (
+        dict(report.get("instrumentation_summary", {}))
+        if isinstance(report.get("instrumentation_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "ignition_report_png_path": str(written["ignition_report_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "supported_scope": decision.get("supported_scope", ""),
+                    "stage84_stream_lattice_precondition_supported": bool(
+                        summary.get("stage84_stream_lattice_precondition_supported", False)
+                    ),
+                    "trace_count": summary.get("trace_count", 0),
+                    "total_turn_count": summary.get("total_turn_count", 0),
+                    "structured_ignition_turn_count": summary.get(
+                        "structured_ignition_turn_count",
+                        0,
+                    ),
+                    "structured_coupling_turn_count": summary.get(
+                        "structured_coupling_turn_count",
+                        0,
+                    ),
+                    "observed_ignition_report_transfer": summary.get(
+                        "observed_ignition_report_transfer",
+                        0.0,
+                    ),
+                    "stage84_legacy_ignition_report_transfer": summary.get(
+                        "stage84_legacy_ignition_report_transfer",
+                        0.0,
+                    ),
+                    "current_trace_instrumentation_gap": bool(
+                        summary.get("current_trace_instrumentation_gap", False)
+                    ),
+                    "focused_provider_cell_required": bool(
+                        summary.get("focused_provider_cell_required", True)
+                    ),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "gnw_language_bounded": bool(evidence.get("gnw_language_bounded", False)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -11516,6 +11617,18 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
     )
     consciousness_stream_lattice_parser.add_argument("--output", default=None)
+    ignition_report_instrumentation_parser = subparsers.add_parser(
+        "evaluate-ignition-report-instrumentation",
+        help="Evaluate Stage85 structured GNW ignition-to-report instrumentation over Stage84 and Stage59/60 traces",
+    )
+    ignition_report_instrumentation_parser.add_argument("--stream-lattice-json", required=True)
+    ignition_report_instrumentation_parser.add_argument(
+        "--trace-json",
+        action="append",
+        required=True,
+        default=[],
+    )
+    ignition_report_instrumentation_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -12210,6 +12323,13 @@ def main(argv: list[str] | None = None) -> int:
         return command_evaluate_consciousness_stream_lattice(
             args.config,
             publication_json=args.publication_json,
+            trace_json=args.trace_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-ignition-report-instrumentation":
+        return command_evaluate_ignition_report_instrumentation(
+            args.config,
+            stream_lattice_json=args.stream_lattice_json,
             trace_json=args.trace_json,
             output=args.output,
         )

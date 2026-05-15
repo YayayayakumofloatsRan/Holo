@@ -101,13 +101,11 @@ provider-native neural dynamics, or an implemented biological global workspace.
 
 ## Next Gate
 
-Stage85 should add explicit ignition-to-report instrumentation or an
-active-versus-passive provider-matched episode design:
+Stage85 has now added explicit ignition-to-report instrumentation and repaired
+the trace export schema. The remaining gate is Stage86 replication:
 
-- carry `ignition_to_reply_coupling` into real provider traces in a way Stage84
-  can observe
-- rerun Stage84 on repeated Pro/Flash cells
-- require `ignition_report_transfer` to become positive and replicated before
+- rerun Stage84/85 on repeated marker-control-compatible Pro/Flash cells
+- require `ignition_report_transfer` to remain positive and replicated before
   strengthening GNW language
 - keep stream controls report-only until a separate mechanism intervention is
   justified
