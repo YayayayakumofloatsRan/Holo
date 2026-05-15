@@ -8998,6 +8998,83 @@ def command_evaluate_biomimetic_provider_progress(
     return 0 if bool(report.get("ok", False)) else 1
 
 
+def command_evaluate_biomimetic_replication_stability(
+    config_path: str | None,
+    *,
+    progress_json: list[str],
+    output: str | None,
+) -> int:
+    from .biomimetic_replication_stability import (
+        build_biomimetic_replication_stability,
+        load_biomimetic_replication_stability_json,
+        write_biomimetic_replication_stability_artifacts,
+    )
+
+    config = load_config(config_path=config_path)
+    reports = [load_biomimetic_replication_stability_json(path) for path in progress_json]
+    report = build_biomimetic_replication_stability(reports)
+    if output:
+        output_path = Path(output).expanduser()
+    else:
+        output_path = (
+            config.runtime.repo_root
+            / "artifacts"
+            / "stage75"
+            / "biomimetic_replication_stability.html"
+        )
+    written = write_biomimetic_replication_stability_artifacts(report, output_path)
+    summary = (
+        dict(report.get("replication_summary", {}))
+        if isinstance(report.get("replication_summary", {}), dict)
+        else {}
+    )
+    decision = (
+        dict(report.get("hypothesis_decision", {}))
+        if isinstance(report.get("hypothesis_decision", {}), dict)
+        else {}
+    )
+    evidence = (
+        dict(report.get("evidence_gate", {}))
+        if isinstance(report.get("evidence_gate", {}), dict)
+        else {}
+    )
+    print(
+        json.dumps(
+            {
+                "ok": bool(report.get("ok", False)),
+                "stage": report.get("stage", ""),
+                "output_path": str(written["html"]),
+                "html_path": str(written["html"]),
+                "json_path": str(written["json"]),
+                "stability_png_path": str(written["stability_png"]),
+                "observatory": {
+                    "decision": decision.get("decision", ""),
+                    "replicated_scope": decision.get("replicated_scope", ""),
+                    "cell_count": summary.get("cell_count", 0),
+                    "real_provider_cell_count": summary.get("real_provider_cell_count", 0),
+                    "absolute_improved_cell_count": summary.get("absolute_improved_cell_count", 0),
+                    "replay_correction_compression_cell_count": summary.get(
+                        "replay_correction_compression_cell_count",
+                        0,
+                    ),
+                    "flow_loss_reduction_cell_count": summary.get(
+                        "flow_loss_reduction_cell_count",
+                        0,
+                    ),
+                    "observed_total_tokens": summary.get("observed_total_tokens", 0),
+                    "real_provider_trace": bool(evidence.get("real_provider_trace", False)),
+                    "do_not_claim_real_consciousness": bool(
+                        evidence.get("do_not_claim_real_consciousness", True)
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if bool(report.get("ok", False)) else 1
+
+
 def _effect_estimate(effect_index: dict[str, object], key: str) -> float:
     item = effect_index.get(key, {})
     if not isinstance(item, dict):
@@ -10583,6 +10660,17 @@ def main(argv: list[str] | None = None) -> int:
     biomimetic_provider_progress_parser.add_argument("--before-trace-json", default=None)
     biomimetic_provider_progress_parser.add_argument("--after-trace-json", default=None)
     biomimetic_provider_progress_parser.add_argument("--output", default=None)
+    biomimetic_replication_stability_parser = subparsers.add_parser(
+        "evaluate-biomimetic-replication-stability",
+        help="Evaluate Stage75 replication stability across repeated Stage73 real-provider progress reports",
+    )
+    biomimetic_replication_stability_parser.add_argument(
+        "--progress-json",
+        action="append",
+        required=True,
+        default=[],
+    )
+    biomimetic_replication_stability_parser.add_argument("--output", default=None)
     provider_trace_parser = subparsers.add_parser(
         "run-consciousness-provider-trace",
         help="Plan or execute Stage59 operator-gated real provider long-form bionic traces",
@@ -11211,6 +11299,12 @@ def main(argv: list[str] | None = None) -> int:
             after_json=args.after_json,
             before_trace_json=args.before_trace_json,
             after_trace_json=args.after_trace_json,
+            output=args.output,
+        )
+    if args.command == "evaluate-biomimetic-replication-stability":
+        return command_evaluate_biomimetic_replication_stability(
+            args.config,
+            progress_json=args.progress_json,
             output=args.output,
         )
     if args.command == "run-consciousness-provider-trace":

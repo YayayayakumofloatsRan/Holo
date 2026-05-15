@@ -356,6 +356,13 @@ Stage74: longer provider headroom compression
 - Stage73 comparison reports continued absolute baseline gains: `baseline_hippocampal_reactivation_delta=0.017593`, `baseline_correction_survival_proxy_delta=0.043647`, and `baseline_biomimetic_score_delta=0.011601`.
 - Keeps all changes evidence/documentation-only over existing gates: no WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
 
+Stage75: replication stability
+- Adds a read-only replication-stability observatory over repeated Stage73 provider-progress reports.
+- Runs a second independent `42`-turn DeepSeek V4 Pro correction-reactivation trace with `191768` observed tokens, no fallback, and `real_provider_trace=true`.
+- Stage73 against Stage72 again reports absolute baseline improvement and replay/correction headroom compression: `baseline_hippocampal_reactivation_delta=0.01339`, `baseline_correction_survival_proxy_delta=0.011948`, `hippocampal_reactivation_headroom_change=-0.00013`, and `correction_survival_headroom_change=-0.001026`.
+- Stage75 stability over Stage74 and Stage75 reports `decision=replicated_replay_correction_partial_flow`: both cells replicate replay/correction compression, but only one cell reduces flow-coupling loss.
+- Keeps all changes observational/report-only over existing gates: no provider call inside Stage75, WeChat transport, live runtime state, provider fallback, self-memory write path, policy mutation, watcher authority, runtime decision authority, downstream MCP server, second decision layer, or unbounded loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
