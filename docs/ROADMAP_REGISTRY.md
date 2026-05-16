@@ -470,6 +470,13 @@ Stage89: local policy vector
 - Reports the current interaction evidence: offline 20-turn free dialogue `overall_score=0.8981`, `interaction_usefulness_score=0.793`, `self_organization_policy_score=1.0`, and `issue_count=0`; two DeepSeek V4 Pro 8-turn free-dialogue cells both returned `overall_score=0.9581`, `interaction_usefulness_score=0.9275`, `self_organization_policy_score=1.0`, `continuity_score=0.8667`, and `issue_count=0`; DeepSeek V4 Pro novice rerun returned `overall_score=0.9612`, `interaction_usefulness_score=0.92`, and `low_interaction_usefulness=false`.
 - Keeps the research claim bounded: Stage89 is within-thread local policy control, not durable policy sedimentation or cross-thread self-memory. Stage90 should estimate update deltas from outcome labels and score failures instead of using hand-scored marker weights.
 
+Stage90: policy update delta
+- Adds `stage90` current-thread policy update deltas from recent `interaction_usefulness_score` headroom, failure labels, and the Stage89 vector.
+- Applies Stage90 `updated_vector` back into the Stage89 `effective_vector`, then exposes the update as `capsule.working_field.local_policy_update` and provider prompt line `Stage90 outcome-score update`.
+- Adds `policy_update_delta_score` to Stage42 scorecards.
+- Reports the current interaction evidence: offline 20-turn free dialogue `overall_score=0.8981`, `interaction_usefulness_score=0.793`, `policy_update_delta_score=1.0`, and `issue_count=0`; two DeepSeek V4 Pro 8-turn free-dialogue cells returned `overall_score=0.9525` and `0.9572`, both with `interaction_usefulness_score=0.96`, `policy_update_delta_score=1.0`, and `issue_count=0`; one DeepSeek V4 Pro 12-turn free-dialogue cell returned `overall_score=0.9569`, `interaction_usefulness_score=0.9467`, `policy_update_delta_score=1.0`, and `issue_count=0`; DeepSeek V4 Pro novice returned `overall_score=0.9645`, `interaction_usefulness_score=0.936`, and `low_interaction_usefulness=false`.
+- Keeps the research claim bounded: Stage90 is current-thread test-time policy adjustment, not durable policy sedimentation, model-weight learning, or consciousness evidence. Stage91 should run paired update-on/update-null ablations with matched prompt cost and scenario mix.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

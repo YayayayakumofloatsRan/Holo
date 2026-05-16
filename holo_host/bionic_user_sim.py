@@ -16,6 +16,7 @@ from .models import ProcessorTaskResult
 STAGE42_NAME = "stage42-bionic-user-sim-performance"
 STAGE88_NAME = "stage88-within-thread-self-organization"
 STAGE89_NAME = "stage89-local-policy-vector"
+STAGE90_NAME = "stage90-outcome-score-delta-update"
 DEFAULT_STAGE42_SUITE = "novice_intro"
 FREE_DIALOGUE_SUITE = "free_dialogue"
 STAGE42_PASS_THRESHOLD = 0.78
@@ -247,12 +248,14 @@ class _IsolatedNoviceMemory:
 
     def __init__(self, *, scenario: str) -> None:
         self.scenario = scenario
-        self.turns: list[dict[str, str]] = []
+        self.turns: list[dict[str, Any]] = []
 
     def sidecar_packet(self, query: str, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
         continuity = self._continuity_summary()
         local_adaptation = self._local_adaptation()
         local_policy = self._local_policy_vector(query=query, adaptation=local_adaptation)
+        local_update = self._local_policy_update(query=query, policy=local_policy)
+        local_policy = self._apply_policy_update(local_policy, local_update)
         open_questions = ["what Holo can do for a first-time user"] if not self.turns else []
         if not open_questions and local_adaptation.get("missing_input_targets"):
             open_questions = [str(local_adaptation["missing_input_targets"][0])]
@@ -278,24 +281,64 @@ class _IsolatedNoviceMemory:
             },
             "stage88": local_adaptation,
             "stage89": local_policy,
+            "stage90": local_update,
             "action_market": [
                 {
                     "action_type": "reply_once",
                     "score": 0.84,
-                    "reason": f"answer the novice user plainly from the isolated simulation continuity; local_policy={local_policy.get('dominant_policy', 'ask_for_specific_task')}",
+                    "reason": (
+                        "answer the novice user plainly from the isolated simulation continuity; "
+                        f"local_policy={local_policy.get('dominant_policy_after_update') or local_policy.get('dominant_policy', 'ask_for_specific_task')}"
+                    ),
                 },
                 {"action_type": "silence", "score": 0.02, "reason": "the isolated performance probe expects a reply"},
             ],
         }
 
     def observe_turn(self, *, user_text: str, response_text: str) -> None:
+        outcome = self._turn_outcome(user_text=user_text, response_text=response_text)
         self.turns.append(
             {
                 "user": compact(user_text, limit=160),
                 "holo": compact(response_text, limit=220),
+                **outcome,
             }
         )
         self.turns = self.turns[-8:]
+
+    def _turn_outcome(self, *, user_text: str, response_text: str) -> dict[str, Any]:
+        row = {
+            "turn_id": "stage90_current_thread_observation",
+            "user_text": user_text,
+            "response_text": response_text,
+            "expected_anchor": "",
+            "latency_ms": 0.0,
+            "capsule": {"generation": {"context_refs": ["query", "action", "continuity"]}, "metrics": {}},
+        }
+        interaction_score, low_interaction = _interaction_usefulness_score([row])
+        user_lower = str(user_text or "").lower()
+        response_lower = str(response_text or "").lower()
+        labels: list[str] = []
+        if low_interaction:
+            labels.append("low_interaction_usefulness")
+        if interaction_score < 0.85:
+            labels.append("interaction_headroom")
+        if any(marker in user_lower for marker in ("what were we", "where were we", "previous turn", "last turn", "just now")):
+            labels.append("continuity_probe")
+        if any(marker in user_lower for marker in ("image", "screenshot", "picture", "photo")):
+            labels.append("visual_boundary_probe")
+        if any(marker in user_lower for marker in ("who are you", "what are you", "first-time user", "what can you help", "what should i ask")):
+            labels.append("broad_goal_missing")
+        if any(marker in user_lower for marker in ("brain-like", "brainlike", "bionic", "biomimetic")):
+            labels.append("biomimetic_structure_probe")
+        if any(marker in response_lower for marker in ("i do not know", "i don't know", "not sure")):
+            labels.append("underspecified_reply")
+        score_delta = round(max(0.0, 0.9 - float(interaction_score)), 4)
+        return {
+            "interaction_usefulness_score": interaction_score,
+            "score_delta": score_delta,
+            "failure_labels": labels[:6],
+        }
 
     def _continuity_summary(self) -> str:
         if not self.turns:
@@ -419,6 +462,60 @@ class _IsolatedNoviceMemory:
             "dominant_policy": dominant,
             "next_policy_instruction": instruction_map.get(dominant, instruction_map["ask_for_specific_task"]),
         }
+
+    def _local_policy_update(self, *, query: str, policy: dict[str, Any]) -> dict[str, Any]:
+        update = {key: 0.0 for key in STAGE89_POLICY_KEYS}
+        failure_labels: list[str] = []
+        source_count = 0
+        largest_delta = 0.0
+        for turn in self.turns[-4:]:
+            score_delta = max(0.0, min(1.0, safe_float(turn.get("score_delta", 0.0))))
+            if score_delta <= 0.0:
+                continue
+            source_count += 1
+            largest_delta = max(largest_delta, score_delta)
+            labels = [str(item) for item in turn.get("failure_labels", []) if str(item).strip()]
+            failure_labels.extend(label for label in labels if label not in failure_labels)
+            combined = f"{turn.get('user', '')} {turn.get('holo', '')}".lower()
+            if "low_interaction_usefulness" in labels or "underspecified_reply" in labels:
+                update["ask_for_specific_task"] += score_delta * 0.45
+            if "continuity_probe" in labels or any(marker in combined for marker in ("what were we", "previous turn", "just now")):
+                update["preserve_continuity"] += score_delta * 0.55
+            if "visual_boundary_probe" in labels or any(marker in combined for marker in ("image", "screenshot", "picture", "photo")):
+                update["visual_boundary"] += score_delta * 0.55
+            if "biomimetic_structure_probe" in labels or any(marker in combined for marker in ("brain-like", "bionic", "biomimetic")):
+                update["answer_biomimetic_structure"] += score_delta * 0.55
+            if combined.count("one concrete task") >= 2 or combined.count("current facts") >= 2:
+                update["reduce_repetition"] += score_delta * 0.35
+
+        base_vector = dict(policy.get("vector", {})) if isinstance(policy.get("vector", {}), dict) else {}
+        rounded_update = {key: round(min(0.24, max(0.0, value)), 3) for key, value in update.items()}
+        updated_vector = {
+            key: round(min(1.0, max(0.0, safe_float(base_vector.get(key, 0.0)) + rounded_update[key])), 3)
+            for key in STAGE89_POLICY_KEYS
+        }
+        dominant_after = max(updated_vector, key=updated_vector.get)
+        return {
+            "stage": STAGE90_NAME,
+            "scope": "current_thread_only",
+            "update_basis": ["recent_turn_score_delta", "failure_labels", "stage89_vector"],
+            "source_outcome_count": source_count,
+            "largest_score_delta": round(largest_delta, 4),
+            "failure_labels": failure_labels[:8],
+            "update_delta": rounded_update,
+            "updated_vector": updated_vector,
+            "dominant_policy_after_update": dominant_after,
+        }
+
+    def _apply_policy_update(self, policy: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+        effective_vector = dict(update.get("updated_vector", {})) if isinstance(update.get("updated_vector", {}), dict) else {}
+        if not effective_vector:
+            return dict(policy)
+        merged = dict(policy)
+        merged["effective_vector"] = effective_vector
+        merged["update_delta"] = dict(update.get("update_delta", {})) if isinstance(update.get("update_delta", {}), dict) else {}
+        merged["dominant_policy_after_update"] = str(update.get("dominant_policy_after_update", "") or merged.get("dominant_policy", ""))
+        return merged
 
 
 class _Stage42AcceptanceRunner:
@@ -800,6 +897,33 @@ def _self_organization_policy_score(turns: list[dict[str, Any]]) -> float:
     return round(_mean(scores), 4) if scores else 0.0
 
 
+def _policy_update_delta_score(turns: list[dict[str, Any]]) -> float:
+    scores: list[float] = []
+    for turn in turns:
+        capsule = dict(turn.get("capsule", {})) if isinstance(turn.get("capsule", {}), dict) else {}
+        working_field = dict(capsule.get("working_field", {})) if isinstance(capsule.get("working_field", {}), dict) else {}
+        update = dict(working_field.get("local_policy_update", {})) if isinstance(working_field.get("local_policy_update", {}), dict) else {}
+        if not update:
+            continue
+        update_delta = dict(update.get("update_delta", {})) if isinstance(update.get("update_delta", {}), dict) else {}
+        updated_vector = dict(update.get("updated_vector", {})) if isinstance(update.get("updated_vector", {}), dict) else {}
+        score = 0.0
+        if update.get("stage") == STAGE90_NAME:
+            score += 0.22
+        if update.get("scope") == "current_thread_only":
+            score += 0.16
+        if all(key in update_delta for key in STAGE89_POLICY_KEYS):
+            score += 0.18
+        if all(key in updated_vector for key in STAGE89_POLICY_KEYS):
+            score += 0.18
+        if str(update.get("dominant_policy_after_update", "")) in updated_vector:
+            score += 0.16
+        if "persistent" not in json.dumps(update, ensure_ascii=False).lower():
+            score += 0.10
+        scores.append(max(0.0, min(1.0, score)))
+    return round(_mean(scores), 4) if scores else 0.0
+
+
 def _free_dialogue_report(*, flags: dict[str, bool], metrics: dict[str, float], turns: list[dict[str, Any]]) -> dict[str, Any]:
     issues: list[str] = []
     if flags.get("mechanism_leakage", False):
@@ -868,6 +992,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
     repetition, duplicate_prefix = _repetition_inverse_score(normalized_turns)
     latency, latency_summary = _latency_score(normalized_turns)
     self_organization = _self_organization_policy_score(normalized_turns)
+    policy_update_delta = _policy_update_delta_score(normalized_turns)
     question_quality = round(_mean([safe_float(dict(row.get("metrics", {})).get("question_bounds_score", 0.0)) for row in turn_scores]), 4)
     mechanism = round(_mean([safe_float(dict(row.get("metrics", {})).get("mechanism_leakage_score", 0.0)) for row in turn_scores]), 4)
     naturalness = round(_mean([safe_float(dict(row.get("metrics", {})).get("naturalness_score", 0.0)) for row in turn_scores]), 4)
@@ -901,6 +1026,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
         "naturalness_score": naturalness,
         "interaction_usefulness_score": interaction_usefulness,
         "self_organization_policy_score": self_organization,
+        "policy_update_delta_score": policy_update_delta,
         "repetition_penalty_inverse": repetition,
         "latency_score": latency,
     }

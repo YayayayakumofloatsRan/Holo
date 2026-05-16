@@ -77,6 +77,9 @@ class BionicPipeline:
         local_policy = bounded_dict(packet.get("stage89", {}), depth=3, str_limit=240, list_limit=8)
         if local_policy:
             working_field["local_policy_vector"] = local_policy
+        local_update = bounded_dict(packet.get("stage90", {}), depth=3, str_limit=240, list_limit=8)
+        if local_update:
+            working_field["local_policy_update"] = local_update
         motivational_field = compute_motivational_field(
             query=turn.query,
             working_field=working_field,

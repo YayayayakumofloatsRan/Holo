@@ -159,6 +159,7 @@ class BionicGeneration:
         continuity = compact(packet.get("continuity_summary", ""), limit=280)
         stage88 = bounded_dict(packet.get("stage88", {}), depth=3, str_limit=220, list_limit=6)
         stage89 = bounded_dict(packet.get("stage89", {}), depth=3, str_limit=220, list_limit=6)
+        stage90 = bounded_dict(packet.get("stage90", {}), depth=3, str_limit=220, list_limit=6)
         stage38 = bounded_dict(packet.get("stage38", {}), depth=3)
         visual_grounding = compact(stage38.get("visual_summary", ""), limit=280)
         capability_line = (
@@ -193,15 +194,32 @@ class BionicGeneration:
                 f"next_turn_instruction={compact(stage88.get('next_turn_instruction', ''), limit=180)}"
             )
         if stage89.get("stage"):
-            policy_vector = stage89.get("vector", {}) if isinstance(stage89.get("vector", {}), dict) else {}
+            policy_vector = (
+                stage89.get("effective_vector", {})
+                if isinstance(stage89.get("effective_vector", {}), dict)
+                else stage89.get("vector", {})
+                if isinstance(stage89.get("vector", {}), dict)
+                else {}
+            )
             vector_text = ", ".join(f"{key}={value}" for key, value in list(policy_vector.items())[:6])
             prompt_lines.append(
                 "Stage89 current-thread policy vector: "
                 f"scope={stage89.get('scope', 'current_thread_only')}; "
-                f"dominant_policy={stage89.get('dominant_policy', '')}; "
+                f"dominant_policy={stage89.get('dominant_policy_after_update') or stage89.get('dominant_policy', '')}; "
                 f"outcome_labels={', '.join(str(item) for item in stage89.get('outcome_labels', [])[:6])}; "
                 f"vector={vector_text}; "
                 f"next_policy_instruction={compact(stage89.get('next_policy_instruction', ''), limit=180)}"
+            )
+        if stage90.get("stage"):
+            update_delta = stage90.get("update_delta", {}) if isinstance(stage90.get("update_delta", {}), dict) else {}
+            delta_text = ", ".join(f"{key}={value}" for key, value in list(update_delta.items())[:6])
+            prompt_lines.append(
+                "Stage90 outcome-score update: "
+                f"scope={stage90.get('scope', 'current_thread_only')}; "
+                f"largest_score_delta={stage90.get('largest_score_delta', 0.0)}; "
+                f"failure_labels={', '.join(str(item) for item in stage90.get('failure_labels', [])[:8])}; "
+                f"update_delta={delta_text}; "
+                f"dominant_policy_after_update={stage90.get('dominant_policy_after_update', '')}"
             )
         prompt_lines.extend(
             [

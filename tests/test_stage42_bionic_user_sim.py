@@ -556,6 +556,84 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertFalse(scorecard["flags"]["low_interaction_usefulness"], json.dumps(scorecard, ensure_ascii=False, indent=2))
         self.assertNotIn("low_interaction_usefulness", scorecard["free_dialogue"]["issues"])
 
+    def test_stage90_score_failure_delta_updates_policy_vector(self) -> None:
+        memory = _IsolatedNoviceMemory(scenario=FREE_DIALOGUE_SUITE)
+        memory.observe_turn(
+            user_text="If I say I have a screenshot but I do not attach anything here, can you see it?",
+            response_text="I do not know.",
+        )
+
+        packet = memory.sidecar_packet("If I say screenshot again, can you see it?")
+        stage89 = dict(packet["stage89"])
+        stage90 = dict(packet["stage90"])
+        vector = dict(stage89.get("vector", {}))
+        effective_vector = dict(stage89.get("effective_vector", {}))
+        update_delta = dict(stage90.get("update_delta", {}))
+
+        self.assertEqual(stage90.get("stage"), "stage90-outcome-score-delta-update")
+        self.assertEqual(stage90.get("scope"), "current_thread_only")
+        self.assertGreater(stage90.get("largest_score_delta", 0.0), 0.2)
+        self.assertIn("low_interaction_usefulness", stage90.get("failure_labels", []))
+        self.assertGreater(update_delta.get("visual_boundary", 0.0), 0.0)
+        self.assertGreater(effective_vector.get("visual_boundary", 0.0), vector.get("visual_boundary", 0.0))
+        self.assertEqual(stage89.get("dominant_policy_after_update"), "visual_boundary")
+        self.assertNotIn("persistent", json.dumps(stage90, ensure_ascii=False).lower())
+
+    def test_stage90_working_field_exposes_score_delta_update(self) -> None:
+        replies = [
+            "I do not know.",
+            "Start with one concrete task or current facts, and I will turn it into the next concrete step.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage90-working-field-update",
+                    chat_name="Stage90WorkingFieldUpdate",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=2,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        second_capsule = dict(result["turns"][1]["capsule"])
+        working_field = dict(second_capsule.get("working_field", {}))
+        update = dict(working_field.get("local_policy_update", {}))
+        self.assertEqual(update.get("stage"), "stage90-outcome-score-delta-update")
+        self.assertGreater(update.get("largest_score_delta", 0.0), 0.2)
+        self.assertIn("low_interaction_usefulness", update.get("failure_labels", []))
+        self.assertGreaterEqual(result["scorecard"]["metrics"].get("policy_update_delta_score", 0.0), 0.75)
+
+    def test_stage90_provider_prompt_receives_score_delta_update(self) -> None:
+        replies = [
+            "I do not know.",
+            "Start with one concrete task or current facts, and I will turn it into the next concrete step.",
+            "Within the current thread, we were covering Holo first contact and the next concrete step.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                harness.run(
+                    thread_key="cli:stage90-provider-update",
+                    chat_name="Stage90ProviderUpdate",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=3,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        second_prompt = str(harness.runner.requests[1]["prompt"])
+        self.assertIn("Stage90 outcome-score update", second_prompt)
+        self.assertIn("largest_score_delta", second_prompt)
+        self.assertIn("low_interaction_usefulness", second_prompt)
+        self.assertIn("current_thread_only", second_prompt)
+
     def test_accept_stage42_composes_stage41_and_runs_isolated_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
