@@ -216,6 +216,8 @@ class BionicGeneration:
             prompt_lines.append(
                 "Stage90 outcome-score update: "
                 f"scope={stage90.get('scope', 'current_thread_only')}; "
+                f"control_condition={stage90.get('control_condition', 'update_on')}; "
+                f"update_enabled={stage90.get('update_enabled', True)}; "
                 f"largest_score_delta={stage90.get('largest_score_delta', 0.0)}; "
                 f"failure_labels={', '.join(str(item) for item in stage90.get('failure_labels', [])[:8])}; "
                 f"update_delta={delta_text}; "

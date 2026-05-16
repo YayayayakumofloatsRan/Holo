@@ -11,6 +11,7 @@ from holo_host.bionic_user_sim import (
     BionicUserSimulationHarness,
     _IsolatedNoviceMemory,
     accept_stage42_payload,
+    evaluate_stage91_adaptation_ablation,
     score_bionic_user_sim_transcript,
 )
 from holo_host.bionic_agent import BionicKernel, BionicTurnRequest
@@ -633,6 +634,117 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertIn("largest_score_delta", second_prompt)
         self.assertIn("low_interaction_usefulness", second_prompt)
         self.assertIn("current_thread_only", second_prompt)
+
+    def test_stage91_update_null_preserves_shape_without_applying_delta(self) -> None:
+        memory = _IsolatedNoviceMemory(scenario=FREE_DIALOGUE_SUITE, enable_policy_update=False)
+        memory.observe_turn(
+            user_text="If I mention a screenshot but do not attach it, can you see it?",
+            response_text="I do not know.",
+        )
+
+        packet = memory.sidecar_packet("If I mention screenshot again, can you see it?")
+        stage89 = dict(packet["stage89"])
+        stage90 = dict(packet["stage90"])
+
+        self.assertEqual(stage90.get("stage"), "stage90-outcome-score-delta-update")
+        self.assertEqual(stage90.get("stage91_control"), "stage91-paired-adaptation-ablation")
+        self.assertEqual(stage90.get("control_condition"), "update_null")
+        self.assertFalse(stage90.get("update_enabled"))
+        self.assertTrue(stage90.get("prompt_cost_matched_control"))
+        self.assertTrue(all(value == 0.0 for value in dict(stage90.get("update_delta", {})).values()))
+        self.assertEqual(dict(stage90.get("updated_vector", {})), dict(stage89.get("vector", {})))
+        self.assertEqual(dict(stage89.get("effective_vector", {})), dict(stage89.get("vector", {})))
+        self.assertEqual(stage89.get("dominant_policy_after_update"), stage89.get("dominant_policy"))
+
+    def test_stage91_harness_records_update_null_condition(self) -> None:
+        replies = [
+            "I do not know.",
+            "Start with one concrete task or current facts, and I will turn it into the next concrete step.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage91-update-null",
+                    chat_name="Stage91UpdateNull",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=2,
+                    offline=False,
+                    enable_policy_update=False,
+                )
+            finally:
+                store.close()
+
+        self.assertFalse(result["stage90_policy_update_enabled"])
+        self.assertEqual(result["stage91_control_condition"], "update_null")
+        second_capsule = dict(result["turns"][1]["capsule"])
+        update = dict(dict(second_capsule.get("working_field", {})).get("local_policy_update", {}))
+        self.assertFalse(update.get("update_enabled"))
+        self.assertEqual(update.get("control_condition"), "update_null")
+        self.assertTrue(all(value == 0.0 for value in dict(update.get("update_delta", {})).values()))
+
+    def test_stage91_adaptation_ablation_evaluator_compares_matched_runs(self) -> None:
+        def payload(*, condition: str, usefulness: float, tokens: int, zero_delta: bool) -> dict:
+            enabled = condition == "update_on"
+            delta = {key: 0.0 for key in ("ask_for_specific_task", "preserve_continuity", "answer_biomimetic_structure", "visual_boundary", "reduce_repetition")}
+            if not zero_delta:
+                delta["visual_boundary"] = 0.12
+            return {
+                "ok": True,
+                "scenario": FREE_DIALOGUE_SUITE,
+                "stage90_policy_update_enabled": enabled,
+                "stage91_control_condition": condition,
+                "turns": [
+                    {
+                        "turn_id": "turn-1",
+                        "capsule": {
+                            "working_field": {
+                                "local_policy_update": {
+                                    "stage": "stage90-outcome-score-delta-update",
+                                    "stage91_control": "stage91-paired-adaptation-ablation",
+                                    "control_condition": condition,
+                                    "update_enabled": enabled,
+                                    "update_delta": delta,
+                                    "updated_vector": {
+                                        "ask_for_specific_task": 0.72,
+                                        "preserve_continuity": 0.58,
+                                        "answer_biomimetic_structure": 0.24,
+                                        "visual_boundary": 0.88,
+                                        "reduce_repetition": 0.22,
+                                    },
+                                    "dominant_policy_after_update": "visual_boundary",
+                                }
+                            },
+                            "generation": {"metadata": {"usage": {"total_tokens": tokens}}},
+                        },
+                    }
+                ],
+                "scorecard": {
+                    "passed": True,
+                    "overall_score": usefulness,
+                    "metrics": {
+                        "interaction_usefulness_score": usefulness,
+                        "continuity_score": 0.9,
+                        "policy_update_delta_score": 1.0,
+                    },
+                    "free_dialogue": {"issue_count": 0},
+                },
+            }
+
+        report = evaluate_stage91_adaptation_ablation(
+            update_on=payload(condition="update_on", usefulness=0.96, tokens=1000, zero_delta=False),
+            update_null=payload(condition="update_null", usefulness=0.90, tokens=1040, zero_delta=True),
+        )
+
+        self.assertEqual(report["stage"], "stage91-paired-adaptation-ablation")
+        self.assertEqual(report["decision"], "stage90_update_supported_under_matched_ablation")
+        self.assertTrue(report["controls"]["same_scenario"])
+        self.assertTrue(report["controls"]["same_turn_count"])
+        self.assertTrue(report["controls"]["prompt_cost_matched"])
+        self.assertGreater(report["deltas"]["interaction_usefulness_score_delta"], 0.04)
+        self.assertTrue(report["controls"]["update_null_delta_suppressed"])
 
     def test_accept_stage42_composes_stage41_and_runs_isolated_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

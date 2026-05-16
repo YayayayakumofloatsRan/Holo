@@ -477,6 +477,14 @@ Stage90: policy update delta
 - Reports the current interaction evidence: offline 20-turn free dialogue `overall_score=0.8981`, `interaction_usefulness_score=0.793`, `policy_update_delta_score=1.0`, and `issue_count=0`; two DeepSeek V4 Pro 8-turn free-dialogue cells returned `overall_score=0.9525` and `0.9572`, both with `interaction_usefulness_score=0.96`, `policy_update_delta_score=1.0`, and `issue_count=0`; one DeepSeek V4 Pro 12-turn free-dialogue cell returned `overall_score=0.9569`, `interaction_usefulness_score=0.9467`, `policy_update_delta_score=1.0`, and `issue_count=0`; DeepSeek V4 Pro novice returned `overall_score=0.9645`, `interaction_usefulness_score=0.936`, and `low_interaction_usefulness=false`.
 - Keeps the research claim bounded: Stage90 is current-thread test-time policy adjustment, not durable policy sedimentation, model-weight learning, or consciousness evidence. Stage91 should run paired update-on/update-null ablations with matched prompt cost and scenario mix.
 
+Stage91: adaptation ablation
+- Adds a matched `update_null` control for Stage90: the same packet shape and provider prompt line remain visible, but `update_delta` is forced to zero and the Stage89 `effective_vector` stays equal to the base vector.
+- Exposes the control through `run-bionic-user-sim --disable-policy-update` and adds `evaluate_stage91_adaptation_ablation()` for paired update-on/update-null comparison.
+- Reports the current offline control as intentionally inconclusive: matched 20-turn deterministic free dialogue returned identical update-on/update-null scores (`overall_score=0.8981`, `interaction_usefulness_score=0.793`, `issue_count=0`).
+- Reports two matched DeepSeek V4 Pro provider cells that support the update path: cell A update-on versus update-null returned `overall_score=0.9525` versus `0.9225`, `interaction_usefulness_score=0.94` versus `0.9175`, and `issue_count=0` versus `2` with measured token delta `0.033`; cell B replicated the same direction with `overall_score=0.957` versus `0.9268`, `interaction_usefulness_score=0.94` versus `0.9175`, and `issue_count=0` versus `2`.
+- Interprets the result as a bounded current-thread adaptive-gain loop: outcome-conditioned policy updates reduce provider free-dialogue failures under a matched null control, especially visual-boundary overclaiming in resume/repair turns.
+- Closes the Stage87-91 interaction self-organization line without claiming persistent self-learning, model-weight learning, durable policy sedimentation, or human consciousness. The next publishable extension should test multi-timescale organization from short-term adaptive gain to medium-term attractor stabilization and long-horizon subject policy sedimentation under direct controls.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

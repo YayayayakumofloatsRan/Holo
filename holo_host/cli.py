@@ -10242,6 +10242,7 @@ def command_run_bionic_user_sim(
     scenario: str,
     turn_limit: int,
     offline: bool,
+    enable_policy_update: bool = True,
 ) -> int:
     payload, _transport = user_sim_cli.run_bionic_user_sim_payload(
         config_path,
@@ -10251,6 +10252,7 @@ def command_run_bionic_user_sim(
         scenario=scenario,
         turn_limit=turn_limit,
         offline=offline,
+        enable_policy_update=enable_policy_update,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if bool(payload.get("ok", False)) else 1
@@ -11710,6 +11712,7 @@ def main(argv: list[str] | None = None) -> int:
     user_sim_parser.add_argument("--scenario", default="novice_intro")
     user_sim_parser.add_argument("--turns", type=int, default=5)
     user_sim_parser.add_argument("--offline", action="store_true")
+    user_sim_parser.add_argument("--disable-policy-update", action="store_true")
     user_sim_scorecard_parser = subparsers.add_parser("show-bionic-user-sim-scorecard", help="Show the latest Stage-42 user-simulation scorecard")
     user_sim_scorecard_parser.add_argument("--suite", default="novice_intro")
     boundary_stress_parser = subparsers.add_parser("run-bionic-boundary-stress", help="Run the Stage-46 high-intensity bionic boundary stress suite")
@@ -12431,6 +12434,7 @@ def main(argv: list[str] | None = None) -> int:
             scenario=args.scenario,
             turn_limit=args.turns,
             offline=args.offline,
+            enable_policy_update=not args.disable_policy_update,
         )
     if args.command == "show-bionic-user-sim-scorecard":
         return command_show_bionic_user_sim_scorecard(args.config, suite=args.suite)

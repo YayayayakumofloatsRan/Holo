@@ -17,6 +17,7 @@ STAGE42_NAME = "stage42-bionic-user-sim-performance"
 STAGE88_NAME = "stage88-within-thread-self-organization"
 STAGE89_NAME = "stage89-local-policy-vector"
 STAGE90_NAME = "stage90-outcome-score-delta-update"
+STAGE91_NAME = "stage91-paired-adaptation-ablation"
 DEFAULT_STAGE42_SUITE = "novice_intro"
 FREE_DIALOGUE_SUITE = "free_dialogue"
 STAGE42_PASS_THRESHOLD = 0.78
@@ -246,15 +247,19 @@ NOVICE_INTRO_SCENARIO = (
 class _IsolatedNoviceMemory:
     """Simulation-local continuity state; never writes Mind Graph or archive memory."""
 
-    def __init__(self, *, scenario: str) -> None:
+    def __init__(self, *, scenario: str, enable_policy_update: bool = True) -> None:
         self.scenario = scenario
+        self.enable_policy_update = bool(enable_policy_update)
         self.turns: list[dict[str, Any]] = []
 
     def sidecar_packet(self, query: str, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
         continuity = self._continuity_summary()
         local_adaptation = self._local_adaptation()
         local_policy = self._local_policy_vector(query=query, adaptation=local_adaptation)
-        local_update = self._local_policy_update(query=query, policy=local_policy)
+        if self.enable_policy_update:
+            local_update = self._local_policy_update(query=query, policy=local_policy)
+        else:
+            local_update = self._null_policy_update(query=query, policy=local_policy)
         local_policy = self._apply_policy_update(local_policy, local_update)
         open_questions = ["what Holo can do for a first-time user"] if not self.turns else []
         if not open_questions and local_adaptation.get("missing_input_targets"):
@@ -497,12 +502,45 @@ class _IsolatedNoviceMemory:
         dominant_after = max(updated_vector, key=updated_vector.get)
         return {
             "stage": STAGE90_NAME,
+            "stage91_control": STAGE91_NAME,
             "scope": "current_thread_only",
+            "control_condition": "update_on",
+            "update_enabled": True,
+            "prompt_cost_matched_control": True,
             "update_basis": ["recent_turn_score_delta", "failure_labels", "stage89_vector"],
             "source_outcome_count": source_count,
             "largest_score_delta": round(largest_delta, 4),
             "failure_labels": failure_labels[:8],
             "update_delta": rounded_update,
+            "updated_vector": updated_vector,
+            "dominant_policy_after_update": dominant_after,
+        }
+
+    def _null_policy_update(self, *, query: str, policy: dict[str, Any]) -> dict[str, Any]:
+        del query
+        base_vector = dict(policy.get("vector", {})) if isinstance(policy.get("vector", {}), dict) else {}
+        updated_vector = {
+            key: round(max(0.0, min(1.0, safe_float(base_vector.get(key, 0.0)))), 3)
+            for key in STAGE89_POLICY_KEYS
+        }
+        dominant_after = str(policy.get("dominant_policy", "") or max(updated_vector, key=updated_vector.get))
+        return {
+            "stage": STAGE90_NAME,
+            "stage91_control": STAGE91_NAME,
+            "scope": "current_thread_only",
+            "control_condition": "update_null",
+            "update_enabled": False,
+            "prompt_cost_matched_control": True,
+            "update_basis": [
+                "recent_turn_score_delta",
+                "failure_labels",
+                "stage89_vector",
+                "matched_update_null_control",
+            ],
+            "source_outcome_count": 0,
+            "largest_score_delta": 0.0,
+            "failure_labels": [],
+            "update_delta": {key: 0.0 for key in STAGE89_POLICY_KEYS},
             "updated_vector": updated_vector,
             "dominant_policy_after_update": dominant_after,
         }
@@ -1046,6 +1084,163 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
     return payload
 
 
+def _stage91_policy_updates(run: dict[str, Any]) -> list[dict[str, Any]]:
+    updates: list[dict[str, Any]] = []
+    turns = run.get("turns", [])
+    if not isinstance(turns, list):
+        return updates
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        capsule = dict(turn.get("capsule", {})) if isinstance(turn.get("capsule", {}), dict) else {}
+        working_field = dict(capsule.get("working_field", {})) if isinstance(capsule.get("working_field", {}), dict) else {}
+        update = dict(working_field.get("local_policy_update", {})) if isinstance(working_field.get("local_policy_update", {}), dict) else {}
+        if update:
+            updates.append(update)
+    return updates
+
+
+def _stage91_total_tokens(run: dict[str, Any]) -> int:
+    total = 0
+    turns = run.get("turns", [])
+    if not isinstance(turns, list):
+        return 0
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        capsule = dict(turn.get("capsule", {})) if isinstance(turn.get("capsule", {}), dict) else {}
+        generation = dict(capsule.get("generation", {})) if isinstance(capsule.get("generation", {}), dict) else {}
+        metadata = dict(generation.get("metadata", {})) if isinstance(generation.get("metadata", {}), dict) else {}
+        usage = dict(metadata.get("usage", {})) if isinstance(metadata.get("usage", {}), dict) else {}
+        turn_total = safe_float(usage.get("total_tokens", 0.0))
+        if turn_total <= 0.0:
+            turn_total = safe_float(usage.get("prompt_tokens", 0.0)) + safe_float(usage.get("completion_tokens", 0.0))
+        total += int(round(max(0.0, turn_total)))
+    return total
+
+
+def _stage91_issue_count(run: dict[str, Any]) -> int:
+    scorecard = dict(run.get("scorecard", {})) if isinstance(run.get("scorecard", {}), dict) else {}
+    free_dialogue = dict(scorecard.get("free_dialogue", {})) if isinstance(scorecard.get("free_dialogue", {}), dict) else {}
+    if "issue_count" in free_dialogue:
+        return int(safe_float(free_dialogue.get("issue_count", 0)))
+    return int(safe_float(scorecard.get("issue_count", 0)))
+
+
+def evaluate_stage91_adaptation_ablation(*, update_on: dict[str, Any], update_null: dict[str, Any]) -> dict[str, Any]:
+    on = dict(update_on or {})
+    null = dict(update_null or {})
+    on_scorecard = dict(on.get("scorecard", {})) if isinstance(on.get("scorecard", {}), dict) else {}
+    null_scorecard = dict(null.get("scorecard", {})) if isinstance(null.get("scorecard", {}), dict) else {}
+    on_metrics = dict(on_scorecard.get("metrics", {})) if isinstance(on_scorecard.get("metrics", {}), dict) else {}
+    null_metrics = dict(null_scorecard.get("metrics", {})) if isinstance(null_scorecard.get("metrics", {}), dict) else {}
+    on_turns = on.get("turns", []) if isinstance(on.get("turns", []), list) else []
+    null_turns = null.get("turns", []) if isinstance(null.get("turns", []), list) else []
+    on_updates = _stage91_policy_updates(on)
+    null_updates = _stage91_policy_updates(null)
+
+    def _metric_delta(name: str) -> float:
+        return round(safe_float(on_metrics.get(name, 0.0)) - safe_float(null_metrics.get(name, 0.0)), 4)
+
+    on_total_tokens = _stage91_total_tokens(on)
+    null_total_tokens = _stage91_total_tokens(null)
+    token_relative_delta = 0.0
+    if on_total_tokens or null_total_tokens:
+        token_relative_delta = abs(on_total_tokens - null_total_tokens) / max(1, on_total_tokens, null_total_tokens)
+
+    def _has_nonzero_delta(updates: list[dict[str, Any]]) -> bool:
+        for update in updates:
+            delta = dict(update.get("update_delta", {})) if isinstance(update.get("update_delta", {}), dict) else {}
+            if any(safe_float(value) > 0.0 for value in delta.values()):
+                return True
+        return False
+
+    def _all_delta_zero(updates: list[dict[str, Any]]) -> bool:
+        if not updates:
+            return False
+        for update in updates:
+            delta = dict(update.get("update_delta", {})) if isinstance(update.get("update_delta", {}), dict) else {}
+            if not delta or any(safe_float(value) != 0.0 for value in delta.values()):
+                return False
+        return True
+
+    same_scenario = str(on.get("scenario", "") or "") == str(null.get("scenario", "") or "")
+    same_turn_count = len(on_turns) == len(null_turns)
+    prompt_cost_matched = token_relative_delta <= 0.20
+    update_on_delta_visible = _has_nonzero_delta(on_updates)
+    update_null_delta_suppressed = _all_delta_zero(null_updates)
+    update_on_passed = bool(on_scorecard.get("passed", False))
+    update_null_passed = bool(null_scorecard.get("passed", False))
+    both_passed = update_on_passed and update_null_passed
+    interaction_delta = _metric_delta("interaction_usefulness_score")
+    overall_delta = round(safe_float(on_scorecard.get("overall_score", 0.0)) - safe_float(null_scorecard.get("overall_score", 0.0)), 4)
+    issue_count_delta = _stage91_issue_count(on) - _stage91_issue_count(null)
+    controls = {
+        "same_scenario": same_scenario,
+        "same_turn_count": same_turn_count,
+        "prompt_cost_matched": prompt_cost_matched,
+        "token_relative_delta": round(token_relative_delta, 4),
+        "update_on_delta_visible": update_on_delta_visible,
+        "update_null_delta_suppressed": update_null_delta_suppressed,
+        "update_on_passed": update_on_passed,
+        "update_null_passed": update_null_passed,
+        "both_passed": both_passed,
+    }
+    strict_controls_ok = (
+        same_scenario
+        and same_turn_count
+        and prompt_cost_matched
+        and update_on_delta_visible
+        and update_null_delta_suppressed
+        and update_on_passed
+    )
+    if strict_controls_ok and interaction_delta >= 0.02 and overall_delta >= 0.0 and issue_count_delta <= 0:
+        decision = "stage90_update_supported_under_matched_ablation"
+    elif same_scenario and same_turn_count and prompt_cost_matched and update_null_delta_suppressed and interaction_delta >= -0.02:
+        decision = "stage90_update_effect_inconclusive_under_matched_ablation"
+    else:
+        decision = "stage90_update_ablation_not_supported"
+    return {
+        "ok": decision != "stage90_update_ablation_not_supported",
+        "stage": STAGE91_NAME,
+        "decision": decision,
+        "controls": controls,
+        "deltas": {
+            "overall_score_delta": overall_delta,
+            "interaction_usefulness_score_delta": interaction_delta,
+            "continuity_score_delta": _metric_delta("continuity_score"),
+            "policy_update_delta_score_delta": _metric_delta("policy_update_delta_score"),
+            "issue_count_delta": issue_count_delta,
+        },
+        "update_on": {
+            "scenario": str(on.get("scenario", "") or ""),
+            "turn_count": len(on_turns),
+            "total_tokens": on_total_tokens,
+            "overall_score": safe_float(on_scorecard.get("overall_score", 0.0)),
+            "interaction_usefulness_score": safe_float(on_metrics.get("interaction_usefulness_score", 0.0)),
+            "policy_update_delta_score": safe_float(on_metrics.get("policy_update_delta_score", 0.0)),
+            "issue_count": _stage91_issue_count(on),
+        },
+        "update_null": {
+            "scenario": str(null.get("scenario", "") or ""),
+            "turn_count": len(null_turns),
+            "total_tokens": null_total_tokens,
+            "overall_score": safe_float(null_scorecard.get("overall_score", 0.0)),
+            "interaction_usefulness_score": safe_float(null_metrics.get("interaction_usefulness_score", 0.0)),
+            "policy_update_delta_score": safe_float(null_metrics.get("policy_update_delta_score", 0.0)),
+            "issue_count": _stage91_issue_count(null),
+        },
+        "publication_boundary": {
+            "claim_scope": "current_thread_test_time_policy_update",
+            "not_claimed": [
+                "persistent_autobiographical_self_memory",
+                "model_weight_learning",
+                "human_consciousness",
+            ],
+        },
+    }
+
+
 class BionicUserSimulationHarness:
     def __init__(
         self,
@@ -1067,11 +1262,12 @@ class BionicUserSimulationHarness:
         scenario: str = DEFAULT_STAGE42_SUITE,
         turn_limit: int | None = None,
         offline: bool = False,
+        enable_policy_update: bool = True,
     ) -> dict[str, Any]:
         normalized_scenario = str(scenario or DEFAULT_STAGE42_SUITE).strip() or DEFAULT_STAGE42_SUITE
         turns = _scenario_turns(normalized_scenario, turn_limit=turn_limit)
         run_id = stable_digest(STAGE42_NAME, normalized_scenario, utc_now(), limit=16)
-        memory = _IsolatedNoviceMemory(scenario=normalized_scenario)
+        memory = _IsolatedNoviceMemory(scenario=normalized_scenario, enable_policy_update=enable_policy_update)
         kernel = BionicKernel(
             config=self.config,
             memory=memory,
@@ -1121,6 +1317,8 @@ class BionicUserSimulationHarness:
             "status": "pass" if bool(scorecard.get("passed", False)) else "fail",
             "run_id": run_id,
             "scenario": normalized_scenario,
+            "stage90_policy_update_enabled": bool(enable_policy_update),
+            "stage91_control_condition": "update_on" if enable_policy_update else "update_null",
             "thread_key": str(thread_key or ""),
             "chat_name": str(chat_name or ""),
             "channel": str(channel or "cli"),
