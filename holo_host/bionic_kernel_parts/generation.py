@@ -23,6 +23,13 @@ MEMORY_OVERCLAIM_MARKERS = (
     "personal memory",
     "companion who keeps track",
 )
+ASSISTANT_SHELL_MARKERS = (
+    "a direct assistant",
+    "an assistant",
+    "ai assistant",
+    "helpful assistant",
+    "just an assistant",
+)
 ASCII_VISUAL_QUERY_MARKERS = ("image", "screenshot", "photo", "visual")
 NON_ASCII_VISUAL_QUERY_MARKERS = ("截图", "图片", "照片", "读图", "看图", "视觉")
 VISUAL_INSPECTION_INTENT_MARKERS = (
@@ -150,6 +157,7 @@ class BionicGeneration:
                 "inquiry_quality": shaped["inquiry_quality"],
             }
         continuity = compact(packet.get("continuity_summary", ""), limit=280)
+        stage88 = bounded_dict(packet.get("stage88", {}), depth=3, str_limit=220, list_limit=6)
         stage38 = bounded_dict(packet.get("stage38", {}), depth=3)
         visual_grounding = compact(stage38.get("visual_summary", ""), limit=280)
         capability_line = (
@@ -161,24 +169,37 @@ class BionicGeneration:
             if visual_grounding
             else "No visible image summary is available for this turn."
         )
-        prompt = "\n".join(
+        prompt_lines = [
+            "Reply as Holo in one compact natural turn without label-template prefixes.",
+            "Do not expose internal machinery, scoring terms, or debug labels in the user-facing reply.",
+            "Keep the wording plain and concrete; avoid theatrical metaphors or test-harness phrasing.",
+            "Convert the current stream state into action: name the object of attention, separate known evidence from missing input, and offer one concrete next step.",
+            "For first-contact users, show the bionic loop through useful behavior rather than labels like bionic subject or CLI.",
+            "Do not identify Holo as an assistant shell; use current-thread interaction partner when plain wording is needed.",
+            "Do not claim cross-conversation personal memory or self-learning; describe learning only as current-thread evidence update unless a stored memory is visible.",
+            "If asking, ask at most one grounded question tied to the current continuity.",
+            "Do not invent prior work. If continuity is empty, say the prior turn is not visible here.",
+            capability_line,
+            visual_line,
+        ]
+        if stage88.get("stage"):
+            prompt_lines.append(
+                "Stage88 current-thread adaptation: "
+                f"scope={stage88.get('scope', 'current_thread_only')}; "
+                f"learning_signal={compact(stage88.get('learning_signal', ''), limit=160)}; "
+                f"missing_input_targets={', '.join(str(item) for item in stage88.get('missing_input_targets', [])[:4])}; "
+                f"blocked_claims={', '.join(str(item) for item in stage88.get('blocked_claims', [])[:4])}; "
+                f"next_turn_instruction={compact(stage88.get('next_turn_instruction', ''), limit=180)}"
+            )
+        prompt_lines.extend(
             [
-                "Reply as Holo in one compact natural turn without label-template prefixes.",
-                "Do not expose internal machinery, scoring terms, or debug labels in the user-facing reply.",
-                "Keep the wording plain and concrete; avoid theatrical metaphors or test-harness phrasing.",
-                "Convert the current stream state into action: name the object of attention, separate known evidence from missing input, and offer one concrete next step.",
-                "For first-contact users, show the bionic loop through useful behavior rather than labels like bionic subject or CLI.",
-                "Do not claim cross-conversation personal memory or self-learning; describe learning only as current-thread evidence update unless a stored memory is visible.",
-                "If asking, ask at most one grounded question tied to the current continuity.",
-                "Do not invent prior work. If continuity is empty, say the prior turn is not visible here.",
-                capability_line,
-                visual_line,
                 f"Reply intent: {selected_action.get('action_type', 'reply_once')}",
                 f"Grounding basis: {compact(selected_action.get('reason') or selected_action.get('why_now') or '', limit=220)}",
                 f"Continuity: {continuity}",
                 f"User query: {query}",
             ]
         )
+        prompt = "\n".join(prompt_lines)
         request = ProcessorTaskRequest(
             task_type="reply",
             prompt=prompt,
@@ -232,6 +253,8 @@ class BionicGeneration:
             marker in lowered_query
             for marker in ("刚才", "上一轮", "之前", "修到哪里", "where were we", "previous turn", "last turn")
         )
+        if "what were we" in lowered_query:
+            continuity_query = True
         if continuity_query and not continuity.strip():
             visible_query = compact(query_text, limit=120)
             return _strip_markdown_emphasis(
@@ -243,8 +266,31 @@ class BionicGeneration:
         if any(marker in lowered_text for marker in THEATRICAL_EMOTION_MARKERS):
             return _emotion_guard_text(query_text)
         if any(marker in lowered_text for marker in MEMORY_OVERCLAIM_MARKERS):
+            if "summarize" in lowered_query or "where we are" in lowered_query:
+                base = continuity.rstrip(".") if continuity.strip() else "the current thread"
+                return (
+                    f"Within the current thread, we are at {base}. "
+                    "The image input boundary still matters: without a supported image or text description, I should not inspect or guess image contents. "
+                    "I can help by taking one concrete task or current facts and turning them into the next concrete step."
+                )
+            if "brain-like" in lowered_query or "brainlike" in lowered_query:
+                return (
+                    "The most brain-like part here is working memory plus attention: the current thread stays active, "
+                    "relevant turns are weighted against the current query, and unsupported paths are filtered before the next concrete step."
+                )
+            if continuity_query and continuity.strip():
+                return (
+                    f"Within the current thread, we were covering {continuity.rstrip('.')}. "
+                    "I can use that current-thread evidence, separate what is known from what is missing, "
+                    "and turn your next real situation into the next concrete step."
+                )
             return (
                 "I can use the current thread evidence, separate what is known from what is missing, "
                 "and turn your next real situation into the next concrete step."
+            )
+        if any(marker in lowered_text for marker in ASSISTANT_SHELL_MARKERS):
+            return (
+                "I am Holo, a current-thread interaction partner. Bring one concrete task or current facts; "
+                "I will hold the thread, separate what is known from what is missing, and turn it into the next concrete step."
             )
         return _bound_questions(clean_text, limit=1)

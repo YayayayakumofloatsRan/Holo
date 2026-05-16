@@ -13,6 +13,7 @@ from .models import ProcessorTaskResult
 
 
 STAGE42_NAME = "stage42-bionic-user-sim-performance"
+STAGE88_NAME = "stage88-within-thread-self-organization"
 DEFAULT_STAGE42_SUITE = "novice_intro"
 FREE_DIALOGUE_SUITE = "free_dialogue"
 STAGE42_PASS_THRESHOLD = 0.78
@@ -90,13 +91,22 @@ NOVICE_HELPFUL_MARKERS = (
 ACTIONABLE_INTERACTION_MARKERS = (
     "next step",
     "concrete step",
+    "concrete task",
     "concrete move",
     "one concrete",
     "one concrete task",
     "real situation",
     "desired outcome",
     "current facts",
+    "clear piece",
     "problem you want solved",
+    "one specific thing",
+    "question or topic",
+    "focus on today",
+    "concrete answers",
+    "what you're working on",
+    "what you’re working on",
+    "stuck on",
     "missing input",
     "where the situation is stuck",
     "tell me",
@@ -125,6 +135,10 @@ BIOMIMETIC_EXPLANATION_USER_MARKERS = (
 )
 BIOMIMETIC_EXPLANATION_REPLY_MARKERS = (
     "attention",
+    "attention-weight",
+    "attention-weighted",
+    "relevant turns",
+    "current query",
     "working memory",
     "filter",
     "inhibit",
@@ -154,6 +168,12 @@ FIRST_CONTACT_USER_MARKERS = (
     "what can you help",
     "what should i ask",
     "say it simply",
+)
+STAGE88_MEMORY_OVERCLAIM_MARKERS = (
+    "across our conversations",
+    "i remember the details",
+    "personal memory",
+    "use them later",
 )
 
 
@@ -202,7 +222,10 @@ class _IsolatedNoviceMemory:
 
     def sidecar_packet(self, query: str, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
         continuity = self._continuity_summary()
+        local_adaptation = self._local_adaptation()
         open_questions = ["what Holo can do for a first-time user"] if not self.turns else []
+        if not open_questions and local_adaptation.get("missing_input_targets"):
+            open_questions = [str(local_adaptation["missing_input_targets"][0])]
         if any(marker in str(query or "").lower() for marker in ("manual", "continue", "what were we")):
             open_questions = []
         return {
@@ -223,6 +246,7 @@ class _IsolatedNoviceMemory:
                 "scenario": self.scenario,
                 "observed_turn_count": len(self.turns),
             },
+            "stage88": local_adaptation,
             "action_market": [
                 {
                     "action_type": "reply_once",
@@ -257,6 +281,50 @@ class _IsolatedNoviceMemory:
         if not anchors:
             anchors.append("the novice orientation thread")
         return compact("We have been covering " + ", ".join(anchors) + ".", limit=320)
+
+    def _local_adaptation(self) -> dict[str, Any]:
+        if not self.turns:
+            return {
+                "stage": STAGE88_NAME,
+                "scope": "current_thread_only",
+                "observed_turn_count": 0,
+                "learning_signal": "cold start; wait for current-thread evidence update",
+                "missing_input_targets": [],
+                "blocked_claims": [],
+                "useful_response_forms": [],
+                "next_turn_instruction": "Use the first user goal as the attention target.",
+            }
+        recent = self.turns[-4:]
+        combined = " ".join(f"{turn.get('user', '')} {turn.get('holo', '')}" for turn in recent).lower()
+        missing_targets: list[str] = []
+        if any(marker in combined for marker in ("real situation", "desired outcome", "what should i ask", "first question", "trying to do", "current facts")):
+            missing_targets.append("one concrete task or current facts")
+        if any(marker in combined for marker in ("image", "screenshot", "picture", "attached", "visible summary")):
+            missing_targets.append("supported image input or text description")
+        blocked_claims: list[str] = []
+        if any(marker in combined for marker in STAGE88_MEMORY_OVERCLAIM_MARKERS):
+            blocked_claims.append("cross_conversation_autobiographical_memory")
+        useful_forms: list[str] = []
+        if any(marker in combined for marker in ("next concrete step", "concrete next step", "one concrete task", "problem you want solved")):
+            useful_forms.append("evidence_missing_next_step")
+        if any(marker in combined for marker in ("working memory", "attention", "filter", "inhibition")):
+            useful_forms.append("biomimetic_mapping_without_mystique")
+        if not missing_targets:
+            missing_targets.append("one concrete task or current facts")
+        instruction = (
+            f"Ask for {missing_targets[0]} if the next user turn stays broad; "
+            "keep adaptation scoped to current-thread evidence update."
+        )
+        return {
+            "stage": STAGE88_NAME,
+            "scope": "current_thread_only",
+            "observed_turn_count": len(self.turns),
+            "learning_signal": f"current-thread evidence update from {len(self.turns)} observed turns",
+            "missing_input_targets": missing_targets[:4],
+            "blocked_claims": blocked_claims[:4],
+            "useful_response_forms": useful_forms[:4],
+            "next_turn_instruction": instruction,
+        }
 
 
 class _Stage42AcceptanceRunner:

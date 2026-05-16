@@ -71,6 +71,9 @@ class BionicPipeline:
             "grounding_order": clip_list(situational_field.get("grounding_order", []), limit=8),
             "open_questions": clip_list(situational_field.get("open_questions", []), limit=6),
         }
+        local_adaptation = bounded_dict(packet.get("stage88", {}), depth=3, str_limit=240, list_limit=8)
+        if local_adaptation:
+            working_field["local_adaptation"] = local_adaptation
         motivational_field = compute_motivational_field(
             query=turn.query,
             working_field=working_field,

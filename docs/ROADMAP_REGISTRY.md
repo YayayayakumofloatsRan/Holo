@@ -456,6 +456,13 @@ Stage87: biomimetic interaction performance
 - Reports the current interaction evidence: offline novice `overall_score=0.9709` and `interaction_usefulness_score=0.818`; offline 20-turn free dialogue `overall_score=0.895`, `interaction_usefulness_score=0.774`, and `issue_count=0`; DeepSeek V4 Pro novice `overall_score=0.8596`, `interaction_usefulness_score=0.74`, and `passed=true`; DeepSeek V4 Pro 12-turn free dialogue `overall_score=0.9677`, `interaction_usefulness_score=0.9183`, and `issue_count=0`.
 - Keeps the research claim performance-centered: Stage87 improves useful biomimetic interaction, but does not claim persistent self-learning, human consciousness, or long-horizon companion robustness. Stage88 should implement within-thread self-organization through outcome-conditioned local adaptation.
 
+Stage88: within-thread self-organization
+- Adds a Stage88 current-thread adaptation signal to Stage42 sidecar memory: observed turn count, missing input targets, blocked claims, useful response forms, and next-turn instruction.
+- Exposes the adaptation signal as `capsule.working_field.local_adaptation`, then injects it into provider prompts as bounded current-thread adaptation rather than persistent self-memory.
+- Tightens provider guards so generic assistant identity becomes current-thread interaction-partner language, and memory-overclaim rewrites preserve continuity, summary, or biomimetic structure according to the user query.
+- Reports the current interaction evidence: offline 20-turn free dialogue `overall_score=0.8981`, `interaction_usefulness_score=0.793`, `continuity_score=0.8667`, and `issue_count=0`; DeepSeek V4 Pro novice `overall_score=0.973`, `interaction_usefulness_score=0.892`, `continuity_score=1.0`, and `capability_honesty_score=1.0`; DeepSeek V4 Pro 8-turn free dialogue `overall_score=0.9787`, `interaction_usefulness_score=0.885`, `continuity_score=1.0`, and `issue_count=0`.
+- Keeps the research claim bounded: Stage88 is a current-thread self-organization proxy and a practical interaction improvement, not autobiographical self-memory or a consciousness claim. Stage89 should convert the adaptation record into a learned local policy vector and require repeated provider cells before stronger interaction-language.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

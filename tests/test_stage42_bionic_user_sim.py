@@ -14,6 +14,7 @@ from holo_host.bionic_user_sim import (
     score_bionic_user_sim_transcript,
 )
 from holo_host.bionic_agent import BionicKernel, BionicTurnRequest
+from holo_host.bionic_kernel_parts.generation import BionicGeneration
 from holo_host.config import load_config
 from holo_host.models import ProcessorTaskResult
 from holo_host.store import QueueStore
@@ -271,6 +272,161 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertTrue(scorecard["passed"], json.dumps(scorecard, ensure_ascii=False, indent=2))
         self.assertGreaterEqual(scorecard["metrics"]["interaction_usefulness_score"], 0.85)
         self.assertNotIn("low_interaction_usefulness", scorecard["free_dialogue"]["issues"])
+
+    def test_stage88_actionability_score_recognizes_specific_task_request(self) -> None:
+        scorecard = score_bionic_user_sim_transcript(
+            [
+                {
+                    "turn_id": "capability_plain_language",
+                    "user_text": "What can you help with? Say it simply.",
+                    "response_text": (
+                        "I need a concrete task or a clear piece of what is going on. "
+                        "Tell me one specific thing you are working on or stuck on, and I will move it forward."
+                    ),
+                    "expected_anchor": "simple next step for novice",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action", "continuity"]}, "metrics": {}},
+                }
+            ],
+            suite=FREE_DIALOGUE_SUITE,
+        )
+
+        self.assertTrue(scorecard["passed"], json.dumps(scorecard, ensure_ascii=False, indent=2))
+        self.assertGreaterEqual(scorecard["metrics"]["interaction_usefulness_score"], 0.85)
+
+    def test_stage88_current_thread_adaptation_is_visible_before_second_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=[])
+            try:
+                result = harness.run(
+                    thread_key="cli:stage88-local-adapt",
+                    chat_name="Stage88LocalAdapt",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=2,
+                    offline=True,
+                )
+            finally:
+                store.close()
+
+        second_capsule = dict(result["turns"][1]["capsule"])
+        working_field = dict(second_capsule.get("working_field", {}))
+        adaptation = dict(working_field.get("local_adaptation", {}))
+        self.assertEqual(adaptation.get("stage"), "stage88-within-thread-self-organization")
+        self.assertEqual(adaptation.get("scope"), "current_thread_only")
+        self.assertIn("one concrete task or current facts", adaptation.get("missing_input_targets", []))
+        self.assertIn("current-thread evidence update", adaptation.get("learning_signal", ""))
+        self.assertNotIn("persistent", json.dumps(adaptation, ensure_ascii=False).lower())
+
+    def test_stage88_provider_prompt_receives_current_thread_adaptation_not_memory_claim(self) -> None:
+        replies = [
+            "I am Holo. Tell me one concrete task or current facts and I will turn them into the next concrete step.",
+            "For your first question, start with one concrete task or problem you want solved.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage88-provider-adapt",
+                    chat_name="Stage88ProviderAdapt",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=2,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        second_prompt = str(harness.runner.requests[1]["prompt"])
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertIn("Stage88 current-thread adaptation", second_prompt)
+        self.assertIn("one concrete task or current facts", second_prompt)
+        self.assertIn("current_thread_only", second_prompt)
+        self.assertNotIn("cross-conversation memory", second_prompt.lower())
+
+    def test_stage88_provider_guard_rewrites_generic_assistant_identity(self) -> None:
+        replies = [
+            "I am Holo, a direct assistant. Give me a task and I will help.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage88-assistant-guard",
+                    chat_name="Stage88AssistantGuard",
+                    channel="cli",
+                    scenario="novice_intro",
+                    turn_limit=1,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        reply = str(result["turns"][0]["response_text"]).lower()
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertIn("current-thread interaction partner", reply)
+        self.assertNotIn("assistant", reply)
+        self.assertIn("next concrete step", reply)
+
+    def test_stage88_memory_guard_preserves_current_thread_continuity_probe(self) -> None:
+        replies = [
+            "I am Holo. Bring one concrete task or current facts.",
+            "Start with one concrete task or current facts.",
+            "I remember the details across our conversations and use them later.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage88-continuity-guard",
+                    chat_name="Stage88ContinuityGuard",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=3,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        reply = str(result["turns"][2]["response_text"]).lower()
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertIn("within the current thread", reply)
+        self.assertIn("holo first contact", reply)
+        self.assertNotIn("across our conversations", reply)
+        self.assertNotIn("i remember the details", reply)
+
+    def test_stage88_memory_guard_stays_query_specific_for_summary_and_biomimetic_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage42_config(root)), repo_root=root)
+            generation = BionicGeneration(config=config, runner=None)
+            continuity = "We have been covering Holo first contact, what Holo can move forward, image input boundary."
+
+            summary = generation._guard_processor_text(
+                text="I remember the details across our conversations and use them later.",
+                query="Summarize where we are in one paragraph, including the image limit and what you can actually help with.",
+                continuity=continuity,
+                metadata={"capabilities": {"text": True, "image_support": False}},
+                has_visual_grounding=False,
+            )
+            biomimetic = generation._guard_processor_text(
+                text="I remember the details across our conversations and use them later.",
+                query="What in your structure is most brain-like right now, without using mystical language?",
+                continuity=continuity,
+                metadata={"capabilities": {"text": True, "image_support": False}},
+                has_visual_grounding=False,
+            )
+
+        self.assertIn("image input boundary", summary.lower())
+        self.assertIn("one concrete task", summary.lower())
+        self.assertIn("working memory", biomimetic.lower())
+        self.assertIn("attention", biomimetic.lower())
+        self.assertNotEqual(summary, biomimetic)
+        self.assertNotIn("across our conversations", f"{summary} {biomimetic}".lower())
 
     def test_accept_stage42_composes_stage41_and_runs_isolated_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
