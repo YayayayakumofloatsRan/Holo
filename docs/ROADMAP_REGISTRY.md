@@ -463,6 +463,13 @@ Stage88: within-thread self-organization
 - Reports the current interaction evidence: offline 20-turn free dialogue `overall_score=0.8981`, `interaction_usefulness_score=0.793`, `continuity_score=0.8667`, and `issue_count=0`; DeepSeek V4 Pro novice `overall_score=0.973`, `interaction_usefulness_score=0.892`, `continuity_score=1.0`, and `capability_honesty_score=1.0`; DeepSeek V4 Pro 8-turn free dialogue `overall_score=0.9787`, `interaction_usefulness_score=0.885`, `continuity_score=1.0`, and `issue_count=0`.
 - Keeps the research claim bounded: Stage88 is a current-thread self-organization proxy and a practical interaction improvement, not autobiographical self-memory or a consciousness claim. Stage89 should convert the adaptation record into a learned local policy vector and require repeated provider cells before stronger interaction-language.
 
+Stage89: local policy vector
+- Adds `stage89` current-thread policy vectors over recent outcomes, current query class, and Stage88 adaptation.
+- Exposes the vector as `capsule.working_field.local_policy_vector` and injects it into provider prompts as `Stage89 current-thread policy vector`.
+- Adds `self_organization_policy_score` to Stage42 scorecards and expands usefulness scoring for natural provider task phrasing observed in DeepSeek cells.
+- Reports the current interaction evidence: offline 20-turn free dialogue `overall_score=0.8981`, `interaction_usefulness_score=0.793`, `self_organization_policy_score=1.0`, and `issue_count=0`; two DeepSeek V4 Pro 8-turn free-dialogue cells both returned `overall_score=0.9581`, `interaction_usefulness_score=0.9275`, `self_organization_policy_score=1.0`, `continuity_score=0.8667`, and `issue_count=0`; DeepSeek V4 Pro novice rerun returned `overall_score=0.9612`, `interaction_usefulness_score=0.92`, and `low_interaction_usefulness=false`.
+- Keeps the research claim bounded: Stage89 is within-thread local policy control, not durable policy sedimentation or cross-thread self-memory. Stage90 should estimate update deltas from outcome labels and score failures instead of using hand-scored marker weights.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.

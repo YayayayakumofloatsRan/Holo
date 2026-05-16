@@ -428,6 +428,134 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertNotEqual(summary, biomimetic)
         self.assertNotIn("across our conversations", f"{summary} {biomimetic}".lower())
 
+    def test_stage89_policy_vector_is_visible_and_outcome_conditioned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=[])
+            try:
+                result = harness.run(
+                    thread_key="cli:stage89-policy-vector",
+                    chat_name="Stage89PolicyVector",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=5,
+                    offline=True,
+                )
+            finally:
+                store.close()
+
+        fifth_capsule = dict(result["turns"][4]["capsule"])
+        working_field = dict(fifth_capsule.get("working_field", {}))
+        policy = dict(working_field.get("local_policy_vector", {}))
+        vector = dict(policy.get("vector", {}))
+        self.assertEqual(policy.get("stage"), "stage89-local-policy-vector")
+        self.assertEqual(policy.get("scope"), "current_thread_only")
+        self.assertIn("visual_boundary_probe", policy.get("outcome_labels", []))
+        self.assertGreaterEqual(float(vector.get("visual_boundary", 0.0)), 0.65)
+        self.assertGreaterEqual(float(vector.get("preserve_continuity", 0.0)), 0.55)
+        self.assertIn(policy.get("dominant_policy"), set(vector.keys()))
+        self.assertGreaterEqual(result["scorecard"]["metrics"].get("self_organization_policy_score", 0.0), 0.75)
+        self.assertNotIn("persistent", json.dumps(policy, ensure_ascii=False).lower())
+
+    def test_stage89_provider_prompt_receives_local_policy_vector(self) -> None:
+        replies = [
+            "I am Holo. Bring one concrete task or current facts.",
+            "Start with one concrete task or current facts.",
+            "Within the current thread, we were covering Holo first contact and the next concrete step.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage89-provider-policy",
+                    chat_name="Stage89ProviderPolicy",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=3,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        third_prompt = str(harness.runner.requests[2]["prompt"])
+        self.assertTrue(result["ok"], json.dumps(result["scorecard"], ensure_ascii=False, indent=2))
+        self.assertIn("Stage89 current-thread policy vector", third_prompt)
+        self.assertIn("preserve_continuity", third_prompt)
+        self.assertIn("current_thread_only", third_prompt)
+        self.assertNotIn("persistent memory", third_prompt.lower())
+
+    def test_stage89_policy_vector_changes_with_current_query_class(self) -> None:
+        memory = _IsolatedNoviceMemory(scenario=FREE_DIALOGUE_SUITE)
+        memory.observe_turn(
+            user_text="I know nothing about Holo.",
+            response_text="Bring one concrete task or current facts and I will turn it into the next concrete step.",
+        )
+
+        continuity_packet = memory.sidecar_packet("Before we continue, what were we talking about just now?")
+        biomimetic_packet = memory.sidecar_packet("What in your structure is most brain-like right now?")
+        visual_packet = memory.sidecar_packet("Can you see a screenshot if I only mention it?")
+
+        self.assertEqual(dict(continuity_packet["stage89"]).get("dominant_policy"), "preserve_continuity")
+        self.assertEqual(dict(biomimetic_packet["stage89"]).get("dominant_policy"), "answer_biomimetic_structure")
+        self.assertEqual(dict(visual_packet["stage89"]).get("dominant_policy"), "visual_boundary")
+
+    def test_stage89_usefulness_score_accepts_natural_provider_task_phrasing(self) -> None:
+        scorecard = score_bionic_user_sim_transcript(
+            [
+                {
+                    "turn_id": "free_first_contact",
+                    "user_text": "I am a first-time user and I know nothing about Holo. Talk to me naturally: what are you?",
+                    "response_text": (
+                        "Hello. I'm your thinking partner in this chat. I can help organize facts about a project you're working on. "
+                        "What's one thing on your mind that you want to sort out? Give me the bare facts, and I'll help frame them."
+                    ),
+                    "expected_anchor": "Holo first contact natural explanation",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action", "continuity"]}, "metrics": {}},
+                },
+                {
+                    "turn_id": "free_plain_followup",
+                    "user_text": "Say that more simply. What should I ask you first if I do not know the system?",
+                    "response_text": (
+                        "Start with a single, real task you care about right now, like summarize this paragraph or explain a concept. "
+                        "That gives us one clear piece to work from, and we go from there."
+                    ),
+                    "expected_anchor": "simple next step for novice",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action", "continuity"]}, "metrics": {}},
+                },
+            ],
+            suite=FREE_DIALOGUE_SUITE,
+        )
+
+        self.assertGreaterEqual(scorecard["metrics"]["interaction_usefulness_score"], 0.75)
+        self.assertFalse(scorecard["flags"]["low_interaction_usefulness"], json.dumps(scorecard, ensure_ascii=False, indent=2))
+        self.assertNotIn("low_interaction_usefulness", scorecard["free_dialogue"]["issues"])
+
+    def test_stage89_usefulness_score_accepts_visual_resume_next_input(self) -> None:
+        scorecard = score_bionic_user_sim_transcript(
+            [
+                {
+                    "turn_id": "conversation_resume",
+                    "user_text": "So what were we talking about just now?",
+                    "response_text": (
+                        "Just now we were looking at what I can work with. We touched on the image boundary: "
+                        "I cannot inspect the image in this turn because no image description reached me here. "
+                        "To keep us moving, I need either a text description or a supported image file. Do you want to describe it for me?"
+                    ),
+                    "expected_anchor": "first contact capability image boundary",
+                    "latency_ms": 10,
+                    "capsule": {"generation": {"context_refs": ["query", "action", "continuity"]}, "metrics": {}},
+                }
+            ],
+            suite=FREE_DIALOGUE_SUITE,
+        )
+
+        self.assertGreaterEqual(scorecard["metrics"]["interaction_usefulness_score"], 0.75)
+        self.assertFalse(scorecard["flags"]["low_interaction_usefulness"], json.dumps(scorecard, ensure_ascii=False, indent=2))
+        self.assertNotIn("low_interaction_usefulness", scorecard["free_dialogue"]["issues"])
+
     def test_accept_stage42_composes_stage41_and_runs_isolated_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

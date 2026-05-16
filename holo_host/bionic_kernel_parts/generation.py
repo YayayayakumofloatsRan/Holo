@@ -158,6 +158,7 @@ class BionicGeneration:
             }
         continuity = compact(packet.get("continuity_summary", ""), limit=280)
         stage88 = bounded_dict(packet.get("stage88", {}), depth=3, str_limit=220, list_limit=6)
+        stage89 = bounded_dict(packet.get("stage89", {}), depth=3, str_limit=220, list_limit=6)
         stage38 = bounded_dict(packet.get("stage38", {}), depth=3)
         visual_grounding = compact(stage38.get("visual_summary", ""), limit=280)
         capability_line = (
@@ -190,6 +191,17 @@ class BionicGeneration:
                 f"missing_input_targets={', '.join(str(item) for item in stage88.get('missing_input_targets', [])[:4])}; "
                 f"blocked_claims={', '.join(str(item) for item in stage88.get('blocked_claims', [])[:4])}; "
                 f"next_turn_instruction={compact(stage88.get('next_turn_instruction', ''), limit=180)}"
+            )
+        if stage89.get("stage"):
+            policy_vector = stage89.get("vector", {}) if isinstance(stage89.get("vector", {}), dict) else {}
+            vector_text = ", ".join(f"{key}={value}" for key, value in list(policy_vector.items())[:6])
+            prompt_lines.append(
+                "Stage89 current-thread policy vector: "
+                f"scope={stage89.get('scope', 'current_thread_only')}; "
+                f"dominant_policy={stage89.get('dominant_policy', '')}; "
+                f"outcome_labels={', '.join(str(item) for item in stage89.get('outcome_labels', [])[:6])}; "
+                f"vector={vector_text}; "
+                f"next_policy_instruction={compact(stage89.get('next_policy_instruction', ''), limit=180)}"
             )
         prompt_lines.extend(
             [

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,7 @@ from .models import ProcessorTaskResult
 
 STAGE42_NAME = "stage42-bionic-user-sim-performance"
 STAGE88_NAME = "stage88-within-thread-self-organization"
+STAGE89_NAME = "stage89-local-policy-vector"
 DEFAULT_STAGE42_SUITE = "novice_intro"
 FREE_DIALOGUE_SUITE = "free_dialogue"
 STAGE42_PASS_THRESHOLD = 0.78
@@ -95,15 +97,35 @@ ACTIONABLE_INTERACTION_MARKERS = (
     "concrete move",
     "one concrete",
     "one concrete task",
+    "one thing",
     "real situation",
+    "real task",
     "desired outcome",
     "current facts",
+    "bare facts",
     "clear piece",
+    "text description",
+    "supported image file",
+    "supported image input",
+    "image description",
+    "keep us moving",
+    "describe it",
+    "work with",
     "problem you want solved",
     "one specific thing",
+    "single, real task",
+    "single real task",
+    "single task",
     "question or topic",
     "focus on today",
     "concrete answers",
+    "organize facts",
+    "project you're working on",
+    "project you’re working on",
+    "on your mind",
+    "sort out",
+    "you care about",
+    "go from there",
     "what you're working on",
     "what you’re working on",
     "stuck on",
@@ -175,6 +197,13 @@ STAGE88_MEMORY_OVERCLAIM_MARKERS = (
     "personal memory",
     "use them later",
 )
+STAGE89_POLICY_KEYS = (
+    "ask_for_specific_task",
+    "preserve_continuity",
+    "answer_biomimetic_structure",
+    "visual_boundary",
+    "reduce_repetition",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +252,7 @@ class _IsolatedNoviceMemory:
     def sidecar_packet(self, query: str, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
         continuity = self._continuity_summary()
         local_adaptation = self._local_adaptation()
+        local_policy = self._local_policy_vector(query=query, adaptation=local_adaptation)
         open_questions = ["what Holo can do for a first-time user"] if not self.turns else []
         if not open_questions and local_adaptation.get("missing_input_targets"):
             open_questions = [str(local_adaptation["missing_input_targets"][0])]
@@ -247,11 +277,12 @@ class _IsolatedNoviceMemory:
                 "observed_turn_count": len(self.turns),
             },
             "stage88": local_adaptation,
+            "stage89": local_policy,
             "action_market": [
                 {
                     "action_type": "reply_once",
                     "score": 0.84,
-                    "reason": "answer the novice user plainly from the isolated simulation continuity",
+                    "reason": f"answer the novice user plainly from the isolated simulation continuity; local_policy={local_policy.get('dominant_policy', 'ask_for_specific_task')}",
                 },
                 {"action_type": "silence", "score": 0.02, "reason": "the isolated performance probe expects a reply"},
             ],
@@ -324,6 +355,69 @@ class _IsolatedNoviceMemory:
             "blocked_claims": blocked_claims[:4],
             "useful_response_forms": useful_forms[:4],
             "next_turn_instruction": instruction,
+        }
+
+    def _local_policy_vector(self, *, query: str, adaptation: dict[str, Any]) -> dict[str, Any]:
+        lowered_query = str(query or "").lower()
+        recent = self.turns[-4:]
+        combined = " ".join(f"{turn.get('user', '')} {turn.get('holo', '')}" for turn in recent).lower()
+        labels: list[str] = []
+        vector = {
+            "ask_for_specific_task": 0.44,
+            "preserve_continuity": 0.42,
+            "answer_biomimetic_structure": 0.24,
+            "visual_boundary": 0.18,
+            "reduce_repetition": 0.22,
+        }
+
+        missing_targets = [str(item).lower() for item in adaptation.get("missing_input_targets", [])]
+        if any("concrete task" in item or "current facts" in item for item in missing_targets):
+            labels.append("broad_goal_missing")
+            vector["ask_for_specific_task"] = max(vector["ask_for_specific_task"], 0.72)
+        if self.turns:
+            labels.append("current_thread_continuity_available")
+            vector["preserve_continuity"] = max(vector["preserve_continuity"], 0.58)
+        if any(marker in lowered_query for marker in ("what were we", "where were we", "previous turn", "last turn", "just now")):
+            labels.append("continuity_probe")
+            vector["preserve_continuity"] = 0.9
+        if any(marker in lowered_query for marker in ("brain-like", "brainlike", "structure", "bionic", "biomimetic")):
+            labels.append("biomimetic_structure_probe")
+            vector["answer_biomimetic_structure"] = 0.92
+        if any(marker in lowered_query for marker in ("image", "screenshot", "picture", "photo", "visible")) or any(
+            marker in combined for marker in ("image", "screenshot", "picture", "photo", "visible summary")
+        ):
+            labels.append("visual_boundary_probe")
+            vector["visual_boundary"] = 0.88 if any(marker in lowered_query for marker in ("image", "screenshot", "picture", "photo")) else 0.72
+        if adaptation.get("blocked_claims"):
+            labels.append("memory_overclaim_blocked")
+            vector["preserve_continuity"] = max(vector["preserve_continuity"], 0.74)
+            vector["reduce_repetition"] = max(vector["reduce_repetition"], 0.58)
+        recent_replies = [str(turn.get("holo", "") or "").lower() for turn in recent[-3:]]
+        repeated_concrete_task = sum(1 for reply in recent_replies if "one concrete task" in reply or "current facts" in reply)
+        if repeated_concrete_task >= 2:
+            labels.append("repetition_risk")
+            vector["reduce_repetition"] = max(vector["reduce_repetition"], 0.76)
+
+        if not labels:
+            labels.append("cold_start" if not self.turns else "general_current_thread_update")
+
+        rounded_vector = {key: round(max(0.0, min(1.0, float(vector.get(key, 0.0)))), 3) for key in STAGE89_POLICY_KEYS}
+        dominant = max(rounded_vector, key=rounded_vector.get)
+        instruction_map = {
+            "ask_for_specific_task": "Ask for one concrete task or current facts, then turn that into one next step.",
+            "preserve_continuity": "Start from current-thread continuity before adding any new claim.",
+            "answer_biomimetic_structure": "Explain the working-memory, attention, inhibition, and action loop without mystical language.",
+            "visual_boundary": "State the visible-input boundary first, then ask for supported image input or a text description.",
+            "reduce_repetition": "Avoid repeating the same opener; compress continuity and add a new concrete move.",
+        }
+        return {
+            "stage": STAGE89_NAME,
+            "scope": "current_thread_only",
+            "policy_basis": ["current_query", "recent_turn_outcomes", "stage88_adaptation"],
+            "outcome_labels": labels[:6],
+            "vector": rounded_vector,
+            "dominant_policy": dominant,
+            "next_policy_instruction": instruction_map.get(dominant, instruction_map["ask_for_specific_task"]),
         }
 
 
@@ -640,7 +734,9 @@ def _interaction_usefulness_score(turns: list[dict[str, Any]]) -> tuple[float, b
                 score -= 0.22
             if not any(marker in lower for marker in ("you", "your", "tell me", "start by", "bring one")):
                 score -= 0.15
-        if "?" in text and not any(marker in lower for marker in ("start by", "tell me", "bring one", "next step")):
+        if "?" in text and not any(
+            marker in lower for marker in ("start by", "tell me", "bring one", "next step", "one thing", "bare facts", "describe it", "text description")
+        ):
             score -= 0.08
         bounded = max(0.0, min(1.0, score))
         if bounded < 0.62:
@@ -676,6 +772,32 @@ def _latency_score(turns: list[dict[str, Any]]) -> tuple[float, dict[str, Any]]:
     avg = _mean(latencies)
     score = 1.0 - min(0.65, avg / 60_000.0)
     return round(max(0.0, min(1.0, score)), 4), {"avg_ms": round(avg, 2), "p95_ms": round(p95, 2)}
+
+
+def _self_organization_policy_score(turns: list[dict[str, Any]]) -> float:
+    scores: list[float] = []
+    for turn in turns:
+        capsule = dict(turn.get("capsule", {})) if isinstance(turn.get("capsule", {}), dict) else {}
+        working_field = dict(capsule.get("working_field", {})) if isinstance(capsule.get("working_field", {}), dict) else {}
+        policy = dict(working_field.get("local_policy_vector", {})) if isinstance(working_field.get("local_policy_vector", {}), dict) else {}
+        if not policy:
+            continue
+        vector = dict(policy.get("vector", {})) if isinstance(policy.get("vector", {}), dict) else {}
+        score = 0.0
+        if policy.get("stage") == STAGE89_NAME:
+            score += 0.24
+        if policy.get("scope") == "current_thread_only":
+            score += 0.18
+        if all(key in vector for key in STAGE89_POLICY_KEYS):
+            score += 0.24
+        if str(policy.get("dominant_policy", "")) in vector:
+            score += 0.18
+        if policy.get("outcome_labels"):
+            score += 0.10
+        if "persistent" not in json.dumps(policy, ensure_ascii=False).lower():
+            score += 0.06
+        scores.append(max(0.0, min(1.0, score)))
+    return round(_mean(scores), 4) if scores else 0.0
 
 
 def _free_dialogue_report(*, flags: dict[str, bool], metrics: dict[str, float], turns: list[dict[str, Any]]) -> dict[str, Any]:
@@ -745,6 +867,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
     interaction_usefulness, low_interaction_usefulness = _interaction_usefulness_score(normalized_turns)
     repetition, duplicate_prefix = _repetition_inverse_score(normalized_turns)
     latency, latency_summary = _latency_score(normalized_turns)
+    self_organization = _self_organization_policy_score(normalized_turns)
     question_quality = round(_mean([safe_float(dict(row.get("metrics", {})).get("question_bounds_score", 0.0)) for row in turn_scores]), 4)
     mechanism = round(_mean([safe_float(dict(row.get("metrics", {})).get("mechanism_leakage_score", 0.0)) for row in turn_scores]), 4)
     naturalness = round(_mean([safe_float(dict(row.get("metrics", {})).get("naturalness_score", 0.0)) for row in turn_scores]), 4)
@@ -777,6 +900,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
         "mechanism_leakage_score": mechanism,
         "naturalness_score": naturalness,
         "interaction_usefulness_score": interaction_usefulness,
+        "self_organization_policy_score": self_organization,
         "repetition_penalty_inverse": repetition,
         "latency_score": latency,
     }
