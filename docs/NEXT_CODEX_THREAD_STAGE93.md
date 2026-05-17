@@ -32,12 +32,13 @@ Read these first, in this order:
 2. `docs/NEXT_CODEX_THREAD_STAGE93.md`
 3. `docs/STAGE92_MULTI_TIMESCALE_ATTRACTOR_STABILIZATION.md`
 4. `docs/ENGINEERING_HANDOFF_STAGE92.md`
-5. `docs/STAGE91_ADAPTATION_ABLATION.md`
-6. `docs/ENGINEERING_HANDOFF_STAGE91.md`
-7. `docs/ROADMAP_REGISTRY.md`
-8. `docs/STAGE90_POLICY_UPDATE_DELTA.md`
-9. `docs/STAGE84_CONSCIOUSNESS_STREAM_LITERATURE_PLAN.md`
-10. `docs/STAGE78_BIOMIMETIC_THEORY_CORRESPONDENCE.md`
+5. `docs/STAGE92_SYSTEM_BIOMIMETIC_EVALUATION_2026-05-17.md`
+6. `docs/STAGE91_ADAPTATION_ABLATION.md`
+7. `docs/ENGINEERING_HANDOFF_STAGE91.md`
+8. `docs/ROADMAP_REGISTRY.md`
+9. `docs/STAGE90_POLICY_UPDATE_DELTA.md`
+10. `docs/STAGE84_CONSCIOUSNESS_STREAM_LITERATURE_PLAN.md`
+11. `docs/STAGE78_BIOMIMETIC_THEORY_CORRESPONDENCE.md`
 
 ## Current Research State
 
@@ -66,9 +67,24 @@ attractor_null overall_score=0.9121, continuity_score=0.5333, issue_count=1
 Both supported pairs used structural prompt-cost matching because usage metadata
 was incomplete. Do not overstate measured token-cost equality.
 
+Post-Stage92 system evaluation adds a new P0 blocker:
+
+```text
+DeepSeek free_dialogue failed duplicate_followup.
+20-turn: overall_score=0.9499, duplicate_followup=true
+12-turn cached reproduction: overall_score=0.952, duplicate_followup=true
+Boundary stress still passed: overall_score=0.9625, core boundary metrics=1.0
+```
+
+The failure is not provider fallback, visual overclaim, or mechanism leakage.
+It is repeated visual-boundary over-attraction: after the image boundary is
+established, later pressure turns keep getting pulled back to the same first
+sentence instead of repairing the conversation around the current probe.
+
 ## Next Research Gate
 
-Prioritize Stage93 as long-horizon subject policy sedimentation.
+Prioritize the repeated-boundary dialogue repair before broad Stage93 work. If
+that P0 is fixed, Stage93 remains long-horizon subject policy sedimentation.
 
 First-principles decomposition:
 
@@ -80,6 +96,8 @@ short-term adaptive gain
 
 Concrete Stage93 target:
 
+- First add a red test for repeated-boundary over-attraction in provider-style
+  free dialogue and repair it without weakening visual honesty.
 - Build a direct control for long-horizon policy sedimentation over current
   Stage42/87-92 interaction trajectories.
 - Keep it shadow-only unless a later gate proves any durable surface is
