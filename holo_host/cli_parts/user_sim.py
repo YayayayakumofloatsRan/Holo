@@ -22,6 +22,7 @@ def run_bionic_user_sim_payload(
     turn_limit: int,
     offline: bool,
     enable_policy_update: bool = True,
+    enable_attractor_stabilization: bool = True,
 ) -> tuple[dict, str]:
     config = load_config(config_path=config_path)
     service = HoloReplyService(config)
@@ -39,6 +40,7 @@ def run_bionic_user_sim_payload(
             turn_limit=turn_limit,
             offline=offline,
             enable_policy_update=enable_policy_update,
+            enable_attractor_stabilization=enable_attractor_stabilization,
         ), "local_process"
     finally:
         bionic_cli.close_reply_service(service)

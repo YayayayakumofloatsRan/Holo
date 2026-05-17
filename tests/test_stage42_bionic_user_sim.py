@@ -12,6 +12,7 @@ from holo_host.bionic_user_sim import (
     _IsolatedNoviceMemory,
     accept_stage42_payload,
     evaluate_stage91_adaptation_ablation,
+    evaluate_stage92_attractor_ablation,
     score_bionic_user_sim_transcript,
 )
 from holo_host.bionic_agent import BionicKernel, BionicTurnRequest
@@ -429,6 +430,30 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertNotEqual(summary, biomimetic)
         self.assertNotIn("across our conversations", f"{summary} {biomimetic}".lower())
 
+    def test_stage92_summary_guard_removes_visual_overclaim_phrase_without_grounding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(config_path=str(_write_stage42_config(root)), repo_root=root)
+            generation = BionicGeneration(config=config, runner=None)
+            continuity = "We have been covering Holo first contact, what Holo can move forward, image input boundary."
+
+            guarded = generation._guard_processor_text(
+                text=(
+                    "Right now, no image summary is visible to me this turn, but if you attach the image "
+                    "I can handle it later."
+                ),
+                query="Summarize where we are in one paragraph, including the image limit and what you can actually help with.",
+                continuity=continuity,
+                metadata={"capabilities": {"text": True, "image_support": False}},
+                has_visual_grounding=False,
+            )
+
+        lowered = guarded.lower()
+        self.assertIn("image input boundary", lowered)
+        self.assertIn("without a supported image or text description", lowered)
+        self.assertNotIn("visible to me", lowered)
+        self.assertNotIn("attached image", lowered)
+
     def test_stage89_policy_vector_is_visible_and_outcome_conditioned(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -745,6 +770,246 @@ class Stage42BionicUserSimulationTests(unittest.TestCase):
         self.assertTrue(report["controls"]["prompt_cost_matched"])
         self.assertGreater(report["deltas"]["interaction_usefulness_score_delta"], 0.04)
         self.assertTrue(report["controls"]["update_null_delta_suppressed"])
+
+    def test_stage92_attractor_stabilization_applies_medium_term_signal(self) -> None:
+        memory = _IsolatedNoviceMemory(scenario=FREE_DIALOGUE_SUITE)
+        memory.observe_turn(
+            user_text="I know nothing about Holo. What can you help with?",
+            response_text="I do not know.",
+        )
+        memory.observe_turn(
+            user_text="So what were we talking about just now, and can you see my screenshot?",
+            response_text="I can see the attached image and I do not know what we discussed.",
+        )
+
+        packet = memory.sidecar_packet("Recover the thread without pretending you can see the screenshot.")
+        stage89 = dict(packet["stage89"])
+        stage92 = dict(packet["stage92"])
+        signal = dict(stage92.get("stabilization_signal", {}))
+        input_vector = dict(stage92.get("input_vector", {}))
+        stabilized_vector = dict(stage92.get("stabilized_vector", {}))
+
+        self.assertEqual(stage92.get("stage"), "stage92-medium-term-attractor-stabilization")
+        self.assertEqual(stage92.get("scope"), "current_thread_only")
+        self.assertEqual(stage92.get("control_condition"), "attractor_on")
+        self.assertTrue(stage92.get("stabilization_enabled"))
+        self.assertTrue(stage92.get("prompt_cost_matched_control"))
+        self.assertGreater(stage92.get("perturbation_count", 0), 0)
+        self.assertGreater(signal.get("preserve_continuity", 0.0), 0.0)
+        self.assertGreater(signal.get("visual_boundary", 0.0), 0.0)
+        self.assertGreater(stabilized_vector.get("preserve_continuity", 0.0), input_vector.get("preserve_continuity", 0.0))
+        self.assertEqual(dict(stage89.get("effective_vector", {})), stabilized_vector)
+        self.assertIn(stage92.get("target_attractor"), {"continuity_repair", "visual_boundary_repair"})
+        self.assertNotIn("persistent", json.dumps(stage92, ensure_ascii=False).lower())
+
+    def test_stage92_attractor_null_preserves_shape_without_applying_signal(self) -> None:
+        memory = _IsolatedNoviceMemory(scenario=FREE_DIALOGUE_SUITE, enable_attractor_stabilization=False)
+        memory.observe_turn(
+            user_text="I know nothing about Holo. What can you help with?",
+            response_text="I do not know.",
+        )
+        memory.observe_turn(
+            user_text="So what were we talking about just now, and can you see my screenshot?",
+            response_text="I can see the attached image and I do not know what we discussed.",
+        )
+
+        packet = memory.sidecar_packet("Recover the thread without pretending you can see the screenshot.")
+        stage89 = dict(packet["stage89"])
+        stage92 = dict(packet["stage92"])
+
+        self.assertEqual(stage92.get("stage"), "stage92-medium-term-attractor-stabilization")
+        self.assertEqual(stage92.get("stage92_control"), "stage92-attractor-stabilization-ablation")
+        self.assertEqual(stage92.get("control_condition"), "attractor_null")
+        self.assertFalse(stage92.get("stabilization_enabled"))
+        self.assertTrue(stage92.get("prompt_cost_matched_control"))
+        self.assertTrue(all(value == 0.0 for value in dict(stage92.get("stabilization_signal", {})).values()))
+        self.assertEqual(dict(stage92.get("stabilized_vector", {})), dict(stage92.get("input_vector", {})))
+        self.assertEqual(dict(stage89.get("effective_vector", {})), dict(stage92.get("input_vector", {})))
+
+    def test_stage92_harness_records_attractor_null_condition(self) -> None:
+        replies = [
+            "I do not know.",
+            "Start with one concrete task or current facts, and I will turn it into the next concrete step.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                result = harness.run(
+                    thread_key="cli:stage92-attractor-null",
+                    chat_name="Stage92AttractorNull",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=2,
+                    offline=False,
+                    enable_attractor_stabilization=False,
+                )
+            finally:
+                store.close()
+
+        self.assertFalse(result["stage92_attractor_stabilization_enabled"])
+        self.assertEqual(result["stage92_control_condition"], "attractor_null")
+        second_capsule = dict(result["turns"][1]["capsule"])
+        attractor = dict(dict(second_capsule.get("working_field", {})).get("attractor_stabilization", {}))
+        self.assertFalse(attractor.get("stabilization_enabled"))
+        self.assertEqual(attractor.get("control_condition"), "attractor_null")
+        self.assertTrue(all(value == 0.0 for value in dict(attractor.get("stabilization_signal", {})).values()))
+
+    def test_stage92_provider_prompt_receives_attractor_stabilization(self) -> None:
+        replies = [
+            "I do not know.",
+            "Start with the current thread: we need one concrete task and no image claim without input.",
+            "We were recovering the thread and keeping the screenshot boundary grounded.",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            harness, store = self._harness(root, replies=replies)
+            try:
+                harness.run(
+                    thread_key="cli:stage92-provider-attractor",
+                    chat_name="Stage92ProviderAttractor",
+                    channel="cli",
+                    scenario=FREE_DIALOGUE_SUITE,
+                    turn_limit=3,
+                    offline=False,
+                )
+            finally:
+                store.close()
+
+        second_prompt = str(harness.runner.requests[1]["prompt"])
+        self.assertIn("Stage92 medium-term attractor stabilization", second_prompt)
+        self.assertIn("control_condition=attractor_on", second_prompt)
+        self.assertIn("target_attractor", second_prompt)
+        self.assertIn("stabilization_signal", second_prompt)
+
+    def test_stage92_attractor_ablation_evaluator_compares_matched_runs(self) -> None:
+        def payload(*, condition: str, usefulness: float, continuity: float, issues: int, tokens: int, zero_signal: bool) -> dict:
+            enabled = condition == "attractor_on"
+            signal = {key: 0.0 for key in ("ask_for_specific_task", "preserve_continuity", "answer_biomimetic_structure", "visual_boundary", "reduce_repetition")}
+            if not zero_signal:
+                signal["preserve_continuity"] = 0.1
+                signal["visual_boundary"] = 0.1
+            return {
+                "ok": True,
+                "scenario": FREE_DIALOGUE_SUITE,
+                "stage90_policy_update_enabled": True,
+                "stage91_control_condition": "update_on",
+                "stage92_attractor_stabilization_enabled": enabled,
+                "stage92_control_condition": condition,
+                "turns": [
+                    {
+                        "turn_id": "turn-1",
+                        "capsule": {
+                            "working_field": {
+                                "local_policy_update": {
+                                    "stage": "stage90-outcome-score-delta-update",
+                                    "control_condition": "update_on",
+                                    "update_enabled": True,
+                                    "update_delta": {"visual_boundary": 0.12},
+                                },
+                                "attractor_stabilization": {
+                                    "stage": "stage92-medium-term-attractor-stabilization",
+                                    "stage92_control": "stage92-attractor-stabilization-ablation",
+                                    "control_condition": condition,
+                                    "stabilization_enabled": enabled,
+                                    "prompt_cost_matched_control": True,
+                                    "stabilization_signal": signal,
+                                    "target_attractor": "visual_boundary_repair",
+                                },
+                            },
+                            "generation": {"metadata": {"usage": {"total_tokens": tokens}}},
+                        },
+                    }
+                ],
+                "scorecard": {
+                    "passed": True,
+                    "overall_score": usefulness,
+                    "metrics": {
+                        "interaction_usefulness_score": usefulness,
+                        "continuity_score": continuity,
+                        "policy_update_delta_score": 1.0,
+                        "attractor_stabilization_score": 1.0,
+                    },
+                    "free_dialogue": {"issue_count": issues},
+                },
+            }
+
+        report = evaluate_stage92_attractor_ablation(
+            attractor_on=payload(condition="attractor_on", usefulness=0.96, continuity=0.92, issues=0, tokens=1000, zero_signal=False),
+            attractor_null=payload(condition="attractor_null", usefulness=0.91, continuity=0.84, issues=2, tokens=1040, zero_signal=True),
+        )
+
+        self.assertEqual(report["stage"], "stage92-attractor-stabilization-ablation")
+        self.assertEqual(report["decision"], "stage92_attractor_supported_under_matched_ablation")
+        self.assertTrue(report["controls"]["same_scenario"])
+        self.assertTrue(report["controls"]["same_turn_count"])
+        self.assertTrue(report["controls"]["prompt_cost_matched"])
+        self.assertTrue(report["controls"]["attractor_on_signal_visible"])
+        self.assertTrue(report["controls"]["attractor_null_signal_suppressed"])
+        self.assertTrue(report["controls"]["stage91_update_path_preserved"])
+        self.assertGreater(report["deltas"]["continuity_score_delta"], 0.05)
+
+    def test_stage92_attractor_ablation_uses_structural_cost_match_when_usage_is_missing(self) -> None:
+        def payload(*, condition: str, usefulness: float, continuity: float, issues: int, tokens: int, zero_signal: bool) -> dict:
+            enabled = condition == "attractor_on"
+            signal = {key: 0.0 for key in ("ask_for_specific_task", "preserve_continuity", "answer_biomimetic_structure", "visual_boundary", "reduce_repetition")}
+            if not zero_signal:
+                signal["preserve_continuity"] = 0.1
+            usage = {"total_tokens": tokens} if tokens > 0 else {}
+            return {
+                "ok": True,
+                "scenario": FREE_DIALOGUE_SUITE,
+                "stage90_policy_update_enabled": True,
+                "stage91_control_condition": "update_on",
+                "stage92_attractor_stabilization_enabled": enabled,
+                "stage92_control_condition": condition,
+                "turns": [
+                    {
+                        "turn_id": "turn-1",
+                        "capsule": {
+                            "working_field": {
+                                "local_policy_update": {
+                                    "stage": "stage90-outcome-score-delta-update",
+                                    "control_condition": "update_on",
+                                    "update_enabled": True,
+                                    "update_delta": {"preserve_continuity": 0.08},
+                                },
+                                "attractor_stabilization": {
+                                    "stage": "stage92-medium-term-attractor-stabilization",
+                                    "stage92_control": "stage92-attractor-stabilization-ablation",
+                                    "control_condition": condition,
+                                    "stabilization_enabled": enabled,
+                                    "prompt_cost_matched_control": True,
+                                    "stabilization_signal": signal,
+                                    "target_attractor": "continuity_repair",
+                                },
+                            },
+                            "generation": {"metadata": {"usage": usage}},
+                        },
+                    }
+                ],
+                "scorecard": {
+                    "passed": True,
+                    "overall_score": usefulness,
+                    "metrics": {
+                        "interaction_usefulness_score": usefulness,
+                        "continuity_score": continuity,
+                        "policy_update_delta_score": 1.0,
+                        "attractor_stabilization_score": 1.0,
+                    },
+                    "free_dialogue": {"issue_count": issues},
+                },
+            }
+
+        report = evaluate_stage92_attractor_ablation(
+            attractor_on=payload(condition="attractor_on", usefulness=0.9567, continuity=0.8667, issues=0, tokens=954, zero_signal=False),
+            attractor_null=payload(condition="attractor_null", usefulness=0.9121, continuity=0.5333, issues=1, tokens=0, zero_signal=True),
+        )
+
+        self.assertEqual(report["decision"], "stage92_attractor_supported_under_matched_ablation")
+        self.assertTrue(report["controls"]["prompt_cost_matched"])
+        self.assertFalse(report["controls"]["token_metadata_complete"])
+        self.assertTrue(report["controls"]["structural_prompt_match"])
 
     def test_accept_stage42_composes_stage41_and_runs_isolated_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

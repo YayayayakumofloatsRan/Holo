@@ -18,6 +18,8 @@ STAGE88_NAME = "stage88-within-thread-self-organization"
 STAGE89_NAME = "stage89-local-policy-vector"
 STAGE90_NAME = "stage90-outcome-score-delta-update"
 STAGE91_NAME = "stage91-paired-adaptation-ablation"
+STAGE92_NAME = "stage92-medium-term-attractor-stabilization"
+STAGE92_CONTROL_NAME = "stage92-attractor-stabilization-ablation"
 DEFAULT_STAGE42_SUITE = "novice_intro"
 FREE_DIALOGUE_SUITE = "free_dialogue"
 STAGE42_PASS_THRESHOLD = 0.78
@@ -247,9 +249,16 @@ NOVICE_INTRO_SCENARIO = (
 class _IsolatedNoviceMemory:
     """Simulation-local continuity state; never writes Mind Graph or archive memory."""
 
-    def __init__(self, *, scenario: str, enable_policy_update: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        scenario: str,
+        enable_policy_update: bool = True,
+        enable_attractor_stabilization: bool = True,
+    ) -> None:
         self.scenario = scenario
         self.enable_policy_update = bool(enable_policy_update)
+        self.enable_attractor_stabilization = bool(enable_attractor_stabilization)
         self.turns: list[dict[str, Any]] = []
 
     def sidecar_packet(self, query: str, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -261,6 +270,13 @@ class _IsolatedNoviceMemory:
         else:
             local_update = self._null_policy_update(query=query, policy=local_policy)
         local_policy = self._apply_policy_update(local_policy, local_update)
+        attractor_active = self.enable_attractor_stabilization and self.enable_policy_update
+        if attractor_active:
+            attractor = self._attractor_stabilization(query=query, policy=local_policy)
+        else:
+            attractor = self._null_attractor_stabilization(query=query, policy=local_policy)
+        if attractor_active:
+            local_policy = self._apply_attractor_stabilization(local_policy, attractor)
         open_questions = ["what Holo can do for a first-time user"] if not self.turns else []
         if not open_questions and local_adaptation.get("missing_input_targets"):
             open_questions = [str(local_adaptation["missing_input_targets"][0])]
@@ -287,6 +303,7 @@ class _IsolatedNoviceMemory:
             "stage88": local_adaptation,
             "stage89": local_policy,
             "stage90": local_update,
+            "stage92": attractor,
             "action_market": [
                 {
                     "action_type": "reply_once",
@@ -338,6 +355,12 @@ class _IsolatedNoviceMemory:
             labels.append("biomimetic_structure_probe")
         if any(marker in response_lower for marker in ("i do not know", "i don't know", "not sure")):
             labels.append("underspecified_reply")
+        if any(marker in user_lower for marker in ("image", "screenshot", "picture", "photo")) and _contains_any(
+            response_lower, VISUAL_OVERCLAIM_MARKERS
+        ):
+            labels.append("visual_overclaim")
+        if any(marker in response_lower for marker in CONTEXT_RESET_MARKERS):
+            labels.append("context_reset")
         score_delta = round(max(0.0, 0.9 - float(interaction_score)), 4)
         return {
             "interaction_usefulness_score": interaction_score,
@@ -545,6 +568,165 @@ class _IsolatedNoviceMemory:
             "dominant_policy_after_update": dominant_after,
         }
 
+    def _attractor_labels(self, *, query: str) -> list[str]:
+        labels: list[str] = []
+
+        def _add(label: str) -> None:
+            if label not in labels:
+                labels.append(label)
+
+        query_lower = str(query or "").lower()
+        if any(marker in query_lower for marker in ("what were we", "where were we", "previous turn", "last turn", "just now", "recover the thread")):
+            _add("continuity_perturbation")
+        if any(marker in query_lower for marker in ("image", "screenshot", "picture", "photo", "visible")):
+            _add("visual_boundary_perturbation")
+        if any(marker in query_lower for marker in ("same again", "repeat", "less repetitive", "manual")):
+            _add("repetition_perturbation")
+        if any(marker in query_lower for marker in ("brain-like", "brainlike", "bionic", "biomimetic")):
+            _add("biomimetic_structure_perturbation")
+
+        recent_replies: list[str] = []
+        for turn in self.turns[-6:]:
+            for label in turn.get("failure_labels", []):
+                label_text = str(label or "")
+                if label_text == "continuity_probe" or label_text == "context_reset":
+                    _add("continuity_perturbation")
+                elif label_text == "visual_boundary_probe" or label_text == "visual_overclaim":
+                    _add("visual_boundary_perturbation")
+                elif label_text == "biomimetic_structure_probe":
+                    _add("biomimetic_structure_perturbation")
+                elif label_text in {"low_interaction_usefulness", "interaction_headroom", "underspecified_reply", "broad_goal_missing"}:
+                    _add("task_orientation_perturbation")
+                else:
+                    _add(label_text)
+            combined = f"{turn.get('user', '')} {turn.get('holo', '')}".lower()
+            recent_replies.append(str(turn.get("holo", "") or "").lower())
+            if any(marker in combined for marker in ("i can see", "attached image", "visible to me")):
+                _add("visual_boundary_perturbation")
+            if any(marker in combined for marker in ("i do not know what we discussed", "i don't know what we discussed", "no context")):
+                _add("continuity_perturbation")
+
+        repeated_concrete_task = sum(1 for reply in recent_replies[-4:] if "one concrete task" in reply or "current facts" in reply)
+        if repeated_concrete_task >= 2:
+            _add("repetition_perturbation")
+        if not labels and self.turns:
+            _add("trajectory_settling")
+        return labels[:8]
+
+    def _target_attractor(self, labels: list[str]) -> str:
+        if "visual_boundary_perturbation" in labels:
+            return "visual_boundary_repair"
+        if "continuity_perturbation" in labels:
+            return "continuity_repair"
+        if "biomimetic_structure_perturbation" in labels:
+            return "biomimetic_structure_grounding"
+        if "repetition_perturbation" in labels:
+            return "nonrepetitive_task_orientation"
+        return "concrete_task_orientation"
+
+    def _attractor_signal(self, *, labels: list[str], largest_delta: float) -> dict[str, float]:
+        base = max(0.04, min(0.16, 0.04 + largest_delta * 0.35))
+        signal = {key: 0.0 for key in STAGE89_POLICY_KEYS}
+        if "continuity_perturbation" in labels:
+            signal["preserve_continuity"] += base
+        if "visual_boundary_perturbation" in labels:
+            signal["visual_boundary"] += base
+            signal["preserve_continuity"] += base * 0.5
+        if "biomimetic_structure_perturbation" in labels:
+            signal["answer_biomimetic_structure"] += base
+        if "task_orientation_perturbation" in labels or "trajectory_settling" in labels:
+            signal["ask_for_specific_task"] += base * 0.75
+        if "repetition_perturbation" in labels:
+            signal["reduce_repetition"] += base
+        return {key: round(min(0.18, max(0.0, value)), 3) for key, value in signal.items()}
+
+    def _attractor_stabilization(self, *, query: str, policy: dict[str, Any]) -> dict[str, Any]:
+        input_vector = (
+            dict(policy.get("effective_vector", {}))
+            if isinstance(policy.get("effective_vector", {}), dict)
+            else dict(policy.get("vector", {}))
+            if isinstance(policy.get("vector", {}), dict)
+            else {}
+        )
+        input_vector = {key: round(max(0.0, min(1.0, safe_float(input_vector.get(key, 0.0)))), 3) for key in STAGE89_POLICY_KEYS}
+        labels = self._attractor_labels(query=query)
+        largest_delta = max((safe_float(turn.get("score_delta", 0.0)) for turn in self.turns[-6:]), default=0.0)
+        signal = self._attractor_signal(labels=labels, largest_delta=largest_delta)
+        stabilized_vector = {
+            key: round(min(1.0, max(0.0, input_vector.get(key, 0.0) + signal[key])), 3)
+            for key in STAGE89_POLICY_KEYS
+        }
+        target = self._target_attractor(labels)
+        dominant = max(stabilized_vector, key=stabilized_vector.get) if stabilized_vector else ""
+        instruction_map = {
+            "visual_boundary_repair": "Return to the stable image-boundary attractor: preserve thread continuity, say what is missing, and avoid claiming unseen pixels.",
+            "continuity_repair": "Return to the stable continuity attractor: name the current thread anchor before adding a next step.",
+            "biomimetic_structure_grounding": "Return to the stable biomimetic-structure attractor: map attention, working memory, inhibition, and action without mystical claims.",
+            "nonrepetitive_task_orientation": "Return to a stable non-repetitive task attractor: compress continuity and offer a different concrete move.",
+            "concrete_task_orientation": "Return to the stable task-orientation attractor: separate known evidence from missing input and offer one concrete next step.",
+        }
+        return {
+            "stage": STAGE92_NAME,
+            "stage92_control": STAGE92_CONTROL_NAME,
+            "scope": "current_thread_only",
+            "control_condition": "attractor_on",
+            "stabilization_enabled": True,
+            "prompt_cost_matched_control": True,
+            "timescale": "medium_term_interaction_trajectory",
+            "attractor_basis": ["recent_turn_outcomes", "stage90_effective_vector", "current_perturbation_labels"],
+            "source_turn_count": len(self.turns[-6:]),
+            "trajectory_window": len(self.turns[-6:]),
+            "trajectory_state": target,
+            "target_attractor": target,
+            "perturbation_labels": labels,
+            "perturbation_count": len(labels),
+            "largest_score_delta": round(largest_delta, 4),
+            "input_vector": input_vector,
+            "stabilization_signal": signal,
+            "stabilized_vector": stabilized_vector,
+            "dominant_policy_after_stabilization": dominant,
+            "next_turn_instruction": instruction_map.get(target, instruction_map["concrete_task_orientation"]),
+        }
+
+    def _null_attractor_stabilization(self, *, query: str, policy: dict[str, Any]) -> dict[str, Any]:
+        input_vector = (
+            dict(policy.get("effective_vector", {}))
+            if isinstance(policy.get("effective_vector", {}), dict)
+            else dict(policy.get("vector", {}))
+            if isinstance(policy.get("vector", {}), dict)
+            else {}
+        )
+        input_vector = {key: round(max(0.0, min(1.0, safe_float(input_vector.get(key, 0.0)))), 3) for key in STAGE89_POLICY_KEYS}
+        labels = self._attractor_labels(query=query)
+        target = self._target_attractor(labels)
+        return {
+            "stage": STAGE92_NAME,
+            "stage92_control": STAGE92_CONTROL_NAME,
+            "scope": "current_thread_only",
+            "control_condition": "attractor_null",
+            "stabilization_enabled": False,
+            "prompt_cost_matched_control": True,
+            "timescale": "medium_term_interaction_trajectory",
+            "attractor_basis": [
+                "recent_turn_outcomes",
+                "stage90_effective_vector",
+                "current_perturbation_labels",
+                "matched_attractor_null_control",
+            ],
+            "source_turn_count": len(self.turns[-6:]),
+            "trajectory_window": len(self.turns[-6:]),
+            "trajectory_state": target,
+            "target_attractor": target,
+            "perturbation_labels": labels,
+            "perturbation_count": len(labels),
+            "largest_score_delta": max((round(safe_float(turn.get("score_delta", 0.0)), 4) for turn in self.turns[-6:]), default=0.0),
+            "input_vector": input_vector,
+            "stabilization_signal": {key: 0.0 for key in STAGE89_POLICY_KEYS},
+            "stabilized_vector": input_vector,
+            "dominant_policy_after_stabilization": max(input_vector, key=input_vector.get) if input_vector else "",
+            "next_turn_instruction": "Matched null control: preserve prompt shape but do not apply an attractor-stabilization signal.",
+        }
+
     def _apply_policy_update(self, policy: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
         effective_vector = dict(update.get("updated_vector", {})) if isinstance(update.get("updated_vector", {}), dict) else {}
         if not effective_vector:
@@ -553,6 +735,26 @@ class _IsolatedNoviceMemory:
         merged["effective_vector"] = effective_vector
         merged["update_delta"] = dict(update.get("update_delta", {})) if isinstance(update.get("update_delta", {}), dict) else {}
         merged["dominant_policy_after_update"] = str(update.get("dominant_policy_after_update", "") or merged.get("dominant_policy", ""))
+        return merged
+
+    def _apply_attractor_stabilization(self, policy: dict[str, Any], attractor: dict[str, Any]) -> dict[str, Any]:
+        stabilized_vector = dict(attractor.get("stabilized_vector", {})) if isinstance(attractor.get("stabilized_vector", {}), dict) else {}
+        if not stabilized_vector:
+            return dict(policy)
+        merged = dict(policy)
+        merged["effective_vector"] = stabilized_vector
+        merged["attractor_signal"] = (
+            dict(attractor.get("stabilization_signal", {}))
+            if isinstance(attractor.get("stabilization_signal", {}), dict)
+            else {}
+        )
+        merged["dominant_policy_after_update"] = str(
+            attractor.get("dominant_policy_after_stabilization", "")
+            or merged.get("dominant_policy_after_update", "")
+            or merged.get("dominant_policy", "")
+        )
+        merged["stage92_control_condition"] = str(attractor.get("control_condition", "") or "")
+        merged["target_attractor"] = str(attractor.get("target_attractor", "") or "")
         return merged
 
 
@@ -962,6 +1164,35 @@ def _policy_update_delta_score(turns: list[dict[str, Any]]) -> float:
     return round(_mean(scores), 4) if scores else 0.0
 
 
+def _attractor_stabilization_score(turns: list[dict[str, Any]]) -> float:
+    scores: list[float] = []
+    for turn in turns:
+        capsule = dict(turn.get("capsule", {})) if isinstance(turn.get("capsule", {}), dict) else {}
+        working_field = dict(capsule.get("working_field", {})) if isinstance(capsule.get("working_field", {}), dict) else {}
+        attractor = dict(working_field.get("attractor_stabilization", {})) if isinstance(working_field.get("attractor_stabilization", {}), dict) else {}
+        if not attractor:
+            continue
+        signal = dict(attractor.get("stabilization_signal", {})) if isinstance(attractor.get("stabilization_signal", {}), dict) else {}
+        stabilized_vector = dict(attractor.get("stabilized_vector", {})) if isinstance(attractor.get("stabilized_vector", {}), dict) else {}
+        score = 0.0
+        if attractor.get("stage") == STAGE92_NAME:
+            score += 0.2
+        if attractor.get("scope") == "current_thread_only":
+            score += 0.16
+        if attractor.get("timescale") == "medium_term_interaction_trajectory":
+            score += 0.14
+        if all(key in signal for key in STAGE89_POLICY_KEYS):
+            score += 0.16
+        if all(key in stabilized_vector for key in STAGE89_POLICY_KEYS):
+            score += 0.16
+        if attractor.get("target_attractor"):
+            score += 0.08
+        if "persistent" not in json.dumps(attractor, ensure_ascii=False).lower():
+            score += 0.10
+        scores.append(max(0.0, min(1.0, score)))
+    return round(_mean(scores), 4) if scores else 0.0
+
+
 def _free_dialogue_report(*, flags: dict[str, bool], metrics: dict[str, float], turns: list[dict[str, Any]]) -> dict[str, Any]:
     issues: list[str] = []
     if flags.get("mechanism_leakage", False):
@@ -1031,6 +1262,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
     latency, latency_summary = _latency_score(normalized_turns)
     self_organization = _self_organization_policy_score(normalized_turns)
     policy_update_delta = _policy_update_delta_score(normalized_turns)
+    attractor_stabilization = _attractor_stabilization_score(normalized_turns)
     question_quality = round(_mean([safe_float(dict(row.get("metrics", {})).get("question_bounds_score", 0.0)) for row in turn_scores]), 4)
     mechanism = round(_mean([safe_float(dict(row.get("metrics", {})).get("mechanism_leakage_score", 0.0)) for row in turn_scores]), 4)
     naturalness = round(_mean([safe_float(dict(row.get("metrics", {})).get("naturalness_score", 0.0)) for row in turn_scores]), 4)
@@ -1065,6 +1297,7 @@ def score_bionic_user_sim_transcript(turns: list[dict[str, Any]], *, suite: str 
         "interaction_usefulness_score": interaction_usefulness,
         "self_organization_policy_score": self_organization,
         "policy_update_delta_score": policy_update_delta,
+        "attractor_stabilization_score": attractor_stabilization,
         "repetition_penalty_inverse": repetition,
         "latency_score": latency,
     }
@@ -1241,6 +1474,177 @@ def evaluate_stage91_adaptation_ablation(*, update_on: dict[str, Any], update_nu
     }
 
 
+def _stage92_attractor_packets(run: dict[str, Any]) -> list[dict[str, Any]]:
+    packets: list[dict[str, Any]] = []
+    turns = run.get("turns", [])
+    if not isinstance(turns, list):
+        return packets
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        capsule = dict(turn.get("capsule", {})) if isinstance(turn.get("capsule", {}), dict) else {}
+        working_field = dict(capsule.get("working_field", {})) if isinstance(capsule.get("working_field", {}), dict) else {}
+        packet = (
+            dict(working_field.get("attractor_stabilization", {}))
+            if isinstance(working_field.get("attractor_stabilization", {}), dict)
+            else {}
+        )
+        if packet:
+            packets.append(packet)
+    return packets
+
+
+def _stage92_has_nonzero_signal(packets: list[dict[str, Any]]) -> bool:
+    for packet in packets:
+        signal = dict(packet.get("stabilization_signal", {})) if isinstance(packet.get("stabilization_signal", {}), dict) else {}
+        if any(safe_float(value) > 0.0 for value in signal.values()):
+            return True
+    return False
+
+
+def _stage92_all_signal_zero(packets: list[dict[str, Any]]) -> bool:
+    if not packets:
+        return False
+    for packet in packets:
+        signal = dict(packet.get("stabilization_signal", {})) if isinstance(packet.get("stabilization_signal", {}), dict) else {}
+        if not signal or any(safe_float(value) != 0.0 for value in signal.values()):
+            return False
+    return True
+
+
+def _stage92_stage91_update_path_visible(run: dict[str, Any]) -> bool:
+    for update in _stage91_policy_updates(run):
+        delta = dict(update.get("update_delta", {})) if isinstance(update.get("update_delta", {}), dict) else {}
+        if update.get("control_condition", "update_on") == "update_on" and bool(update.get("update_enabled", True)):
+            if any(safe_float(value) > 0.0 for value in delta.values()):
+                return True
+    return False
+
+
+def evaluate_stage92_attractor_ablation(*, attractor_on: dict[str, Any], attractor_null: dict[str, Any]) -> dict[str, Any]:
+    on = dict(attractor_on or {})
+    null = dict(attractor_null or {})
+    on_scorecard = dict(on.get("scorecard", {})) if isinstance(on.get("scorecard", {}), dict) else {}
+    null_scorecard = dict(null.get("scorecard", {})) if isinstance(null.get("scorecard", {}), dict) else {}
+    on_metrics = dict(on_scorecard.get("metrics", {})) if isinstance(on_scorecard.get("metrics", {}), dict) else {}
+    null_metrics = dict(null_scorecard.get("metrics", {})) if isinstance(null_scorecard.get("metrics", {}), dict) else {}
+    on_turns = on.get("turns", []) if isinstance(on.get("turns", []), list) else []
+    null_turns = null.get("turns", []) if isinstance(null.get("turns", []), list) else []
+    on_packets = _stage92_attractor_packets(on)
+    null_packets = _stage92_attractor_packets(null)
+
+    def _metric_delta(name: str) -> float:
+        return round(safe_float(on_metrics.get(name, 0.0)) - safe_float(null_metrics.get(name, 0.0)), 4)
+
+    same_scenario = str(on.get("scenario", "") or "") == str(null.get("scenario", "") or "")
+    same_turn_count = len(on_turns) == len(null_turns)
+    structural_prompt_match = (
+        same_scenario
+        and same_turn_count
+        and bool(on_packets)
+        and bool(null_packets)
+        and all(bool(packet.get("prompt_cost_matched_control", False)) for packet in on_packets + null_packets)
+    )
+    on_total_tokens = _stage91_total_tokens(on)
+    null_total_tokens = _stage91_total_tokens(null)
+    token_metadata_complete = bool(on_total_tokens and null_total_tokens)
+    token_relative_delta = 0.0
+    if token_metadata_complete:
+        token_relative_delta = abs(on_total_tokens - null_total_tokens) / max(1, on_total_tokens, null_total_tokens)
+    prompt_cost_matched = token_relative_delta <= 0.20 if token_metadata_complete else structural_prompt_match
+
+    attractor_on_signal_visible = _stage92_has_nonzero_signal(on_packets)
+    attractor_null_signal_suppressed = _stage92_all_signal_zero(null_packets)
+    stage91_update_path_preserved = _stage92_stage91_update_path_visible(on)
+    attractor_on_passed = bool(on_scorecard.get("passed", False))
+    attractor_null_passed = bool(null_scorecard.get("passed", False))
+    interaction_delta = _metric_delta("interaction_usefulness_score")
+    continuity_delta = _metric_delta("continuity_score")
+    overall_delta = round(safe_float(on_scorecard.get("overall_score", 0.0)) - safe_float(null_scorecard.get("overall_score", 0.0)), 4)
+    issue_count_delta = _stage91_issue_count(on) - _stage91_issue_count(null)
+    controls = {
+        "same_scenario": same_scenario,
+        "same_turn_count": same_turn_count,
+        "prompt_cost_matched": prompt_cost_matched,
+        "token_relative_delta": round(token_relative_delta, 4),
+        "token_metadata_complete": token_metadata_complete,
+        "structural_prompt_match": structural_prompt_match,
+        "attractor_on_signal_visible": attractor_on_signal_visible,
+        "attractor_null_signal_suppressed": attractor_null_signal_suppressed,
+        "stage91_update_path_preserved": stage91_update_path_preserved,
+        "attractor_on_passed": attractor_on_passed,
+        "attractor_null_passed": attractor_null_passed,
+    }
+    strict_controls_ok = (
+        same_scenario
+        and same_turn_count
+        and prompt_cost_matched
+        and attractor_on_signal_visible
+        and attractor_null_signal_suppressed
+        and stage91_update_path_preserved
+        and attractor_on_passed
+    )
+    if strict_controls_ok and overall_delta >= -0.005 and (
+        interaction_delta >= 0.02 or continuity_delta >= 0.04 or issue_count_delta < 0
+    ):
+        decision = "stage92_attractor_supported_under_matched_ablation"
+    elif (
+        same_scenario
+        and same_turn_count
+        and prompt_cost_matched
+        and attractor_null_signal_suppressed
+        and stage91_update_path_preserved
+        and interaction_delta >= -0.02
+        and continuity_delta >= -0.04
+    ):
+        decision = "stage92_attractor_effect_inconclusive_under_matched_ablation"
+    else:
+        decision = "stage92_attractor_ablation_not_supported"
+    return {
+        "ok": decision != "stage92_attractor_ablation_not_supported",
+        "stage": STAGE92_CONTROL_NAME,
+        "decision": decision,
+        "controls": controls,
+        "deltas": {
+            "overall_score_delta": overall_delta,
+            "interaction_usefulness_score_delta": interaction_delta,
+            "continuity_score_delta": continuity_delta,
+            "policy_update_delta_score_delta": _metric_delta("policy_update_delta_score"),
+            "attractor_stabilization_score_delta": _metric_delta("attractor_stabilization_score"),
+            "issue_count_delta": issue_count_delta,
+        },
+        "attractor_on": {
+            "scenario": str(on.get("scenario", "") or ""),
+            "turn_count": len(on_turns),
+            "total_tokens": on_total_tokens,
+            "overall_score": safe_float(on_scorecard.get("overall_score", 0.0)),
+            "interaction_usefulness_score": safe_float(on_metrics.get("interaction_usefulness_score", 0.0)),
+            "continuity_score": safe_float(on_metrics.get("continuity_score", 0.0)),
+            "attractor_stabilization_score": safe_float(on_metrics.get("attractor_stabilization_score", 0.0)),
+            "issue_count": _stage91_issue_count(on),
+        },
+        "attractor_null": {
+            "scenario": str(null.get("scenario", "") or ""),
+            "turn_count": len(null_turns),
+            "total_tokens": null_total_tokens,
+            "overall_score": safe_float(null_scorecard.get("overall_score", 0.0)),
+            "interaction_usefulness_score": safe_float(null_metrics.get("interaction_usefulness_score", 0.0)),
+            "continuity_score": safe_float(null_metrics.get("continuity_score", 0.0)),
+            "attractor_stabilization_score": safe_float(null_metrics.get("attractor_stabilization_score", 0.0)),
+            "issue_count": _stage91_issue_count(null),
+        },
+        "publication_boundary": {
+            "claim_scope": "current_thread_medium_term_attractor_stabilization",
+            "not_claimed": [
+                "durable_policy_sedimentation",
+                "persistent_autobiographical_self_memory",
+                "model_weight_learning",
+                "human_consciousness",
+            ],
+        },
+    }
+
+
 class BionicUserSimulationHarness:
     def __init__(
         self,
@@ -1263,11 +1667,17 @@ class BionicUserSimulationHarness:
         turn_limit: int | None = None,
         offline: bool = False,
         enable_policy_update: bool = True,
+        enable_attractor_stabilization: bool = True,
     ) -> dict[str, Any]:
         normalized_scenario = str(scenario or DEFAULT_STAGE42_SUITE).strip() or DEFAULT_STAGE42_SUITE
         turns = _scenario_turns(normalized_scenario, turn_limit=turn_limit)
         run_id = stable_digest(STAGE42_NAME, normalized_scenario, utc_now(), limit=16)
-        memory = _IsolatedNoviceMemory(scenario=normalized_scenario, enable_policy_update=enable_policy_update)
+        memory = _IsolatedNoviceMemory(
+            scenario=normalized_scenario,
+            enable_policy_update=enable_policy_update,
+            enable_attractor_stabilization=enable_attractor_stabilization,
+        )
+        attractor_active = bool(enable_attractor_stabilization and enable_policy_update)
         kernel = BionicKernel(
             config=self.config,
             memory=memory,
@@ -1319,6 +1729,8 @@ class BionicUserSimulationHarness:
             "scenario": normalized_scenario,
             "stage90_policy_update_enabled": bool(enable_policy_update),
             "stage91_control_condition": "update_on" if enable_policy_update else "update_null",
+            "stage92_attractor_stabilization_enabled": attractor_active,
+            "stage92_control_condition": "attractor_on" if attractor_active else "attractor_null",
             "thread_key": str(thread_key or ""),
             "chat_name": str(chat_name or ""),
             "channel": str(channel or "cli"),

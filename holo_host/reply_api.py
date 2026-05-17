@@ -1302,6 +1302,7 @@ class HoloReplyService:
         turn_limit: int = 5,
         offline: bool = False,
         enable_policy_update: bool = True,
+        enable_attractor_stabilization: bool = True,
     ) -> dict[str, Any]:
         resolved_thread_key = str(thread_key or "cli:Stage42Novice")
         resolved_chat_name = str(chat_name or resolved_thread_key)
@@ -1318,6 +1319,7 @@ class HoloReplyService:
             turn_limit=int(turn_limit or 5),
             offline=offline,
             enable_policy_update=enable_policy_update,
+            enable_attractor_stabilization=enable_attractor_stabilization,
         )
 
     def show_bionic_user_sim_scorecard(self, *, suite: str = DEFAULT_STAGE42_SUITE) -> dict[str, Any]:
@@ -10855,6 +10857,7 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                             turn_limit=int(payload.get("turn_limit", payload.get("turns", 5)) or 5),
                             offline=bool(payload.get("offline", False)),
                             enable_policy_update=not bool(payload.get("disable_policy_update", False)),
+                            enable_attractor_stabilization=not bool(payload.get("disable_attractor_stabilization", False)),
                         ),
                     )
                     return

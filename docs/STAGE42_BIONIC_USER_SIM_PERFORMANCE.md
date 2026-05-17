@@ -6,7 +6,7 @@ Stage42 isolates the "new user meets Holo" test as an operational performance be
 This is a performance-test layer, not a WeChat rollout and not self-memory. It exists so bionic dialogue quality can be measured repeatedly without polluting Holo's subject memory or ordinary bionic traces.
 
 ## Public Surfaces
-- `run-bionic-user-sim --thread-key ... --chat-name ... --channel cli [--scenario novice_intro|free_dialogue] [--turns N] [--offline]`
+- `run-bionic-user-sim --thread-key ... --chat-name ... --channel cli [--scenario novice_intro|free_dialogue] [--turns N] [--offline] [--disable-policy-update] [--disable-attractor-stabilization]`
 - `show-bionic-user-sim-scorecard --suite novice_intro|free_dialogue`
 - `accept-stage42`
 - HTTP mirrors:
@@ -38,6 +38,10 @@ Stage42 records these metrics:
 - `question_quality_score`
 - `mechanism_leakage_score`
 - `naturalness_score`
+- `interaction_usefulness_score`
+- `self_organization_policy_score`
+- `policy_update_delta_score`
+- `attractor_stabilization_score`
 - `repetition_penalty_inverse`
 - `latency_score`
 

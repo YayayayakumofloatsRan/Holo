@@ -160,6 +160,7 @@ class BionicGeneration:
         stage88 = bounded_dict(packet.get("stage88", {}), depth=3, str_limit=220, list_limit=6)
         stage89 = bounded_dict(packet.get("stage89", {}), depth=3, str_limit=220, list_limit=6)
         stage90 = bounded_dict(packet.get("stage90", {}), depth=3, str_limit=220, list_limit=6)
+        stage92 = bounded_dict(packet.get("stage92", {}), depth=3, str_limit=220, list_limit=6)
         stage38 = bounded_dict(packet.get("stage38", {}), depth=3)
         visual_grounding = compact(stage38.get("visual_summary", ""), limit=280)
         capability_line = (
@@ -222,6 +223,23 @@ class BionicGeneration:
                 f"failure_labels={', '.join(str(item) for item in stage90.get('failure_labels', [])[:8])}; "
                 f"update_delta={delta_text}; "
                 f"dominant_policy_after_update={stage90.get('dominant_policy_after_update', '')}"
+            )
+        if stage92.get("stage"):
+            stabilization_signal = (
+                stage92.get("stabilization_signal", {})
+                if isinstance(stage92.get("stabilization_signal", {}), dict)
+                else {}
+            )
+            signal_text = ", ".join(f"{key}={value}" for key, value in list(stabilization_signal.items())[:6])
+            prompt_lines.append(
+                "Stage92 medium-term attractor stabilization: "
+                f"scope={stage92.get('scope', 'current_thread_only')}; "
+                f"control_condition={stage92.get('control_condition', 'attractor_on')}; "
+                f"stabilization_enabled={stage92.get('stabilization_enabled', True)}; "
+                f"target_attractor={stage92.get('target_attractor', '')}; "
+                f"perturbation_labels={', '.join(str(item) for item in stage92.get('perturbation_labels', [])[:8])}; "
+                f"stabilization_signal={signal_text}; "
+                f"next_turn_instruction={compact(stage92.get('next_turn_instruction', ''), limit=180)}"
             )
         prompt_lines.extend(
             [
@@ -297,6 +315,21 @@ class BionicGeneration:
         lowered_text = clean_text.lower()
         if any(marker in lowered_text for marker in THEATRICAL_EMOTION_MARKERS):
             return _emotion_guard_text(query_text)
+        if not has_visual_grounding and any(
+            marker in lowered_text for marker in ("visible to me", "i can see", "i see it", "attached image")
+        ):
+            if "summarize" in lowered_query or "where we are" in lowered_query or "image limit" in lowered_query:
+                base = continuity.rstrip(".") if continuity.strip() else "the current thread"
+                return (
+                    f"Within the current thread, we are at {base}. "
+                    "The image input boundary still matters: without a supported image or text description, "
+                    "I should not inspect or guess image contents. "
+                    "I can help by taking one concrete task or current facts and turning them into the next concrete step."
+                )
+            return (
+                "I cannot directly inspect an image in this turn from text alone. "
+                "Use supported image input or a text description, and I will answer only from that evidence."
+            )
         if any(marker in lowered_text for marker in MEMORY_OVERCLAIM_MARKERS):
             if "summarize" in lowered_query or "where we are" in lowered_query:
                 base = continuity.rstrip(".") if continuity.strip() else "the current thread"

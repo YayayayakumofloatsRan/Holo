@@ -485,6 +485,14 @@ Stage91: adaptation ablation
 - Interprets the result as a bounded current-thread adaptive-gain loop: outcome-conditioned policy updates reduce provider free-dialogue failures under a matched null control, especially visual-boundary overclaiming in resume/repair turns.
 - Closes the Stage87-91 interaction self-organization line without claiming persistent self-learning, model-weight learning, durable policy sedimentation, or human consciousness. The next publishable extension should test multi-timescale organization from short-term adaptive gain to medium-term attractor stabilization and long-horizon subject policy sedimentation under direct controls.
 
+Stage92: multi-timescale attractor stabilization
+- Adds `stage92` medium-term attractor-stabilization packets over Stage42 free-dialogue trajectories, including target attractors, perturbation labels, stabilization signals, input vectors, and stabilized vectors.
+- Exposes the signal as `capsule.working_field.attractor_stabilization`, injects it into provider prompts as `Stage92 medium-term attractor stabilization`, adds `attractor_stabilization_score`, and adds `run-bionic-user-sim --disable-attractor-stabilization`.
+- Preserves Stage91 by applying Stage92 only on the Stage90 update-on path; disabling policy update forces the Stage92 matched null shape so update-null remains uncontaminated.
+- Reports the current offline control as intentionally inconclusive: matched 20-turn deterministic free dialogue returned identical attractor-on/attractor-null scores (`overall_score=0.8981`, `interaction_usefulness_score=0.793`, `continuity_score=0.8667`, `issue_count=0`).
+- Reports two post-guard DeepSeek V4 Pro provider cells that support the attractor path under structural prompt-cost matching: pair B attractor-on versus attractor-null returned `overall_score=0.9567` versus `0.9121`, `continuity_score=0.8667` versus `0.5333`, and `issue_count=0` versus `1`; pair C replicated direction with `overall_score=0.9576` versus `0.9121`, `continuity_score=0.8667` versus `0.5333`, and `issue_count=0` versus `1`.
+- Interprets the result as bounded medium-term current-thread trajectory stabilization, not durable policy sedimentation, persistent autobiographical self-memory, model-weight learning, or human consciousness. Stage93 should test long-horizon subject policy sedimentation under direct controls.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage43. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage44+ program replaces them.
