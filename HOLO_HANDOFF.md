@@ -171,13 +171,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 166. `docs/ENGINEERING_HANDOFF_STAGE90.md`
 167. `docs/STAGE91_ADAPTATION_ABLATION.md`
 168. `docs/ENGINEERING_HANDOFF_STAGE91.md`
-169. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
-170. `HOLO_SYSTEM.md`
-171. `HOLO_HOST.md`
-172. `OPERATIONS.md`
-173. `docs/PUBLIC_RELEASE_HYGIENE.md`
-174. `holo_memory_library/MEMORY_LIBRARY.md`
-175. `windows_helper/README.md`
+169. `docs/NEXT_CODEX_THREAD_STAGE92.md`
+170. `docs/DEEPSEEK_MODEL_BIONIC_STRESS_2026-05-12.md`
+171. `HOLO_SYSTEM.md`
+172. `HOLO_HOST.md`
+173. `OPERATIONS.md`
+174. `docs/PUBLIC_RELEASE_HYGIENE.md`
+175. `holo_memory_library/MEMORY_LIBRARY.md`
+176. `windows_helper/README.md`
 
 ## What This Document Must Cover
 - current live state
@@ -524,9 +525,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - Latest bionic finding: the residual fast channel repairs the metacognitive coupling failure for scheduled commitments and current visual grounding; stable-prefix repair moved live DeepSeek cache from `0` hit / `15796` miss in run J to `3328` hit / `15419` miss in run R; provider message partitioning is capability-safe and inspectable but not clearly better than the single-message stable-prefix baseline. Stage48 separates cortical schema into provider prefix and working/hippocampal memory into dynamic context. Stage49 proves duplicate volatile prompt blocks can be removed only if recall reconstruction is promoted into the hippocampal budget. Stage50 adds the missing audit surface: DeepSeek Z preserved all bionic metrics with `5376` hit / `14525` miss tokens and `protected_line_dropped=false` every turn. Stage51 improves biological-memory lifecycle and consciousness-flow evidence while keeping all Stage46 bionic metrics at `1.0`, but DeepSeek AA miss tokens rose to `18600`. Stage52 fused lifecycle/flow into scheduler dynamic lines and reduced miss tokens to `15566`, though it has not fully returned to Stage50's `14525`. Stage53 shifts from prompt optimization to tool reach: Holo now treats upstream MCP tool/resource outputs as bounded observations and keeps external servers out of transport, memory, and decision authority. Stage56 shows the immediate geometry bottleneck is trace depth after lifting Stage55 vectors from 12 to 138 dimensions: the current seven-point trace has `effective_rank_proxy=3.2727`, `max_observable_rank=6`, and `limited_by_trace_length=true`. Stage57 shows lifted geometry has a useful cross-run score-movement signal (`geometry_score_correlation=0.7966` across eight recent Stage46 runs), but still keeps `do_not_claim_manifold=true` because the longest trace remains only seven points. Stage58 proves the toolchain can run at long-trace scale through five surrogate traces of `420` turns each (`total_generated_turns=2100`, surrogate Stage57 `geometry_score_correlation=0.983`). Stage59 proves the real DeepSeek provider path can collect journaled shadow-state long-form evidence with strict provider provenance. Stage60 proves that real provider evidence can now be collected as a recoverable multi-model campaign with per-cell shadow runtimes, manifest/events continuity, and conservative breakthrough gating. Stage61 proves Holo can now generate thousands of surrogate bionic interactions, collect internal telemetry, and produce concrete improvement backlog items before spending provider tokens. Stage62 converts that data into forward/reverse explainability and ranks cache inheritance as the first current bottleneck. Stage63 adds a stable cortical cache spine: latest-seed Stage61 prefix tokens rose to `1202.54` and Stage62 aggregate rose to `0.659837`, but `cache_inheritance_low` remains the top bottleneck. Stage64 turns residual fast facts into scheduler-owned working memory: active surrogate Stage62 aggregate rose to `0.687083`, latency residual to `0.672105`, and grounding integrity to `0.925926`; cache inheritance remains the first bottleneck. Stage65 turns tool pressure into scheduler-owned bounded observation evidence: cumulative surrogate tool coverage rose to `0.75`, aggregate to `0.737083`, and bottlenecks fell to `6`; cache inheritance remains first.
   - `python scripts\check_public_release_hygiene.py` passed on `2026-05-12`.
   - `git diff --check` reported no whitespace errors on `2026-05-12`; Git printed only CRLF conversion warnings for existing text files.
-- First action in a new thread: run `git status --short`, read this handoff plus `docs/ENGINEERING_HANDOFF_STAGE65.md`, and do not assume any uncommitted chat-only state exists.
-- Next safe direction: reduce dynamic prompt churn after Stage65 and increase stable-prefix reuse, re-run Stage61/62 for telemetry deltas, then confirm important gains with a budget-approved Stage60 real-provider campaign in shadow state.
-- Do not start WeChat, expose Holo as a downstream MCP server, widen transport rights, mutate self-memory, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
+- First action in a new thread: run `git status --short --branch`, read this handoff plus `docs/NEXT_CODEX_THREAD_STAGE92.md`, `docs/STAGE91_ADAPTATION_ABLATION.md`, and `docs/ENGINEERING_HANDOFF_STAGE91.md`, and continue from the latest pushed `main` commit.
+- Next safe direction: Stage92 should test multi-timescale biomimetic organization. Start with a direct attractor-stabilization mechanism and a matched attractor-null control over the existing Stage42/87-91 interaction harnesses before broad new provider repeats.
+- Do not start WeChat, expose Holo as a downstream MCP server, widen transport rights, mutate self-memory, write persistent policy, add a second brain, or add an unbounded loop as part of the next thread's automatic warm-up.
 
 ## What Holo Is
 - Holo is not one long Codex conversation.
