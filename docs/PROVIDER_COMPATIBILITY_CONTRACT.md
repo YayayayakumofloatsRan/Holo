@@ -20,46 +20,64 @@ It must return standardized:
 
 ## 2. Supported Providers
 
+### `DeepSeekProvider`
+
+Role:
+- default production path for live Holo speech
+
+Use when:
+- the task is text-only
+- Holo is serving the phone app, WeChat, or another live conversation endpoint
+- a direct DeepSeek key is available through `DEEPSEEK_API_KEY`
+
+Transport:
+- HTTP `chat/completions`
+- model defaults: `deepseek-v4-pro` for main/kernel lanes, `deepseek-v4-flash` for fast lanes
+
+### `OpenAICompatibleProvider`
+
+Role:
+- first configurable external fallback
+
+Use when:
+- a compatible HTTP backend is configured
+- DeepSeek is unavailable or a different external backend should be tested
+
+### `ResponsesProvider`
+
+Role:
+- optional OpenAI fallback
+
+Use when:
+- OpenAI Responses is explicitly configured and reachable
+
 ### `CodexCliProvider`
 
 Role:
-- primary production path
+- optional development/operator fallback
 
 Use when:
 - task requires current Codex CLI behavior
 - image inputs are present and CLI supports them
 - shadow/operator flows depend on CLI semantics
 
-### `ResponsesProvider`
-
-Role:
-- first fallback
-
-Use when:
-- Codex CLI is unavailable or failing
-- task is compatible with OpenAI Responses semantics
-
-### `OpenAICompatibleProvider`
-
-Role:
-- second fallback
-
-Use when:
-- a compatible HTTP backend is configured
-- previous providers are unavailable
+Important:
+- live Holo speech must not depend on `codex_cli`
+- append it only through explicit lane config or `HOLO_ENABLE_CODEX_FALLBACK=1`
 
 ## 3. Fallback Order
 
 Per lane:
 1. primary provider
 2. backup provider
-3. `openai_compatible`
-4. final compatibility fallback only if configured in code
+3. compatible external fallback
+4. `codex_cli` only when explicitly configured or enabled
 
 Important:
 - fallback may change provider
 - fallback must not silently change task meaning
 - fallback must still write usage and failure details
+- fallback must not hide a broken live provider by blocking the conversation thread for minutes
 
 ## 4. Required Request Fields
 
@@ -99,6 +117,9 @@ Use:
 - `processor_fabric`
 - `provider_backends`
 - `processor_routing`
+- `DEEPSEEK_API_KEY`
+- `DEEPSEEK_BASE_URL` when overriding the default endpoint
+- `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL` for non-DeepSeek compatible providers
 
 Do not treat:
 - `codex_model`
@@ -119,3 +140,4 @@ Use these commands:
 - no direct raw HTTP call sites added outside provider classes
 - no direct `codex exec` subprocesses added outside the runner/provider layer
 - no hidden per-feature provider logic that bypasses usage accounting
+- no live-reply path that makes Codex CLI the silent final fallback unless explicitly enabled

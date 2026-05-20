@@ -53,6 +53,7 @@ from .mind_graph_parts.temporal_state import upsert_temporal_item as _upsert_tem
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
 TEXT_FILE_SUFFIXES = {".txt", ".md", ".json", ".jsonl", ".yaml", ".yml", ".csv", ".log", ".html", ".xml"}
+ACTIVE_THREAD_FAST_CHANNELS = {"wechat", "holo_app"}
 RECALL_HINTS = ("记得", "之前", "更早", "上线前", "你说过", "我们之前", "remember", "earlier", "before", "previous")
 ORIGIN_RECALL_HINTS = (
     "最开始",
@@ -1628,7 +1629,7 @@ class MindGraph:
 
         blockers = bool(signal["explicit_memory"] or signal["factual"] or signal["search_or_visual"])
         reflex_eligible = (
-            str(channel or "").strip() == "wechat"
+            str(channel or "").strip() in ACTIVE_THREAD_FAST_CHANNELS
             and normalized_direction in {"inbound", "inspect"}
             and int(signal["meaningful"]) <= 54
             and tension < 0.58

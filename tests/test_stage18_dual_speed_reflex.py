@@ -102,6 +102,59 @@ class Stage18DualSpeedReflexTests(unittest.TestCase):
                 bridge.activation.close()
                 bridge.graph.close()
 
+    def test_holo_app_short_turn_can_route_generation_to_micro_fast(self) -> None:
+        with TempMemoryRepo() as temp:
+            bridge = self._bridge(temp)
+            try:
+                active = bridge.update_active_thread_state(
+                    channel="holo_app",
+                    thread_key="holo_app:HoloSubject",
+                    chat_name="HoloSubject",
+                    direction="inbound",
+                    text="ping",
+                    message_id="stage18-holo-fast-1",
+                    event_row_id=1818,
+                )
+                packet = bridge.sidecar_packet(
+                    "ping",
+                    context={
+                        "channel": "holo_app",
+                        "thread_key": "holo_app:HoloSubject",
+                        "chat_name": "HoloSubject",
+                        "active_thread_state": active,
+                        "attachments": [],
+                    },
+                )
+                packet["selected_action"] = {"action_type": "reply_once", "score": 0.9}
+                packet["action_market"] = [{"action_type": "reply_once", "score": 0.9}]
+                packet["uncertainty_level"] = 0.12
+                runner = _LaneRecordingRunner()
+                processor = CodexCliProcessor(self._config(), runner)  # type: ignore[arg-type]
+                context = TurnContext(
+                    channel="holo_app",
+                    thread_key="holo_app:HoloSubject",
+                    chat_name="HoloSubject",
+                    sender="User",
+                    user_text="ping",
+                    sidecar=packet,
+                    mind_packet=packet,
+                    attention_state=build_attention_state("ping", channel="holo_app"),
+                    emotion_state={},
+                    history=[{"direction": "inbound", "body_text": "ping"}],
+                    metadata={},
+                    capability_context={},
+                )
+                reply = processor.generate(context)
+
+                self.assertEqual(packet["memory_route"], "active_thread")
+                self.assertEqual(runner.calls[-1]["lane"], "micro_fast")
+                self.assertEqual(runner.calls[-1]["timeout_seconds"], 45)
+                self.assertEqual(reply.debug["lane"], "micro_fast")
+                self.assertEqual(reply.debug["reply_lane_reason"], "stage18_reflex_micro_fast")
+            finally:
+                bridge.activation.close()
+                bridge.graph.close()
+
     def test_explicit_memory_query_still_escalates_and_avoids_micro_fast(self) -> None:
         with TempMemoryRepo() as temp:
             bridge = self._bridge(temp)

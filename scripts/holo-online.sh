@@ -19,7 +19,7 @@ ensure_default_config() {
 state_dir = ".holo_runtime"
 db_path = ".holo_runtime/holo_host.sqlite3"
 log_dir = ".holo_runtime/logs"
-processor_backend = "codex_cli"
+processor_backend = "deepseek"
 poll_interval_seconds = 30
 max_jobs_per_cycle = 4
 codex_binary = "codex"
@@ -36,6 +36,34 @@ resume_sessions = true
 dry_run = false
 api_bind_host = "0.0.0.0"
 api_port = 8004
+
+[processor_fabric]
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_api_key_env = "DEEPSEEK_API_KEY"
+openai_compatible_base_url = ""
+openai_compatible_api_key_env = "OPENAI_COMPATIBLE_API_KEY"
+responses_api_key_env = "OPENAI_API_KEY"
+
+[provider_backends.kernel_xhigh]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-pro"
+reasoning_effort = "xhigh"
+max_output_tokens = 2400
+
+[provider_backends.subject_main]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-pro"
+reasoning_effort = "medium"
+max_output_tokens = 1600
+
+[provider_backends.micro_fast]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-flash"
+reasoning_effort = "low"
+max_output_tokens = 900
 
 [mail]
 transport = "maildir"
@@ -140,6 +168,39 @@ if re.search(r'(?m)^\s*api_bind_host\s*=\s*"([^"]+)"', text):
     updated = re.sub(r'(?m)^(\s*api_bind_host\s*=\s*")([^"]+)(".*)$', r'\g<1>0.0.0.0\3', text, count=1)
 else:
     updated = text.replace('api_port = 8004', 'api_bind_host = "0.0.0.0"\napi_port = 8004', 1)
+if re.search(r'(?m)^\s*processor_backend\s*=\s*"codex_cli"', updated):
+    updated = re.sub(r'(?m)^(\s*processor_backend\s*=\s*")codex_cli(".*)$', r'\g<1>deepseek\2', updated, count=1)
+if "[processor_fabric]" not in updated:
+    updated = updated.rstrip() + """
+
+[processor_fabric]
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_api_key_env = "DEEPSEEK_API_KEY"
+openai_compatible_base_url = ""
+openai_compatible_api_key_env = "OPENAI_COMPATIBLE_API_KEY"
+responses_api_key_env = "OPENAI_API_KEY"
+
+[provider_backends.kernel_xhigh]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-pro"
+reasoning_effort = "xhigh"
+max_output_tokens = 2400
+
+[provider_backends.subject_main]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-pro"
+reasoning_effort = "medium"
+max_output_tokens = 1600
+
+[provider_backends.micro_fast]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-flash"
+reasoning_effort = "low"
+max_output_tokens = 900
+"""
 if updated != text:
     config_path.write_text(updated, encoding="utf-8")
 PY

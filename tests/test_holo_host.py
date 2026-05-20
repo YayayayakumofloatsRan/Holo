@@ -1319,7 +1319,7 @@ class FakeMemory:
         for index, item in enumerate(self.initiatives, start=len(rows) + 1):
             rows.append(
                 {
-                    "id": index,
+                    "id": item.get("id", index),
                     "candidate_type": item.get("candidate_type", "contact_ping"),
                     "channel": item.get("channel", channel),
                     "thread_key": item.get("thread_key", thread_key or ""),
@@ -1798,12 +1798,21 @@ class QueueStoreTests(unittest.TestCase):
 
 
 class CodexRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _force_codex_cli(config) -> None:
+        config.runtime.processor_backend = "codex_cli"
+        for lane in config.processor_fabric.provider_backends.values():
+            lane.primary_provider = "codex_cli"
+            lane.backup_provider = "responses"
+            lane.model = config.runtime.codex_model or "gpt-5.4"
+
     def test_runner_applies_model_and_low_reasoning_effort(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             config.runtime.codex_model = "gpt-5.4"
             config.runtime.codex_reasoning_effort = "low"
+            self._force_codex_cli(config)
             runner = CodexRunner(config)
 
             with mock.patch("holo_host.codex_runner.subprocess.run") as run_mock:
@@ -1834,6 +1843,7 @@ class CodexRunnerTests(unittest.TestCase):
             config = load_config(repo_root=root)
             config.runtime.codex_model = "gpt-5.4"
             config.runtime.codex_reasoning_effort = "low"
+            self._force_codex_cli(config)
             runner = CodexRunner(config)
 
             with mock.patch("holo_host.codex_runner.subprocess.run") as run_mock:
@@ -1857,6 +1867,7 @@ class CodexRunnerTests(unittest.TestCase):
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             config.runtime.codex_command_prefix = ("codex",)
+            self._force_codex_cli(config)
             runner = CodexRunner(config)
             calls: list[list[str]] = []
 
@@ -2386,6 +2397,46 @@ class DaemonFlowTests(unittest.TestCase):
                 self.assertTrue(result["initiative"]["blocked_candidates"])
                 self.assertEqual(result["initiative"]["blocked_candidates"][0]["reason"], "initiative_probe_disabled")
                 self.assertFalse(send_queue_dir.exists() and list(send_queue_dir.glob("*.json")))
+            finally:
+                close_daemon_handles(daemon)
+
+    def test_daemon_cycle_does_not_crash_on_string_initiative_candidate_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            send_queue_dir = root / "send_queue"
+            helper_dir = root / "windows_helper"
+            helper_dir.mkdir(parents=True, exist_ok=True)
+            (helper_dir / "wechat_helper.live.json").write_text(
+                json.dumps(
+                    {
+                        "whitelist": ["TestUser"],
+                        "send_queue_dir": str(send_queue_dir),
+                        "pywinauto_process_path": "C:/Program Files/Tencent/WeChat/WeChat.exe",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(repo_root=root)
+            gateway = MaildirGateway(config)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("What are you busy with?")
+            memory = FakeMemory()
+            memory.initiatives.append(
+                {
+                    "id": "initiative-1f1c27cc67e8bac0fc",
+                    "channel": "wechat",
+                    "thread_key": "wechat:TestUser",
+                    "chat_name": "TestUser",
+                    "reason": "String id from graph-backed initiative store",
+                    "prompt": "Lightly poke this thread",
+                    "send_allowed": False,
+                }
+            )
+            daemon = HoloDaemon(config, store=store, gateway=gateway, runner=runner, memory=memory)
+            try:
+                result = daemon.run_cycle()
+                self.assertEqual(result["initiative"]["scheduled_job_ids"], [])
             finally:
                 close_daemon_handles(daemon)
     def test_daemon_reply_job_passes_richer_metadata_to_memory_bridge(self) -> None:

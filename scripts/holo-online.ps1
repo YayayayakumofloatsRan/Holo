@@ -37,7 +37,7 @@ function Ensure-DefaultConfig {
 state_dir = ".holo_runtime"
 db_path = ".holo_runtime/holo_host.sqlite3"
 log_dir = ".holo_runtime/logs"
-processor_backend = "codex_cli"
+processor_backend = "deepseek"
 poll_interval_seconds = 30
 max_jobs_per_cycle = 4
 codex_binary = "codex"
@@ -55,6 +55,34 @@ resume_sessions = true
 dry_run = false
 api_bind_host = "127.0.0.1"
 api_port = 8004
+
+[processor_fabric]
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_api_key_env = "DEEPSEEK_API_KEY"
+openai_compatible_base_url = ""
+openai_compatible_api_key_env = "OPENAI_COMPATIBLE_API_KEY"
+responses_api_key_env = "OPENAI_API_KEY"
+
+[provider_backends.kernel_xhigh]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-pro"
+reasoning_effort = "xhigh"
+max_output_tokens = 2400
+
+[provider_backends.subject_main]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-pro"
+reasoning_effort = "medium"
+max_output_tokens = 1600
+
+[provider_backends.micro_fast]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-flash"
+reasoning_effort = "low"
+max_output_tokens = 900
 
 [mail]
 transport = "maildir"

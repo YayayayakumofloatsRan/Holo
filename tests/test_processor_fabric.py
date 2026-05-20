@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from holo_host.config import load_config
-from holo_host.codex_runner import CodexRunner
+from holo_host.codex_runner import CodexRunner, DeepSeekProvider
 from holo_host.models import ProcessorTaskRequest, ProcessorUsageRecord
 from holo_host.store import QueueStore
 
@@ -91,6 +92,116 @@ class ProcessorUsageLedgerTests(unittest.TestCase):
 
 
 class CodexRunnerRoutingTests(unittest.TestCase):
+    def test_deepseek_backend_dispatch_does_not_append_codex_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_api_key_env = "TEST_DEEPSEEK_API_KEY"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+
+            dispatch = runner.describe_task_dispatch(
+                ProcessorTaskRequest(
+                    task_type="reply",
+                    prompt="hello",
+                    metadata={"selected_action_type": "reply_once", "uncertainty_level": 0.12},
+                )
+            )
+
+            self.assertEqual(dispatch["providers"][0], "deepseek")
+            self.assertNotIn("codex_cli", dispatch["providers"])
+
+    def test_deepseek_provider_uses_chat_completions_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+
+[processor_fabric]
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_api_key_env = "TEST_DEEPSEEK_API_KEY"
+
+[provider_backends.micro_fast]
+primary_provider = "deepseek"
+backup_provider = "openai_compatible"
+model = "deepseek-v4-flash"
+reasoning_effort = "low"
+max_output_tokens = 128
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+            provider = DeepSeekProvider()
+
+            captured: dict[str, object] = {}
+
+            def fake_post_json(url: str, api_key: str, payload: dict[str, object], timeout_seconds: int) -> dict[str, object]:
+                captured["url"] = url
+                captured["api_key"] = api_key
+                captured["payload"] = payload
+                captured["timeout_seconds"] = timeout_seconds
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "holo reply",
+                                "reasoning_content": "internal trace",
+                            }
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 2,
+                        "total_tokens": 12,
+                    },
+                }
+
+            with mock.patch.dict("os.environ", {"TEST_DEEPSEEK_API_KEY": "test-key"}):
+                with mock.patch.object(provider, "_post_json", side_effect=fake_post_json):
+                    result = provider.run_task(
+                        runner,
+                        ProcessorTaskRequest(
+                            task_type="reply",
+                            prompt="say hello",
+                            lane="micro_fast",
+                            timeout_seconds=9,
+                        ),
+                        spec={"output_schema": "plain_text"},
+                        lane_name="micro_fast",
+                        lane_config=config.processor_fabric.provider_backends["micro_fast"],
+                    )
+
+            self.assertEqual(result.text, "holo reply")
+            self.assertEqual(captured["url"], "https://api.deepseek.com/chat/completions")
+            self.assertEqual(captured["api_key"], "test-key")
+            self.assertEqual(captured["timeout_seconds"], 9)
+            payload = captured["payload"]
+            self.assertIsInstance(payload, dict)
+            self.assertEqual(payload["model"], "deepseek-v4-flash")
+            self.assertEqual(payload["thinking"], {"type": "disabled"})
+            self.assertEqual(payload["messages"], [{"role": "user", "content": "say hello"}])
+            self.assertEqual(result.metadata["reasoning_content_present"], True)
+
     def test_describe_task_dispatch_uses_expected_default_lanes(self) -> None:
         config = load_config(repo_root=Path(__file__).resolve().parents[1])
         runner = CodexRunner(config)
@@ -126,4 +237,4 @@ class CodexRunnerRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(dispatch["lane"], "kernel_xhigh")
-        self.assertIn("codex_cli", dispatch["providers"])
+        self.assertIn(dispatch["providers"][0], {"deepseek", "codex_cli"})

@@ -34,7 +34,7 @@ class RuntimeConfig:
     state_dir: Path
     db_path: Path
     log_dir: Path
-    processor_backend: str = "auto"
+    processor_backend: str = "deepseek"
     codex_binary: str = "codex"
     codex_command_prefix: tuple[str, ...] = ()
     codex_extra_args: tuple[str, ...] = ()
@@ -79,6 +79,8 @@ class TaskRoutingConfig:
 class ProcessorFabricConfig:
     provider_backends: dict[str, ProviderLaneConfig] = field(default_factory=dict)
     processor_routing: dict[str, TaskRoutingConfig] = field(default_factory=dict)
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_api_key_env: str = "DEEPSEEK_API_KEY"
     openai_compatible_base_url: str = ""
     openai_compatible_api_key_env: str = "OPENAI_COMPATIBLE_API_KEY"
     responses_api_key_env: str = "OPENAI_API_KEY"
@@ -243,40 +245,48 @@ def _resolve_path(repo_root: Path, state_dir: Path, raw: str | None, fallback: s
 
 
 def _default_provider_backends(runtime: RuntimeConfig) -> dict[str, ProviderLaneConfig]:
-    preferred = (runtime.processor_backend or "codex_cli").strip().lower()
-    if preferred not in {"codex_cli", "responses", "openai_compatible"}:
-        preferred = "codex_cli"
+    preferred = (runtime.processor_backend or "deepseek").strip().lower()
+    if preferred in {"auto", "default"}:
+        preferred = "deepseek"
+    if preferred not in {"deepseek", "codex_cli", "responses", "openai_compatible"}:
+        preferred = "deepseek"
     if preferred == "codex_cli":
         subject_backup = "responses"
         kernel_backup = "responses"
         micro_backup = "responses"
+    elif preferred == "deepseek":
+        subject_backup = "openai_compatible"
+        kernel_backup = "openai_compatible"
+        micro_backup = "openai_compatible"
     elif preferred == "responses":
-        subject_backup = "codex_cli"
-        kernel_backup = "codex_cli"
-        micro_backup = "codex_cli"
+        subject_backup = "deepseek"
+        kernel_backup = "deepseek"
+        micro_backup = "deepseek"
     else:
-        subject_backup = "responses"
-        kernel_backup = "responses"
-        micro_backup = "responses"
+        subject_backup = "deepseek"
+        kernel_backup = "deepseek"
+        micro_backup = "deepseek"
+    subject_model = "deepseek-v4-pro" if preferred == "deepseek" else str(runtime.codex_model or runtime.responses_model or "gpt-5.4")
+    fast_model = "deepseek-v4-flash" if preferred == "deepseek" else str(runtime.fast_model or runtime.responses_fast_model or "gpt-5.4-mini")
     return {
         "kernel_xhigh": ProviderLaneConfig(
             primary_provider=preferred,
             backup_provider=kernel_backup,
-            model=str(runtime.codex_model or runtime.responses_model or "gpt-5.4"),
+            model=subject_model,
             reasoning_effort="xhigh",
             max_output_tokens=2400,
         ),
         "subject_main": ProviderLaneConfig(
             primary_provider=preferred,
             backup_provider=subject_backup,
-            model=str(runtime.codex_model or runtime.responses_model or "gpt-5.4"),
+            model=subject_model,
             reasoning_effort="medium",
             max_output_tokens=1800,
         ),
         "micro_fast": ProviderLaneConfig(
             primary_provider=preferred,
             backup_provider=micro_backup,
-            model=str(runtime.fast_model or runtime.responses_fast_model or "gpt-5.4-mini"),
+            model=fast_model,
             reasoning_effort=str(runtime.fast_reasoning_effort or "low"),
             max_output_tokens=900,
         ),
@@ -382,7 +392,7 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         state_dir=state_dir,
         db_path=db_path,
         log_dir=log_dir,
-        processor_backend=str(runtime_data.get("processor_backend", "auto")).strip() or "auto",
+        processor_backend=str(runtime_data.get("processor_backend", "deepseek")).strip() or "deepseek",
         codex_binary=str(runtime_data.get("codex_binary", "codex")),
         codex_command_prefix=tuple(str(item) for item in runtime_data.get("codex_command_prefix", [])),
         codex_extra_args=tuple(str(item) for item in runtime_data.get("codex_extra_args", [])),
@@ -558,6 +568,12 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
     processor_fabric = ProcessorFabricConfig(
         provider_backends=_load_provider_backends(data.get("provider_backends", {}), runtime),
         processor_routing=_load_processor_routing(data.get("processor_routing", {})),
+        deepseek_base_url=str(
+            processor_fabric_data.get("deepseek_base_url", os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
+        ).strip()
+        or "https://api.deepseek.com",
+        deepseek_api_key_env=str(processor_fabric_data.get("deepseek_api_key_env", "DEEPSEEK_API_KEY")).strip()
+        or "DEEPSEEK_API_KEY",
         openai_compatible_base_url=str(
             processor_fabric_data.get("openai_compatible_base_url", os.environ.get("OPENAI_COMPATIBLE_BASE_URL", ""))
         ).strip(),

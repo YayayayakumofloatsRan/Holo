@@ -55,6 +55,18 @@ def render_thread_summary(history: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _numeric_candidate_id(row: dict[str, Any]) -> int:
+    for key in ("candidate_id", "row_id", "numeric_id", "id"):
+        raw = row.get(key)
+        try:
+            value = int(raw or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 0
+
+
 def reply_prompt(bundle: dict[str, Any], sidecar: dict[str, Any], *, proactive: bool = False) -> str:
     thread = bundle["thread"]
     contact = bundle["contact"]
@@ -909,7 +921,7 @@ class HoloDaemon:
         thread = bundle["thread"]
         contact = bundle["contact"]
         payload = dict(bundle["payload"])
-        candidate_id = int(payload.get("id", 0) or 0)
+        candidate_id = _numeric_candidate_id(payload)
         reason = str(payload.get("reason", "") or payload.get("prompt", "") or "initiative_ping")
         mode = self.brain_mode()
         override_hint = self._candidate_override_hint(row=payload, mode=mode)
@@ -1153,7 +1165,7 @@ class HoloDaemon:
             thread_key = str(row.get("thread_key", "")).strip()
             if channel != "wechat" or not chat_name or not thread_key:
                 continue
-            candidate_id = int(row.get("id", 0) or 0)
+            candidate_id = _numeric_candidate_id(row)
             if not bool(row.get("send_allowed", False)):
                 if candidate_id:
                     self.memory.graph.update_initiative_candidate(
@@ -1491,7 +1503,7 @@ class HoloDaemon:
                 metadata={"source_candidate": latest.get("candidate_type", ""), **evidence_payload},
             )
             self.memory.graph.update_initiative_candidate(
-                candidate_id=int(latest.get("id", 0) or 0),
+                candidate_id=_numeric_candidate_id(latest),
                 status="sent",
                 metadata={"outcome_appraised": True},
                 note="outcome_appraised",

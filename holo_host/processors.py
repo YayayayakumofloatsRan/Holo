@@ -272,9 +272,12 @@ def build_attention_state(text: str, *, channel: str, metadata: dict[str, Any] |
     )
 
 
+ACTIVE_THREAD_FAST_CHANNELS = {"wechat", "holo_app"}
+
+
 def should_use_fast_path(context: TurnContext) -> bool:
     text = context.user_text.strip()
-    if context.channel != "wechat":
+    if context.channel not in ACTIVE_THREAD_FAST_CHANNELS:
         return False
     if context.metadata.get("attachments"):
         return False
@@ -345,6 +348,24 @@ def _select_reply_lane(context: TurnContext, turn_plan: TurnPlan, config: HostCo
     if micro_fast_candidate:
         return fallback_lane, "stage18_reflex_micro_fast", True
     return default_lane, "conservative_subject_main", False
+
+
+def _reply_processor_timeout_seconds(context: TurnContext, lane: str) -> int | None:
+    for key in ("processor_timeout_seconds", "reply_timeout_seconds"):
+        raw = context.metadata.get(key)
+        if raw is None:
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    if context.channel == "holo_app":
+        return 45
+    if lane == "micro_fast":
+        return 60
+    return None
 
 
 def build_reply_bubbles(
@@ -1168,6 +1189,7 @@ class CodexCliProcessor:
         effort: str = "",
         budget_tag: str = "",
         max_output_tokens: int | None = None,
+        timeout_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
     ):
         try:
@@ -1180,6 +1202,7 @@ class CodexCliProcessor:
                 reasoning_effort_override=effort,
                 budget_tag=budget_tag,
                 max_output_tokens=max_output_tokens,
+                timeout_seconds=timeout_seconds,
                 metadata=metadata or {},
             )
         except TypeError as exc:
@@ -1192,6 +1215,7 @@ class CodexCliProcessor:
                     "provider_hint",
                     "budget_tag",
                     "max_output_tokens",
+                    "timeout_seconds",
                     "metadata",
                 )
             ):
@@ -1237,12 +1261,14 @@ class CodexCliProcessor:
         started_at = time.perf_counter()
         selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
         lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
+        timeout_seconds = _reply_processor_timeout_seconds(context, lane)
         result = self._run_runner(
             prompt,
             session_id=session_id,
             lane=lane,
             budget_tag="chat_reply",
             max_output_tokens=1200,
+            timeout_seconds=timeout_seconds,
             metadata={
                 "thread_key": context.thread_key,
                 "chat_name": context.chat_name,

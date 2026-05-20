@@ -6,6 +6,8 @@ import os
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -470,15 +472,21 @@ class _OpenAIResponsesBase(ProcessorProvider):
     def _client(self, runner: "CodexRunner") -> Any:
         if importlib.util.find_spec("openai") is None:
             raise RuntimeError("openai package is not installed")
+        api_key = self._api_key(runner)
+        if not api_key:
+            env_name = (
+                runner.config.processor_fabric.openai_compatible_api_key_env
+                if self.compatible
+                else runner.config.processor_fabric.responses_api_key_env
+            )
+            raise RuntimeError(f"{env_name} is not set")
         from openai import OpenAI  # type: ignore
 
         kwargs: dict[str, Any] = {}
         base_url = self._base_url(runner)
         if base_url:
             kwargs["base_url"] = base_url
-        api_key = self._api_key(runner)
-        if api_key:
-            kwargs["api_key"] = api_key
+        kwargs["api_key"] = api_key
         return OpenAI(**kwargs)
 
     def run_task(
@@ -492,13 +500,26 @@ class _OpenAIResponsesBase(ProcessorProvider):
     ) -> ProcessorTaskResult:
         started_at = time.perf_counter()
         client = self._client(runner)
-        response = client.responses.create(
-            model=request.model_override or lane_config.model,
-            input=request.prompt,
-            max_output_tokens=request.max_output_tokens or lane_config.max_output_tokens or None,
-        )
+        model = request.model_override or lane_config.model
+        if self.compatible:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": request.prompt}],
+                max_tokens=request.max_output_tokens or lane_config.max_output_tokens or None,
+            )
+            choices = list(getattr(response, "choices", []) or [])
+            message = getattr(choices[0], "message", None) if choices else None
+            text = str(getattr(message, "content", "") or "").strip()
+            command = [self.name, "chat.completions.create"]
+        else:
+            response = client.responses.create(
+                model=model,
+                input=request.prompt,
+                max_output_tokens=request.max_output_tokens or lane_config.max_output_tokens or None,
+            )
+            text = str(getattr(response, "output_text", "") or "").strip()
+            command = [self.name, "responses.create"]
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        text = str(getattr(response, "output_text", "") or "").strip()
         usage = _coerce_usage_payload(getattr(response, "usage", None))
         if not usage["total_tokens"]:
             usage = {
@@ -514,7 +535,7 @@ class _OpenAIResponsesBase(ProcessorProvider):
             returncode=0,
             stdout="",
             stderr="",
-            command=[self.name, "responses.create"],
+            command=command,
             output_schema=request.output_schema or str(spec.get("output_schema", "plain_text")),
             metadata={
                 "allowed_data_layers": list(request.allowed_data_layers or tuple(spec.get("allowed_data_layers", ()))),
@@ -528,6 +549,128 @@ class _OpenAIResponsesBase(ProcessorProvider):
                 "usage": usage,
                 "duration_ms": duration_ms,
                 "budget_tag": request.budget_tag,
+            },
+        )
+
+
+class DeepSeekProvider(ProcessorProvider):
+    name = "deepseek"
+
+    def _base_url(self, runner: "CodexRunner") -> str:
+        return (
+            runner.config.processor_fabric.deepseek_base_url
+            or os.environ.get("DEEPSEEK_BASE_URL", "")
+            or "https://api.deepseek.com"
+        ).strip().rstrip("/")
+
+    def _api_key(self, runner: "CodexRunner") -> str:
+        env_name = runner.config.processor_fabric.deepseek_api_key_env or "DEEPSEEK_API_KEY"
+        return str(os.environ.get(env_name, "") or "").strip()
+
+    def _completion_url(self, runner: "CodexRunner") -> str:
+        base_url = self._base_url(runner)
+        if base_url.endswith("/chat/completions"):
+            return base_url
+        return f"{base_url}/chat/completions"
+
+    def _thinking_payload(self, effort: str) -> dict[str, str]:
+        normalized = str(effort or "").strip().lower()
+        if normalized in {"", "none", "minimal", "low", "off", "false", "disabled"}:
+            return {"type": "disabled"}
+        if normalized in {"xhigh", "max"}:
+            return {"type": "enabled", "reasoning_effort": "max"}
+        return {"type": "enabled", "reasoning_effort": "high"}
+
+    def supports_request(self, request: ProcessorTaskRequest) -> bool:
+        return not bool(request.image_paths)
+
+    def _post_json(self, url: str, api_key: str, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=max(1, int(timeout_seconds or 1))) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"DeepSeek HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"DeepSeek network error: {exc.reason}") from exc
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"DeepSeek returned non-JSON response: {raw[:240]}") from exc
+        if not isinstance(decoded, dict):
+            raise RuntimeError("DeepSeek returned a non-object response")
+        return decoded
+
+    def run_task(
+        self,
+        runner: "CodexRunner",
+        request: ProcessorTaskRequest,
+        *,
+        spec: dict[str, Any],
+        lane_name: str,
+        lane_config: ProcessorLaneConfig,
+    ) -> ProcessorTaskResult:
+        api_key = self._api_key(runner)
+        if not api_key:
+            env_name = runner.config.processor_fabric.deepseek_api_key_env or "DEEPSEEK_API_KEY"
+            raise RuntimeError(f"{env_name} is not set")
+        started_at = time.perf_counter()
+        model = request.model_override or lane_config.model or "deepseek-v4-flash"
+        effort = request.reasoning_effort_override or lane_config.reasoning_effort or str(spec.get("default_reasoning_effort", ""))
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": request.prompt}],
+            "max_tokens": request.max_output_tokens or lane_config.max_output_tokens or None,
+            "thinking": self._thinking_payload(effort),
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        timeout_seconds = int(request.timeout_seconds or runner.config.runtime.codex_timeout_seconds or 60)
+        decoded = self._post_json(self._completion_url(runner), api_key, payload, timeout_seconds)
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        choices = list(decoded.get("choices", []) or [])
+        message = dict(choices[0].get("message", {})) if choices and isinstance(choices[0], dict) else {}
+        text = str(message.get("content", "") or "").strip()
+        reasoning_content = str(message.get("reasoning_content", "") or "").strip()
+        usage = _coerce_usage_payload(decoded.get("usage"))
+        if not usage["total_tokens"]:
+            usage = {
+                "prompt_tokens": _estimate_text_tokens(request.prompt),
+                "completion_tokens": _estimate_text_tokens(text),
+                "total_tokens": _estimate_text_tokens(request.prompt) + _estimate_text_tokens(text),
+                "estimated": True,
+            }
+        return ProcessorTaskResult(
+            task_type=request.task_type,
+            text=text,
+            session_id=request.session_id,
+            returncode=0,
+            stdout="",
+            stderr="",
+            command=[self.name, "chat.completions"],
+            output_schema=request.output_schema or str(spec.get("output_schema", "plain_text")),
+            metadata={
+                "allowed_data_layers": list(request.allowed_data_layers or tuple(spec.get("allowed_data_layers", ()))),
+                "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
+                "provider": self.name,
+                "lane": lane_name,
+                "model": model,
+                "reasoning_effort": effort,
+                "usage": usage,
+                "duration_ms": duration_ms,
+                "budget_tag": request.budget_tag,
+                "thinking": dict(payload.get("thinking", {})),
+                "reasoning_content_present": bool(reasoning_content),
             },
         )
 
@@ -547,6 +690,7 @@ class CodexRunner:
         self.config = config
         self.usage_recorder = usage_recorder
         self._providers: dict[str, ProcessorProvider] = {
+            "deepseek": DeepSeekProvider(),
             "codex_cli": CodexCliProvider(),
             "responses": ResponsesProvider(),
             "openai_compatible": OpenAICompatibleProvider(),
@@ -733,12 +877,16 @@ class CodexRunner:
             hint,
             lane_config.primary_provider,
             lane_config.backup_provider,
+            "deepseek",
             "openai_compatible",
         ):
             current = str(name or "").strip()
             if current and current not in chain:
                 chain.append(current)
-        if "codex_cli" not in chain:
+        backend = str(self.config.runtime.processor_backend or "").strip().lower()
+        codex_explicit = "codex_cli" in {str(lane_config.primary_provider or "").strip(), str(lane_config.backup_provider or "").strip(), hint}
+        codex_enabled = str(os.environ.get("HOLO_ENABLE_CODEX_FALLBACK", "")).strip().lower() in {"1", "true", "yes", "on"}
+        if "codex_cli" not in chain and (backend == "codex_cli" or codex_explicit or codex_enabled):
             chain.append("codex_cli")
         return chain
 
@@ -791,6 +939,7 @@ class CodexRunner:
         reasoning_effort_override: str = "",
         budget_tag: str = "",
         max_output_tokens: int | None = None,
+        timeout_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> CodexResult:
         resolved_model_override = model_override
@@ -810,6 +959,7 @@ class CodexRunner:
                 model_override=resolved_model_override,
                 reasoning_effort_override=resolved_reasoning_effort_override,
                 budget_tag=budget_tag,
+                timeout_seconds=timeout_seconds,
                 max_output_tokens=max_output_tokens,
                 metadata=dict(metadata or {}),
             )

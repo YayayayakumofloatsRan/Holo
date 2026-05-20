@@ -475,7 +475,15 @@ class WindowsHelperTests(unittest.TestCase):
             helper.visible_pyweixin_unread_map = original_visible
 
     def test_pyweixin_is_foreground_returns_false_without_windows_modules(self) -> None:
-        self.assertFalse(pyweixin_is_foreground(r"D:\Weixin\Weixin.exe"))
+        real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name in {"win32api", "win32con", "win32gui", "win32process"}:
+                raise ImportError(name)
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            self.assertFalse(pyweixin_is_foreground(r"D:\Weixin\Weixin.exe"))
 
     def test_pyweixin_reply_adapter_records_draft_and_optional_send(self) -> None:
         import windows_helper.wechat_helper as helper

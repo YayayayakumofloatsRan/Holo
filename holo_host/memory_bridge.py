@@ -53,6 +53,7 @@ SEMANTIC_STOP_TOKENS = {
 
 GRAPH_MEMORY_LANES = MEMORY_BRIDGE_POLICY.graph_memory_lanes
 GRAPH_REPLY_MIN_CONFIDENCE = MEMORY_BRIDGE_POLICY.graph_reply_min_confidence
+ACTIVE_THREAD_FAST_CHANNELS = {"wechat", "holo_app"}
 LOOKUP_HINTS = (
     "search",
     "look up",
@@ -1956,7 +1957,7 @@ class MemoryBridge:
             or signal.get("visual_requested", False)
         )
         meaningful = self._meaningful_char_count(query)
-        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        reflex_eligible = channel in ACTIVE_THREAD_FAST_CHANNELS and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
         confidence = max(float(predictive.get("active_prediction_confidence", 0.0) or 0.0), min(0.84, 0.56 + stage19["thread_heat"] * 0.24))
         if not reflex_eligible:
             confidence = min(confidence, 0.54)
@@ -2102,7 +2103,7 @@ class MemoryBridge:
             or signal.get("visual_requested", False)
         )
         meaningful = self._meaningful_char_count(query)
-        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        reflex_eligible = channel in ACTIVE_THREAD_FAST_CHANNELS and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
         confidence = max(float(predictive.get("active_prediction_confidence", 0.0) or 0.0), 0.58 + float(stage20.get("temporal_pressure", 0.0) or 0.0) * 0.2)
         if not reflex_eligible:
             confidence = min(confidence, 0.54)
@@ -2251,7 +2252,7 @@ class MemoryBridge:
             or signal.get("visual_requested", False)
         )
         meaningful = self._meaningful_char_count(query)
-        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        reflex_eligible = channel in ACTIVE_THREAD_FAST_CHANNELS and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
         confidence = max(float(predictive.get("active_prediction_confidence", 0.0) or 0.0), 0.56 + min(0.18, len(stage26["object_ids"]) * 0.04))
         if not reflex_eligible:
             confidence = min(confidence, 0.54)
@@ -2344,7 +2345,7 @@ class MemoryBridge:
             or signal.get("visual_requested", False)
         )
         meaningful = self._meaningful_char_count(query)
-        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        reflex_eligible = channel in ACTIVE_THREAD_FAST_CHANNELS and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
         targets = self._unique_strings(
             list(predictive.get("likely_reference_targets", []))
             + [str(item.get("summary", "")) for item in stage22["signals"]]
@@ -2751,7 +2752,7 @@ class MemoryBridge:
             or signal.get("visual_requested", False)
         )
         meaningful = self._meaningful_char_count(query)
-        reflex_eligible = channel == "wechat" and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
+        reflex_eligible = channel in ACTIVE_THREAD_FAST_CHANNELS and not blockers and meaningful <= 54 and not list(context.get("attachments", []))
         confidence = max(
             float(predictive.get("active_prediction_confidence", 0.0) or 0.0),
             min(
@@ -2814,7 +2815,7 @@ class MemoryBridge:
         signal: dict[str, Any],
         recall_escalation_reason: str,
     ) -> bool:
-        if str(context.get("channel", "wechat") or "wechat") != "wechat":
+        if str(context.get("channel", "wechat") or "wechat") not in ACTIVE_THREAD_FAST_CHANNELS:
             return False
         if list(context.get("attachments", [])):
             return False
