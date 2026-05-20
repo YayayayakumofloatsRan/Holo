@@ -36,19 +36,30 @@ STAGE2_CORRECTIONS = [
 ]
 
 
-def _live_api_request(
-    config_path: str | None,
-    *,
-    method: str,
-    path: str,
-    params: dict[str, object] | None = None,
-    payload: dict[str, object] | None = None,
-    timeout: float = 5.0,
-) -> dict | None:
-    config = load_config(config_path=config_path)
-    query = urlencode({key: value for key, value in (params or {}).items() if value is not None and value != ""})
-    base_urls = [f"http://{config.runtime.api_bind_host}:{config.runtime.api_port}"]
-    if os.name == "nt" and str(config.runtime.api_bind_host).strip() in {"127.0.0.1", "localhost"}:
+def _append_live_base_url(base_urls: list[str], base_url: str) -> None:
+    cleaned = str(base_url or "").strip().rstrip("/")
+    if cleaned and cleaned not in base_urls:
+        base_urls.append(cleaned)
+
+
+def _live_api_base_urls(config) -> list[str]:
+    base_urls: list[str] = []
+    explicit_url = str(os.environ.get("HOLO_LIVE_API_URL", "") or "").strip()
+    if explicit_url:
+        _append_live_base_url(base_urls, explicit_url)
+
+    bind_host = str(config.runtime.api_bind_host or "127.0.0.1").strip() or "127.0.0.1"
+    configured_port = int(config.runtime.api_port)
+    port_candidates = [configured_port]
+    if os.name == "nt" and configured_port != 8004:
+        port_candidates.append(8004)
+
+    for port in port_candidates:
+        _append_live_base_url(base_urls, f"http://{bind_host}:{port}")
+        if os.name == "nt" and bind_host in {"127.0.0.1", "localhost"}:
+            _append_live_base_url(base_urls, f"http://127.0.0.1:{port}")
+
+    if os.name == "nt" and bind_host in {"127.0.0.1", "localhost"}:
         distro = str(os.environ.get("HOLO_WSL_DISTRO", "") or "").strip()
         if distro:
             try:
@@ -64,9 +75,23 @@ def _live_api_request(
             if probe and probe.returncode == 0:
                 ip = str(probe.stdout or "").strip().split()
                 if ip:
-                    forwarded = f"http://{ip[0]}:{config.runtime.api_port}"
-                    if forwarded not in base_urls:
-                        base_urls.append(forwarded)
+                    for port in port_candidates:
+                        _append_live_base_url(base_urls, f"http://{ip[0]}:{port}")
+    return base_urls
+
+
+def _live_api_request(
+    config_path: str | None,
+    *,
+    method: str,
+    path: str,
+    params: dict[str, object] | None = None,
+    payload: dict[str, object] | None = None,
+    timeout: float = 5.0,
+) -> dict | None:
+    config = load_config(config_path=config_path)
+    query = urlencode({key: value for key, value in (params or {}).items() if value is not None and value != ""})
+    base_urls = _live_api_base_urls(config)
     headers = {}
     data = None
     if payload is not None:
@@ -319,6 +344,24 @@ def _provider_status_payload(config_path: str | None, *, allow_local_fallback: b
     service = HoloReplyService(config)
     try:
         return service.provider_status(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
+def _live_readiness_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/live-readiness")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.live_readiness(), "local_process"
     finally:
         service.store.close()
         if hasattr(service.memory, "activation"):
@@ -7811,6 +7854,12 @@ def command_show_provider_status(config_path: str | None) -> int:
     return 0
 
 
+def command_show_live_readiness(config_path: str | None) -> int:
+    payload, _transport = _live_readiness_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_usage_ledger(
     config_path: str | None,
     *,
@@ -8739,6 +8788,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-stream-status", help="Show background Mind OS stream status and recent runs")
     subparsers.add_parser("show-processor-routing", help="Show processor lane routing and task dispatch policy")
     subparsers.add_parser("show-provider-status", help="Show processor provider availability and configured lane backends")
+    subparsers.add_parser("show-live-readiness", help="Show live Holo speech readiness across provider, brain, vector, and recent error checks")
     usage_ledger_parser = subparsers.add_parser("show-usage-ledger", help="Inspect processor token and timing usage records")
     usage_ledger_parser.add_argument("--limit", type=int, default=50)
     usage_ledger_parser.add_argument("--task-type", default=None)
@@ -9123,6 +9173,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_processor_routing(args.config)
     if args.command == "show-provider-status":
         return command_show_provider_status(args.config)
+    if args.command == "show-live-readiness":
+        return command_show_live_readiness(args.config)
     if args.command == "show-usage-ledger":
         return command_show_usage_ledger(
             args.config,

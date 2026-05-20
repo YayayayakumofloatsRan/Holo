@@ -4653,6 +4653,12 @@ class MemoryBridge:
     def vector_health(self) -> dict[str, Any]:
         return self.vector.health()
 
+    def ensure_vector_ready(self) -> dict[str, Any]:
+        ensure_ready = getattr(self.vector, "ensure_ready", None)
+        if callable(ensure_ready):
+            return ensure_ready()
+        return self.vector_health()
+
     def brain_status(self) -> dict[str, Any]:
         payload = self._brain_state()
         payload["roadmap_registry"] = self.roadmap_registry()

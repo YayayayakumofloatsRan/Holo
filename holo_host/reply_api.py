@@ -911,6 +911,133 @@ class HoloReplyService:
     def provider_status(self) -> dict[str, Any]:
         return self.runner.provider_status()
 
+    def live_readiness(self) -> dict[str, Any]:
+        health = self.health()
+        provider_status = dict(health.get("provider_status") or getattr(self.runner, "provider_status", lambda: {})())
+        vector_health = dict(health.get("vector_health") or {})
+        if bool(vector_health.get("available")) and not bool(vector_health.get("ready")):
+            ensure_vector_ready = getattr(self.memory, "ensure_vector_ready", None)
+            if callable(ensure_vector_ready):
+                with self._memory_lock:
+                    vector_health = dict(ensure_vector_ready() or vector_health)
+                health["vector_health"] = vector_health
+        brain_status = dict(health.get("brain_status") or {})
+        usage_payload = self.usage_ledger(limit=25)
+        usage_items = list(usage_payload.get("items", []) or [])
+        latest_usage = dict(usage_items[0]) if usage_items else {}
+        recent_errors = [
+            {
+                "id": row.get("id"),
+                "task_type": row.get("task_type", ""),
+                "lane": row.get("lane", ""),
+                "provider": row.get("provider", ""),
+                "status": row.get("status", ""),
+                "created_at": row.get("created_at", ""),
+            }
+            for row in usage_items
+            if str(row.get("status", "ok") or "ok").strip().lower() not in {"", "ok", "success"}
+        ]
+        speech_dispatch: dict[str, Any] = {}
+        describe_dispatch = getattr(self.runner, "describe_task_dispatch", None)
+        if callable(describe_dispatch):
+            speech_dispatch = describe_dispatch(
+                ProcessorTaskRequest(
+                    task_type="reply",
+                    prompt="[live readiness probe: dispatch only]",
+                    metadata={"selected_action_type": "reply_once", "uncertainty_level": 0.0},
+                )
+            )
+        providers = [str(item).strip() for item in list(speech_dispatch.get("providers", []) or []) if str(item).strip()]
+        primary_provider = providers[0] if providers else ""
+        provider_table = dict(provider_status.get("providers", {}) or {})
+        primary_status = dict(provider_table.get(primary_provider, {}) or {}) if primary_provider else {}
+        lanes = dict(provider_status.get("lanes", {}) or {})
+        unavailable_primary_lanes: list[dict[str, Any]] = []
+        for lane_name in ("kernel_xhigh", "subject_main", "micro_fast"):
+            lane_payload = dict(lanes.get(lane_name, {}) or {})
+            lane_primary = str(lane_payload.get("primary_provider", "") or "").strip()
+            lane_provider = dict(provider_table.get(lane_primary, {}) or {}) if lane_primary else {}
+            if not lane_primary or not bool(lane_provider.get("available", False)):
+                unavailable_primary_lanes.append(
+                    {
+                        "lane": lane_name,
+                        "primary_provider": lane_primary,
+                        "reason": str(lane_provider.get("reason", "missing primary provider") or ""),
+                    }
+                )
+        brain_mode = str(health.get("brain_mode") or brain_status.get("mode") or "").strip()
+        checks = [
+            {"name": "health_ok", "ok": str(health.get("status", "")).strip() == "ok", "detail": {"status": health.get("status")}},
+            {
+                "name": "processor_fabric_active",
+                "ok": str(health.get("active_processor", "")).strip() == "processor_fabric",
+                "detail": {"active_processor": health.get("active_processor"), "processor_backend": health.get("processor_backend")},
+            },
+            {
+                "name": "vector_ready",
+                "ok": bool(vector_health.get("available")) and bool(vector_health.get("ready")),
+                "detail": vector_health,
+            },
+            {
+                "name": "brain_mode_operational",
+                "ok": brain_mode in {"companion", "full_brain"},
+                "detail": {"brain_mode": brain_mode},
+            },
+            {
+                "name": "live_speech_dispatch_visible",
+                "ok": bool(providers),
+                "detail": speech_dispatch,
+            },
+            {
+                "name": "live_speech_primary_available",
+                "ok": bool(primary_provider) and bool(primary_status.get("available", False)),
+                "detail": {"primary_provider": primary_provider, "primary_status": primary_status},
+            },
+            {
+                "name": "live_speech_not_codex_dependent",
+                "ok": "codex_cli" not in providers,
+                "detail": {"providers": providers},
+            },
+            {
+                "name": "required_lane_primaries_available",
+                "ok": not unavailable_primary_lanes,
+                "detail": unavailable_primary_lanes,
+            },
+            {
+                "name": "latest_processor_usage_not_error",
+                "ok": not latest_usage
+                or str(latest_usage.get("status", "ok") or "ok").strip().lower() in {"", "ok", "success"},
+                "detail": {
+                    "id": latest_usage.get("id"),
+                    "task_type": latest_usage.get("task_type", ""),
+                    "lane": latest_usage.get("lane", ""),
+                    "provider": latest_usage.get("provider", ""),
+                    "status": latest_usage.get("status", ""),
+                    "created_at": latest_usage.get("created_at", ""),
+                }
+                if latest_usage
+                else {},
+            },
+        ]
+        status = "ready" if all(bool(item.get("ok")) for item in checks) else "degraded"
+        return {
+            "status": status,
+            "checked_at": utc_now(),
+            "health": {
+                "status": health.get("status"),
+                "brain_mode": brain_mode,
+                "active_processor": health.get("active_processor"),
+                "processor_backend": health.get("processor_backend"),
+                "api_port": health.get("api_port"),
+                "vector_health": vector_health,
+            },
+            "speech_dispatch": speech_dispatch,
+            "provider_status": provider_status,
+            "usage_ledger": usage_payload.get("summary", {}),
+            "recent_processor_errors": recent_errors[:8],
+            "checks": checks,
+        }
+
     def usage_ledger(
         self,
         *,
@@ -953,7 +1080,7 @@ class HoloReplyService:
             {"name": "required_lanes_present", "ok": all(name in provider_status.get("lanes", {}) for name in ("kernel_xhigh", "subject_main", "micro_fast")), "detail": provider_status.get("lanes", {})},
             {"name": "required_tasks_routed", "ok": all(name in routing for name in ("reply", "recall_reconstruct", "initiative_probe", "deep_simulation")), "detail": routing},
             {"name": "usage_ledger_available", "ok": isinstance(usage_payload.get("items", []), list), "detail": usage_payload.get("summary", {})},
-            {"name": "provider_contract_visible", "ok": all(name in provider_status.get("providers", {}) for name in ("codex_cli", "responses", "openai_compatible")), "detail": provider_status.get("providers", {})},
+            {"name": "provider_contract_visible", "ok": all(name in provider_status.get("providers", {}) for name in ("deepseek", "codex_cli", "responses", "openai_compatible")), "detail": provider_status.get("providers", {})},
         ]
         status = "pass" if all(bool(item["ok"]) for item in checks) else "fail"
         return {
@@ -9305,6 +9432,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/provider-status":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.provider_status())
+                    return
+                if parsed.path == "/live-readiness":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.live_readiness())
                     return
                 if parsed.path == "/usage-ledger":
                     params = parse_qs(parsed.query)

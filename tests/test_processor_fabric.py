@@ -202,6 +202,48 @@ max_output_tokens = 128
             self.assertEqual(payload["messages"], [{"role": "user", "content": "say hello"}])
             self.assertEqual(result.metadata["reasoning_content_present"], True)
 
+    def test_legacy_run_uses_lane_model_for_deepseek_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / ".holo_host.toml"
+            config_path.write_text(
+                """
+[runtime]
+state_dir = ".holo_runtime"
+db_path = ".holo_runtime/holo_host.sqlite3"
+log_dir = ".holo_runtime/logs"
+processor_backend = "deepseek"
+codex_model = "gpt-5.4"
+codex_reasoning_effort = "low"
+
+[processor_fabric]
+deepseek_base_url = "https://api.deepseek.com"
+deepseek_api_key_env = "TEST_DEEPSEEK_API_KEY"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = load_config(str(config_path), repo_root=root)
+            runner = CodexRunner(config)
+            provider = runner._providers["deepseek"]
+            captured: dict[str, object] = {}
+
+            def fake_post_json(url: str, api_key: str, payload: dict[str, object], timeout_seconds: int) -> dict[str, object]:
+                captured["payload"] = payload
+                return {
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+            with mock.patch.dict("os.environ", {"TEST_DEEPSEEK_API_KEY": "test-key"}):
+                with mock.patch.object(provider, "_post_json", side_effect=fake_post_json):
+                    result = runner.run("legacy call without lane")
+
+            payload = captured["payload"]
+            self.assertIsInstance(payload, dict)
+            self.assertEqual(result.reply_text, "ok")
+            self.assertEqual(payload["model"], "deepseek-v4-pro")
+            self.assertEqual(payload["thinking"], {"type": "enabled", "reasoning_effort": "high"})
+
     def test_describe_task_dispatch_uses_expected_default_lanes(self) -> None:
         config = load_config(repo_root=Path(__file__).resolve().parents[1])
         runner = CodexRunner(config)

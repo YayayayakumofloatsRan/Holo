@@ -78,7 +78,9 @@ ps -eo pid,ppid,pgid,cmd | grep -E 'python3 -m holo_host .*serve-api|python3 -m 
 
 if [[ -f "$CONFIG_PATH" ]]; then
   python3 - <<'PY' "$CONFIG_PATH"
-import sys, tomllib
+import json
+import sys
+import tomllib
 from urllib import request
 
 path = sys.argv[1]
@@ -95,5 +97,16 @@ try:
     print(body)
 except Exception as exc:  # noqa: BLE001
     print(f"health: unavailable {url} ({exc})")
+else:
+    readiness_url = f"http://{host}:{port}/live-readiness"
+    try:
+        readiness_body = opener.open(readiness_url, timeout=3).read().decode("utf-8")
+        readiness = json.loads(readiness_body)
+        print(f"readiness: {readiness.get('status', 'unknown')} {readiness_url}")
+        failed = [item for item in readiness.get("checks", []) if not item.get("ok")]
+        for item in failed[:6]:
+            print(f"readiness_failed: {item.get('name')} detail={item.get('detail')}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"readiness: unavailable {readiness_url} ({exc})")
 PY
 fi

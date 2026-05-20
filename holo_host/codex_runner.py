@@ -944,7 +944,8 @@ class CodexRunner:
     ) -> CodexResult:
         resolved_model_override = model_override
         resolved_reasoning_effort_override = reasoning_effort_override
-        if not str(lane or "").strip():
+        backend = str(self.config.runtime.processor_backend or "").strip().lower()
+        if not str(lane or "").strip() and backend == "codex_cli":
             if not str(resolved_model_override or "").strip():
                 resolved_model_override = str(self.config.runtime.codex_model or "").strip()
             if not str(resolved_reasoning_effort_override or "").strip():

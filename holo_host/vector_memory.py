@@ -109,6 +109,10 @@ class VectorMemory:
             "last_error": self._last_error,
         }
 
+    def ensure_ready(self) -> dict[str, Any]:
+        self._client_instance()
+        return self.health()
+
     def _client_instance(self) -> Any | None:
         if not self._available:
             self._last_error = "pymilvus is not installed"

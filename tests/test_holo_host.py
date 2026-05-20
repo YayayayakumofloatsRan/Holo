@@ -13,7 +13,7 @@ from holo_host.codex_runner import CodexRunner
 from holo_host.daemon import HoloDaemon
 from holo_host.mail_gateway import MaildirGateway
 from holo_host.mind_graph import MindGraph
-from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, TurnContext
+from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, ProcessorUsageRecord, TurnContext
 from holo_host.policy import AutonomyPolicy
 from holo_host.reply_api import (
     HoloReplyService,
@@ -1898,6 +1898,168 @@ class CodexRunnerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.reply_text, "I在。")
             self.assertEqual(result.session_id, "thread-new")
+
+
+class HoloLiveReadinessTests(unittest.TestCase):
+    def test_live_readiness_reports_deepseek_speech_path_without_codex_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            config.runtime.processor_backend = "deepseek"
+            config.memory.brain_mode_default = "full_brain"
+            for lane in config.processor_fabric.provider_backends.values():
+                lane.primary_provider = "deepseek"
+                lane.backup_provider = "openai_compatible"
+                lane.model = "deepseek-v4-pro"
+            config.processor_fabric.provider_backends["micro_fast"].model = "deepseek-v4-flash"
+            store = QueueStore(root / "queue.sqlite3")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.vector_health = lambda: {"backend": "milvus", "available": True, "ready": True, "last_error": ""}
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}):
+                    readiness = service.live_readiness()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in readiness["checks"]}
+            self.assertEqual(readiness["status"], "ready")
+            self.assertEqual(readiness["speech_dispatch"]["providers"][0], "deepseek")
+            self.assertNotIn("codex_cli", readiness["speech_dispatch"]["providers"])
+            self.assertTrue(checks["live_speech_primary_available"]["ok"])
+            self.assertTrue(checks["live_speech_not_codex_dependent"]["ok"])
+            self.assertEqual(readiness["provider_status"]["providers"]["deepseek"]["available"], True)
+
+    def test_live_readiness_marks_codex_speech_path_degraded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            config.runtime.processor_backend = "codex_cli"
+            config.memory.brain_mode_default = "full_brain"
+            for lane in config.processor_fabric.provider_backends.values():
+                lane.primary_provider = "codex_cli"
+                lane.backup_provider = "responses"
+            store = QueueStore(root / "queue.sqlite3")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.vector_health = lambda: {"backend": "milvus", "available": True, "ready": True, "last_error": ""}
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                readiness = service.live_readiness()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in readiness["checks"]}
+            self.assertEqual(readiness["status"], "degraded")
+            self.assertIn("codex_cli", readiness["speech_dispatch"]["providers"])
+            self.assertFalse(checks["live_speech_not_codex_dependent"]["ok"])
+
+    def test_live_readiness_reports_old_errors_without_blocking_after_new_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            config.runtime.processor_backend = "deepseek"
+            config.memory.brain_mode_default = "full_brain"
+            for lane in config.processor_fabric.provider_backends.values():
+                lane.primary_provider = "deepseek"
+                lane.backup_provider = "openai_compatible"
+                lane.model = "deepseek-v4-pro"
+            store = QueueStore(root / "queue.sqlite3")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.vector_health = lambda: {"backend": "milvus", "available": True, "ready": True, "last_error": ""}
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                store.record_processor_usage(
+                    ProcessorUsageRecord(
+                        task_type="reply",
+                        lane="subject_main",
+                        provider="",
+                        model="deepseek-v4-pro",
+                        reasoning_effort="medium",
+                        status="error",
+                    )
+                )
+                store.record_processor_usage(
+                    ProcessorUsageRecord(
+                        task_type="reply",
+                        lane="subject_main",
+                        provider="deepseek",
+                        model="deepseek-v4-pro",
+                        reasoning_effort="medium",
+                        status="ok",
+                    )
+                )
+                with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}):
+                    readiness = service.live_readiness()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in readiness["checks"]}
+            self.assertEqual(readiness["status"], "ready")
+            self.assertTrue(checks["latest_processor_usage_not_error"]["ok"])
+            self.assertEqual(checks["latest_processor_usage_not_error"]["detail"]["provider"], "deepseek")
+            self.assertEqual(len(readiness["recent_processor_errors"]), 1)
+
+    def test_live_readiness_warms_available_vector_backend(self) -> None:
+        class WarmableMemory(FakeMemory):
+            def __init__(self) -> None:
+                super().__init__()
+                self.brain_mode = "full_brain"
+                self.ensure_calls = 0
+                self.ready = False
+
+            def vector_health(self) -> dict:
+                return {"backend": "milvus", "available": True, "ready": self.ready, "last_error": ""}
+
+            def ensure_vector_ready(self) -> dict:
+                self.ensure_calls += 1
+                self.ready = True
+                return self.vector_health()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            config.runtime.processor_backend = "deepseek"
+            config.memory.brain_mode_default = "full_brain"
+            for lane in config.processor_fabric.provider_backends.values():
+                lane.primary_provider = "deepseek"
+                lane.backup_provider = "openai_compatible"
+                lane.model = "deepseek-v4-pro"
+            store = QueueStore(root / "queue.sqlite3")
+            memory = WarmableMemory()
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}):
+                    readiness = service.live_readiness()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in readiness["checks"]}
+            self.assertEqual(readiness["status"], "ready")
+            self.assertEqual(memory.ensure_calls, 1)
+            self.assertTrue(checks["vector_ready"]["ok"])
 
 
 class MaildirGatewayTests(unittest.TestCase):

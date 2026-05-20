@@ -132,8 +132,21 @@ as the authoritative long-term routing surface; they are compatibility aliases.
 
 Use these commands:
 - `python3 -m holo_host show-provider-status`
+- `python3 -m holo_host show-live-readiness`
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host accept-processor-fabric`
+
+`show-live-readiness` is the operator-facing readiness gate for a long-running
+Holo instance. It must report:
+- active processor backend and speech dispatch chain
+- DeepSeek primary-provider availability for live speech
+- whether `codex_cli` is still in the live speech dependency chain
+- vector memory readiness
+- latest processor usage state, with recent processor errors retained as
+  diagnostic evidence
+
+The readiness probe may initialize the vector-memory client in the live process,
+but it must not spend provider tokens or generate user-facing speech.
 
 ## 9. Forbidden Changes
 
