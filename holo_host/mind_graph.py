@@ -4679,12 +4679,13 @@ class MindGraph:
         if not thread_name:
             return None
         now = utc_now()
+        source_id = f"{channel}:{thread_name}"
         return {
             "id": f"thread:{channel}:{thread_name}",
             "node_type": "thread",
             "memory_class": "relationship_memory",
             "source_store": "thread_state",
-            "source_id": thread_name,
+            "source_id": source_id,
             "source_kind": "thread",
             "text": thread_name,
             "channel": channel,
@@ -4706,12 +4707,13 @@ class MindGraph:
         if not identity:
             return None
         now = utc_now()
+        source_id = f"{channel}:{identity}"
         return {
             "id": f"contact:{channel}:{identity}",
             "node_type": "contact",
             "memory_class": "relationship_memory",
             "source_store": "contact_state",
-            "source_id": identity,
+            "source_id": source_id,
             "source_kind": "contact",
             "text": chat_name or identity,
             "channel": channel,

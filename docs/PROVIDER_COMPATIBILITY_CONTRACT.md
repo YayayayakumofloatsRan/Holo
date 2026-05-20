@@ -133,6 +133,7 @@ as the authoritative long-term routing surface; they are compatibility aliases.
 Use these commands:
 - `python3 -m holo_host show-provider-status`
 - `python3 -m holo_host show-live-readiness`
+- `python3 -m holo_host show-live-flow`
 - `python3 -m holo_host show-processor-routing`
 - `python3 -m holo_host accept-processor-fabric`
 
@@ -147,6 +148,21 @@ Holo instance. It must report:
 
 The readiness probe may initialize the vector-memory client in the live process,
 but it must not spend provider tokens or generate user-facing speech.
+
+`show-live-flow` is the wider long-running diagnosis surface. It must keep the
+single-subject topology visible across:
+- subject continuity thread
+- Windows transport state, when present
+- reply API readiness
+- processor-fabric usage ledger
+- vector and stream memory
+- core brain loops
+- queued outbound work
+- operator/self-maintenance status
+
+Its job is not to replace `/live-readiness`. Readiness answers "can Holo speak
+through the intended provider path now?" Flow answers "is the whole live
+cognitive pipeline still moving?"
 
 ## 9. Forbidden Changes
 

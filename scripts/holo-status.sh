@@ -108,5 +108,16 @@ else:
             print(f"readiness_failed: {item.get('name')} detail={item.get('detail')}")
     except Exception as exc:  # noqa: BLE001
         print(f"readiness: unavailable {readiness_url} ({exc})")
+    else:
+        flow_url = f"http://{host}:{port}/live-flow"
+        try:
+            flow_body = opener.open(flow_url, timeout=3).read().decode("utf-8")
+            flow = json.loads(flow_body)
+            print(f"flow: {flow.get('status', 'unknown')} {flow_url}")
+            recommendations = list(flow.get("recommendations", []) or [])
+            for item in recommendations[:4]:
+                print(f"flow_recommendation: {item}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"flow: unavailable {flow_url} ({exc})")
 PY
 fi

@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from holo_host.common import utc_now
 from holo_host.config import load_config
 from holo_host.codex_runner import CodexRunner
 from holo_host.daemon import HoloDaemon
@@ -1641,6 +1642,51 @@ class QueueStoreTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_complete_job_clears_previous_retry_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "queue.sqlite3"
+            store = QueueStore(db_path)
+            try:
+                store.initialize()
+                job_id = store.enqueue_job(task_type="proactive_followup", status="pending", payload={"reason": "unit"})
+                self.assertTrue(store.claim_job(job_id))
+                store.retry_job(job_id, "openai package not installed", delay_seconds=60)
+                store.complete_job(job_id, status="queued_transport", sent_message_id="sent-1")
+                job = store._fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            finally:
+                store.close()
+
+            self.assertIsNotNone(job)
+            self.assertEqual(job["status"], "queued_transport")
+            self.assertEqual(job["sent_message_id"], "sent-1")
+            self.assertEqual(job["last_error"], "")
+
+    def test_initialize_clears_stale_handoff_errors_from_existing_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "queue.sqlite3"
+            store = QueueStore(db_path)
+            try:
+                store.initialize()
+                job_id = store.enqueue_job(task_type="proactive_followup", status="pending", payload={"reason": "unit"})
+                store.conn.execute(
+                    "UPDATE jobs SET status = 'queued_transport', sent_message_id = 'sent-1', last_error = 'openai package not installed' WHERE id = ?",
+                    (job_id,),
+                )
+                store.conn.commit()
+            finally:
+                store.close()
+
+            reopened = QueueStore(db_path)
+            try:
+                reopened.initialize()
+                job = reopened._fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            finally:
+                reopened.close()
+
+            self.assertIsNotNone(job)
+            self.assertEqual(job["status"], "queued_transport")
+            self.assertEqual(job["last_error"], "")
+
     def test_initiative_cooldown_fields_are_migrated_and_enforced(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "queue.sqlite3"
@@ -2060,6 +2106,221 @@ class HoloLiveReadinessTests(unittest.TestCase):
             self.assertEqual(readiness["status"], "ready")
             self.assertEqual(memory.ensure_calls, 1)
             self.assertTrue(checks["vector_ready"]["ok"])
+
+
+class HoloLiveFlowTests(unittest.TestCase):
+    @staticmethod
+    def _deepseek_config(root: Path):
+        config = load_config(repo_root=root)
+        config.runtime.processor_backend = "deepseek"
+        config.memory.brain_mode_default = "full_brain"
+        for lane in config.processor_fabric.provider_backends.values():
+            lane.primary_provider = "deepseek"
+            lane.backup_provider = "openai_compatible"
+            lane.model = "deepseek-v4-pro"
+        config.processor_fabric.provider_backends["micro_fast"].model = "deepseek-v4-flash"
+        return config
+
+    @staticmethod
+    def _recent_core_loops() -> list[dict]:
+        now = utc_now()
+        return [
+            {"loop_name": "heartbeat", "status": "ok", "finished_at": now},
+            {"loop_name": "attention_tick", "status": "ok", "finished_at": now},
+            {"loop_name": "self_model_refresh", "status": "ok", "finished_at": now},
+            {"loop_name": "homeostasis_tick", "status": "ok", "finished_at": now},
+            {"loop_name": "operator_planning", "status": "ok", "finished_at": now},
+        ]
+
+    def test_live_flow_reports_healthy_single_subject_deepseek_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = self._deepseek_config(root)
+            store = QueueStore(root / "queue.sqlite3")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.vector_health = lambda: {"backend": "milvus", "available": True, "ready": True, "last_error": ""}
+            memory.brain_status = lambda: {
+                "mode": "full_brain",
+                "idle_seconds": 0.0,
+                "cache": {"hit_ratio": 0.25, "hits": 1, "misses": 3},
+                "loops": self._recent_core_loops(),
+            }
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                store.record_processor_usage(
+                    ProcessorUsageRecord(
+                        task_type="reply",
+                        lane="subject_main",
+                        provider="deepseek",
+                        model="deepseek-v4-pro",
+                        reasoning_effort="medium",
+                        status="ok",
+                        duration_ms=1800,
+                        total_tokens=42,
+                    )
+                )
+                with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}):
+                    flow = service.live_flow()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in flow["checks"]}
+            self.assertEqual(flow["status"], "healthy")
+            self.assertTrue(checks["live_readiness_ready"]["ok"])
+            self.assertTrue(checks["latest_reply_deepseek_ok"]["ok"])
+            self.assertTrue(checks["core_brain_loops_recent"]["ok"])
+            self.assertEqual(flow["nodes"]["processor"]["latest_reply"]["provider"], "deepseek")
+            self.assertEqual(flow["nodes"]["subject"]["thread_key"], "holo_app:HoloSubject")
+            self.assertEqual(flow["recommendations"], [])
+
+    def test_live_flow_marks_stale_core_loop_attention_with_repair_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = self._deepseek_config(root)
+            store = QueueStore(root / "queue.sqlite3")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.vector_health = lambda: {"backend": "milvus", "available": True, "ready": True, "last_error": ""}
+            memory.brain_status = lambda: {
+                "mode": "full_brain",
+                "idle_seconds": 0.0,
+                "cache": {"hit_ratio": 0.25, "hits": 1, "misses": 3},
+                "loops": [
+                    {"loop_name": "heartbeat", "status": "ok", "finished_at": utc_now()},
+                    {"loop_name": "attention_tick", "status": "ok", "finished_at": utc_now()},
+                    {"loop_name": "self_model_refresh", "status": "ok", "finished_at": "2000-01-01T00:00:00Z"},
+                    {"loop_name": "homeostasis_tick", "status": "ok", "finished_at": utc_now()},
+                    {"loop_name": "operator_planning", "status": "ok", "finished_at": utc_now()},
+                ],
+            }
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                store.record_processor_usage(
+                    ProcessorUsageRecord(
+                        task_type="reply",
+                        lane="subject_main",
+                        provider="deepseek",
+                        model="deepseek-v4-pro",
+                        reasoning_effort="medium",
+                        status="ok",
+                    )
+                )
+                with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}):
+                    flow = service.live_flow()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in flow["checks"]}
+            self.assertEqual(flow["status"], "attention")
+            self.assertFalse(checks["core_brain_loops_recent"]["ok"])
+            self.assertEqual(checks["core_brain_loops_recent"]["detail"][0]["loop_name"], "self_model_refresh")
+            self.assertTrue(any("self_model_refresh" in item for item in flow["recommendations"]))
+
+    def test_live_flow_marks_retrying_queue_errors_attention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = self._deepseek_config(root)
+            store = QueueStore(root / "queue.sqlite3")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.vector_health = lambda: {"backend": "milvus", "available": True, "ready": True, "last_error": ""}
+            memory.brain_status = lambda: {
+                "mode": "full_brain",
+                "idle_seconds": 0.0,
+                "cache": {"hit_ratio": 0.25, "hits": 1, "misses": 3},
+                "loops": self._recent_core_loops(),
+            }
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                store.record_processor_usage(
+                    ProcessorUsageRecord(
+                        task_type="reply",
+                        lane="subject_main",
+                        provider="deepseek",
+                        model="deepseek-v4-pro",
+                        reasoning_effort="medium",
+                        status="ok",
+                    )
+                )
+                job_id = store.enqueue_job(task_type="proactive_followup", status="pending", payload={"reason": "test"})
+                self.assertTrue(store.claim_job(job_id))
+                store.retry_job(job_id, "openai package not installed", delay_seconds=60)
+                self.assertTrue(store.claim_job(job_id))
+                store.retry_job(job_id, "openai package not installed", delay_seconds=60)
+                with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}):
+                    flow = service.live_flow()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in flow["checks"]}
+            self.assertEqual(flow["status"], "attention")
+            self.assertFalse(checks["queue_not_backlogged"]["ok"])
+            self.assertEqual(checks["queue_not_backlogged"]["detail"]["error_count"], 1)
+            self.assertNotIn("payload_json", flow["nodes"]["queue"]["recent"][0])
+            self.assertTrue(any("queued jobs" in item for item in flow["recommendations"]))
+
+    def test_live_flow_ignores_handed_off_transport_jobs_without_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = self._deepseek_config(root)
+            store = QueueStore(root / "queue.sqlite3")
+            memory = FakeMemory()
+            memory.brain_mode = "full_brain"
+            memory.vector_health = lambda: {"backend": "milvus", "available": True, "ready": True, "last_error": ""}
+            memory.brain_status = lambda: {
+                "mode": "full_brain",
+                "idle_seconds": 0.0,
+                "cache": {"hit_ratio": 0.25, "hits": 1, "misses": 3},
+                "loops": self._recent_core_loops(),
+            }
+            runner = CodexRunner(config)
+            service = None
+            try:
+                service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+                store.record_processor_usage(
+                    ProcessorUsageRecord(
+                        task_type="reply",
+                        lane="subject_main",
+                        provider="deepseek",
+                        model="deepseek-v4-pro",
+                        reasoning_effort="medium",
+                        status="ok",
+                    )
+                )
+                job_id = store.enqueue_job(task_type="proactive_followup", status="pending", payload={"reason": "test"})
+                store.conn.execute(
+                    "UPDATE jobs SET status = 'queued_transport', sent_message_id = 'sent-1', attempt_count = 4, last_error = '' WHERE id = ?",
+                    (job_id,),
+                )
+                store.conn.commit()
+                with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}):
+                    flow = service.live_flow()
+            finally:
+                if service is not None:
+                    close_service_handles(service)
+                else:
+                    store.close()
+
+            checks = {item["name"]: item for item in flow["checks"]}
+            self.assertEqual(flow["status"], "healthy")
+            self.assertTrue(checks["queue_not_backlogged"]["ok"])
+            self.assertEqual(checks["queue_not_backlogged"]["detail"]["active_count"], 0)
 
 
 class MaildirGatewayTests(unittest.TestCase):

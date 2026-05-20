@@ -370,6 +370,24 @@ def _live_readiness_payload(config_path: str | None, *, allow_local_fallback: bo
             service.memory.graph.close()
 
 
+def _live_flow_payload(config_path: str | None, *, allow_local_fallback: bool = True) -> tuple[dict, str]:
+    live_payload = _live_api_request(config_path, method="GET", path="/live-flow")
+    if live_payload is not None:
+        return live_payload, "live_http"
+    if not allow_local_fallback:
+        return {"status": "live_http_unavailable"}, "live_http_unavailable"
+    config = load_config(config_path=config_path)
+    service = HoloReplyService(config)
+    try:
+        return service.live_flow(), "local_process"
+    finally:
+        service.store.close()
+        if hasattr(service.memory, "activation"):
+            service.memory.activation.close()
+        if hasattr(service.memory, "graph"):
+            service.memory.graph.close()
+
+
 def _usage_ledger_payload(
     config_path: str | None,
     *,
@@ -7860,6 +7878,12 @@ def command_show_live_readiness(config_path: str | None) -> int:
     return 0
 
 
+def command_show_live_flow(config_path: str | None) -> int:
+    payload, _transport = _live_flow_payload(config_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_show_usage_ledger(
     config_path: str | None,
     *,
@@ -8789,6 +8813,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("show-processor-routing", help="Show processor lane routing and task dispatch policy")
     subparsers.add_parser("show-provider-status", help="Show processor provider availability and configured lane backends")
     subparsers.add_parser("show-live-readiness", help="Show live Holo speech readiness across provider, brain, vector, and recent error checks")
+    subparsers.add_parser("show-live-flow", help="Show end-to-end live Holo flow diagnosis across transport, API, processor, memory, brain loops, and queue")
     usage_ledger_parser = subparsers.add_parser("show-usage-ledger", help="Inspect processor token and timing usage records")
     usage_ledger_parser.add_argument("--limit", type=int, default=50)
     usage_ledger_parser.add_argument("--task-type", default=None)
@@ -9175,6 +9200,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_show_provider_status(args.config)
     if args.command == "show-live-readiness":
         return command_show_live_readiness(args.config)
+    if args.command == "show-live-flow":
+        return command_show_live_flow(args.config)
     if args.command == "show-usage-ledger":
         return command_show_usage_ledger(
             args.config,

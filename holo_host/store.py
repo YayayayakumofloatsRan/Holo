@@ -206,6 +206,7 @@ class QueueStore:
         self._ensure_column("contacts", "last_initiative_at", "TEXT")
         self._ensure_column("contacts", "initiative_note", "TEXT NOT NULL DEFAULT ''")
         self._normalize_wechat_aliases()
+        self._clear_stale_handoff_job_errors()
         self.conn.commit()
 
     @_synchronized
@@ -217,6 +218,20 @@ class QueueStore:
         if column in columns:
             return
         self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @_synchronized
+    def _clear_stale_handoff_job_errors(self) -> None:
+        self.conn.execute(
+            """
+            UPDATE jobs
+            SET last_error = ''
+            WHERE last_error <> ''
+              AND (
+                status IN ('completed', 'sent', 'silenced', 'ignored', 'rescheduled')
+                OR (status = 'queued_transport' AND sent_message_id <> '')
+              )
+            """
+        )
 
     @staticmethod
     def _latest_timestamp(*values: Any) -> str:
@@ -673,7 +688,7 @@ class QueueStore:
     @_synchronized
     def complete_job(self, job_id: int, *, status: str = "completed", sent_message_id: str = "") -> None:
         self.conn.execute(
-            "UPDATE jobs SET status = ?, sent_message_id = ?, updated_at = ? WHERE id = ?",
+            "UPDATE jobs SET status = ?, sent_message_id = ?, last_error = '', updated_at = ? WHERE id = ?",
             (status, sent_message_id, utc_now(), job_id),
         )
         self.conn.commit()

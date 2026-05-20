@@ -1038,6 +1038,235 @@ class HoloReplyService:
             "checks": checks,
         }
 
+    @staticmethod
+    def _latest_usage_for_task(usage_items: list[dict[str, Any]], task_type: str) -> dict[str, Any]:
+        for item in usage_items:
+            if str(item.get("task_type", "") or "").strip() == task_type:
+                return dict(item)
+        return {}
+
+    def _core_loop_freshness(self, brain_status: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        mode = str(brain_status.get("mode", self.config.memory.brain_mode_default) or self.config.memory.brain_mode_default)
+        definitions = self._brain_loop_definitions(mode)
+        loop_rows = {
+            str(item.get("loop_name", "") or "").strip(): dict(item)
+            for item in list(brain_status.get("loops", []) or [])
+            if str(item.get("loop_name", "") or "").strip()
+        }
+        now_ts = time.time()
+        core_loop_names = ("heartbeat", "attention_tick", "self_model_refresh", "homeostasis_tick", "operator_planning")
+        fresh: list[dict[str, Any]] = []
+        stale: list[dict[str, Any]] = []
+        for loop_name in core_loop_names:
+            row = dict(loop_rows.get(loop_name, {}) or {})
+            meta = dict(definitions.get(loop_name, {}) or {})
+            interval_seconds = max(1, int(meta.get("interval_seconds", 60) or 60))
+            threshold_seconds = max(90, interval_seconds * 3 + 30)
+            observed_at = str(row.get("finished_at", "") or row.get("started_at", "") or "").strip()
+            status = str(row.get("status", "") or "").strip() or "unknown"
+            age_seconds = None
+            if observed_at:
+                age_seconds = max(0.0, now_ts - _parse_utc_timestamp(observed_at))
+            summary = {
+                "loop_name": loop_name,
+                "status": status,
+                "observed_at": observed_at,
+                "age_seconds": round(age_seconds, 2) if age_seconds is not None else None,
+                "threshold_seconds": threshold_seconds,
+                "next_due_at": str(row.get("next_due_at", "") or ""),
+            }
+            if status in {"error", "blocked"} or age_seconds is None or age_seconds > threshold_seconds:
+                stale.append(summary)
+            else:
+                fresh.append(summary)
+        return fresh, stale
+
+    def _transport_flow_state(self) -> dict[str, Any]:
+        helper = self._load_wechat_helper_runtime()
+        state = dict(helper.get("transport_state", {}) or {})
+        heartbeat = int(state.get("heartbeat_at", 0) or 0)
+        heartbeat_age_s = max(0, int(time.time()) - heartbeat) if heartbeat else None
+        status = str(state.get("status", "") or "").strip() or ("stopped" if not state else "unknown")
+        if heartbeat_age_s is not None and heartbeat_age_s > 45 and status not in {"stopped"}:
+            status = "stale"
+        return {
+            "status": status,
+            "mode": str(state.get("mode", "") or ""),
+            "transport": str(state.get("transport", "") or ""),
+            "detail": str(state.get("detail", "") or ""),
+            "heartbeat_age_s": heartbeat_age_s,
+            "state_file": str(helper.get("transport_state_file", "") or ""),
+            "config_path": str(helper.get("config_path", "") or ""),
+            "optional": True,
+        }
+
+    @staticmethod
+    def _compact_flow_job(job: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": job.get("id"),
+            "task_type": str(job.get("task_type", "") or ""),
+            "status": str(job.get("status", "") or ""),
+            "attempt_count": int(job.get("attempt_count", 0) or 0),
+            "last_error": str(job.get("last_error", "") or ""),
+            "sent_message_id": str(job.get("sent_message_id", "") or ""),
+            "available_at": str(job.get("available_at", "") or ""),
+            "updated_at": str(job.get("updated_at", "") or ""),
+        }
+
+    @staticmethod
+    def _compact_flow_operator(operator_status: dict[str, Any]) -> dict[str, Any]:
+        latest = dict(operator_status.get("latest", {}) or {})
+        return {
+            "pending_count": int(operator_status.get("pending_count", 0) or 0),
+            "latest": {
+                "id": latest.get("id"),
+                "task_type": str(latest.get("task_type", "") or ""),
+                "scope": str(latest.get("scope", "") or ""),
+                "workspace_mode": str(latest.get("workspace_mode", "") or ""),
+                "status": str(latest.get("status", "") or ""),
+                "applied_live": bool(latest.get("applied_live", False)),
+                "created_at": str(latest.get("created_at", "") or ""),
+                "completed_at": str(latest.get("completed_at", "") or ""),
+            },
+            "recent_count": len(list(operator_status.get("recent_runs", []) or [])),
+        }
+
+    def live_flow(self) -> dict[str, Any]:
+        readiness = self.live_readiness()
+        brain_status = self.brain_status()
+        stream_status = self.stream_status()
+        operator_status = self.operator_status()
+        usage_payload = self.usage_ledger(limit=50)
+        usage_items = [dict(item) for item in list(usage_payload.get("items", []) or [])]
+        latest_usage = dict(usage_items[0]) if usage_items else {}
+        latest_reply = self._latest_usage_for_task(usage_items, "reply")
+        error_items = [
+            dict(item)
+            for item in usage_items
+            if str(item.get("status", "ok") or "ok").strip().lower() not in {"", "ok", "success"}
+        ]
+        error_ratio = round(len(error_items) / max(1, len(usage_items)), 4)
+        fresh_core_loops, stale_core_loops = self._core_loop_freshness(brain_status)
+        jobs = self.store.list_jobs(limit=32)
+        active_jobs = []
+        for job in jobs:
+            status_text = str(job.get("status", "") or "").strip()
+            sent_message_id = str(job.get("sent_message_id", "") or "").strip()
+            if status_text in {"pending", "retry_wait", "running"} or (status_text == "queued_transport" and not sent_message_id):
+                active_jobs.append(dict(job))
+        errored_active_jobs = [
+            dict(job)
+            for job in active_jobs
+            if str(job.get("last_error", "") or "").strip() or int(job.get("attempt_count", 0) or 0) >= 3
+        ]
+        transport_state = self._transport_flow_state()
+        latest_reply_status = str(latest_reply.get("status", "") or "").strip().lower()
+        latest_reply_provider = str(latest_reply.get("provider", "") or "").strip()
+        checks = [
+            {
+                "name": "live_readiness_ready",
+                "ok": str(readiness.get("status", "") or "").strip() == "ready",
+                "severity": "critical",
+                "detail": {"status": readiness.get("status"), "failed": [item for item in readiness.get("checks", []) if not item.get("ok")]},
+            },
+            {
+                "name": "latest_reply_deepseek_ok",
+                "ok": bool(latest_reply) and latest_reply_status in {"", "ok", "success"} and latest_reply_provider == "deepseek",
+                "severity": "critical",
+                "detail": {
+                    "id": latest_reply.get("id"),
+                    "provider": latest_reply_provider,
+                    "model": latest_reply.get("model", ""),
+                    "status": latest_reply.get("status", ""),
+                    "created_at": latest_reply.get("created_at", ""),
+                    "duration_ms": latest_reply.get("duration_ms", 0),
+                },
+            },
+            {
+                "name": "processor_error_ratio_bounded",
+                "ok": error_ratio <= 0.2,
+                "severity": "critical",
+                "detail": {"error_ratio": error_ratio, "error_count": len(error_items), "sample_size": len(usage_items)},
+            },
+            {
+                "name": "core_brain_loops_recent",
+                "ok": not stale_core_loops,
+                "severity": "warning",
+                "detail": stale_core_loops,
+            },
+            {
+                "name": "queue_not_backlogged",
+                "ok": len(active_jobs) <= 8 and not errored_active_jobs,
+                "severity": "warning",
+                "detail": {
+                    "active_count": len(active_jobs),
+                    "error_count": len(errored_active_jobs),
+                    "sample": [self._compact_flow_job(job) for job in active_jobs[:5]],
+                    "error_sample": [self._compact_flow_job(job) for job in errored_active_jobs[:5]],
+                },
+            },
+            {
+                "name": "stream_memory_visible",
+                "ok": bool(list(stream_status.get("recent_runs", []) or [])) or bool(list(stream_status.get("activation_events", []) or [])),
+                "severity": "warning",
+                "detail": {
+                    "recent_run_count": len(list(stream_status.get("recent_runs", []) or [])),
+                    "activation_event_count": len(list(stream_status.get("activation_events", []) or [])),
+                },
+            },
+        ]
+        recommendations: list[str] = []
+        checks_by_name = {str(item.get("name", "")): item for item in checks}
+        if not bool(checks_by_name["live_readiness_ready"].get("ok")):
+            recommendations.append("run `python3 -m holo_host show-live-readiness` and fix the failed readiness check before testing higher layers")
+        if not bool(checks_by_name["latest_reply_deepseek_ok"].get("ok")):
+            recommendations.append("run one live `/reply` smoke and inspect `python3 -m holo_host show-usage-ledger --task-type reply --limit 5`")
+        if not bool(checks_by_name["processor_error_ratio_bounded"].get("ok")):
+            recommendations.append("inspect recent provider failures with `python3 -m holo_host show-usage-ledger --limit 25`")
+        if stale_core_loops:
+            stale_names = ", ".join(str(item.get("loop_name", "")) for item in stale_core_loops)
+            recommendations.append(f"restart or manually tick stale brain loops: {stale_names}")
+        if not bool(checks_by_name["queue_not_backlogged"].get("ok")):
+            recommendations.append("inspect queued jobs with retries/errors and transport handoff before sending more live traffic")
+        if not bool(checks_by_name["stream_memory_visible"].get("ok")):
+            recommendations.append("run a stream tick or inspect memory stream tables; semantic memory may not be moving")
+        critical_failed = [item for item in checks if item.get("severity") == "critical" and not item.get("ok")]
+        warning_failed = [item for item in checks if item.get("severity") != "critical" and not item.get("ok")]
+        if critical_failed:
+            status = "blocked"
+        elif warning_failed:
+            status = "attention"
+        else:
+            status = "healthy"
+        return {
+            "status": status,
+            "checked_at": utc_now(),
+            "subject": {"thread_key": "holo_app:HoloSubject", "continuity_model": "single_subject_thread"},
+            "nodes": {
+                "subject": {"thread_key": "holo_app:HoloSubject", "continuity_model": "single_subject_thread"},
+                "transport": transport_state,
+                "reply_api": {"status": dict(readiness.get("health", {})).get("status"), "readiness_status": readiness.get("status")},
+                "processor": {
+                    "backend": dict(readiness.get("health", {})).get("processor_backend"),
+                    "latest_usage": latest_usage,
+                    "latest_reply": latest_reply,
+                    "error_ratio": error_ratio,
+                },
+                "memory": {
+                    "vector": dict(dict(readiness.get("health", {})).get("vector_health", {}) or {}),
+                    "stream": {
+                        "recent_run_count": len(list(stream_status.get("recent_runs", []) or [])),
+                        "activation_event_count": len(list(stream_status.get("activation_events", []) or [])),
+                    },
+                },
+                "brain_loops": {"fresh": fresh_core_loops, "stale": stale_core_loops},
+                "queue": {"active_count": len(active_jobs), "recent": [self._compact_flow_job(job) for job in jobs[:8]]},
+                "operator": self._compact_flow_operator(operator_status),
+            },
+            "checks": checks,
+            "recommendations": recommendations,
+        }
+
     def usage_ledger(
         self,
         *,
@@ -9435,6 +9664,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 if parsed.path == "/live-readiness":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.live_readiness())
+                    return
+                if parsed.path == "/live-flow":
+                    self._write_json(HTTPStatus.OK, self.server.reply_service.live_flow())
                     return
                 if parsed.path == "/usage-ledger":
                     params = parse_qs(parsed.query)

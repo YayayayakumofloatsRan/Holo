@@ -49,6 +49,19 @@ class CliLiveApiRequestTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:8000/live-readiness", opened_urls)
         self.assertIn("http://127.0.0.1:8004/live-readiness", opened_urls)
 
+    def test_live_flow_payload_uses_live_http_before_local_process(self) -> None:
+        def fake_live_api_request(config_path, *, method, path, **_kwargs):
+            self.assertIsNone(config_path)
+            self.assertEqual(method, "GET")
+            self.assertEqual(path, "/live-flow")
+            return {"status": "healthy"}
+
+        with mock.patch("holo_host.cli._live_api_request", side_effect=fake_live_api_request):
+            payload, transport = cli._live_flow_payload(None)
+
+        self.assertEqual(payload, {"status": "healthy"})
+        self.assertEqual(transport, "live_http")
+
 
 if __name__ == "__main__":
     unittest.main()
