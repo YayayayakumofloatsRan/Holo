@@ -79,6 +79,7 @@ KIND_WEIGHT = {
     "boundary": 1.28,
     "preference": 1.20,
     "self_model": 1.18,
+    "context_attractor": 1.16,
     "social_model": 1.08,
     "procedural": 1.05,
     "episodic": 1.00,
@@ -91,6 +92,7 @@ STRUCTURED_KINDS = {
     "boundary",
     "preference",
     "self_model",
+    "context_attractor",
     "social_model",
     "procedural",
     "episodic",
@@ -103,6 +105,7 @@ PROMPT_MEMORY_KINDS = {
     "habit",
     "preference",
     "self_model",
+    "context_attractor",
     "social_model",
     "procedural",
 }
@@ -490,6 +493,7 @@ PROMOTION_THRESHOLDS = {
     "procedural": 0.78,
     "episodic": 0.90,
     "summary": 0.90,
+    "context_attractor": 0.82,
 }
 STALE_CANDIDATE_DAYS = 7
 MATCH_REINFORCE_THRESHOLD = 0.78
@@ -555,6 +559,7 @@ SEMANTIC_MEMORY_MARKERS = {
     "habit": ("习惯", "口癖", "默认", "自然", "滑回", "即使"),
     "preference": ("用户", "the user", "喜欢", "偏爱", "向往", "prefer", "likes"),
     "self_model": ("holo", "the subject", "用户", "应", "应该", "保持", "若", "当", "drift", "identity", "persona"),
+    "context_attractor": ("holo", "stage", "memory", "semantic", "provider", "biomimetic", "attractor", "context"),
     "social_model": ("用户", "陪伴", "关系", "信任", "应先", "relationship", "support"),
 }
 SERVICE_REGISTER_REPLACEMENTS = (

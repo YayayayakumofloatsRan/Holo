@@ -25,6 +25,7 @@ from .memory_doctor import memory_doctor_report
 from .memory_warehouse import memory_warehouse_report, write_memory_warehouse_artifacts
 from .models import ProcessorTaskRequest
 from .reply_api import HoloReplyService, run_reply_api
+from .stage104_context_learning import STAGE104_CONFIRMATION, stage104_candidate_plan, stage104_context_learning_report
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -8572,6 +8573,61 @@ def command_memory_warehouse(
     return 0
 
 
+def command_stage104_context_learning(
+    config_path: str | None,
+    *,
+    repo_root: str | None,
+    query: str,
+    recent_limit: int,
+    attractor_limit: int,
+    apply: bool,
+    confirm: str,
+) -> int:
+    if apply and not _is_wsl_runtime():
+        print(_json_dumps_utf8_safe({"status": "error", "reason": "stage104_apply_requires_wsl"}, ensure_ascii=False, indent=2))
+        return 2
+    if apply and confirm != STAGE104_CONFIRMATION:
+        print(
+            _json_dumps_utf8_safe(
+                {
+                    "status": "error",
+                    "reason": "stage104_apply_requires_exact_confirmation",
+                    "confirm": STAGE104_CONFIRMATION,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 2
+    config = load_config(config_path=config_path, repo_root=repo_root)
+    report = stage104_context_learning_report(
+        config.runtime.repo_root,
+        query=query,
+        recent_limit=recent_limit,
+        attractor_limit=attractor_limit,
+    )
+    plan = stage104_candidate_plan(
+        config.runtime.repo_root,
+        apply=apply,
+        query=query,
+        recent_limit=recent_limit,
+        attractor_limit=attractor_limit,
+    )
+    payload = {
+        "schema": report["schema"],
+        "stage": 104,
+        "dry_run": not bool(apply),
+        "report": report,
+        "candidate_plan": plan,
+        "authority": {
+            "apply_requires_wsl": True,
+            "applied_from_wsl": bool(apply),
+        },
+    }
+    print(_json_dumps_utf8_safe(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9324,6 +9380,17 @@ def main(argv: list[str] | None = None) -> int:
     memory_warehouse_parser.add_argument("--chat-name", default="HoloCLI")
     memory_warehouse_parser.add_argument("--channel", default="holo_cli")
     memory_warehouse_parser.add_argument("--output-dir", default=None)
+    stage104_parser = subparsers.add_parser(
+        "stage104-context-learning",
+        help="Plan or apply Stage104 local context-learning attractor consolidation",
+    )
+    stage104_parser.add_argument("--repo-root", default=None, help="Optional authoritative Holo repo root to inspect")
+    stage104_parser.add_argument("--query", default="\u56de\u5fc6\u4efb\u4f55\u4e8b\u60c5\uff1f")
+    stage104_parser.add_argument("--recent-limit", type=int, default=96)
+    stage104_parser.add_argument("--attractor-limit", type=int, default=8)
+    stage104_parser.add_argument("--dry-run", action="store_true", help="Plan only; this is also the default unless --apply is set")
+    stage104_parser.add_argument("--apply", action="store_true", help="Write Stage104 context-attractor candidates; WSL confirmation required")
+    stage104_parser.add_argument("--confirm", default="", help=f"Required value for --apply: {STAGE104_CONFIRMATION}")
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10181,6 +10248,16 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
             output_dir=args.output_dir,
+        )
+    if args.command == "stage104-context-learning":
+        return command_stage104_context_learning(
+            args.config,
+            repo_root=args.repo_root,
+            query=args.query,
+            recent_limit=args.recent_limit,
+            attractor_limit=args.attractor_limit,
+            apply=args.apply,
+            confirm=args.confirm,
         )
     if args.command == "visualize-biomimetic-system":
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)

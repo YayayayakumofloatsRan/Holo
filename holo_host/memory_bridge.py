@@ -22,6 +22,7 @@ from .policy_runtime.action_market import apply_policy_sedimentation_overlay, ap
 from .policy_runtime.action_simulation import simulate_action_candidate as _simulate_action_candidate_impl
 from .policy_runtime.counterfactuals import fast_counterfactual_set as _fast_counterfactual_set_impl
 from .policy_runtime.world_calibration_trace import expression_budget_summary
+from .stage104_context_learning import inject_stage104_context, stage104_context_packet
 from .vector_memory import VectorMemory
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
@@ -1709,6 +1710,11 @@ class MemoryBridge:
             **dict(packet.get("reply_constraints", {})),
             "persona_guard": f"persona={persona_blend}",
         }
+        stage104_context = stage104_context_packet(self.repo_root, query=query, limit=4)
+        packet = inject_stage104_context(packet, stage104_context, limit=4)
+        packet.setdefault("state", {})
+        packet["state"]["stage104"] = dict(packet.get("stage104", {}))
+        packet["state"]["semantic_attractor_lines"] = list(packet.get("semantic_attractor_lines", []))
         self._store_packet_cache(query, context=context, packet=packet)
         return packet
 
@@ -3811,6 +3817,8 @@ class MemoryBridge:
             "stage22": dict(packet.get("stage22", {})),
             "stage25": dict(packet.get("stage25", {})),
             "stage28": dict(packet.get("stage28", {})),
+            "stage104": dict(packet.get("stage104", {})),
+            "semantic_attractor_lines": list(packet.get("semantic_attractor_lines", [])),
             "mind_packet": packet,
         }
 
