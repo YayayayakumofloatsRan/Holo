@@ -119,6 +119,11 @@ Every provider result must expose enough data to record:
   - a provider packet is followed by an explicit provider return or a wait state
   - provider returns are locally compressed before entering the next packet
   - tool observations must re-enter the loop as bounded packet inputs
+- visible speech segmentation must go through the Stage108 expression stream:
+  - internal provider events do not map one-to-one to chat messages by default
+  - one internal event may drive multiple surface forms
+  - multiple internal events may merge into one bubble or paragraph while
+    retaining source-event links
 
 ## 7. Configuration Surface
 
