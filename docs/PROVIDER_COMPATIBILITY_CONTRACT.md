@@ -115,6 +115,10 @@ Every provider result must expose enough data to record:
   - provider responses are parsed as proposed `tool_calls`
   - unknown tools and invalid argument payloads are rejected before execution
   - tool execution authority remains in the WSL brain, not in the provider
+- provider packet loops must go through the Stage107 interaction state machine:
+  - a provider packet is followed by an explicit provider return or a wait state
+  - provider returns are locally compressed before entering the next packet
+  - tool observations must re-enter the loop as bounded packet inputs
 
 ## 7. Configuration Surface
 
