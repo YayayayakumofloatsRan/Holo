@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from .config import load_config
 from .daemon import build_daemon
+from .biomimetic_visualization import write_biomimetic_visualization
 from .memory_admin import MEMORY_RESET_CONFIRMATION, reset_holo_memory
 from .memory_doctor import memory_doctor_report
 from .models import ProcessorTaskRequest
@@ -8392,6 +8393,13 @@ def command_memory_doctor(config_path: str | None, *, include_vector_open: bool)
     return 0
 
 
+def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
+    config = load_config(config_path=config_path)
+    report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /status                show compact brain status
@@ -9075,6 +9083,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also query the live/local vector backend; default is static-only to avoid touching an active vector store.",
     )
+    biomimetic_visual_parser = subparsers.add_parser(
+        "visualize-biomimetic-system",
+        help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
+    )
+    biomimetic_visual_parser.add_argument("--output-dir", default=None)
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -9894,6 +9907,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_vector_health(args.config)
     if args.command == "memory-doctor":
         return command_memory_doctor(args.config, include_vector_open=args.include_vector_open)
+    if args.command == "visualize-biomimetic-system":
+        return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)
     if args.command == "reply-probe":
         return command_reply_probe(
             args.config,
