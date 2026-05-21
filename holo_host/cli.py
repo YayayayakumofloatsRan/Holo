@@ -22,6 +22,7 @@ from .biomimetic_visualization import write_biomimetic_visualization
 from .biomimetic_telemetry import record_biomimetic_event, telemetry_report
 from .memory_admin import MEMORY_RESET_CONFIRMATION, reset_holo_memory
 from .memory_doctor import memory_doctor_report
+from .memory_warehouse import memory_warehouse_report, write_memory_warehouse_artifacts
 from .models import ProcessorTaskRequest
 from .reply_api import HoloReplyService, run_reply_api
 from .store import QueueStore
@@ -8500,6 +8501,77 @@ def command_memory_doctor(config_path: str | None, *, include_vector_open: bool)
     return 0
 
 
+def command_memory_warehouse(
+    config_path: str | None,
+    *,
+    repo_root: str | None,
+    include_raw: bool,
+    confirm: str,
+    sample_limit: int,
+    max_chars: int,
+    query: str,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    output_dir: str | None,
+) -> int:
+    if include_raw and not _is_wsl_runtime():
+        print(json.dumps({"status": "error", "reason": "raw_memory_view_requires_wsl"}, ensure_ascii=False, indent=2))
+        return 2
+    if include_raw and confirm != "SHOW_HOLO_MEMORY_FROM_WSL":
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "reason": "raw_memory_view_requires_exact_confirmation",
+                    "confirm": "SHOW_HOLO_MEMORY_FROM_WSL",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 2
+    config = load_config(config_path=config_path, repo_root=repo_root)
+    doctor = memory_doctor_report(config.runtime.repo_root)
+    inspect_payload: dict[str, Any] = {}
+    trace_payload: dict[str, Any] = {}
+    if str(query or "").strip():
+        inspect_payload, _inspect_transport = _inspect_mind_payload(
+            config_path,
+            query=query,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            sender=None,
+            include_graph_trace=True,
+            allow_local_fallback=False,
+        )
+        trace_payload, _trace_transport = _trace_hybrid_payload(
+            config_path,
+            query=query,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            channel=channel,
+            limit=max(1, int(sample_limit)),
+            allow_local_fallback=False,
+        )
+    report = memory_warehouse_report(
+        config.runtime.repo_root,
+        include_raw=include_raw,
+        sample_limit=sample_limit,
+        max_chars=max_chars,
+        doctor=doctor,
+        inspect_mind=inspect_payload,
+        trace_hybrid=trace_payload,
+    )
+    if output_dir:
+        artifacts = write_memory_warehouse_artifacts(report, output_dir)
+        print(json.dumps({"status": "written", "artifacts": artifacts, "summary": _utf8_safe_json_value(report)}, ensure_ascii=False, indent=2))
+    else:
+        print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9241,6 +9313,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also query the live/local vector backend; default is static-only to avoid touching an active vector store.",
     )
+    memory_warehouse_parser = subparsers.add_parser("memory-warehouse", help="Write an explicit local memory warehouse/RAG observability report")
+    memory_warehouse_parser.add_argument("--repo-root", default=None, help="Optional authoritative Holo repo root to inspect")
+    memory_warehouse_parser.add_argument("--include-raw", action="store_true", help="Include local raw memory excerpts; WSL confirmation required")
+    memory_warehouse_parser.add_argument("--confirm", default="", help="Required value for --include-raw: SHOW_HOLO_MEMORY_FROM_WSL")
+    memory_warehouse_parser.add_argument("--sample-limit", type=int, default=8)
+    memory_warehouse_parser.add_argument("--max-chars", type=int, default=320)
+    memory_warehouse_parser.add_argument("--query", default="回忆任何事情？")
+    memory_warehouse_parser.add_argument("--thread-key", default="holo_cli:main")
+    memory_warehouse_parser.add_argument("--chat-name", default="HoloCLI")
+    memory_warehouse_parser.add_argument("--channel", default="holo_cli")
+    memory_warehouse_parser.add_argument("--output-dir", default=None)
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10085,6 +10168,20 @@ def main(argv: list[str] | None = None) -> int:
         return command_vector_health(args.config)
     if args.command == "memory-doctor":
         return command_memory_doctor(args.config, include_vector_open=args.include_vector_open)
+    if args.command == "memory-warehouse":
+        return command_memory_warehouse(
+            args.config,
+            repo_root=args.repo_root,
+            include_raw=args.include_raw,
+            confirm=args.confirm,
+            sample_limit=args.sample_limit,
+            max_chars=args.max_chars,
+            query=args.query,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            output_dir=args.output_dir,
+        )
     if args.command == "visualize-biomimetic-system":
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)
     if args.command == "show-biomimetic-telemetry":
