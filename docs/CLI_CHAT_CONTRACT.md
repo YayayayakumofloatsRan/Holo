@@ -12,6 +12,12 @@ From the WSL repo:
 python3 -m holo_host chat
 ```
 
+From Windows PowerShell through the shared checkout:
+
+```powershell
+wsl.exe -d HoloUbuntu -- bash -lc "cd /mnt/d/Holo/holo && python3 -m holo_host chat"
+```
+
 One-shot smoke test:
 
 ```bash
@@ -51,6 +57,11 @@ Inside `python3 -m holo_host chat`:
 Normal text is sent to `/reply` first. If the live HTTP service is unavailable,
 the shell may fall back to an in-process local `HoloReplyService` unless
 `--no-local-fallback` is supplied.
+
+When running under WSL, CLI live HTTP discovery tries the configured API port
+first and then the standard live Holo port `8004`. This keeps the shared
+`/mnt/d/Holo/holo` checkout from silently falling back to a slow in-process
+brain when the live subject is running from `/home/holo/holo`.
 
 `holo_cli` is an active-thread fast-lane channel. Short ordinary CLI turns should
 use the same Stage17 reflex path as WeChat and mobile Holo instead of forcing

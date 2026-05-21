@@ -59,6 +59,32 @@ class CliLiveApiRequestTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:8000/live-readiness", opened_urls)
         self.assertIn("http://127.0.0.1:8004/live-readiness", opened_urls)
 
+    def test_wsl_live_request_falls_back_to_standard_live_port(self) -> None:
+        config = SimpleNamespace(runtime=SimpleNamespace(api_bind_host="127.0.0.1", api_port=8000))
+        opened_urls: list[str] = []
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            opened_urls.append(request.full_url)
+            if request.full_url == "http://127.0.0.1:8004/live-readiness":
+                return _FakeResponse({"status": "ready"})
+            raise cli.URLError("offline")
+
+        with mock.patch("holo_host.cli.load_config", return_value=config), mock.patch(
+            "holo_host.cli.os.name", "posix"
+        ), mock.patch.dict(
+            "holo_host.cli.os.environ",
+            {"WSL_DISTRO_NAME": "HoloUbuntu", "HOLO_LIVE_API_URL": ""},
+            clear=False,
+        ), mock.patch(
+            "holo_host.cli.urlopen", side_effect=fake_urlopen
+        ):
+            payload = cli._live_api_request(None, method="GET", path="/live-readiness")
+
+        self.assertEqual(payload, {"status": "ready"})
+        self.assertIn("http://127.0.0.1:8000/live-readiness", opened_urls)
+        self.assertIn("http://127.0.0.1:8004/live-readiness", opened_urls)
+
     def test_live_flow_payload_uses_live_http_before_local_process(self) -> None:
         def fake_live_api_request(config_path, *, method, path, **_kwargs):
             self.assertIsNone(config_path)

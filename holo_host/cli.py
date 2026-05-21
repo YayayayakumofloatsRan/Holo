@@ -50,6 +50,21 @@ def _append_live_base_url(base_urls: list[str], base_url: str) -> None:
         base_urls.append(cleaned)
 
 
+def _is_wsl_runtime() -> bool:
+    if os.name != "posix":
+        return False
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    for probe_path in ("/proc/sys/kernel/osrelease", "/proc/version"):
+        try:
+            text = Path(probe_path).read_text(encoding="utf-8", errors="ignore").lower()
+        except OSError:
+            continue
+        if "microsoft" in text or "wsl" in text:
+            return True
+    return False
+
+
 def _live_api_base_urls(config) -> list[str]:
     base_urls: list[str] = []
     explicit_url = str(os.environ.get("HOLO_LIVE_API_URL", "") or "").strip()
@@ -59,7 +74,7 @@ def _live_api_base_urls(config) -> list[str]:
     bind_host = str(config.runtime.api_bind_host or "127.0.0.1").strip() or "127.0.0.1"
     configured_port = int(config.runtime.api_port)
     port_candidates = [configured_port]
-    if os.name == "nt" and configured_port != 8004:
+    if (os.name == "nt" or _is_wsl_runtime()) and configured_port != 8004:
         port_candidates.append(8004)
 
     for port in port_candidates:
