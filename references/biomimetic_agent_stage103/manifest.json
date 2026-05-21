@@ -1,0 +1,61 @@
+{
+  "schema": "holo.biomimetic_reference_publish.v1",
+  "generated_at": "2026-05-21T10:09:17Z",
+  "stage": "stage103",
+  "source_artifact": "stage100_biomimetic_system_workbench",
+  "metrics": {
+    "trajectory_source": "biomimetic_simulation",
+    "batch_id": "stage103-categorized-topic-sweep-final",
+    "frame_count": 2304,
+    "category_count": 6,
+    "topic_count": 24,
+    "node_count": 211,
+    "edge_count": 329,
+    "continuity": {
+      "frame_count": 2304,
+      "max_delta": 0.0691,
+      "mean_delta": 0.0116,
+      "large_jump_threshold": 0.22,
+      "large_jump_count": 0
+    }
+  },
+  "privacy": {
+    "raw_text_included": false,
+    "machine_paths_redacted": true,
+    "runtime_memory_included": false,
+    "provider_content_included": false,
+    "paper_claim_boundary": {
+      "observable_proxy_only": true,
+      "no_hidden_reasoning_claim": true,
+      "no_real_emotion_claim": true,
+      "no_biological_brain_state_claim": true
+    }
+  },
+  "reproduce": [
+    "python -m holo_host simulate-biomimetic-telemetry --topics-per-category 4 --turns-per-topic 24 --seed 103 --batch-id stage103-categorized-topic-sweep-final",
+    "python -m holo_host visualize-biomimetic-system",
+    "python -m holo_host publish-biomimetic-reference"
+  ],
+  "artifacts": {
+    "stage100_biomimetic_system_workbench.html": {
+      "path": "stage100_biomimetic_system_workbench.html",
+      "size_bytes": 1835609,
+      "sha256": "be843c72659e7256c934690a3bcc1951c2d8ec6cc2c7a23c745e0e9b291da272"
+    },
+    "stage100_biomimetic_system_payload.json": {
+      "path": "stage100_biomimetic_system_payload.json",
+      "size_bytes": 1688390,
+      "sha256": "2d43fb85b6bab1a0306d8c9c836c7131b6f576b47f3dee82c0363eab6b0cdab4"
+    },
+    "README.md": {
+      "path": "README.md",
+      "size_bytes": 1104,
+      "sha256": "89af73d6b8b49f7c0b99a5048a10a46d8b2d608668f41cb59e805a11dae38bc4"
+    },
+    "REFERENCE.md": {
+      "path": "REFERENCE.md",
+      "size_bytes": 1419,
+      "sha256": "40438c94acc5b8f9c60b25fbf3accf433176b85af783e8a9ee09db90a57cfb89"
+    }
+  }
+}

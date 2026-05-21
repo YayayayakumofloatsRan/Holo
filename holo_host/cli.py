@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from .config import load_config
 from .daemon import build_daemon
+from .biomimetic_reference_publish import publish_biomimetic_reference
 from .biomimetic_simulation import simulate_categorized_biomimetic_telemetry
 from .biomimetic_visualization import write_biomimetic_visualization
 from .biomimetic_telemetry import record_biomimetic_event, telemetry_report
@@ -8481,6 +8482,13 @@ def command_show_biomimetic_telemetry(config_path: str | None, *, limit: int) ->
     return 0
 
 
+def command_publish_biomimetic_reference(config_path: str | None, *, output_dir: str | None, source_dir: str | None) -> int:
+    config = load_config(config_path=config_path)
+    report = publish_biomimetic_reference(config.runtime.repo_root, output_dir=output_dir, source_dir=source_dir)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_simulate_biomimetic_telemetry(
     config_path: str | None,
     *,
@@ -9205,6 +9213,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Inspect redacted Stage101 biomimetic telemetry frames",
     )
     biomimetic_telemetry_parser.add_argument("--limit", type=int, default=25)
+    biomimetic_publish_parser = subparsers.add_parser(
+        "publish-biomimetic-reference",
+        help="Publish redacted Stage100/Stage103 biomimetic visualization artifacts into references/",
+    )
+    biomimetic_publish_parser.add_argument("--output-dir", default=None)
+    biomimetic_publish_parser.add_argument("--source-dir", default=None)
     biomimetic_simulation_parser = subparsers.add_parser(
         "simulate-biomimetic-telemetry",
         help="Generate categorized redacted Stage103 biomimetic simulation telemetry",
@@ -10037,6 +10051,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)
     if args.command == "show-biomimetic-telemetry":
         return command_show_biomimetic_telemetry(args.config, limit=args.limit)
+    if args.command == "publish-biomimetic-reference":
+        return command_publish_biomimetic_reference(args.config, output_dir=args.output_dir, source_dir=args.source_dir)
     if args.command == "simulate-biomimetic-telemetry":
         return command_simulate_biomimetic_telemetry(
             args.config,

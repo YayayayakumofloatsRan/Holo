@@ -74,7 +74,8 @@ Vector memory health:
    are much closer to usable interaction times.
 
 4. Thread-key normalization is inconsistent across old stores.
-   Some WeChat-derived records use `Nemoqi`, while others use `wechat:Nemoqi`.
+   Some WeChat-derived records use a bare contact alias, while others use the
+   `wechat:<contact>` canonical form.
    This can fragment graph edges, callback candidates, and thread affinity.
 
 5. Direct in-process memory inspection can contend with the live Milvus-lite
@@ -111,5 +112,6 @@ Recommended first implementation slice:
    reserve deep recall for explicit memory reconstruction.
 
 5. Normalize thread keys:
-   add a migration/report path that can identify `Nemoqi` vs `wechat:Nemoqi`
-   style splits without mutating data until an operator approves.
+   add a migration/report path that can identify bare-alias vs
+   `wechat:<contact>` style splits without mutating data until an operator
+   approves.

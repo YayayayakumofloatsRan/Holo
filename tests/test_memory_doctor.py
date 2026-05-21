@@ -29,7 +29,7 @@ def test_audit_jsonl_store_reports_integrity_without_raw_text(tmp_path: Path) ->
     duplicate = {
         "id": "turn-1",
         "channel": "wechat",
-        "thread_key": "Nemoqi",
+        "thread_key": "SampleContact",
         "text": "private text must not be echoed",
         "created_at": "2026-05-20T00:00:00Z",
     }
@@ -38,7 +38,7 @@ def test_audit_jsonl_store_reports_integrity_without_raw_text(tmp_path: Path) ->
         [
             duplicate,
             duplicate,
-            {"id": "turn-1", "channel": "wechat", "thread_key": "wechat:Nemoqi"},
+            {"id": "turn-1", "channel": "wechat", "thread_key": "wechat:SampleContact"},
             {"id": "turn-2", "channel": "holo_cli", "thread_key": "holo_cli:main"},
         ],
         invalid_tail=True,
@@ -57,11 +57,11 @@ def test_audit_jsonl_store_reports_integrity_without_raw_text(tmp_path: Path) ->
 def test_route_latency_summary_deduplicates_adjacent_duplicate_log_lines(tmp_path: Path) -> None:
     log_path = tmp_path / ".holo_runtime" / "logs" / "reply_api.log"
     log_path.parent.mkdir(parents=True)
-    line = "2026-05-21 reply route=deep_recall processor=main total_ms=100 chat=Nemoqi\n"
+    line = "2026-05-21 reply route=deep_recall processor=main total_ms=100 chat=SampleContact\n"
     log_path.write_text(
         line
         + line
-        + "2026-05-21 reply route=fast processor=fast total_ms=20 chat=Nemoqi\n",
+        + "2026-05-21 reply route=fast processor=fast total_ms=20 chat=SampleContact\n",
         encoding="utf-8",
     )
 
@@ -82,8 +82,8 @@ def test_memory_doctor_report_surfaces_biomimetic_health_and_thread_splits(tmp_p
             {
                 "id": "archive-1",
                 "channel": "wechat",
-                "thread_key": "Nemoqi",
-                "chat_name": "Nemoqi",
+                "thread_key": "SampleContact",
+                "chat_name": "SampleContact",
                 "created_at": "2026-05-20T00:00:00Z",
                 "text": "private archive text",
                 "metadata": {
@@ -96,8 +96,8 @@ def test_memory_doctor_report_surfaces_biomimetic_health_and_thread_splits(tmp_p
             {
                 "id": "archive-2",
                 "channel": "wechat",
-                "thread_key": "wechat:Nemoqi",
-                "chat_name": "Nemoqi",
+                "thread_key": "wechat:SampleContact",
+                "chat_name": "SampleContact",
                 "created_at": "2026-05-21T00:00:00Z",
                 "metadata": {"route": "fast", "timing_ms": {"total_ms": 120}},
             },
@@ -105,13 +105,13 @@ def test_memory_doctor_report_surfaces_biomimetic_health_and_thread_splits(tmp_p
     )
     _write_jsonl(
         memory_dir / "memory_store.jsonl",
-        [{"id": "memory-1", "thread_key": "wechat:Nemoqi", "created_at": "2026-04-01T00:00:00Z"}],
+        [{"id": "memory-1", "thread_key": "wechat:SampleContact", "created_at": "2026-04-01T00:00:00Z"}],
     )
     _create_sqlite(tmp_path / ".holo_runtime" / "mind_graph.sqlite3")
     _create_sqlite(tmp_path / ".holo_runtime" / "holo_host.sqlite3", table_name="threads")
     (tmp_path / ".holo_runtime" / "logs").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".holo_runtime" / "logs" / "reply_api.log").write_text(
-        "2026-05-21 reply route=deep_recall processor=main total_ms=90000 chat=Nemoqi\n",
+        "2026-05-21 reply route=deep_recall processor=main total_ms=90000 chat=SampleContact\n",
         encoding="utf-8",
     )
 
@@ -120,7 +120,7 @@ def test_memory_doctor_report_surfaces_biomimetic_health_and_thread_splits(tmp_p
     assert report["privacy"]["raw_text_included"] is False
     assert report["jsonl_stores"]["conversation_archive.jsonl"]["valid_rows"] == 2
     assert report["archive_metadata"]["route_counts"]["deep_recall"] == 1
-    assert report["thread_identity"]["fragmentation_candidates"][0]["canonical_key"] == "wechat:Nemoqi"
+    assert report["thread_identity"]["fragmentation_candidates"][0]["canonical_key"] == "wechat:SampleContact"
     assert report["biomimetic_health"]["deep_recall_pressure"]["status"] in {"warn", "critical"}
     assert report["biomimetic_health"]["semantic_consolidation"]["status"] in {"warn", "critical"}
     assert report["recommendations"]

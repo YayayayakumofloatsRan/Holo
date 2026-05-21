@@ -114,7 +114,7 @@ raw_text_included=False
 returned_frames=3
 ```
 
-The default WSL user path on this machine is `/home/ran_yakumo/holo`. That is a separate dirty worktree with many pre-existing uncommitted changes and missing Stage100/101 files, so Stage101 did not overwrite it blindly.
+The default WSL user path on this machine was checked as a separate user-home checkout. That checkout was dirty, had many pre-existing uncommitted changes, and was missing Stage100/101 files, so Stage101 did not overwrite it blindly.
 
 ## Publication Value
 
