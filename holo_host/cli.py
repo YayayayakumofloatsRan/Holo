@@ -4239,9 +4239,13 @@ def command_followups(config_path: str | None, limit: int) -> int:
     return 0
 
 
-def command_promote_memory(config_path: str | None) -> int:
+def command_promote_memory(config_path: str | None, *, dry_run: bool) -> int:
     daemon = build_daemon(config_path)
-    print(json.dumps(daemon.memory.promote_ready_candidates(limit=daemon.config.memory.promote_batch_size), ensure_ascii=False, indent=2))
+    if dry_run:
+        payload = daemon.memory.plan_ready_candidates(limit=daemon.config.memory.promote_batch_size)
+    else:
+        payload = daemon.memory.promote_ready_candidates(limit=daemon.config.memory.promote_batch_size)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -8748,7 +8752,8 @@ def main(argv: list[str] | None = None) -> int:
     jobs_parser.add_argument("--limit", type=int, default=50)
     followups_parser = subparsers.add_parser("schedule-followups", help="Schedule due proactive followups")
     followups_parser.add_argument("--limit", type=int, default=10)
-    subparsers.add_parser("promote-memory", help="Promote ready candidate memories")
+    promote_memory_parser = subparsers.add_parser("promote-memory", help="Promote ready candidate memories")
+    promote_memory_parser.add_argument("--dry-run", action="store_true", help="Plan candidate promotion without writing memory stores")
     backfill_parser = subparsers.add_parser("backfill-archive", help="Backfill archive turns from holo_host.sqlite3")
     backfill_parser.add_argument("--db-path", default=None)
     backfill_parser.add_argument("--dry-run", action="store_true")
@@ -9382,7 +9387,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "schedule-followups":
         return command_followups(args.config, args.limit)
     if args.command == "promote-memory":
-        return command_promote_memory(args.config)
+        return command_promote_memory(args.config, dry_run=args.dry_run)
     if args.command == "backfill-archive":
         return command_backfill_archive(args.config, args.db_path, dry_run=args.dry_run)
     if args.command == "backfill-mind-graph":

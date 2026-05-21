@@ -17,6 +17,7 @@ from .mind_graph import MindGraph, TASK_WORLD_CUE_TO_OBJECT, _normalize_thread_k
 from .models import ProcessorTaskRequest
 from .operator_bus import build_homeostasis_state
 from .policies import MEMORY_BRIDGE_POLICY
+from .memory_promotion import plan_ready_candidates
 from .policy_runtime.action_market import apply_policy_sedimentation_overlay, apply_scene_state_overlay, apply_simulation_overlay, apply_situational_field_overlay
 from .policy_runtime.action_simulation import simulate_action_candidate as _simulate_action_candidate_impl
 from .policy_runtime.counterfactuals import fast_counterfactual_set as _fast_counterfactual_set_impl
@@ -6258,6 +6259,9 @@ class MemoryBridge:
         self.rag.write_rows("durable", durable_rows)
         self.rag.write_rows("candidate", remaining)
         return {"promoted": promoted, "skipped": skipped, "remaining_candidates": len(remaining)}
+
+    def plan_ready_candidates(self, limit: int = 8) -> dict[str, Any]:
+        return plan_ready_candidates(self.rag, limit=limit)
 
     def export_snapshot(self, *, path: str | None = None, label: str | None = None, query: str | None = None) -> dict[str, Any]:
         return self.rag.export_snapshot_payload(path=path, label=label, query=query)

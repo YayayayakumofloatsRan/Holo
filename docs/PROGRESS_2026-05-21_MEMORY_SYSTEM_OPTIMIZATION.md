@@ -42,18 +42,28 @@ python -m holo_host memory-doctor --include-vector-open
 
 Default mode is static-only so the doctor can be run while the WSL brain is live without trying to open an active vector store.
 
+Added safe semantic promotion planning:
+
+```powershell
+python -m holo_host promote-memory --dry-run
+```
+
+This uses the same candidate ordering and durable-memory match logic as promotion, but returns only ids, action type, confidence, importance, and match score. It does not emit candidate text and does not write `memory_store.jsonl` or `candidate_store.jsonl`.
+
 ## Verification
 
 Local tests:
 
 ```powershell
 pytest -q tests/test_memory_doctor.py --basetemp .holo_runtime\pytest-tmp
+pytest -q tests/test_memory_promotion.py --basetemp .holo_runtime\pytest-tmp
 ```
 
 Result:
 
 ```text
 4 passed
+2 passed
 ```
 
 Local command smoke:
@@ -93,6 +103,31 @@ holo.memory_doctor.v1
 False
 ok
 critical
+```
+
+WSL semantic-promotion dry-run smoke:
+
+```bash
+cd /home/holo/holo
+python3 -m holo_host promote-memory --dry-run > .holo_runtime/promote_memory_dry_run.wsl.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+data = json.loads(Path(".holo_runtime/promote_memory_dry_run.wsl.json").read_text(encoding="utf-8"))
+print(data.get("status"))
+print(data.get("dry_run"))
+print(data.get("privacy", {}).get("raw_text_included"))
+print(data.get("candidate_count"))
+PY
+```
+
+Result:
+
+```text
+plan
+True
+False
+9
 ```
 
 WSL note: `pytest` is not installed in the current WSL Python environment, so test execution was verified on Windows and WSL was verified by CLI smoke.
