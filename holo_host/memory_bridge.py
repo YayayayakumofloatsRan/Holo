@@ -23,6 +23,7 @@ from .policy_runtime.action_simulation import simulate_action_candidate as _simu
 from .policy_runtime.counterfactuals import fast_counterfactual_set as _fast_counterfactual_set_impl
 from .policy_runtime.world_calibration_trace import expression_budget_summary
 from .stage104_context_learning import inject_stage104_context, stage104_context_packet
+from .stage105_provider_packet_stream import inject_stage105_packet_stream, stage105_packet_stream_plan
 from .vector_memory import VectorMemory
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
@@ -1712,9 +1713,12 @@ class MemoryBridge:
         }
         stage104_context = stage104_context_packet(self.repo_root, query=query, limit=4)
         packet = inject_stage104_context(packet, stage104_context, limit=4)
+        stage105_plan = stage105_packet_stream_plan(packet, query=query, max_packets=4)
+        packet = inject_stage105_packet_stream(packet, stage105_plan)
         packet.setdefault("state", {})
         packet["state"]["stage104"] = dict(packet.get("stage104", {}))
         packet["state"]["semantic_attractor_lines"] = list(packet.get("semantic_attractor_lines", []))
+        packet["state"]["stage105"] = dict(packet.get("stage105", {}))
         self._store_packet_cache(query, context=context, packet=packet)
         return packet
 
@@ -3819,6 +3823,8 @@ class MemoryBridge:
             "stage28": dict(packet.get("stage28", {})),
             "stage104": dict(packet.get("stage104", {})),
             "semantic_attractor_lines": list(packet.get("semantic_attractor_lines", [])),
+            "stage105": dict(packet.get("stage105", {})),
+            "provider_packet_stream": dict(packet.get("provider_packet_stream", {})),
             "mind_packet": packet,
         }
 

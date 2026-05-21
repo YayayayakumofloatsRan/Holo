@@ -26,6 +26,7 @@ from .memory_warehouse import memory_warehouse_report, write_memory_warehouse_ar
 from .models import ProcessorTaskRequest
 from .reply_api import HoloReplyService, run_reply_api
 from .stage104_context_learning import STAGE104_CONFIRMATION, stage104_candidate_plan, stage104_context_learning_report
+from .stage105_provider_packet_stream import stage105_packet_stream_plan
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -8628,6 +8629,40 @@ def command_stage104_context_learning(
     return 0
 
 
+def command_stage105_packet_stream(
+    config_path: str | None,
+    *,
+    query: str,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    max_packets: int,
+    packet_budget_tokens: int,
+    deadline_ms: int | None,
+) -> int:
+    payload, transport = _inspect_mind_payload(
+        config_path,
+        query=query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        include_graph_trace=False,
+    )
+    mind_packet = dict(payload.get("mind_packet", {})) if isinstance(payload.get("mind_packet", {}), dict) else dict(payload)
+    plan = stage105_packet_stream_plan(
+        mind_packet,
+        query=query,
+        max_packets=max_packets,
+        packet_budget_tokens=packet_budget_tokens,
+        deadline_ms=deadline_ms,
+    )
+    plan["source"] = transport
+    print(_json_dumps_utf8_safe(plan, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9391,6 +9426,18 @@ def main(argv: list[str] | None = None) -> int:
     stage104_parser.add_argument("--dry-run", action="store_true", help="Plan only; this is also the default unless --apply is set")
     stage104_parser.add_argument("--apply", action="store_true", help="Write Stage104 context-attractor candidates; WSL confirmation required")
     stage104_parser.add_argument("--confirm", default="", help=f"Required value for --apply: {STAGE104_CONFIRMATION}")
+    stage105_parser = subparsers.add_parser(
+        "stage105-packet-stream",
+        help="Inspect Stage105 finite provider packet stream planning for one query",
+    )
+    stage105_parser.add_argument("--query", required=True)
+    stage105_parser.add_argument("--thread-key", default="holo_cli:main")
+    stage105_parser.add_argument("--chat-name", default="HoloCLI")
+    stage105_parser.add_argument("--channel", default="holo_cli")
+    stage105_parser.add_argument("--sender", default="Operator")
+    stage105_parser.add_argument("--max-packets", type=int, default=4)
+    stage105_parser.add_argument("--packet-budget-tokens", type=int, default=2400)
+    stage105_parser.add_argument("--deadline-ms", type=int, default=None)
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10258,6 +10305,18 @@ def main(argv: list[str] | None = None) -> int:
             attractor_limit=args.attractor_limit,
             apply=args.apply,
             confirm=args.confirm,
+        )
+    if args.command == "stage105-packet-stream":
+        return command_stage105_packet_stream(
+            args.config,
+            query=args.query,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            max_packets=args.max_packets,
+            packet_budget_tokens=args.packet_budget_tokens,
+            deadline_ms=args.deadline_ms,
         )
     if args.command == "visualize-biomimetic-system":
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)
