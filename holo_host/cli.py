@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 from .config import load_config
 from .daemon import build_daemon
 from .memory_admin import MEMORY_RESET_CONFIRMATION, reset_holo_memory
+from .memory_doctor import memory_doctor_report
 from .models import ProcessorTaskRequest
 from .reply_api import HoloReplyService, run_reply_api
 from .store import QueueStore
@@ -8371,6 +8372,22 @@ def command_reset_memory(config_path: str | None, *, confirm: str, reason: str, 
     return 0
 
 
+def command_memory_doctor(config_path: str | None, *, include_vector_open: bool) -> int:
+    config = load_config(config_path=config_path)
+    vector_health = None
+    vector_source = "not_requested"
+    if include_vector_open:
+        try:
+            vector_health, vector_source = _vector_health_payload(config_path)
+        except Exception as exc:  # pragma: no cover - defensive CLI boundary
+            vector_health = {"status": "error", "error": str(exc)}
+            vector_source = "error"
+    report = memory_doctor_report(config.runtime.repo_root, vector_health=vector_health)
+    report["vector"]["open_probe_source"] = vector_source
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /status                show compact brain status
@@ -9047,6 +9064,12 @@ def main(argv: list[str] | None = None) -> int:
     backfill_vector_parser.add_argument("--chat-name", default=None)
     backfill_vector_parser.add_argument("--channel", default=None)
     subparsers.add_parser("vector-health", help="Inspect vector backend health")
+    memory_doctor_parser = subparsers.add_parser("memory-doctor", help="Run a redacted structural health audit for Holo memory")
+    memory_doctor_parser.add_argument(
+        "--include-vector-open",
+        action="store_true",
+        help="Also query the live/local vector backend; default is static-only to avoid touching an active vector store.",
+    )
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -9864,6 +9887,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "vector-health":
         return command_vector_health(args.config)
+    if args.command == "memory-doctor":
+        return command_memory_doctor(args.config, include_vector_open=args.include_vector_open)
     if args.command == "reply-probe":
         return command_reply_probe(
             args.config,
