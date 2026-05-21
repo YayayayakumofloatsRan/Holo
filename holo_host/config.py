@@ -54,6 +54,7 @@ class RuntimeConfig:
     resume_sessions: bool = True
     api_bind_host: str = "127.0.0.1"
     api_port: int = 8000
+    api_bearer_token_env: str = "HOLO_API_BEARER_TOKEN"
 
 
 @dataclass(slots=True)
@@ -412,6 +413,8 @@ def load_config(config_path: str | None = None, repo_root: str | Path | None = N
         resume_sessions=bool(runtime_data.get("resume_sessions", True)),
         api_bind_host=str(runtime_data.get("api_bind_host", "127.0.0.1")),
         api_port=int(runtime_data.get("api_port", 8000)),
+        api_bearer_token_env=str(runtime_data.get("api_bearer_token_env", "HOLO_API_BEARER_TOKEN")).strip()
+        or "HOLO_API_BEARER_TOKEN",
     )
 
     mail_data = data.get("mail", {})

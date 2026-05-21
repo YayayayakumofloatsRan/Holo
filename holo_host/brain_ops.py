@@ -15,6 +15,7 @@ ALLOWED_SELF_REVISION_FIELDS = {
     "initiative_thresholds",
     "prompt_composer_bias",
 }
+STRUCTURED_SELF_REVISION_FIELDS = set(ALLOWED_SELF_REVISION_FIELDS)
 CORRECTION_HINTS = ("别总这么老成", "不要一直顺着", "独立性", "反身性", "不要一直", "别太老成")
 
 
@@ -29,11 +30,45 @@ def _parse_json_payload(text: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _coerce_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        return _parse_json_payload(value)
+    return {}
+
+
+def _coerce_float_patch(value: Any) -> dict[str, float]:
+    payload = _coerce_json_dict(value)
+    normalized: dict[str, float] = {}
+    for key, raw in payload.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        try:
+            numeric = float(raw)
+        except (TypeError, ValueError):
+            continue
+        normalized[name] = round(max(0.0, min(1.0, numeric)), 4)
+    return normalized
+
+
 def filter_self_revision_patch(patch: dict[str, Any]) -> dict[str, Any]:
     filtered: dict[str, Any] = {}
     for key, value in dict(patch or {}).items():
-        if key in ALLOWED_SELF_REVISION_FIELDS:
-            filtered[key] = value
+        if key not in ALLOWED_SELF_REVISION_FIELDS:
+            continue
+        if key == "persona_blend":
+            normalized_persona = _coerce_float_patch(value)
+            if normalized_persona:
+                filtered[key] = normalized_persona
+            continue
+        if key in STRUCTURED_SELF_REVISION_FIELDS:
+            normalized = _coerce_json_dict(value)
+            if normalized:
+                filtered[key] = normalized
+            continue
+        filtered[key] = value
     return filtered
 
 

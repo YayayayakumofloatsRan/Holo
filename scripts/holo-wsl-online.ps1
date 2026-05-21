@@ -23,6 +23,7 @@ $wslEnvNames = @(
   'DEEPSEEK_BASE_URL',
   'OPENAI_COMPATIBLE_API_KEY',
   'OPENAI_COMPATIBLE_BASE_URL',
+  'HOLO_API_BEARER_TOKEN',
   'HOLO_ENABLE_CODEX_FALLBACK'
 )
 $existingWslEnv = @(([string]$env:WSLENV).Split(':') | Where-Object { [string]$_ -ne '' })

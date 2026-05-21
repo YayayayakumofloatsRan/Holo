@@ -7,13 +7,16 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .config import load_config
 from .daemon import build_daemon
+from .memory_admin import MEMORY_RESET_CONFIRMATION, reset_holo_memory
 from .models import ProcessorTaskRequest
 from .reply_api import HoloReplyService, run_reply_api
 from .store import QueueStore
@@ -55,7 +58,11 @@ def _live_api_base_urls(config) -> list[str]:
         port_candidates.append(8004)
 
     for port in port_candidates:
-        _append_live_base_url(base_urls, f"http://{bind_host}:{port}")
+        if bind_host == "0.0.0.0":
+            _append_live_base_url(base_urls, f"http://127.0.0.1:{port}")
+            _append_live_base_url(base_urls, f"http://localhost:{port}")
+        else:
+            _append_live_base_url(base_urls, f"http://{bind_host}:{port}")
         if os.name == "nt" and bind_host in {"127.0.0.1", "localhost"}:
             _append_live_base_url(base_urls, f"http://127.0.0.1:{port}")
 
@@ -97,6 +104,10 @@ def _live_api_request(
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
+    token_env = str(getattr(config.runtime, "api_bearer_token_env", "HOLO_API_BEARER_TOKEN") or "").strip()
+    bearer_token = os.environ.get(token_env, "").strip() if token_env else ""
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
     for base_url in base_urls:
         url = f"{base_url}{path}"
         if query:
@@ -8310,8 +8321,7 @@ def command_experiment_memory(
 
 
 def command_snapshot_memory(config_path: str | None, path: str | None, label: str | None, query: str | None) -> int:
-    daemon = build_daemon(config_path)
-    print(json.dumps(daemon.memory.export_snapshot(path=path, label=label, query=query), ensure_ascii=False, indent=2))
+    print(json.dumps(command_snapshot_memory_payload(config_path, path=path, label=label, query=query), ensure_ascii=False, indent=2))
     return 0
 
 
@@ -8347,6 +8357,289 @@ def command_revive_packet(config_path: str | None, path: str | None, query: str 
     else:
         print(packet["text"])
     return 0
+
+
+def command_reset_memory(config_path: str | None, *, confirm: str, reason: str, dry_run: bool) -> int:
+    config = load_config(config_path=config_path)
+    report = reset_holo_memory(
+        repo_root=config.runtime.repo_root,
+        confirm=confirm,
+        reason=reason,
+        dry_run=dry_run,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+CHAT_HELP = """Commands:
+  /help                  show this help
+  /status                show compact brain status
+  /readiness             show live readiness
+  /flow                  show live flow summary
+  /mind <query>          inspect current mind packet for a query
+  /recall <query>        trace hybrid recall for a query
+  /activation            show activation state for this CLI thread
+  /snapshot [label]      create a memory snapshot
+  /json on|off           show or hide raw reply JSON after each turn
+  /quit, /exit           leave the shell
+
+Reset is intentionally not available inside chat. Use reset-memory directly
+from WSL with the exact confirmation phrase when you need the highest
+privilege operation.
+"""
+
+
+def _chat_payload(*, text: str, channel: str, thread_key: str, chat_name: str, sender: str) -> dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    return {
+        "chat_name": chat_name,
+        "sender": sender,
+        "text": text,
+        "is_group": False,
+        "mentioned": True,
+        "channel": channel,
+        "thread_key": thread_key,
+        "message_id": f"{channel}-cli-{now_ms}-{uuid.uuid4().hex[:8]}",
+        "ts": now_ms,
+        "metadata": {
+            "transport": "holo_cli",
+            "module": "interactive_cli",
+            "authority": "operator_chat",
+            "client_context_policy": "single_subject_thread",
+            "single_subject_thread": True,
+            "client_capabilities": {
+                "memory_admin": False,
+                "subject_settings": False,
+            },
+        },
+    }
+
+
+def _chat_response_text(payload: dict[str, Any]) -> str:
+    text = str(payload.get("text", "") or "").strip()
+    if text:
+        return text
+    bubbles = payload.get("bubbles", [])
+    if isinstance(bubbles, list):
+        parts: list[str] = []
+        for item in bubbles:
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+            elif isinstance(item, dict) and str(item.get("text", "") or "").strip():
+                parts.append(str(item.get("text", "")).strip())
+        if parts:
+            return "\n".join(parts)
+    action = str(payload.get("action", "") or "").strip()
+    reason = str(payload.get("reason", "") or "").strip()
+    if action:
+        return f"[{action}{': ' + reason if reason else ''}]"
+    return "[no reply text]"
+
+
+def _compact_chat_status(payload: dict[str, Any]) -> str:
+    mode = str(payload.get("mode", "") or "").strip() or "unknown"
+    updated = str(payload.get("last_updated_at", "") or "").strip()
+    metadata = dict(payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {})
+    homeostasis = dict(metadata.get("homeostasis_state", {}) if isinstance(metadata.get("homeostasis_state"), dict) else {})
+    deficits = ", ".join(str(item) for item in list(homeostasis.get("active_deficits", []))[:6])
+    provider = str(dict(homeostasis.get("provider_state", {}) if isinstance(homeostasis.get("provider_state"), dict) else {}).get("active_backend", "") or "")
+    budget = homeostasis.get("budget_pressure", "")
+    return (
+        f"mode={mode} provider={provider or 'unknown'} budget_pressure={budget} "
+        f"updated={updated or '-'}\n"
+        f"deficits={deficits or 'none'}"
+    )
+
+
+def _compact_chat_flow(payload: dict[str, Any]) -> str:
+    status = str(payload.get("status", "") or "").strip()
+    recommendation = str(payload.get("recommendation", payload.get("flow_recommendation", "")) or "").strip()
+    active = payload.get("active_loop", payload.get("active", ""))
+    return f"status={status or 'unknown'} active={active or '-'} recommendation={recommendation or '-'}"
+
+
+def _print_chat_json(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _close_chat_service(service: HoloReplyService | None) -> None:
+    if service is None:
+        return
+    service.store.close()
+    if hasattr(service.memory, "activation"):
+        service.memory.activation.close()
+    if hasattr(service.memory, "graph"):
+        service.memory.graph.close()
+
+
+def command_chat(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    sender: str,
+    once: str | None,
+    json_output: bool,
+    no_local_fallback: bool,
+    timeout: float,
+) -> int:
+    service: HoloReplyService | None = None
+    show_json = bool(json_output)
+
+    def send_turn(text: str) -> tuple[dict[str, Any], str]:
+        nonlocal service
+        payload = _chat_payload(text=text, channel=channel, thread_key=thread_key, chat_name=chat_name, sender=sender)
+        live_payload = _live_api_request(config_path, method="POST", path="/reply", payload=payload, timeout=timeout)
+        if live_payload is not None:
+            return live_payload, "live_http"
+        if no_local_fallback:
+            return {"action": "error", "reason": "live_http_unavailable"}, "live_http_unavailable"
+        if service is None:
+            service = HoloReplyService(load_config(config_path=config_path))
+        return service.handle_reply(payload), "local_process"
+
+    def run_slash(command_line: str) -> bool:
+        nonlocal show_json
+        command, _, rest = command_line.partition(" ")
+        command = command.strip().lower()
+        rest = rest.strip()
+        if command in {"/quit", "/exit"}:
+            return False
+        if command == "/help":
+            print(CHAT_HELP.rstrip())
+            return True
+        if command == "/json":
+            if rest.lower() in {"on", "1", "true", "yes"}:
+                show_json = True
+                print("json=on")
+            elif rest.lower() in {"off", "0", "false", "no"}:
+                show_json = False
+                print("json=off")
+            else:
+                print("usage: /json on|off")
+            return True
+        if command == "/status":
+            payload, transport = _brain_status_payload(config_path)
+            print(f"[{transport}] {_compact_chat_status(payload)}")
+            return True
+        if command == "/readiness":
+            payload, transport = _live_readiness_payload(config_path)
+            print(f"[{transport}] status={payload.get('status', 'unknown')}")
+            if show_json:
+                _print_chat_json(payload)
+            return True
+        if command == "/flow":
+            payload, transport = _live_flow_payload(config_path)
+            print(f"[{transport}] {_compact_chat_flow(payload)}")
+            if show_json:
+                _print_chat_json(payload)
+            return True
+        if command == "/mind":
+            if not rest:
+                print("usage: /mind <query>")
+                return True
+            payload, transport = _inspect_mind_payload(
+                config_path,
+                query=rest,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                sender=sender,
+                include_graph_trace=False,
+            )
+            print(f"[{transport}] tier={payload.get('tier', '-')} route={payload.get('memory_route', payload.get('retrieval_mode', '-'))}")
+            for line in list(payload.get("episodic_lines", []))[:4]:
+                print(f"- {line}")
+            if show_json:
+                _print_chat_json(payload)
+            return True
+        if command == "/recall":
+            if not rest:
+                print("usage: /recall <query>")
+                return True
+            payload, transport = _trace_hybrid_payload(
+                config_path,
+                query=rest,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=8,
+            )
+            print(f"[{transport}] tier={payload.get('tier', '-')} recall_confidence={payload.get('recall_confidence', '-')}")
+            for item in list(payload.get("graph_hits", []))[:4]:
+                text = str(dict(item).get("text", "") or "").strip()
+                if text:
+                    print(f"- {text}")
+            if show_json:
+                _print_chat_json(payload)
+            return True
+        if command == "/activation":
+            payload, transport = _activation_state_payload(config_path, thread_key=thread_key, chat_name=chat_name, channel=channel)
+            print(f"[{transport}] heat={payload.get('heat', '-')} motifs={', '.join(str(item) for item in list(payload.get('motifs', []))[:6])}")
+            if show_json:
+                _print_chat_json(payload)
+            return True
+        if command == "/snapshot":
+            label = rest or "holo-cli"
+            print(json.dumps(command_snapshot_memory_payload(config_path, path=None, label=label, query=None), ensure_ascii=False, indent=2))
+            return True
+        if command in {"/reset", "/reset-memory"}:
+            print("reset-memory is not available inside interactive chat. Exit and run the WSL-only reset-memory command explicitly.")
+            return True
+        print(f"unknown command: {command}. Type /help.")
+        return True
+
+    try:
+        if once is not None:
+            text = str(once or "").strip()
+            if not text:
+                return 0
+            payload, transport = send_turn(text)
+            print(_chat_response_text(payload))
+            if show_json:
+                print(f"\n[{transport}]")
+                _print_chat_json(payload)
+            return 0
+
+        print(f"Holo CLI chat | channel={channel} thread={thread_key} chat={chat_name}")
+        print("Type /help for commands, /quit to exit.")
+        while True:
+            try:
+                line = input("holo> ")
+            except EOFError:
+                print()
+                break
+            except KeyboardInterrupt:
+                print("\nInterrupted. Type /quit to exit.")
+                continue
+            text = line.strip()
+            if not text:
+                continue
+            if text.startswith("/"):
+                if not run_slash(text):
+                    break
+                continue
+            payload, transport = send_turn(text)
+            print(_chat_response_text(payload))
+            if show_json:
+                print(f"\n[{transport}]")
+                _print_chat_json(payload)
+    finally:
+        _close_chat_service(service)
+    return 0
+
+
+def command_snapshot_memory_payload(config_path: str | None, path: str | None, label: str | None, query: str | None) -> dict[str, Any]:
+    daemon = build_daemon(config_path)
+    try:
+        return daemon.memory.export_snapshot(path=path, label=label, query=query)
+    finally:
+        daemon.store.close()
+        if hasattr(daemon.memory, "activation"):
+            daemon.memory.activation.close()
+        if hasattr(daemon.memory, "graph"):
+            daemon.memory.graph.close()
 
 
 def command_serve_api(config_path: str | None, host: str | None, port: int | None) -> int:
@@ -8761,6 +9054,15 @@ def main(argv: list[str] | None = None) -> int:
     reply_probe_parser.add_argument("--channel", default="wechat")
     reply_probe_parser.add_argument("--sender", default=None)
     reply_probe_parser.add_argument("--mode", choices=("all", "graph", "hybrid", "legacy"), default="all")
+    chat_parser = subparsers.add_parser("chat", help="Run an interactive single-thread Holo CLI chat shell")
+    chat_parser.add_argument("--thread-key", default="holo_cli:main")
+    chat_parser.add_argument("--chat-name", default="HoloCLI")
+    chat_parser.add_argument("--channel", default="holo_cli")
+    chat_parser.add_argument("--sender", default="Operator")
+    chat_parser.add_argument("--once", default=None, help="Send one message and exit")
+    chat_parser.add_argument("--json", action="store_true", help="Print raw reply JSON after each turn")
+    chat_parser.add_argument("--no-local-fallback", action="store_true", help="Fail instead of creating an in-process fallback brain")
+    chat_parser.add_argument("--timeout", type=float, default=180.0)
     experiment_parser = subparsers.add_parser("experiment-memory", help="Run a fixed three-scenario mind-packet experiment")
     experiment_parser.add_argument("--thread-key", default=None)
     experiment_parser.add_argument("--chat-name", default=None)
@@ -8779,6 +9081,10 @@ def main(argv: list[str] | None = None) -> int:
     revive_parser.add_argument("--path", default=None)
     revive_parser.add_argument("--query", default=None)
     revive_parser.add_argument("--json", action="store_true")
+    reset_memory_parser = subparsers.add_parser("reset-memory", help="WSL-only system reset for Holo memory stores and derived indexes")
+    reset_memory_parser.add_argument("--confirm", required=True, help=f"Must be exactly {MEMORY_RESET_CONFIRMATION}")
+    reset_memory_parser.add_argument("--reason", required=True)
+    reset_memory_parser.add_argument("--dry-run", action="store_true")
     artifact_parser = subparsers.add_parser("ingest-artifact", help="Read a local text/document/image artifact into Holo memory")
     artifact_parser.add_argument("--path", required=True)
     artifact_parser.add_argument("--note", default=None)
@@ -9568,6 +9874,18 @@ def main(argv: list[str] | None = None) -> int:
             sender=args.sender,
             mode=args.mode,
         )
+    if args.command == "chat":
+        return command_chat(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            once=args.once,
+            json_output=args.json,
+            no_local_fallback=args.no_local_fallback,
+            timeout=args.timeout,
+        )
     if args.command == "experiment-memory":
         return command_experiment_memory(
             args.config,
@@ -9588,6 +9906,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "revive-packet":
         return command_revive_packet(args.config, args.path, args.query, args.json)
+    if args.command == "reset-memory":
+        return command_reset_memory(
+            args.config,
+            confirm=args.confirm,
+            reason=args.reason,
+            dry_run=args.dry_run,
+        )
     if args.command == "ingest-artifact":
         return command_ingest_artifact(
             args.config,

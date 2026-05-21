@@ -23,6 +23,16 @@ class _FakeResponse:
 
 
 class CliLiveApiRequestTests(unittest.TestCase):
+    def test_bind_all_host_also_adds_loopback_client_url(self) -> None:
+        config = SimpleNamespace(runtime=SimpleNamespace(api_bind_host="0.0.0.0", api_port=8004))
+
+        with mock.patch("holo_host.cli.os.name", "posix"):
+            urls = cli._live_api_base_urls(config)
+
+        self.assertEqual(urls[0], "http://127.0.0.1:8004")
+        self.assertIn("http://localhost:8004", urls)
+        self.assertNotIn("http://0.0.0.0:8004", urls)
+
     def test_windows_live_request_falls_back_to_standard_wsl_port(self) -> None:
         config = SimpleNamespace(runtime=SimpleNamespace(api_bind_host="127.0.0.1", api_port=8000))
         opened_urls: list[str] = []
@@ -61,6 +71,31 @@ class CliLiveApiRequestTests(unittest.TestCase):
 
         self.assertEqual(payload, {"status": "healthy"})
         self.assertEqual(transport, "live_http")
+
+    def test_live_request_sends_configured_bearer_token(self) -> None:
+        config = SimpleNamespace(
+            runtime=SimpleNamespace(
+                api_bind_host="127.0.0.1",
+                api_port=8004,
+                api_bearer_token_env="HOLO_TEST_TOKEN",
+            )
+        )
+        seen_authorization: list[str | None] = []
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            seen_authorization.append(request.get_header("Authorization"))
+            return _FakeResponse({"status": "ready"})
+
+        with mock.patch("holo_host.cli.load_config", return_value=config), mock.patch.dict(
+            "holo_host.cli.os.environ",
+            {"HOLO_TEST_TOKEN": "secret-token", "HOLO_LIVE_API_URL": ""},
+            clear=False,
+        ), mock.patch("holo_host.cli.urlopen", side_effect=fake_urlopen):
+            payload = cli._live_api_request(None, method="GET", path="/live-readiness")
+
+        self.assertEqual(payload, {"status": "ready"})
+        self.assertEqual(seen_authorization, ["Bearer secret-token"])
 
 
 if __name__ == "__main__":

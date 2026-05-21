@@ -36,6 +36,7 @@ resume_sessions = true
 dry_run = false
 api_bind_host = "0.0.0.0"
 api_port = 8004
+api_bearer_token_env = "HOLO_API_BEARER_TOKEN"
 
 [processor_fabric]
 deepseek_base_url = "https://api.deepseek.com"
@@ -168,6 +169,8 @@ if re.search(r'(?m)^\s*api_bind_host\s*=\s*"([^"]+)"', text):
     updated = re.sub(r'(?m)^(\s*api_bind_host\s*=\s*")([^"]+)(".*)$', r'\g<1>0.0.0.0\3', text, count=1)
 else:
     updated = text.replace('api_port = 8004', 'api_bind_host = "0.0.0.0"\napi_port = 8004', 1)
+if "api_bearer_token_env" not in updated:
+    updated = updated.replace('api_port = 8004', 'api_port = 8004\napi_bearer_token_env = "HOLO_API_BEARER_TOKEN"', 1)
 if re.search(r'(?m)^\s*processor_backend\s*=\s*"codex_cli"', updated):
     updated = re.sub(r'(?m)^(\s*processor_backend\s*=\s*")codex_cli(".*)$', r'\g<1>deepseek\2', updated, count=1)
 if "[processor_fabric]" not in updated:

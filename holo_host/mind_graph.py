@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Iterable
 
+from .brain_ops import filter_self_revision_patch
 from .common import compact_text, ensure_directory, stable_digest, utc_now
 from .mind_graph_parts.autobiographical_updates import update_autobiographical_state as _update_autobiographical_state
 from .mind_graph_parts.goal_updates import goal_state as _goal_state
@@ -53,7 +54,7 @@ from .mind_graph_parts.temporal_state import upsert_temporal_item as _upsert_tem
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
 TEXT_FILE_SUFFIXES = {".txt", ".md", ".json", ".jsonl", ".yaml", ".yml", ".csv", ".log", ".html", ".xml"}
-ACTIVE_THREAD_FAST_CHANNELS = {"wechat", "holo_app"}
+ACTIVE_THREAD_FAST_CHANNELS = {"wechat", "holo_app", "holo_cli"}
 RECALL_HINTS = ("记得", "之前", "更早", "上线前", "你说过", "我们之前", "remember", "earlier", "before", "previous")
 ORIGIN_RECALL_HINTS = (
     "最开始",
@@ -7727,7 +7728,7 @@ class MindGraph:
         with self._lock:
             applied = self.conn.execute("SELECT * FROM self_revision_applied ORDER BY id DESC LIMIT 1").fetchone()
             run = self.conn.execute("SELECT * FROM self_revision_runs ORDER BY id DESC LIMIT 1").fetchone()
-        patch = _safe_json_dict(applied["patch_json"]) if applied else {}
+        patch = filter_self_revision_patch(_safe_json_dict(applied["patch_json"]) if applied else {})
         return {
             "latest_run_id": int(run["id"]) if run else 0,
             "latest_status": str(run["status"]) if run else "",
@@ -7786,7 +7787,7 @@ class MindGraph:
         return {"id": int(row_id), "created_at": now, "status": str(status or "").strip()}
 
     def apply_self_revision_patch(self, *, run_id: int, patch: dict[str, Any], note: str = "") -> dict[str, Any]:
-        filtered_patch = {key: value for key, value in dict(patch or {}).items() if key in ALLOWED_SELF_REVISION_FIELDS}
+        filtered_patch = filter_self_revision_patch(patch)
         previous = self.latest_self_revision_state().get("applied_patch", {})
         now = utc_now()
         with self._lock:

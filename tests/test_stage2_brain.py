@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 import holo_memory_library.rag_memory as rm
@@ -92,6 +93,57 @@ class Stage2BrainTests(unittest.TestCase):
             }
         )
         self.assertEqual(set(filtered), {"persona_blend", "prompt_composer_bias"})
+
+    def test_filter_self_revision_patch_rejects_malformed_persona_blend(self) -> None:
+        filtered = filter_self_revision_patch(
+            {
+                "persona_blend": [0.0, 0.4, 0.6],
+                "prompt_composer_bias": {"avoid_counselor_register": 0.8},
+            }
+        )
+        self.assertNotIn("persona_blend", filtered)
+        self.assertEqual(filtered["prompt_composer_bias"], {"avoid_counselor_register": 0.8})
+
+    def test_latest_self_revision_state_sanitizes_legacy_malformed_patch(self) -> None:
+        with TempMemoryRepo() as temp:
+            graph = MindGraph(temp.repo_root, rag=rm, db_path=temp.runtime_dir / "mind_graph.sqlite3")
+            try:
+                graph.rebuild()
+                run = graph.record_self_revision_run(
+                    status="reviewed",
+                    evidence=[],
+                    observe={},
+                    plan={},
+                    review={"approved": True},
+                    patch={},
+                )
+                graph.conn.execute(
+                    """
+                    INSERT INTO self_revision_applied(run_id, status, patch_json, previous_patch_json, note, created_at)
+                    VALUES (?, 'applied', ?, '{}', 'legacy-bad-state', '2026-05-21T00:00:00Z')
+                    """,
+                    (
+                        int(run["id"]),
+                        json.dumps(
+                            {
+                                "persona_blend": [0.0, 0.4, 0.6],
+                                "prompt_composer_bias": {"avoid_counselor_register": 0.8},
+                                "policy_gate": {"forbidden": True},
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                    ),
+                )
+                graph.conn.commit()
+
+                patch = graph.latest_self_revision_state()["applied_patch"]
+
+                self.assertNotIn("persona_blend", patch)
+                self.assertNotIn("policy_gate", patch)
+                self.assertEqual(patch["prompt_composer_bias"], {"avoid_counselor_register": 0.8})
+            finally:
+                graph.close()
 
     def test_initiative_cooldown_accepts_stage11_state_objects(self) -> None:
         class Autonomy:

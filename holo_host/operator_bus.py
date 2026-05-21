@@ -348,8 +348,8 @@ def build_self_model_snapshot(*, memory, store, config, runner=None) -> dict[str
     active_deficits: list[str] = []
     if str(self_revision_state.get("latest_status", "")) in {"rejected", "skipped", ""}:
         active_deficits.append("self_revision_unsettled")
-    applied_patch = dict(self_revision_state.get("applied_patch", {}))
-    persona_patch = dict(applied_patch.get("persona_blend", {}))
+    applied_patch = _coerce_dict(self_revision_state.get("applied_patch", {}), {})
+    persona_patch = _coerce_dict(applied_patch.get("persona_blend", {}), {})
     if float(persona_patch.get("playfulness", 0.0) or 0.0) < 0.6:
         active_deficits.append("stiffness_drift")
     if hit_ratio < 0.15:

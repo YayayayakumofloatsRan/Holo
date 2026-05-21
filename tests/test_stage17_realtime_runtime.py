@@ -109,6 +109,37 @@ class Stage17RealtimeRuntimeTests(unittest.TestCase):
                 bridge.activation.close()
                 bridge.graph.close()
 
+    def test_holo_cli_short_turn_uses_active_fast_lane_without_hybrid_recall(self) -> None:
+        with TempMemoryRepo() as temp:
+            bridge = self._bridge(temp)
+            try:
+                active = bridge.update_active_thread_state(
+                    channel="holo_cli",
+                    thread_key="holo_cli:main",
+                    chat_name="HoloCLI",
+                    direction="inbound",
+                    text="ping",
+                    message_id="msg-stage17-holo-cli-1",
+                    event_row_id=1718,
+                )
+                context = {
+                    "channel": "holo_cli",
+                    "thread_key": "holo_cli:main",
+                    "chat_name": "HoloCLI",
+                    "active_thread_state": active,
+                    "attachments": [],
+                }
+                with mock.patch.object(bridge, "_hybrid_trace", side_effect=AssertionError("hybrid recall should not run")):
+                    packet = bridge.sidecar_packet("ping", context=context)
+
+                self.assertEqual(packet["tier"], "fast")
+                self.assertEqual(packet["memory_route"], "active_thread")
+                self.assertEqual(packet["retrieval_mode"], "active-thread-fast")
+                self.assertTrue(packet["stage17"]["fast_lane"])
+            finally:
+                bridge.activation.close()
+                bridge.graph.close()
+
     def test_fast_lane_prompt_prefers_active_summary_over_recent_history_window(self) -> None:
         config = load_config(config_path=Path(__file__).resolve().parents[1] / ".holo_host.example.toml")
         packet = {

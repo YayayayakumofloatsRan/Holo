@@ -53,7 +53,7 @@ SEMANTIC_STOP_TOKENS = {
 
 GRAPH_MEMORY_LANES = MEMORY_BRIDGE_POLICY.graph_memory_lanes
 GRAPH_REPLY_MIN_CONFIDENCE = MEMORY_BRIDGE_POLICY.graph_reply_min_confidence
-ACTIVE_THREAD_FAST_CHANNELS = {"wechat", "holo_app"}
+ACTIVE_THREAD_FAST_CHANNELS = {"wechat", "holo_app", "holo_cli"}
 LOOKUP_HINTS = (
     "search",
     "look up",
@@ -284,6 +284,18 @@ class MemoryBridge:
             return 0.0
 
     @staticmethod
+    def _coerce_dict(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        return {}
+
+    @staticmethod
     def _clamp(value: Any, *, lower: float = 0.0, upper: float = 1.0, default: float = 0.0) -> float:
         try:
             numeric = float(value)
@@ -403,8 +415,8 @@ class MemoryBridge:
 
     def _persona_blend(self, *, query: str, relationship_state: dict[str, Any], game_state: dict[str, Any], self_revision_state: dict[str, Any]) -> dict[str, float]:
         blend = dict(DEFAULT_PERSONA_BLEND)
-        applied_patch = dict(self_revision_state.get("applied_patch", {}))
-        for key, value in dict(applied_patch.get("persona_blend", {})).items():
+        applied_patch = self._coerce_dict(self_revision_state.get("applied_patch", {}))
+        for key, value in self._coerce_dict(applied_patch.get("persona_blend", {})).items():
             if key in blend:
                 blend[key] = self._clamp(value, default=blend[key])
         tone_tendency = str(relationship_state.get("tone_tendency", "") or "").strip()

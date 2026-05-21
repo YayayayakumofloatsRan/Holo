@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import inspect
 import json
 import logging
@@ -9562,8 +9563,16 @@ class HoloReplyService:
 
 
 class _ReplyHTTPServer(ThreadingHTTPServer):
-    def __init__(self, server_address: tuple[str, int], handler_cls: type[BaseHTTPRequestHandler], *, service: HoloReplyService):
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler_cls: type[BaseHTTPRequestHandler],
+        *,
+        service: HoloReplyService,
+        bearer_token: str = "",
+    ):
         self.reply_service = service
+        self.bearer_token = str(bearer_token or "").strip()
         super().__init__(server_address, handler_cls)
 
 
@@ -9577,8 +9586,12 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                if not self._authorize():
+                    return
                 if parsed.path == "/health":
-                    self._write_json(HTTPStatus.OK, self.server.reply_service.health())
+                    health = self.server.reply_service.health()
+                    health["auth_required"] = bool(self.server.bearer_token)
+                    self._write_json(HTTPStatus.OK, health)
                     return
                 if parsed.path == "/revive-packet":
                     params = parse_qs(parsed.query)
@@ -10179,6 +10192,8 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                if not self._authorize():
+                    return
                 payload = self._read_json()
                 if parsed.path == "/reply":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.handle_reply(payload))
@@ -10595,6 +10610,24 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 raise ValueError("request body must be a JSON object")
             return data
 
+        def _authorize(self) -> bool:
+            expected = str(getattr(self.server, "bearer_token", "") or "").strip()
+            if not expected:
+                return True
+            header = str(self.headers.get("Authorization", "") or "").strip()
+            prefix = "Bearer "
+            supplied = header[len(prefix) :].strip() if header.startswith(prefix) else ""
+            if supplied and hmac.compare_digest(supplied, expected):
+                return True
+            self._write_json(
+                HTTPStatus.UNAUTHORIZED,
+                {
+                    "error": "unauthorized",
+                    "detail": "Holo API bearer token is required.",
+                },
+            )
+            return False
+
         def _write_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(status.value)
@@ -10610,9 +10643,21 @@ def run_reply_api(config_path: str | None = None, *, host: str | None = None, po
     config = load_config(config_path=config_path)
     bind_host = host or config.runtime.api_bind_host
     bind_port = port or config.runtime.api_port
+    token_env = str(getattr(config.runtime, "api_bearer_token_env", "HOLO_API_BEARER_TOKEN") or "").strip()
+    bearer_token = os.environ.get(token_env, "").strip() if token_env else ""
     service = HoloReplyService(config)
-    service.logger.info("starting reply api on %s:%s", bind_host, bind_port)
-    server = _ReplyHTTPServer((bind_host, bind_port), _handler_factory(), service=service)
+    service.logger.info(
+        "starting reply api on %s:%s auth=%s",
+        bind_host,
+        bind_port,
+        "bearer" if bearer_token else "none",
+    )
+    server = _ReplyHTTPServer(
+        (bind_host, bind_port),
+        _handler_factory(),
+        service=service,
+        bearer_token=bearer_token,
+    )
     try:
         server.serve_forever()
     finally:
