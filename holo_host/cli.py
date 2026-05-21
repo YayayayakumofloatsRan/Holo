@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from .config import load_config
 from .daemon import build_daemon
+from .biomimetic_simulation import simulate_categorized_biomimetic_telemetry
 from .biomimetic_visualization import write_biomimetic_visualization
 from .biomimetic_telemetry import record_biomimetic_event, telemetry_report
 from .memory_admin import MEMORY_RESET_CONFIRMATION, reset_holo_memory
@@ -8480,6 +8481,28 @@ def command_show_biomimetic_telemetry(config_path: str | None, *, limit: int) ->
     return 0
 
 
+def command_simulate_biomimetic_telemetry(
+    config_path: str | None,
+    *,
+    topics_per_category: int,
+    turns_per_topic: int,
+    seed: int,
+    batch_id: str | None,
+    categories: list[str] | None,
+) -> int:
+    config = load_config(config_path=config_path)
+    report = simulate_categorized_biomimetic_telemetry(
+        config.runtime.repo_root,
+        topics_per_category=topics_per_category,
+        turns_per_topic=turns_per_topic,
+        seed=seed,
+        batch_id=batch_id,
+        categories=categories,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /status                show compact brain status
@@ -9182,6 +9205,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Inspect redacted Stage101 biomimetic telemetry frames",
     )
     biomimetic_telemetry_parser.add_argument("--limit", type=int, default=25)
+    biomimetic_simulation_parser = subparsers.add_parser(
+        "simulate-biomimetic-telemetry",
+        help="Generate categorized redacted Stage103 biomimetic simulation telemetry",
+    )
+    biomimetic_simulation_parser.add_argument("--topics-per-category", type=int, default=3)
+    biomimetic_simulation_parser.add_argument("--turns-per-topic", type=int, default=12)
+    biomimetic_simulation_parser.add_argument("--seed", type=int, default=103)
+    biomimetic_simulation_parser.add_argument("--batch-id", default=None)
+    biomimetic_simulation_parser.add_argument("--category", action="append", default=None, dest="categories")
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -10005,6 +10037,15 @@ def main(argv: list[str] | None = None) -> int:
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)
     if args.command == "show-biomimetic-telemetry":
         return command_show_biomimetic_telemetry(args.config, limit=args.limit)
+    if args.command == "simulate-biomimetic-telemetry":
+        return command_simulate_biomimetic_telemetry(
+            args.config,
+            topics_per_category=args.topics_per_category,
+            turns_per_topic=args.turns_per_topic,
+            seed=args.seed,
+            batch_id=args.batch_id,
+            categories=args.categories,
+        )
     if args.command == "reply-probe":
         return command_reply_probe(
             args.config,

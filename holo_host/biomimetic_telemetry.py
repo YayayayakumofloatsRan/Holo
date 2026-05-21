@@ -488,9 +488,13 @@ def _safe_extra(extra: dict[str, Any]) -> dict[str, Any]:
 
 
 def append_biomimetic_frame(repo_root: Path | str, frame: dict[str, Any]) -> dict[str, Any]:
+    return append_biomimetic_frames(repo_root, [frame])
+
+
+def append_biomimetic_frames(repo_root: Path | str, frames: list[dict[str, Any]]) -> dict[str, Any]:
     path = telemetry_store_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(frame, ensure_ascii=False, sort_keys=True) + "\n"
+    lines = [json.dumps(frame, ensure_ascii=False, sort_keys=True) + "\n" for frame in frames]
     with path.open("a", encoding="utf-8") as handle:
         try:
             import fcntl  # type: ignore
@@ -498,7 +502,7 @@ def append_biomimetic_frame(repo_root: Path | str, frame: dict[str, Any]) -> dic
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         except Exception:
             pass
-        handle.write(line)
+        handle.writelines(lines)
         handle.flush()
         try:
             os.fsync(handle.fileno())
@@ -510,7 +514,12 @@ def append_biomimetic_frame(repo_root: Path | str, frame: dict[str, Any]) -> dic
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         except Exception:
             pass
-    return {"status": "ok", "path": str(path), "frame_id": str(frame.get("id", ""))}
+    return {
+        "status": "ok",
+        "path": str(path),
+        "frame_count": len(frames),
+        "frame_id": str(frames[-1].get("id", "")) if frames else "",
+    }
 
 
 def record_biomimetic_event(

@@ -169,8 +169,12 @@ def _trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict[str, Any]
     return frames
 
 
-def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict[str, Any]]:
+def _telemetry_trajectory_frames(repo_root: Path, limit: int = 2400) -> list[dict[str, Any]]:
     telemetry_rows = load_biomimetic_frames(repo_root, limit=limit)
+    simulation_rows = [row for row in telemetry_rows if isinstance(row.get("simulation"), dict) and str(row.get("simulation", {}).get("batch_id", "") or "")]
+    if simulation_rows:
+        latest_batch = str(simulation_rows[-1].get("simulation", {}).get("batch_id", "") or "")
+        telemetry_rows = [row for row in simulation_rows if str(row.get("simulation", {}).get("batch_id", "") or "") == latest_batch]
     frames: list[dict[str, Any]] = []
     previous_projection: dict[str, float] | None = None
 
@@ -198,6 +202,7 @@ def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict
             continue
         observables = row.get("observables", {}) if isinstance(row.get("observables"), dict) else {}
         context = row.get("context", {}) if isinstance(row.get("context"), dict) else {}
+        simulation = row.get("simulation", {}) if isinstance(row.get("simulation"), dict) else {}
         base_values = {str(key): round(_safe_float(value), 4) for key, value in values.items()}
         base_projection = {str(key): round(_safe_float(value), 4) for key, value in projection.items()}
         row_id = str(row.get("id", "") or f"telemetry-{index}")
@@ -212,27 +217,39 @@ def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict
                 "values": base_values,
                 "projection": base_projection,
                 "event_type": str(row.get("event_type", "") or ""),
+                "simulation_batch_id": str(simulation.get("batch_id", "") or ""),
+                "category": str(simulation.get("category", "") or ""),
+                "topic": str(simulation.get("topic", "") or ""),
             }
         )
         recall_trajectory = row.get("recall_trajectory", {}) if isinstance(row.get("recall_trajectory"), dict) else {}
+        is_simulation = bool(str(simulation.get("batch_id", "") or ""))
         stages = [item for item in recall_trajectory.get("stages", []) if isinstance(item, dict)]
-        for candidate in stages[:32]:
+        stage_limit = 3 if is_simulation else 32
+        for candidate in stages[:stage_limit]:
             stage = str(candidate.get("stage", "") or "")
             node_hash = str(candidate.get("node_hash", "") or "")
             if not stage or not node_hash:
                 continue
             score = max(0.0, _safe_float(candidate.get("score"), 0.0))
             score_norm = _clamp(score / 2.6)
-            stage_offset = {"graph": 0.04, "vector": 0.12, "rerank": 0.2, "activation": 0.08}.get(stage, 0.02)
+            if is_simulation:
+                stage_offset = {"graph": 0.008, "vector": 0.018, "rerank": 0.032, "activation": 0.014}.get(stage, 0.006)
+                score_scale = 0.035
+                y_rank_scale = 0.002
+            else:
+                stage_offset = {"graph": 0.04, "vector": 0.12, "rerank": 0.2, "activation": 0.08}.get(stage, 0.02)
+                score_scale = 0.16
+                y_rank_scale = 0.012
             rank = max(0, int(_safe_float(candidate.get("rank"), 0)))
             micro_values = dict(base_values)
-            micro_values["memory_pressure"] = round(_clamp(_safe_float(micro_values.get("memory_pressure"), 0.0) + score_norm * 0.26), 4)
+            micro_values["memory_pressure"] = round(_clamp(_safe_float(micro_values.get("memory_pressure"), 0.0) + score_norm * (0.08 if is_simulation else 0.26)), 4)
             micro_values["arousal"] = round(_clamp(_safe_float(micro_values.get("arousal"), 0.0) + stage_offset * 0.25), 4)
             micro_values["control"] = round(_clamp(_safe_float(micro_values.get("control"), 0.55) - stage_offset * 0.08), 4)
             micro_projection = {
-                "x": round(_clamp(_safe_float(base_projection.get("x"), 0.0) + score_norm * 0.16 + stage_offset), 4),
-                "y": round(_clamp(_safe_float(base_projection.get("y"), 0.0) + stage_offset * 0.35 + min(rank, 10) * 0.012), 4),
-                "z": round(_clamp(_safe_float(base_projection.get("z"), 0.0) + (0.04 if stage == "rerank" else 0.015)), 4),
+                "x": round(_clamp(_safe_float(base_projection.get("x"), 0.0) + score_norm * score_scale + stage_offset), 4),
+                "y": round(_clamp(_safe_float(base_projection.get("y"), 0.0) + stage_offset * 0.18 + min(rank, 10) * y_rank_scale), 4),
+                "z": round(_clamp(_safe_float(base_projection.get("z"), 0.0) + (0.008 if is_simulation and stage == "rerank" else 0.04 if stage == "rerank" else 0.006 if is_simulation else 0.015)), 4),
             }
             append_frame(
                 {
@@ -245,6 +262,9 @@ def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict
                     "values": micro_values,
                     "projection": micro_projection,
                     "event_type": str(row.get("event_type", "") or ""),
+                    "simulation_batch_id": str(simulation.get("batch_id", "") or ""),
+                    "category": str(simulation.get("category", "") or ""),
+                    "topic": str(simulation.get("topic", "") or ""),
                     "recall_stage": stage,
                     "candidate_hash": node_hash,
                     "recall_score": round(score, 4),
@@ -252,6 +272,38 @@ def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict
                 }
             )
     return frames
+
+
+def _simulation_summary(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    sim_frames = [frame for frame in frames if str(frame.get("simulation_batch_id", "") or "")]
+    if not sim_frames:
+        return {
+            "available": False,
+            "latest_batch_id": "",
+            "category_count": 0,
+            "topic_count": 0,
+            "categories": {},
+            "topics": {},
+            "continuity": {"frame_count": 0, "max_delta": 0.0, "mean_delta": 0.0, "large_jump_threshold": 0.22, "large_jump_count": 0},
+        }
+    deltas = [float(frame.get("delta_from_previous", 0.0) or 0.0) for frame in sim_frames[1:]]
+    categories = Counter(str(frame.get("category", "") or "unknown") for frame in sim_frames)
+    topics = Counter(str(frame.get("topic", "") or "unknown") for frame in sim_frames)
+    return {
+        "available": True,
+        "latest_batch_id": str(sim_frames[-1].get("simulation_batch_id", "") or ""),
+        "category_count": len(categories),
+        "topic_count": len(topics),
+        "categories": dict(sorted(categories.items())),
+        "topics": dict(sorted(topics.items())),
+        "continuity": {
+            "frame_count": len(sim_frames),
+            "max_delta": round(max(deltas), 4) if deltas else 0.0,
+            "mean_delta": round(sum(deltas) / len(deltas), 4) if deltas else 0.0,
+            "large_jump_threshold": 0.22,
+            "large_jump_count": sum(1 for delta in deltas if delta > 0.22),
+        },
+    }
 
 
 def _sqlite_counts(path: Path) -> dict[str, int]:
@@ -324,7 +376,7 @@ def _mind_graph_samples(repo_root: Path, limit: int = 80) -> tuple[list[dict[str
 def _system_topology(repo_root: Path, doctor: dict[str, Any], frames: list[dict[str, Any]]) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
-    layers = ["memory", "route", "health", "mind_graph", "vector", "trajectory"]
+    layers = ["memory", "route", "health", "mind_graph", "vector", "trajectory", "topic"]
 
     def add_node(node_id: str, label: str, layer: str, value: float, group: str = "") -> None:
         nodes.append({"id": node_id, "label": label, "layer": layer, "value": round(_clamp(value), 4), "group": group or layer})
@@ -348,6 +400,19 @@ def _system_topology(repo_root: Path, doctor: dict[str, Any], frames: list[dict[
         add_node(node_id, route, "route", value, "route")
         add_edge("subject", node_id, "selected_route", max(0.1, value), "route")
 
+    category_counts = Counter(str(frame.get("category", "") or "") for frame in frames if str(frame.get("category", "") or ""))
+    topic_counts = Counter((str(frame.get("category", "") or ""), str(frame.get("topic", "") or "")) for frame in frames if str(frame.get("topic", "") or ""))
+    for category, count in category_counts.items():
+        node_id = f"category:{category}"
+        value = _clamp(count / max(1, len(frames)))
+        add_node(node_id, category, "topic", value, "topic")
+        add_edge("subject", node_id, "simulates_category", max(0.12, value), "topic")
+    for (category, topic), count in topic_counts.items():
+        node_id = f"topic:{category}:{topic}"
+        value = _clamp(count / max(1, len(frames)))
+        add_node(node_id, topic, "topic", value, "topic")
+        add_edge(f"category:{category}", node_id, "contains_topic", max(0.1, value), "topic")
+
     for key, item in doctor.get("biomimetic_health", {}).items():
         status = str(item.get("status", "unknown"))
         value = {"ok": 0.25, "unknown": 0.45, "warn": 0.72, "critical": 0.95}.get(status, 0.5)
@@ -367,6 +432,8 @@ def _system_topology(repo_root: Path, doctor: dict[str, Any], frames: list[dict[
             previous = frames[-80:][index - 1]
             add_edge(f"frame:{previous['index']}", node_id, "temporal_transition", value, "trajectory")
         add_edge(node_id, f"route:{frame.get('route', 'unknown')}", "route_at_frame", 0.35, "trajectory")
+        if frame.get("topic") and frame.get("category"):
+            add_edge(node_id, f"topic:{frame.get('category')}:{frame.get('topic')}", "topic_at_frame", 0.28, "topic")
 
     graph_nodes, graph_edges = _mind_graph_samples(repo_root)
     nodes.extend(graph_nodes)
@@ -396,9 +463,11 @@ def build_biomimetic_visualization_payload(repo_root: Path | str) -> dict[str, A
     root = Path(repo_root).resolve()
     doctor = memory_doctor_report(root)
     frames = _telemetry_trajectory_frames(root)
-    trajectory_source = "biomimetic_telemetry" if frames else "conversation_archive_proxy"
+    simulation = _simulation_summary(frames)
+    trajectory_source = "biomimetic_simulation" if simulation["available"] else ("biomimetic_telemetry" if frames else "conversation_archive_proxy")
     if not frames:
         frames = _trajectory_frames(root)
+        simulation = _simulation_summary(frames)
     topology = _system_topology(root, doctor, frames)
     promotion = _safe_promotion_plan(root)
     sqlite_counts = _sqlite_counts(root / RUNTIME_DIR / "mind_graph.sqlite3")
@@ -416,6 +485,7 @@ def build_biomimetic_visualization_payload(repo_root: Path | str) -> dict[str, A
             "component_keys": ["valence", "arousal", "control", "memory_pressure", "latency_pressure", "deep_recall", "health_pressure", "regulation"],
             "frames": frames,
         },
+        "simulation": simulation,
         "topology": topology,
         "doctor": doctor,
         "promotion_plan": promotion,
@@ -475,6 +545,8 @@ def render_biomimetic_visualization_html(payload: dict[str, Any]) -> str:
     .metric {{ display: grid; grid-template-columns: 1fr auto; gap: 8px; border-bottom: 1px solid #edf1ef; padding: 7px 0; }}
     .metric span {{ color: var(--muted); }}
     .pill {{ display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; font-size: 12px; color: var(--muted); }}
+    .topicGrid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; margin: 8px 0; }}
+    .topicChip {{ border: 1px solid var(--line); border-radius: 5px; padding: 6px; font-size: 12px; }}
     .list {{ display: grid; gap: 6px; }}
     .bar {{ height: 7px; background: #e8eeeb; border-radius: 999px; overflow: hidden; }}
     .bar i {{ display: block; height: 100%; background: var(--accent); }}
@@ -503,6 +575,7 @@ def render_biomimetic_visualization_html(payload: dict[str, Any]) -> str:
         <button data-density="global" class="density">Global</button>
       </div>
       <label>topology layer <select id="layerSelect"><option value="all">all</option></select></label>
+      <div id="simulationReadout" class="readout"></div>
       <div id="frameReadout" class="readout"></div>
       <h2>Health</h2>
       <div id="healthReadout" class="list"></div>
@@ -563,7 +636,14 @@ def render_biomimetic_visualization_html(payload: dict[str, Any]) -> str:
     if (itemLayer === "health") return `rgba(166,71,60,${{alpha}})`;
     if (itemLayer === "vector") return `rgba(108,94,151,${{alpha}})`;
     if (itemLayer === "trajectory") return `rgba(35,96,106,${{alpha}})`;
+    if (itemLayer === "topic") return `rgba(128,91,54,${{alpha}})`;
     return `rgba(90,100,100,${{alpha}})`;
+  }}
+  function categoryColor(category, alpha = .72) {{
+    const palette = ["53,111,138", "182,83,79", "77,127,83", "108,94,151", "176,123,45", "75,122,116", "151,82,110"];
+    let hash = 0;
+    String(category || "none").split("").forEach(ch => {{ hash = (hash * 31 + ch.charCodeAt(0)) >>> 0; }});
+    return `rgba(${{palette[hash % palette.length]}},${{alpha}})`;
   }}
   function drawPhase() {{
     const canvas = document.getElementById("phaseCanvas");
@@ -601,7 +681,7 @@ def render_biomimetic_visualization_html(payload: dict[str, Any]) -> str:
       const r = index === frame ? 6 : 2.4;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = index === frame ? "#b6534f" : "rgba(53,111,138,.42)";
+      ctx.fillStyle = index === frame ? "#b6534f" : categoryColor(item.category || item.route, .48);
       ctx.fill();
     }});
   }}
@@ -686,19 +766,32 @@ def render_biomimetic_visualization_html(payload: dict[str, Any]) -> str:
     }});
     ctx.fillStyle = "#18201f";
     ctx.font = "12px system-ui";
-    ctx.fillText(`frame ${{frame}} | route=${{current.route || ""}} | latency=${{current.latency_ms || 0}}ms`, 20, 22);
+    ctx.fillText(`frame ${{frame}} | ${{current.category || "runtime"}}/${{current.topic || current.route || ""}} | latency=${{current.latency_ms || 0}}ms`, 20, 22);
   }}
   function updateReadouts() {{
     const current = frames[frame] || {{}};
     const values = current.values || {{}};
     document.getElementById("frameReadout").innerHTML = `
       <div class="metric"><span>route</span><strong>${{current.route || "none"}}</strong></div>
+      <div class="metric"><span>category</span><strong>${{current.category || "runtime"}}</strong></div>
+      <div class="metric"><span>topic</span><strong>${{current.topic || "none"}}</strong></div>
       <div class="metric"><span>thread</span><strong>${{current.thread_key || ""}}</strong></div>
       <div class="metric"><span>latency</span><strong>${{current.latency_ms || 0}} ms</strong></div>
       <div class="metric"><span>delta</span><strong>${{number(current.delta_from_previous).toFixed(4)}}</strong></div>
       ${{Object.keys(values).map(key => `<div><div class="metric"><span>${{key}}</span><strong>${{number(values[key]).toFixed(3)}}</strong></div><div class="bar"><i style="width:${{Math.round(number(values[key]) * 100)}}%"></i></div></div>`).join("")}}
     `;
     const health = payload.doctor.biomimetic_health || {{}};
+    const simulation = payload.simulation || {{}};
+    const categories = simulation.categories || {{}};
+    document.getElementById("simulationReadout").innerHTML = `
+      <h2>Simulation</h2>
+      <div class="metric"><span>source</span><strong>${{payload.trajectory.source || ""}}</strong></div>
+      <div class="metric"><span>batch</span><strong>${{simulation.latest_batch_id || ""}}</strong></div>
+      <div class="metric"><span>categories</span><strong>${{simulation.category_count || 0}}</strong></div>
+      <div class="metric"><span>topics</span><strong>${{simulation.topic_count || 0}}</strong></div>
+      <div class="metric"><span>max delta</span><strong>${{number((simulation.continuity || {{}}).max_delta).toFixed(4)}}</strong></div>
+      <div class="topicGrid">${{Object.keys(categories).slice(0, 12).map(key => `<div class="topicChip" style="border-color:${{categoryColor(key, .55)}}"><strong>${{key}}</strong><br><span class="small">${{categories[key]}} frames</span></div>`).join("")}}</div>
+    `;
     document.getElementById("healthReadout").innerHTML = Object.keys(health).map(key => {{
       const status = health[key].status || "unknown";
       return `<div class="metric"><span>${{key}}</span><strong class="pill">${{status}}</strong></div>`;
