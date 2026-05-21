@@ -1,10 +1,20 @@
+param(
+  [switch]$WithWeChat
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'holo-wsl-common.ps1')
 
+$wechatFlag = ''
+if ($env:HOLO_START_WECHAT) {
+  $wechatFlag = $env:HOLO_START_WECHAT.Trim().ToLowerInvariant()
+}
+$startWeChat = $WithWeChat -or (@('1', 'true', 'yes', 'on') -contains $wechatFlag)
+
 if (-not (Test-HoloForceWindows) -and (Test-HoloWslReady -WindowsRepoRoot $root)) {
-  & (Join-Path $PSScriptRoot 'holo-wsl-start-all.ps1')
+  & (Join-Path $PSScriptRoot 'holo-wsl-start-all.ps1') -WithWeChat:$WithWeChat
   return
 }
 $configPath = if ($env:HOLO_HOST_CONFIG) { $env:HOLO_HOST_CONFIG } else { Join-Path $root '.holo_host.toml' }
@@ -39,7 +49,12 @@ if ($null -ne $lastError) {
   throw "reply api did not become healthy in time: $lastError"
 }
 
-powershell.exe -ExecutionPolicy Bypass -NoProfile -File (Join-Path $root 'windows_helper\start_holo_wechat.ps1')
-
-Write-Output ''
-Write-Output 'Holo host + WeChat watcher started'
+if ($startWeChat) {
+  powershell.exe -ExecutionPolicy Bypass -NoProfile -File (Join-Path $root 'windows_helper\start_holo_wechat.ps1')
+  Write-Output ''
+  Write-Output 'Holo host + WeChat watcher started'
+} else {
+  Write-Output ''
+  Write-Output 'Holo host started'
+  Write-Output 'WeChat watcher not started (set HOLO_START_WECHAT=1 or pass -WithWeChat to enable transport)'
+}

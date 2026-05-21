@@ -29,8 +29,13 @@ That is both the original intended shape of this repo and the faster one in prac
    - `$env:HOLO_WSL_REPO='/home/holo/holo'`
 5. Sync the repo-local Codex hooks so they point at the current path:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\sync-codex-hooks.ps1`
-6. Start host + WeChat watcher together:
+6. Start the Holo host/kernel. This does not start the WeChat watcher by default:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\holo-start-all.ps1`
+7. Start host + WeChat watcher only when you explicitly want the Windows
+   transport online:
+   - `powershell -ExecutionPolicy Bypass -File .\scripts\holo-start-all.ps1 -WithWeChat`
+   - or set `$env:HOLO_START_WECHAT='1'` before running the start/restart
+     command
 
 The existing PowerShell entrypoints now auto-prefer the live WSL kernel whenever they can resolve a Linux-side repo:
 
@@ -38,7 +43,7 @@ The existing PowerShell entrypoints now auto-prefer the live WSL kernel whenever
 - `scripts/holo-offline.ps1`
 - `scripts/holo-start-all.ps1`
 
-If Windows cannot reach the WSL kernel through `127.0.0.1`, `start_holo_wechat.ps1` now writes a runtime helper config under `.holo_runtime/wechat-helper/` and rewrites `agent_url` to the current WSL IP before starting the watcher.
+If Windows cannot reach the WSL kernel through `127.0.0.1`, `start_holo_wechat.ps1` writes a runtime helper config under `.holo_runtime/wechat-helper/` and rewrites `agent_url` to the current WSL IP before starting the watcher. This helper is now opt-in from the normal host start scripts because UI-driven pyweixin transport can steal foreground focus on the operator desktop.
 - `scripts/holo-stop-all.ps1`
 - `scripts/holo-restart-all.ps1`
 
@@ -65,8 +70,11 @@ If you need to run directly from Windows anyway:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\sync-codex-hooks.ps1`
 2. Start the Holo host:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\holo-online.ps1`
-3. Start host + WeChat watcher together:
+3. Start host only through the convenience wrapper:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\holo-start-all.ps1`
+4. Start the WeChat watcher only when foreground interaction is acceptable:
+   - `powershell -ExecutionPolicy Bypass -File .\scripts\holo-start-all.ps1 -WithWeChat`
+   - or `powershell.exe -ExecutionPolicy Bypass -NoProfile -File windows_helper\start_holo_wechat.ps1`
 
 The current Windows config expects:
 - `python` to be available on `PATH`
@@ -155,6 +163,11 @@ Terminal form:
 Hidden/background form:
 - `pythonw.exe windows_helper\pyweixin_watcher.pyw --config C:\wechat-helper\wechat_helper.json`
 - or use the repo helper: `powershell.exe -ExecutionPolicy Bypass -NoProfile -File windows_helper\start_holo_wechat.ps1`
+
+Normal `holo-start-all` and `holo-wsl-start-all` runs deliberately do not start
+this watcher unless `-WithWeChat` or `HOLO_START_WECHAT=1` is supplied. Keep it
+off during ordinary desktop work; pyweixin/pywinauto may need foreground access
+to inspect Weixin UI state.
 
 What it does:
 - in the live config, `watch_mode` is now `pyweixin_dialog`

@@ -28,7 +28,16 @@ for _ in range(20):
         time.sleep(0.5)
 raise SystemExit(f"reply api did not become healthy in time: {last_exc}")
 PY
-'/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe' -ExecutionPolicy Bypass -NoProfile -File "$ROOT_DIR/windows_helper/start_holo_wechat.ps1"
-
-echo
-echo "Holo host + WeChat watcher started"
+START_WECHAT="$(printf '%s' "${HOLO_START_WECHAT:-0}" | tr '[:upper:]' '[:lower:]')"
+case "$START_WECHAT" in
+  1|true|yes|on)
+    '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe' -ExecutionPolicy Bypass -NoProfile -File "$ROOT_DIR/windows_helper/start_holo_wechat.ps1"
+    echo
+    echo "Holo host + WeChat watcher started"
+    ;;
+  *)
+    echo
+    echo "Holo host started"
+    echo "WeChat watcher not started (set HOLO_START_WECHAT=1 to enable transport)"
+    ;;
+esac
