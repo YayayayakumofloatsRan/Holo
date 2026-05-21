@@ -124,6 +124,11 @@ Every provider result must expose enough data to record:
   - one internal event may drive multiple surface forms
   - multiple internal events may merge into one bubble or paragraph while
     retaining source-event links
+- theory and evaluation surfaces must go through the Stage109 consciousness-flow
+  frame:
+  - theory claims must be bounded to mechanistic provider-above adaptation
+  - each theoretical claim must map to observable stages, hypotheses, or metrics
+  - subjective-consciousness claims are out of scope
 
 ## 7. Configuration Surface
 
