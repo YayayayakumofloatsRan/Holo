@@ -110,6 +110,11 @@ Every provider result must expose enough data to record:
 - providers may differ in capabilities
 - unsupported requests must fail explicitly, not degrade silently
 - image support can be lane/provider-specific, but unsupported image requests must surface clearly
+- provider-native tool calling must go through the Stage106 adapter:
+  - Holo exposes only allowlisted tool schemas
+  - provider responses are parsed as proposed `tool_calls`
+  - unknown tools and invalid argument payloads are rejected before execution
+  - tool execution authority remains in the WSL brain, not in the provider
 
 ## 7. Configuration Surface
 

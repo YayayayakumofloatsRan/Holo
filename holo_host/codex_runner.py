@@ -13,6 +13,7 @@ from typing import Any
 
 from .config import HostConfig, ProcessorLaneConfig, TaskRoutingConfig
 from .models import CodexResult, ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
+from .stage106_deepseek_tool_adapter import build_tool_payload, parse_provider_tool_calls
 
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
     "reply": {
@@ -634,14 +635,21 @@ class DeepSeekProvider(ProcessorProvider):
             "max_tokens": request.max_output_tokens or lane_config.max_output_tokens or None,
             "thinking": self._thinking_payload(effort),
         }
+        provider_tool_payload: dict[str, Any] = {}
+        if bool(request.metadata.get("enable_provider_tools", False)):
+            provider_tool_payload = build_tool_payload(request.metadata.get("tool_requests", []))
+            if provider_tool_payload.get("tools"):
+                payload.update(provider_tool_payload)
         payload = {key: value for key, value in payload.items() if value is not None}
         timeout_seconds = int(request.timeout_seconds or runner.config.runtime.codex_timeout_seconds or 60)
         decoded = self._post_json(self._completion_url(runner), api_key, payload, timeout_seconds)
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         choices = list(decoded.get("choices", []) or [])
-        message = dict(choices[0].get("message", {})) if choices and isinstance(choices[0], dict) else {}
+        first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
+        message = dict(first_choice.get("message", {})) if isinstance(first_choice.get("message", {}), dict) else {}
         text = str(message.get("content", "") or "").strip()
         reasoning_content = str(message.get("reasoning_content", "") or "").strip()
+        tool_calls = parse_provider_tool_calls(decoded)
         usage = _coerce_usage_payload(decoded.get("usage"))
         if not usage["total_tokens"]:
             usage = {
@@ -671,6 +679,10 @@ class DeepSeekProvider(ProcessorProvider):
                 "budget_tag": request.budget_tag,
                 "thinking": dict(payload.get("thinking", {})),
                 "reasoning_content_present": bool(reasoning_content),
+                "provider_tools_enabled": bool(provider_tool_payload.get("tools")),
+                "tool_calls": tool_calls,
+                "tool_call_count": len(tool_calls),
+                "finish_reason": str(first_choice.get("finish_reason", "") or ""),
             },
         )
 

@@ -27,6 +27,7 @@ from .models import ProcessorTaskRequest
 from .reply_api import HoloReplyService, run_reply_api
 from .stage104_context_learning import STAGE104_CONFIRMATION, stage104_candidate_plan, stage104_context_learning_report
 from .stage105_provider_packet_stream import stage105_packet_stream_plan
+from .stage106_deepseek_tool_adapter import build_stage106_deepseek_adapter_plan
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -8663,6 +8664,45 @@ def command_stage105_packet_stream(
     return 0
 
 
+def command_stage106_deepseek_tool_adapter(
+    config_path: str | None,
+    *,
+    query: str,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    sender: str | None,
+    max_packets: int,
+    packet_budget_tokens: int,
+) -> int:
+    payload, transport = _inspect_mind_payload(
+        config_path,
+        query=query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        sender=sender,
+        include_graph_trace=False,
+    )
+    mind_packet = dict(payload.get("mind_packet", {})) if isinstance(payload.get("mind_packet", {}), dict) else dict(payload)
+    stage105 = stage105_packet_stream_plan(
+        mind_packet,
+        query=query,
+        max_packets=max_packets,
+        packet_budget_tokens=packet_budget_tokens,
+    )
+    plan = build_stage106_deepseek_adapter_plan(stage105.get("tool_requests", []), query=query)
+    plan["source"] = transport
+    plan["stage105"] = {
+        "next_action": stage105.get("next_action", ""),
+        "stop_reason": stage105.get("stop_reason", ""),
+        "tool_requests": list(stage105.get("tool_requests", [])),
+        "policy": dict(stage105.get("policy", {})),
+    }
+    print(_json_dumps_utf8_safe(plan, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9438,6 +9478,17 @@ def main(argv: list[str] | None = None) -> int:
     stage105_parser.add_argument("--max-packets", type=int, default=4)
     stage105_parser.add_argument("--packet-budget-tokens", type=int, default=2400)
     stage105_parser.add_argument("--deadline-ms", type=int, default=None)
+    stage106_parser = subparsers.add_parser(
+        "stage106-deepseek-tool-adapter",
+        help="Inspect Stage106 DeepSeek/OpenAI-compatible tool-call adapter payloads",
+    )
+    stage106_parser.add_argument("--query", required=True)
+    stage106_parser.add_argument("--thread-key", default="holo_cli:main")
+    stage106_parser.add_argument("--chat-name", default="HoloCLI")
+    stage106_parser.add_argument("--channel", default="holo_cli")
+    stage106_parser.add_argument("--sender", default="Operator")
+    stage106_parser.add_argument("--max-packets", type=int, default=4)
+    stage106_parser.add_argument("--packet-budget-tokens", type=int, default=2400)
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10317,6 +10368,17 @@ def main(argv: list[str] | None = None) -> int:
             max_packets=args.max_packets,
             packet_budget_tokens=args.packet_budget_tokens,
             deadline_ms=args.deadline_ms,
+        )
+    if args.command == "stage106-deepseek-tool-adapter":
+        return command_stage106_deepseek_tool_adapter(
+            args.config,
+            query=args.query,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            sender=args.sender,
+            max_packets=args.max_packets,
+            packet_budget_tokens=args.packet_budget_tokens,
         )
     if args.command == "visualize-biomimetic-system":
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)
