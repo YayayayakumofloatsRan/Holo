@@ -11,6 +11,7 @@ from holo_host.biomimetic_visualization import (
     render_biomimetic_visualization_html,
     write_biomimetic_visualization,
 )
+from holo_host.biomimetic_telemetry import record_biomimetic_event
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -137,3 +138,33 @@ def test_visualize_biomimetic_system_cli_dispatches(monkeypatch, capsys, tmp_pat
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "ok"
     assert payload["frame_count"] == 2
+
+
+def test_visualization_expands_recall_trajectory_microframes(tmp_path: Path) -> None:
+    record_biomimetic_event(
+        tmp_path,
+        event_type="hybrid_recall_trace",
+        source="cli.trace_hybrid_recall",
+        input_payload={"text": "private query", "thread_key": "holo_cli:main", "channel": "holo_cli"},
+        output_payload={
+            "tier": "deep_recall",
+            "memory_route": "hybrid",
+            "trace": [
+                {"node_id": "raw-node-1", "hybrid_score": 1.4, "source": "hybrid", "text": "private memory"},
+                {"node_id": "raw-node-2", "hybrid_score": 1.1, "source": "hybrid", "text": "private memory"},
+            ],
+            "vector_hits": [{"node_id": "raw-node-3", "score": 0.7, "text": "private vector"}],
+        },
+    )
+
+    payload = build_biomimetic_visualization_payload(tmp_path)
+
+    frames = payload["trajectory"]["frames"]
+    recall_frames = [item for item in frames if item.get("recall_stage")]
+    assert len(recall_frames) >= 3
+    assert {item["recall_stage"] for item in recall_frames} == {"vector", "rerank"}
+    assert all(str(item.get("candidate_hash", "")).startswith("node-") for item in recall_frames)
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "private query" not in serialized
+    assert "private memory" not in serialized
+    assert "raw-node-1" not in serialized

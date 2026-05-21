@@ -173,12 +173,10 @@ def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict
     telemetry_rows = load_biomimetic_frames(repo_root, limit=limit)
     frames: list[dict[str, Any]] = []
     previous_projection: dict[str, float] | None = None
-    for index, row in enumerate(telemetry_rows):
-        vector = row.get("vector", {}) if isinstance(row.get("vector"), dict) else {}
-        values = vector.get("values", {}) if isinstance(vector.get("values"), dict) else {}
-        projection = vector.get("projection", {}) if isinstance(vector.get("projection"), dict) else {}
-        if not values or not projection:
-            continue
+
+    def append_frame(frame: dict[str, Any]) -> None:
+        nonlocal previous_projection
+        projection = frame["projection"]
         if previous_projection is None:
             delta = 0.0
         else:
@@ -187,24 +185,72 @@ def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict
                 + (_safe_float(projection.get("y")) - _safe_float(previous_projection.get("y"))) ** 2
                 + (_safe_float(projection.get("z")) - _safe_float(previous_projection.get("z"))) ** 2
             )
+        frame["delta_from_previous"] = round(delta, 4)
         previous_projection = dict(projection)
+        frame["index"] = len(frames)
+        frames.append(frame)
+
+    for index, row in enumerate(telemetry_rows):
+        vector = row.get("vector", {}) if isinstance(row.get("vector"), dict) else {}
+        values = vector.get("values", {}) if isinstance(vector.get("values"), dict) else {}
+        projection = vector.get("projection", {}) if isinstance(vector.get("projection"), dict) else {}
+        if not values or not projection:
+            continue
         observables = row.get("observables", {}) if isinstance(row.get("observables"), dict) else {}
         context = row.get("context", {}) if isinstance(row.get("context"), dict) else {}
-        frames.append(
+        base_values = {str(key): round(_safe_float(value), 4) for key, value in values.items()}
+        base_projection = {str(key): round(_safe_float(value), 4) for key, value in projection.items()}
+        row_id = str(row.get("id", "") or f"telemetry-{index}")
+        append_frame(
             {
-                "index": index,
-                "id": str(row.get("id", "") or f"telemetry-{index}"),
+                "id": row_id,
                 "timestamp": str(row.get("created_at", "") or ""),
                 "channel": str(context.get("channel", "") or ""),
                 "thread_key": str(context.get("thread_key", "") or ""),
                 "route": str(observables.get("route", "") or row.get("event_type", "unknown")),
                 "latency_ms": int(dict(observables.get("timing_ms", {}) if isinstance(observables.get("timing_ms"), dict) else {}).get("total_ms", 0) or 0),
-                "values": {str(key): round(_safe_float(value), 4) for key, value in values.items()},
-                "projection": {str(key): round(_safe_float(value), 4) for key, value in projection.items()},
-                "delta_from_previous": round(delta, 4),
+                "values": base_values,
+                "projection": base_projection,
                 "event_type": str(row.get("event_type", "") or ""),
             }
         )
+        recall_trajectory = row.get("recall_trajectory", {}) if isinstance(row.get("recall_trajectory"), dict) else {}
+        stages = [item for item in recall_trajectory.get("stages", []) if isinstance(item, dict)]
+        for candidate in stages[:32]:
+            stage = str(candidate.get("stage", "") or "")
+            node_hash = str(candidate.get("node_hash", "") or "")
+            if not stage or not node_hash:
+                continue
+            score = max(0.0, _safe_float(candidate.get("score"), 0.0))
+            score_norm = _clamp(score / 2.6)
+            stage_offset = {"graph": 0.04, "vector": 0.12, "rerank": 0.2, "activation": 0.08}.get(stage, 0.02)
+            rank = max(0, int(_safe_float(candidate.get("rank"), 0)))
+            micro_values = dict(base_values)
+            micro_values["memory_pressure"] = round(_clamp(_safe_float(micro_values.get("memory_pressure"), 0.0) + score_norm * 0.26), 4)
+            micro_values["arousal"] = round(_clamp(_safe_float(micro_values.get("arousal"), 0.0) + stage_offset * 0.25), 4)
+            micro_values["control"] = round(_clamp(_safe_float(micro_values.get("control"), 0.55) - stage_offset * 0.08), 4)
+            micro_projection = {
+                "x": round(_clamp(_safe_float(base_projection.get("x"), 0.0) + score_norm * 0.16 + stage_offset), 4),
+                "y": round(_clamp(_safe_float(base_projection.get("y"), 0.0) + stage_offset * 0.35 + min(rank, 10) * 0.012), 4),
+                "z": round(_clamp(_safe_float(base_projection.get("z"), 0.0) + (0.04 if stage == "rerank" else 0.015)), 4),
+            }
+            append_frame(
+                {
+                    "id": f"{row_id}:{stage}:{rank}:{node_hash}",
+                    "timestamp": str(row.get("created_at", "") or ""),
+                    "channel": str(context.get("channel", "") or ""),
+                    "thread_key": str(context.get("thread_key", "") or ""),
+                    "route": str(observables.get("route", "") or row.get("event_type", "unknown")),
+                    "latency_ms": 0,
+                    "values": micro_values,
+                    "projection": micro_projection,
+                    "event_type": str(row.get("event_type", "") or ""),
+                    "recall_stage": stage,
+                    "candidate_hash": node_hash,
+                    "recall_score": round(score, 4),
+                    "memory_class": str(candidate.get("memory_class", "") or ""),
+                }
+            )
     return frames
 
 

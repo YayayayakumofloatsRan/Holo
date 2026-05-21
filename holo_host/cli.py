@@ -229,6 +229,30 @@ def _trace_hybrid_payload(
     return payload, "local_process"
 
 
+def _record_cli_biomimetic_event(
+    config_path: str | None,
+    *,
+    event_type: str,
+    source: str,
+    input_payload: dict[str, Any] | None,
+    output_payload: dict[str, Any] | None,
+) -> None:
+    if not isinstance(output_payload, dict) or isinstance(output_payload.get("biomimetic_telemetry"), dict):
+        return
+    try:
+        config = load_config(config_path=config_path)
+        frame = record_biomimetic_event(
+            config.runtime.repo_root,
+            event_type=event_type,
+            source=source,
+            input_payload=input_payload,
+            output_payload=output_payload,
+        )
+        output_payload["biomimetic_telemetry"] = {"frame_id": frame["id"]}
+    except Exception as exc:  # noqa: BLE001
+        output_payload["biomimetic_telemetry"] = {"error": type(exc).__name__}
+
+
 def _reply_probe_payload(
     config_path: str | None,
     *,
@@ -4757,6 +4781,13 @@ def command_inspect_mind(
         sender=sender,
         allow_local_fallback=not live_only,
     )
+    _record_cli_biomimetic_event(
+        config_path,
+        event_type="inspect_mind",
+        source=f"cli.inspect_mind.{_transport}",
+        input_payload={"text": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel, "sender": sender},
+        output_payload=packet,
+    )
     print(json.dumps(packet, ensure_ascii=False, indent=2))
     return 0
 
@@ -7760,16 +7791,25 @@ def command_trace_recall(
         params={"query": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
     )
     if live_payload is not None:
+        _record_cli_biomimetic_event(
+            config_path,
+            event_type="graph_recall_trace",
+            source="cli.trace_recall.live_http",
+            input_payload={"text": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+            output_payload=live_payload,
+        )
         print(json.dumps(live_payload, ensure_ascii=False, indent=2))
         return 0
     daemon = build_daemon(config_path)
-    print(
-        json.dumps(
-            daemon.memory.trace_recall(query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit),
-            ensure_ascii=False,
-            indent=2,
-        )
+    payload = daemon.memory.trace_recall(query, thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit)
+    _record_cli_biomimetic_event(
+        config_path,
+        event_type="graph_recall_trace",
+        source="cli.trace_recall.local_process",
+        input_payload={"text": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        output_payload=payload,
     )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -7789,23 +7829,32 @@ def command_trace_hybrid_recall(
         params={"query": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel, "limit": limit},
     )
     if live_payload is not None:
+        _record_cli_biomimetic_event(
+            config_path,
+            event_type="hybrid_recall_trace",
+            source="cli.trace_hybrid_recall.live_http",
+            input_payload={"text": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+            output_payload=live_payload,
+        )
         print(json.dumps(live_payload, ensure_ascii=False, indent=2))
         return 0
     daemon = build_daemon(config_path)
-    print(
-        json.dumps(
-            daemon.memory.trace_hybrid_recall(
-                query,
-                thread_key=thread_key,
-                chat_name=chat_name,
-                channel=channel,
-                limit=limit,
-                record=False,
-            ),
-            ensure_ascii=False,
-            indent=2,
-        )
+    payload = daemon.memory.trace_hybrid_recall(
+        query,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+        record=False,
     )
+    _record_cli_biomimetic_event(
+        config_path,
+        event_type="hybrid_recall_trace",
+        source="cli.trace_hybrid_recall.local_process",
+        input_payload={"text": query, "thread_key": thread_key, "chat_name": chat_name, "channel": channel},
+        output_payload=payload,
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 

@@ -46,6 +46,11 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
 
 
+def _hash_id(value: Any, *, prefix: str) -> str:
+    digest = _hash_text(str(value or ""))
+    return f"{prefix}-{digest}" if digest else ""
+
+
 def _repo_path(repo_root: Path | str) -> Path:
     return Path(repo_root).resolve()
 
@@ -133,6 +138,165 @@ def _promotion_observables(payload: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _reason_count(item: dict[str, Any]) -> int:
+    reasons: list[Any] = []
+    for key in ("activation_reason", "rerank_reason", "reasons"):
+        value = item.get(key, [])
+        if isinstance(value, list):
+            reasons.extend(value)
+        elif str(value or "").strip():
+            reasons.append(value)
+    return len(reasons)
+
+
+def _candidate_score(item: dict[str, Any], stage: str) -> float:
+    keys = {
+        "graph": ("score", "graph_score", "hybrid_score"),
+        "vector": ("score", "vector_score", "hybrid_score"),
+        "rerank": ("hybrid_score", "score", "graph_score", "vector_score"),
+        "activation": ("score", "hybrid_score", "graph_score", "vector_score"),
+    }.get(stage, ("score",))
+    for key in keys:
+        if key in item:
+            return round(_safe_float(item.get(key), 0.0), 4)
+    return 0.0
+
+
+def _candidate_id(item: dict[str, Any], *, stage: str, rank: int) -> str:
+    for key in ("node_id", "source_id", "id", "memory_id"):
+        value = str(item.get(key, "") or "").strip()
+        if value:
+            return value
+    return f"{stage}:{rank}"
+
+
+def _safe_candidate(stage: str, rank: int, item: dict[str, Any]) -> dict[str, Any]:
+    score = _candidate_score(item, stage)
+    payload: dict[str, Any] = {
+        "stage": stage,
+        "rank": rank,
+        "node_hash": _hash_id(_candidate_id(item, stage=stage, rank=rank), prefix="node"),
+        "score": score,
+        "memory_class": str(item.get("memory_class", "") or ""),
+        "node_type": str(item.get("node_type", "") or ""),
+        "source": str(item.get("source", item.get("source_store", "")) or ""),
+        "reason_count": _reason_count(item),
+    }
+    for key in ("graph_score", "vector_score", "activation_boost", "semantic_overlap"):
+        if key in item:
+            payload[key] = round(_safe_float(item.get(key), 0.0), 4)
+    return payload
+
+
+def _recall_source(payload: dict[str, Any]) -> dict[str, Any]:
+    retrieval_trace = payload.get("retrieval_trace", {})
+    if isinstance(retrieval_trace, dict) and retrieval_trace:
+        return retrieval_trace
+    return payload
+
+
+def build_recall_trajectory(output_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    source = output_payload if isinstance(output_payload, dict) else {}
+    if not source:
+        return None
+    recall_source = _recall_source(source)
+    graph_trace = recall_source.get("graph_trace", {})
+    if not isinstance(graph_trace, dict):
+        graph_trace = source.get("graph_trace", {})
+    if not isinstance(graph_trace, dict):
+        graph_trace = {}
+    graph_hits = _list_of_dicts(source.get("graph_hits"))
+    if not graph_hits:
+        graph_hits = _list_of_dicts(graph_trace.get("trace"))
+    vector_hits = _list_of_dicts(recall_source.get("vector_hits"))
+    if not vector_hits:
+        vector_hits = _list_of_dicts(source.get("vector_hits"))
+    trace_hits = _list_of_dicts(recall_source.get("reranked"))
+    if not trace_hits:
+        raw_trace = _list_of_dicts(source.get("trace"))
+        if vector_hits or source.get("memory_route") or source.get("recall_confidence") is not None:
+            trace_hits = raw_trace
+        elif not graph_hits:
+            graph_hits = raw_trace
+    stages: list[dict[str, Any]] = []
+    for stage, hits in (("graph", graph_hits), ("vector", vector_hits), ("rerank", trace_hits)):
+        for rank, item in enumerate(hits[:12]):
+            stages.append(_safe_candidate(stage, rank, item))
+    if not stages:
+        activation_ids = list(source.get("activation_trace_ids", [])) if isinstance(source.get("activation_trace_ids", []), list) else []
+        selected_ids = list(source.get("selected_memory_ids", [])) if isinstance(source.get("selected_memory_ids", []), list) else []
+        for rank, node_id in enumerate([str(item) for item in activation_ids + selected_ids if str(item).strip()][:12]):
+            stages.append(_safe_candidate("activation", rank, {"node_id": node_id}))
+    if not stages:
+        return None
+    stage_counts = Counter(str(item["stage"]) for item in stages)
+    scores = [_safe_float(item.get("score"), 0.0) for item in stages]
+    by_node: dict[str, dict[str, Any]] = {}
+    movement: list[dict[str, Any]] = []
+    for item in stages:
+        node_hash = str(item.get("node_hash", "") or "")
+        previous = by_node.get(node_hash)
+        if previous and str(previous.get("stage", "")) != str(item.get("stage", "")):
+            movement.append(
+                {
+                    "node_hash": node_hash,
+                    "from_stage": str(previous.get("stage", "")),
+                    "to_stage": str(item.get("stage", "")),
+                    "score_delta": round(_safe_float(item.get("score"), 0.0) - _safe_float(previous.get("score"), 0.0), 4),
+                }
+            )
+        by_node[node_hash] = item
+    return {
+        "schema": "holo.recall_trajectory.v1",
+        "tier": str(source.get("tier", graph_trace.get("tier", recall_source.get("tier", ""))) or ""),
+        "query_focus": str(source.get("query_focus", graph_trace.get("query_focus", recall_source.get("query_focus", ""))) or ""),
+        "retrieval_mode": str(source.get("retrieval_mode", recall_source.get("retrieval_mode", "")) or ""),
+        "memory_route": str(source.get("memory_route", recall_source.get("route", "")) or ""),
+        "recall_confidence": round(_safe_float(source.get("recall_confidence", recall_source.get("confidence")), 0.0), 4),
+        "graph_confidence": round(_safe_float(source.get("graph_confidence", graph_trace.get("confidence")), 0.0), 4),
+        "stage_counts": dict(sorted(stage_counts.items())),
+        "candidate_count": len(stages),
+        "max_score": round(max(scores), 4) if scores else 0.0,
+        "mean_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+        "stages": stages[:32],
+        "movement": movement[:32],
+    }
+
+
+def _recall_observables(payload: dict[str, Any]) -> dict[str, Any]:
+    trajectory = build_recall_trajectory(payload)
+    if not trajectory:
+        return {
+            "recall_tier": str(payload.get("tier", "") or ""),
+            "recall_query_focus": str(payload.get("query_focus", "") or ""),
+            "recall_candidate_count": 0,
+            "recall_stage_count": 0,
+            "recall_max_score": 0.0,
+            "recall_mean_score": 0.0,
+            "graph_hit_count": 0,
+            "vector_hit_count": 0,
+            "rerank_hit_count": 0,
+        }
+    stage_counts = dict(trajectory.get("stage_counts", {})) if isinstance(trajectory.get("stage_counts"), dict) else {}
+    return {
+        "recall_tier": str(trajectory.get("tier", "") or ""),
+        "recall_query_focus": str(trajectory.get("query_focus", "") or ""),
+        "recall_candidate_count": max(0, _safe_int(trajectory.get("candidate_count"), 0)),
+        "recall_stage_count": len(stage_counts),
+        "recall_max_score": round(_safe_float(trajectory.get("max_score"), 0.0), 4),
+        "recall_mean_score": round(_safe_float(trajectory.get("mean_score"), 0.0), 4),
+        "graph_hit_count": max(0, _safe_int(stage_counts.get("graph"), 0)),
+        "vector_hit_count": max(0, _safe_int(stage_counts.get("vector"), 0)),
+        "rerank_hit_count": max(0, _safe_int(stage_counts.get("rerank"), 0)),
+    }
+
+
 def _output_observables(payload: dict[str, Any] | None) -> dict[str, Any]:
     source = payload if isinstance(payload, dict) else {}
     selected_memory_ids = source.get("selected_memory_ids", [])
@@ -155,6 +319,7 @@ def _output_observables(payload: dict[str, Any] | None) -> dict[str, Any]:
         "expression_budget": max(0, _safe_int(source.get("expression_budget"), 0)),
         "health_status_counts": _health_counts(source),
         **_promotion_observables(source),
+        **_recall_observables(source),
     }
 
 
@@ -171,15 +336,18 @@ def _vector_values(observables: dict[str, Any], output_payload: dict[str, Any] |
     total_ms = max(0, _safe_int(timing.get("total_ms"), 0))
     emotion = _emotion_state(output_payload)
     route = str(observables.get("route", "") or "")
+    recall_tier = str(observables.get("recall_tier", "") or "")
     action = str(observables.get("action", "") or "")
     selected_memory_count = max(0, _safe_int(observables.get("selected_memory_count"), 0))
+    recall_candidate_count = max(0, _safe_int(observables.get("recall_candidate_count"), 0))
+    recall_max_score = _safe_float(observables.get("recall_max_score"), 0.0)
     health_counts = dict(observables.get("health_status_counts", {}) if isinstance(observables.get("health_status_counts"), dict) else {})
     critical_count = max(0, _safe_int(health_counts.get("critical"), 0))
     warn_count = max(0, _safe_int(health_counts.get("warn"), 0))
     promotion_apply = max(0, _safe_int(observables.get("promotion_would_apply"), 0))
     latency_pressure = _clamp(math.log1p(total_ms) / math.log1p(300_000)) if total_ms > 0 else 0.0
-    deep_recall = 1.0 if route == "deep_recall" else 0.0
-    memory_pressure = _clamp(selected_memory_count / 8.0 + promotion_apply / 12.0 + deep_recall * 0.35)
+    deep_recall = 1.0 if route == "deep_recall" or recall_tier == "deep_recall" else 0.0
+    memory_pressure = _clamp(selected_memory_count / 8.0 + recall_candidate_count / 18.0 + promotion_apply / 12.0 + recall_max_score * 0.08 + deep_recall * 0.35)
     valence = _safe_float(emotion.get("valence", emotion.get("pleasantness")), 0.5)
     arousal = _safe_float(emotion.get("arousal"), 0.15)
     control = _safe_float(emotion.get("control", emotion.get("dominance")), 0.55)
@@ -205,7 +373,12 @@ def _projection(values: dict[str, float]) -> dict[str, float]:
     }
 
 
-def _topology_refs(event_type: str, context: dict[str, Any], observables: dict[str, Any]) -> dict[str, Any]:
+def _topology_refs(
+    event_type: str,
+    context: dict[str, Any],
+    observables: dict[str, Any],
+    recall_trajectory: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     route = str(observables.get("route", "unknown") or "unknown")
     action = str(observables.get("action", "unknown") or "unknown")
     nodes = [
@@ -219,12 +392,27 @@ def _topology_refs(event_type: str, context: dict[str, Any], observables: dict[s
         nodes.append("memory:selected")
     if observables.get("health_status_counts"):
         nodes.append("health:doctor")
+    edges = [
+        {"source": f"event:{event_type}", "target": f"route:{route}", "type": "selected_route"},
+        {"source": f"route:{route}", "target": f"action:{action}", "type": "conditioned_action"},
+    ]
+    if recall_trajectory:
+        stages = [item for item in recall_trajectory.get("stages", []) if isinstance(item, dict)]
+        for stage in sorted({str(item.get("stage", "") or "") for item in stages if str(item.get("stage", "") or "")}):
+            stage_node = f"recall_stage:{stage}"
+            nodes.append(stage_node)
+            edges.append({"source": f"event:{event_type}", "target": stage_node, "type": "recall_stage"})
+        for item in stages[:12]:
+            stage = str(item.get("stage", "") or "")
+            node_hash = str(item.get("node_hash", "") or "")
+            if not stage or not node_hash:
+                continue
+            recall_node = f"recall_node:{node_hash}"
+            nodes.append(recall_node)
+            edges.append({"source": f"recall_stage:{stage}", "target": recall_node, "type": "candidate_activation"})
     return {
         "nodes": nodes,
-        "edges": [
-            {"source": f"event:{event_type}", "target": f"route:{route}", "type": "selected_route"},
-            {"source": f"route:{route}", "target": f"action:{action}", "type": "conditioned_action"},
-        ],
+        "edges": edges,
     }
 
 
@@ -249,6 +437,7 @@ def build_biomimetic_frame(
         context["chat_name"] = str(output_payload.get("chat_name", "") or "")
     if not context["message_id"] and isinstance(output_payload, dict):
         context["message_id"] = str(output_payload.get("message_id", "") or "")
+    recall_trajectory = build_recall_trajectory(output_payload)
     values = _vector_values(observables, output_payload)
     frame = {
         "schema": "holo.biomimetic_frame.v1",
@@ -264,7 +453,8 @@ def build_biomimetic_frame(
             "values": values,
             "projection": _projection(values),
         },
-        "topology_refs": _topology_refs(str(event_type or "unknown"), context, observables),
+        "recall_trajectory": recall_trajectory or {},
+        "topology_refs": _topology_refs(str(event_type or "unknown"), context, observables, recall_trajectory),
         "extra": _safe_extra(extra or {}),
         "privacy": {
             "raw_text_included": False,

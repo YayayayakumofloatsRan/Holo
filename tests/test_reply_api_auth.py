@@ -27,6 +27,46 @@ class _TelemetryReplyService(_FakeReplyService):
         self.config = SimpleNamespace(runtime=SimpleNamespace(repo_root=repo_root))
 
 
+class _TelemetryDiagnosticService(_TelemetryReplyService):
+    def trace_hybrid_recall(
+        self,
+        *,
+        query: str,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+        channel: str = "wechat",
+        limit: int = 8,
+    ) -> dict:
+        return {
+            "query": query,
+            "channel": channel,
+            "thread_key": thread_key or "",
+            "chat_name": chat_name or "",
+            "tier": "deep_recall",
+            "memory_route": "hybrid",
+            "retrieval_mode": "graph-led",
+            "recall_confidence": 0.8,
+            "graph_confidence": 0.6,
+            "trace": [
+                {
+                    "node_id": "raw-node-1",
+                    "hybrid_score": 1.2,
+                    "memory_class": "episodic_memory",
+                    "source": "hybrid",
+                    "text": "private memory text",
+                }
+            ],
+            "vector_hits": [
+                {
+                    "node_id": "raw-node-2",
+                    "score": 0.7,
+                    "memory_class": "durable_memory",
+                    "text": "private vector text",
+                }
+            ],
+        }
+
+
 def _start_server(*, token: str) -> tuple[_ReplyHTTPServer, str]:
     server = _ReplyHTTPServer(
         ("127.0.0.1", 0),
@@ -122,6 +162,28 @@ def test_reply_api_records_redacted_biomimetic_telemetry(tmp_path: Path) -> None
         frame = json.loads(text.strip())
         assert frame["event_type"] == "reply"
         assert frame["context"]["thread_key"] == "holo_cli:main"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_reply_api_records_redacted_hybrid_recall_telemetry(tmp_path: Path) -> None:
+    server, base_url = _start_server_with_service(_TelemetryDiagnosticService(tmp_path), token="")
+    try:
+        status, payload = _open_json(
+            f"{base_url}/trace-hybrid-recall?query=private+diagnostic+query&thread_key=holo_cli:main&chat_name=Main&channel=holo_cli"
+        )
+        assert status == HTTPStatus.OK
+        assert payload["biomimetic_telemetry"]["frame_id"].startswith("bf-")
+        telemetry_path = tmp_path / ".holo_runtime" / "biomimetic_frames.jsonl"
+        text = telemetry_path.read_text(encoding="utf-8")
+        assert "private diagnostic query" not in text
+        assert "private memory text" not in text
+        assert "raw-node-1" not in text
+        frame = json.loads(text.strip())
+        assert frame["event_type"] == "hybrid_recall_trace"
+        assert frame["context"]["thread_key"] == "holo_cli:main"
+        assert frame["recall_trajectory"]["candidate_count"] == 2
     finally:
         server.shutdown()
         server.server_close()

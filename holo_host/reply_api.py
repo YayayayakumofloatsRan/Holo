@@ -9577,6 +9577,35 @@ class _ReplyHTTPServer(ThreadingHTTPServer):
         super().__init__(server_address, handler_cls)
 
 
+def _service_repo_root(service: Any) -> Any:
+    runtime = getattr(getattr(service, "config", None), "runtime", None)
+    return getattr(runtime, "repo_root", None)
+
+
+def _record_reply_api_biomimetic_event(
+    service: Any,
+    *,
+    event_type: str,
+    source: str,
+    input_payload: dict[str, Any] | None,
+    output_payload: dict[str, Any] | None,
+) -> None:
+    repo_path = _service_repo_root(service)
+    if repo_path is None or not isinstance(output_payload, dict):
+        return
+    try:
+        frame = record_biomimetic_event(
+            repo_path,
+            event_type=event_type,
+            source=source,
+            input_payload=input_payload,
+            output_payload=output_payload,
+        )
+        output_payload["biomimetic_telemetry"] = {"frame_id": frame["id"]}
+    except Exception:  # noqa: BLE001
+        service.logger.exception("biomimetic telemetry write failed")
+
+
 def _handler_factory() -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server: _ReplyHTTPServer
@@ -9626,6 +9655,19 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         sender=params.get("sender", [None])[0],
                         include_graph_trace=params.get("include_graph_trace", ["1"])[0] not in {"0", "false", "False"},
                     )
+                    _record_reply_api_biomimetic_event(
+                        self.server.reply_service,
+                        event_type="inspect_mind",
+                        source="reply_api.inspect_mind",
+                        input_payload={
+                            "text": query,
+                            "thread_key": params.get("thread_key", [None])[0],
+                            "chat_name": params.get("chat_name", [None])[0],
+                            "channel": params.get("channel", ["wechat"])[0],
+                            "sender": params.get("sender", [None])[0],
+                        },
+                        output_payload=payload,
+                    )
                     self._write_json(HTTPStatus.OK, payload)
                     return
                 if parsed.path == "/trace-recall":
@@ -9641,6 +9683,18 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         channel=params.get("channel", ["wechat"])[0],
                         limit=int(params.get("limit", ["8"])[0]),
                     )
+                    _record_reply_api_biomimetic_event(
+                        self.server.reply_service,
+                        event_type="graph_recall_trace",
+                        source="reply_api.trace_recall",
+                        input_payload={
+                            "text": query,
+                            "thread_key": params.get("thread_key", [None])[0],
+                            "chat_name": params.get("chat_name", [None])[0],
+                            "channel": params.get("channel", ["wechat"])[0],
+                        },
+                        output_payload=payload,
+                    )
                     self._write_json(HTTPStatus.OK, payload)
                     return
                 if parsed.path == "/trace-hybrid-recall":
@@ -9655,6 +9709,18 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                         chat_name=params.get("chat_name", [None])[0],
                         channel=params.get("channel", ["wechat"])[0],
                         limit=int(params.get("limit", ["8"])[0]),
+                    )
+                    _record_reply_api_biomimetic_event(
+                        self.server.reply_service,
+                        event_type="hybrid_recall_trace",
+                        source="reply_api.trace_hybrid_recall",
+                        input_payload={
+                            "text": query,
+                            "thread_key": params.get("thread_key", [None])[0],
+                            "chat_name": params.get("chat_name", [None])[0],
+                            "channel": params.get("channel", ["wechat"])[0],
+                        },
+                        output_payload=payload,
                     )
                     self._write_json(HTTPStatus.OK, payload)
                     return
@@ -10198,21 +10264,13 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                 payload = self._read_json()
                 if parsed.path == "/reply":
                     result = self.server.reply_service.handle_reply(payload)
-                    runtime = getattr(getattr(self.server.reply_service, "config", None), "runtime", None)
-                    repo_path = getattr(runtime, "repo_root", None)
-                    if repo_path is not None:
-                        try:
-                            frame = record_biomimetic_event(
-                                repo_path,
-                                event_type="reply",
-                                source="reply_api.http",
-                                input_payload=payload,
-                                output_payload=result,
-                            )
-                            if isinstance(result, dict):
-                                result["biomimetic_telemetry"] = {"frame_id": frame["id"]}
-                        except Exception:  # noqa: BLE001
-                            self.server.reply_service.logger.exception("biomimetic telemetry write failed")
+                    _record_reply_api_biomimetic_event(
+                        self.server.reply_service,
+                        event_type="reply",
+                        source="reply_api.http",
+                        input_payload=payload,
+                        output_payload=result,
+                    )
                     self._write_json(HTTPStatus.OK, result)
                     return
                 if parsed.path == "/snapshot":
