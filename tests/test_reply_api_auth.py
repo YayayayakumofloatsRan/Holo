@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from types import SimpleNamespace
+from pathlib import Path
 from http import HTTPStatus
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -20,11 +22,29 @@ class _FakeReplyService:
         return {"action": "reply", "text": str(payload.get("text", ""))}
 
 
+class _TelemetryReplyService(_FakeReplyService):
+    def __init__(self, repo_root: Path) -> None:
+        self.config = SimpleNamespace(runtime=SimpleNamespace(repo_root=repo_root))
+
+
 def _start_server(*, token: str) -> tuple[_ReplyHTTPServer, str]:
     server = _ReplyHTTPServer(
         ("127.0.0.1", 0),
         _handler_factory(),
         service=_FakeReplyService(),
+        bearer_token=token,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    return server, f"http://{host}:{port}"
+
+
+def _start_server_with_service(service, *, token: str = "") -> tuple[_ReplyHTTPServer, str]:
+    server = _ReplyHTTPServer(
+        ("127.0.0.1", 0),
+        _handler_factory(),
+        service=service,
         bearer_token=token,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -82,6 +102,26 @@ def test_reply_api_allows_local_unauthenticated_mode_when_no_token() -> None:
         assert status == HTTPStatus.OK
         assert payload["status"] == "ok"
         assert payload["auth_required"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_reply_api_records_redacted_biomimetic_telemetry(tmp_path: Path) -> None:
+    server, base_url = _start_server_with_service(_TelemetryReplyService(tmp_path), token="")
+    try:
+        status, payload = _open_json(
+            f"{base_url}/reply",
+            data={"text": "private input", "chat_name": "ResearchThread", "thread_key": "holo_cli:main", "channel": "holo_cli"},
+        )
+        assert status == HTTPStatus.OK
+        assert payload["biomimetic_telemetry"]["frame_id"].startswith("bf-")
+        telemetry_path = tmp_path / ".holo_runtime" / "biomimetic_frames.jsonl"
+        text = telemetry_path.read_text(encoding="utf-8")
+        assert "private input" not in text
+        frame = json.loads(text.strip())
+        assert frame["event_type"] == "reply"
+        assert frame["context"]["thread_key"] == "holo_cli:main"
     finally:
         server.shutdown()
         server.server_close()

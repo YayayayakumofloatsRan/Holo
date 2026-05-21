@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .biomimetic_telemetry import load_biomimetic_frames
 from .memory_doctor import memory_doctor_report
 from .memory_promotion import plan_ready_candidates
 
@@ -168,6 +169,45 @@ def _trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict[str, Any]
     return frames
 
 
+def _telemetry_trajectory_frames(repo_root: Path, limit: int = 360) -> list[dict[str, Any]]:
+    telemetry_rows = load_biomimetic_frames(repo_root, limit=limit)
+    frames: list[dict[str, Any]] = []
+    previous_projection: dict[str, float] | None = None
+    for index, row in enumerate(telemetry_rows):
+        vector = row.get("vector", {}) if isinstance(row.get("vector"), dict) else {}
+        values = vector.get("values", {}) if isinstance(vector.get("values"), dict) else {}
+        projection = vector.get("projection", {}) if isinstance(vector.get("projection"), dict) else {}
+        if not values or not projection:
+            continue
+        if previous_projection is None:
+            delta = 0.0
+        else:
+            delta = math.sqrt(
+                (_safe_float(projection.get("x")) - _safe_float(previous_projection.get("x"))) ** 2
+                + (_safe_float(projection.get("y")) - _safe_float(previous_projection.get("y"))) ** 2
+                + (_safe_float(projection.get("z")) - _safe_float(previous_projection.get("z"))) ** 2
+            )
+        previous_projection = dict(projection)
+        observables = row.get("observables", {}) if isinstance(row.get("observables"), dict) else {}
+        context = row.get("context", {}) if isinstance(row.get("context"), dict) else {}
+        frames.append(
+            {
+                "index": index,
+                "id": str(row.get("id", "") or f"telemetry-{index}"),
+                "timestamp": str(row.get("created_at", "") or ""),
+                "channel": str(context.get("channel", "") or ""),
+                "thread_key": str(context.get("thread_key", "") or ""),
+                "route": str(observables.get("route", "") or row.get("event_type", "unknown")),
+                "latency_ms": int(dict(observables.get("timing_ms", {}) if isinstance(observables.get("timing_ms"), dict) else {}).get("total_ms", 0) or 0),
+                "values": {str(key): round(_safe_float(value), 4) for key, value in values.items()},
+                "projection": {str(key): round(_safe_float(value), 4) for key, value in projection.items()},
+                "delta_from_previous": round(delta, 4),
+                "event_type": str(row.get("event_type", "") or ""),
+            }
+        )
+    return frames
+
+
 def _sqlite_counts(path: Path) -> dict[str, int]:
     if not path.exists():
         return {}
@@ -309,7 +349,10 @@ def _safe_promotion_plan(repo_root: Path) -> dict[str, Any]:
 def build_biomimetic_visualization_payload(repo_root: Path | str) -> dict[str, Any]:
     root = Path(repo_root).resolve()
     doctor = memory_doctor_report(root)
-    frames = _trajectory_frames(root)
+    frames = _telemetry_trajectory_frames(root)
+    trajectory_source = "biomimetic_telemetry" if frames else "conversation_archive_proxy"
+    if not frames:
+        frames = _trajectory_frames(root)
     topology = _system_topology(root, doctor, frames)
     promotion = _safe_promotion_plan(root)
     sqlite_counts = _sqlite_counts(root / RUNTIME_DIR / "mind_graph.sqlite3")
@@ -323,7 +366,8 @@ def build_biomimetic_visualization_payload(repo_root: Path | str) -> dict[str, A
             "redaction_policy": "turn text, memory text, graph labels, and provider content are not emitted",
         },
         "trajectory": {
-            "component_keys": ["valence", "arousal", "control", "memory_pressure", "latency_pressure", "deep_recall", "regulation"],
+            "source": trajectory_source,
+            "component_keys": ["valence", "arousal", "control", "memory_pressure", "latency_pressure", "deep_recall", "health_pressure", "regulation"],
             "frames": frames,
         },
         "topology": topology,

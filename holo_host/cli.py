@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 from .config import load_config
 from .daemon import build_daemon
 from .biomimetic_visualization import write_biomimetic_visualization
+from .biomimetic_telemetry import record_biomimetic_event, telemetry_report
 from .memory_admin import MEMORY_RESET_CONFIRMATION, reset_holo_memory
 from .memory_doctor import memory_doctor_report
 from .models import ProcessorTaskRequest
@@ -4246,6 +4247,16 @@ def command_promote_memory(config_path: str | None, *, dry_run: bool) -> int:
         payload = daemon.memory.plan_ready_candidates(limit=daemon.config.memory.promote_batch_size)
     else:
         payload = daemon.memory.promote_ready_candidates(limit=daemon.config.memory.promote_batch_size)
+    runtime = getattr(getattr(daemon, "config", None), "runtime", None)
+    repo_root = getattr(runtime, "repo_root", None)
+    if repo_root is not None:
+        frame = record_biomimetic_event(
+            repo_root,
+            event_type="promotion_plan" if dry_run else "promotion_apply",
+            source="cli.promote_memory",
+            output_payload=payload,
+        )
+        payload["biomimetic_telemetry"] = {"frame_id": frame["id"]}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
@@ -8389,6 +8400,13 @@ def command_memory_doctor(config_path: str | None, *, include_vector_open: bool)
             vector_source = "error"
     report = memory_doctor_report(config.runtime.repo_root, vector_health=vector_health)
     report["vector"]["open_probe_source"] = vector_source
+    frame = record_biomimetic_event(
+        config.runtime.repo_root,
+        event_type="memory_doctor",
+        source="cli.memory_doctor",
+        output_payload=report,
+    )
+    report["biomimetic_telemetry"] = {"frame_id": frame["id"]}
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
@@ -8396,7 +8414,20 @@ def command_memory_doctor(config_path: str | None, *, include_vector_open: bool)
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
+    frame = record_biomimetic_event(
+        config.runtime.repo_root,
+        event_type="visualization_export",
+        source="cli.visualize_biomimetic_system",
+        output_payload=report,
+    )
+    report["biomimetic_telemetry"] = {"frame_id": frame["id"]}
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_show_biomimetic_telemetry(config_path: str | None, *, limit: int) -> int:
+    config = load_config(config_path=config_path)
+    print(json.dumps(telemetry_report(config.runtime.repo_root, limit=limit), ensure_ascii=False, indent=2))
     return 0
 
 
@@ -8526,7 +8557,16 @@ def command_chat(
             return {"action": "error", "reason": "live_http_unavailable"}, "live_http_unavailable"
         if service is None:
             service = HoloReplyService(load_config(config_path=config_path))
-        return service.handle_reply(payload), "local_process"
+        result = service.handle_reply(payload)
+        frame = record_biomimetic_event(
+            service.config.runtime.repo_root,
+            event_type="reply",
+            source="cli.chat.local_process",
+            input_payload=payload,
+            output_payload=result,
+        )
+        result["biomimetic_telemetry"] = {"frame_id": frame["id"]}
+        return result, "local_process"
 
     def run_slash(command_line: str) -> bool:
         nonlocal show_json
@@ -9088,6 +9128,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
     )
     biomimetic_visual_parser.add_argument("--output-dir", default=None)
+    biomimetic_telemetry_parser = subparsers.add_parser(
+        "show-biomimetic-telemetry",
+        help="Inspect redacted Stage101 biomimetic telemetry frames",
+    )
+    biomimetic_telemetry_parser.add_argument("--limit", type=int, default=25)
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -9909,6 +9954,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_memory_doctor(args.config, include_vector_open=args.include_vector_open)
     if args.command == "visualize-biomimetic-system":
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)
+    if args.command == "show-biomimetic-telemetry":
+        return command_show_biomimetic_telemetry(args.config, limit=args.limit)
     if args.command == "reply-probe":
         return command_reply_probe(
             args.config,

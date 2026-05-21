@@ -29,6 +29,7 @@ from .capabilities import CapabilityBroker
 from .common import atomic_write_text, compact_text, stable_digest, utc_now
 from .config import HostConfig, load_config
 from .codex_runner import CodexRunner
+from .biomimetic_telemetry import record_biomimetic_event
 from .memory_bridge import MemoryBridge, stream_cadences_from_config
 from .models import AttentionState, IncomingMessage, OutgoingMessage, ProcessorTaskRequest, ReplyBubble, TurnContext
 from .operator_bus import build_engineering_snapshot, build_homeostasis_state
@@ -10196,7 +10197,23 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     return
                 payload = self._read_json()
                 if parsed.path == "/reply":
-                    self._write_json(HTTPStatus.OK, self.server.reply_service.handle_reply(payload))
+                    result = self.server.reply_service.handle_reply(payload)
+                    runtime = getattr(getattr(self.server.reply_service, "config", None), "runtime", None)
+                    repo_path = getattr(runtime, "repo_root", None)
+                    if repo_path is not None:
+                        try:
+                            frame = record_biomimetic_event(
+                                repo_path,
+                                event_type="reply",
+                                source="reply_api.http",
+                                input_payload=payload,
+                                output_payload=result,
+                            )
+                            if isinstance(result, dict):
+                                result["biomimetic_telemetry"] = {"frame_id": frame["id"]}
+                        except Exception:  # noqa: BLE001
+                            self.server.reply_service.logger.exception("biomimetic telemetry write failed")
+                    self._write_json(HTTPStatus.OK, result)
                     return
                 if parsed.path == "/snapshot":
                     self._write_json(HTTPStatus.OK, self.server.reply_service.snapshot(payload))
