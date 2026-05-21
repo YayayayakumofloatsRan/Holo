@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import unittest
 from unittest import mock
@@ -55,6 +56,37 @@ class CliChatTests(unittest.TestCase):
     def test_chat_response_text_uses_bubbles_and_action_fallbacks(self) -> None:
         self.assertEqual(cli._chat_response_text({"bubbles": [{"text": "a"}, "b"]}), "a\nb")
         self.assertEqual(cli._chat_response_text({"action": "silence", "reason": "low_salience"}), "[silence: low_salience]")
+
+    def test_chat_response_text_replaces_lone_surrogates_before_printing(self) -> None:
+        self.assertEqual(cli._chat_response_text({"text": "bad\ud800"}), "bad?")
+
+    def test_chat_json_print_replaces_lone_surrogates_before_printing(self) -> None:
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            cli._print_chat_json({"text": "bad\ud800"})
+
+        self.assertEqual(json.loads(stdout.getvalue())["text"], "bad?")
+
+    def test_interactive_snapshot_replaces_lone_surrogates_before_printing(self) -> None:
+        with mock.patch(
+            "holo_host.cli.command_snapshot_memory_payload",
+            return_value={"label": "bad\ud800"},
+        ), mock.patch("builtins.input", side_effect=["/snapshot", "/quit"]), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            result = cli.command_chat(
+                None,
+                thread_key="holo_cli:main",
+                chat_name="HoloCLI",
+                channel="holo_cli",
+                sender="Operator",
+                once=None,
+                json_output=False,
+                no_local_fallback=True,
+                timeout=3.0,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn('"label": "bad?"', stdout.getvalue())
 
     def test_interactive_help_keeps_reset_outside_chat(self) -> None:
         self.assertIn("Reset is intentionally not available inside chat", cli.CHAT_HELP)

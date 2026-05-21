@@ -50,6 +50,29 @@ def _append_live_base_url(base_urls: list[str], base_url: str) -> None:
         base_urls.append(cleaned)
 
 
+def _utf8_safe_text(value: object) -> str:
+    return str(value).encode("utf-8", errors="replace").decode("utf-8")
+
+
+def _utf8_safe_json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _utf8_safe_text(value)
+    if isinstance(value, dict):
+        return {
+            (_utf8_safe_text(key) if isinstance(key, str) else key): _utf8_safe_json_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_utf8_safe_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_utf8_safe_json_value(item) for item in value)
+    return value
+
+
+def _json_dumps_utf8_safe(value: Any, **kwargs: Any) -> str:
+    return json.dumps(_utf8_safe_json_value(value), **kwargs)
+
+
 def _is_wsl_runtime() -> bool:
     if os.name != "posix":
         return False
@@ -122,7 +145,7 @@ def _live_api_request(
     headers = {}
     data = None
     if payload is not None:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        data = _json_dumps_utf8_safe(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
     token_env = str(getattr(config.runtime, "api_bearer_token_env", "HOLO_API_BEARER_TOKEN") or "").strip()
     bearer_token = os.environ.get(token_env, "").strip() if token_env else ""
@@ -135,7 +158,7 @@ def _live_api_request(
         request = Request(url, data=data, headers=headers, method=method.upper())
         try:
             with urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                return _utf8_safe_json_value(json.loads(response.read().decode("utf-8")))
         except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError):
             continue
     return None
@@ -8573,15 +8596,15 @@ def _chat_payload(*, text: str, channel: str, thread_key: str, chat_name: str, s
 def _chat_response_text(payload: dict[str, Any]) -> str:
     text = str(payload.get("text", "") or "").strip()
     if text:
-        return text
+        return _utf8_safe_text(text)
     bubbles = payload.get("bubbles", [])
     if isinstance(bubbles, list):
         parts: list[str] = []
         for item in bubbles:
             if isinstance(item, str) and item.strip():
-                parts.append(item.strip())
+                parts.append(_utf8_safe_text(item.strip()))
             elif isinstance(item, dict) and str(item.get("text", "") or "").strip():
-                parts.append(str(item.get("text", "")).strip())
+                parts.append(_utf8_safe_text(str(item.get("text", "")).strip()))
         if parts:
             return "\n".join(parts)
     action = str(payload.get("action", "") or "").strip()
@@ -8614,7 +8637,7 @@ def _compact_chat_flow(payload: dict[str, Any]) -> str:
 
 
 def _print_chat_json(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    print(_json_dumps_utf8_safe(payload, ensure_ascii=False, indent=2))
 
 
 def _close_chat_service(service: HoloReplyService | None) -> None:
@@ -8652,7 +8675,7 @@ def command_chat(
             return {"action": "error", "reason": "live_http_unavailable"}, "live_http_unavailable"
         if service is None:
             service = HoloReplyService(load_config(config_path=config_path))
-        result = service.handle_reply(payload)
+        result = _utf8_safe_json_value(service.handle_reply(payload))
         frame = record_biomimetic_event(
             service.config.runtime.repo_root,
             event_type="reply",
@@ -8746,7 +8769,7 @@ def command_chat(
             return True
         if command == "/snapshot":
             label = rest or "holo-cli"
-            print(json.dumps(command_snapshot_memory_payload(config_path, path=None, label=label, query=None), ensure_ascii=False, indent=2))
+            _print_chat_json(command_snapshot_memory_payload(config_path, path=None, label=label, query=None))
             return True
         if command in {"/reset", "/reset-memory"}:
             print("reset-memory is not available inside interactive chat. Exit and run the WSL-only reset-memory command explicitly.")

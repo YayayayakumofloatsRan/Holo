@@ -123,6 +123,31 @@ class CliLiveApiRequestTests(unittest.TestCase):
         self.assertEqual(payload, {"status": "ready"})
         self.assertEqual(seen_authorization, ["Bearer secret-token"])
 
+    def test_live_request_replaces_lone_surrogates_before_utf8_encoding(self) -> None:
+        config = SimpleNamespace(
+            runtime=SimpleNamespace(
+                api_bind_host="127.0.0.1",
+                api_port=8004,
+                api_bearer_token_env="",
+            )
+        )
+        seen_data: list[bytes | None] = []
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            seen_data.append(request.data)
+            return _FakeResponse({"status": "ok"})
+
+        with mock.patch("holo_host.cli.load_config", return_value=config), mock.patch.dict(
+            "holo_host.cli.os.environ",
+            {"HOLO_LIVE_API_URL": ""},
+            clear=False,
+        ), mock.patch("holo_host.cli.urlopen", side_effect=fake_urlopen):
+            payload = cli._live_api_request(None, method="POST", path="/reply", payload={"text": "bad\ud800"})
+
+        self.assertEqual(payload, {"status": "ok"})
+        self.assertEqual(json.loads(seen_data[0].decode("utf-8"))["text"], "bad?")
+
 
 if __name__ == "__main__":
     unittest.main()
