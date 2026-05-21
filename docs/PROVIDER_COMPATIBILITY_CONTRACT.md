@@ -129,6 +129,11 @@ Every provider result must expose enough data to record:
   - theory claims must be bounded to mechanistic provider-above adaptation
   - each theoretical claim must map to observable stages, hypotheses, or metrics
   - subjective-consciousness claims are out of scope
+- practical packet dispatch guidance must go through Stage110:
+  - theoretical axioms must become concrete packet count, budget, tool, stop,
+    and expression-wait recommendations before live execution
+  - broad recall, lookup, no-send, and pending internal-return cases must be
+    distinguishable in the guidance
 
 ## 7. Configuration Surface
 
