@@ -139,6 +139,11 @@ Every provider result must expose enough data to record:
   - provider must not execute local tools directly
   - Holo validates, executes locally, and feeds `tool_observation` back into
     the next bounded provider packet
+- closed agent tool loops must use Stage114:
+  - parsed provider `tool_calls` or Stage105 `tool_first` requests are executed
+    locally
+  - the resulting observation must be present in the next provider packet
+    inputs before reply commitment
 
 ## 7. Configuration Surface
 

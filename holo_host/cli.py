@@ -35,6 +35,7 @@ from .stage110_theory_guided_packets import build_stage110_packet_guidance
 from .stage111_category_simulation import run_stage111_category_simulation
 from .stage112_system_taxonomy import run_stage112_system_taxonomy
 from .stage113_agent_tool_executor import execute_stage113_agent_tools
+from .stage114_agent_tool_cycle import run_stage114_simulated_cycle
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -8931,6 +8932,26 @@ def command_stage113_agent_tools(
     return 0
 
 
+def command_stage114_agent_tool_cycle(
+    *,
+    query: str,
+    simulate_tool: str,
+    memory_corpus: str | None,
+    live_network: bool,
+    repo_root: str | None,
+) -> int:
+    report = run_stage114_simulated_cycle(
+        query=query,
+        simulate_tool=simulate_tool,
+        memory_corpus_path=memory_corpus,
+        repo_root=repo_root,
+        network_enabled=live_network,
+    )
+    report["source"] = "cli"
+    print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9785,6 +9806,15 @@ def main(argv: list[str] | None = None) -> int:
     stage113_parser.add_argument("--memory-corpus", default=None)
     stage113_parser.add_argument("--repo-root", default=None)
     stage113_parser.add_argument("--live-network", action="store_true")
+    stage114_parser = subparsers.add_parser(
+        "stage114-agent-tool-cycle",
+        help="Run a provider tool-call, local execution, and Stage107 reentry cycle",
+    )
+    stage114_parser.add_argument("--query", required=True)
+    stage114_parser.add_argument("--simulate-tool", choices=("external_lookup", "memory_recall", "both"), default="memory_recall")
+    stage114_parser.add_argument("--memory-corpus", default=None)
+    stage114_parser.add_argument("--repo-root", default=None)
+    stage114_parser.add_argument("--live-network", action="store_true")
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10737,6 +10767,14 @@ def main(argv: list[str] | None = None) -> int:
         return command_stage113_agent_tools(
             tool=args.tool,
             query=args.query,
+            memory_corpus=args.memory_corpus,
+            live_network=args.live_network,
+            repo_root=args.repo_root,
+        )
+    if args.command == "stage114-agent-tool-cycle":
+        return command_stage114_agent_tool_cycle(
+            query=args.query,
+            simulate_tool=args.simulate_tool,
             memory_corpus=args.memory_corpus,
             live_network=args.live_network,
             repo_root=args.repo_root,
