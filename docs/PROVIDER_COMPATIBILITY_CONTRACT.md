@@ -134,6 +134,11 @@ Every provider result must expose enough data to record:
     and expression-wait recommendations before live execution
   - broad recall, lookup, no-send, and pending internal-return cases must be
     distinguishable in the guidance
+- provider tool proposals become useful only through Stage113:
+  - provider may propose allowlisted `tool_calls`
+  - provider must not execute local tools directly
+  - Holo validates, executes locally, and feeds `tool_observation` back into
+    the next bounded provider packet
 
 ## 7. Configuration Surface
 
