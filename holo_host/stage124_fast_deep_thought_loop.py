@@ -10,6 +10,49 @@ STAGE124_SCHEMA = "holo.stage124.fast_deep_thought_loop.v1"
 STAGE124_FAST_MARKER = "Stage124 Fast Packet"
 STAGE124_DEEP_MARKER = "Stage124 Deep Packet Context"
 
+MEMORY_DEEP_HINTS = (
+    "记忆",
+    "回忆",
+    "记得",
+    "最深",
+    "什么时候",
+    "何时",
+    "档案",
+    "memory",
+    "remember",
+    "recall",
+    "archive",
+)
+SELF_DEEP_HINTS = (
+    "你是什么",
+    "自己是什么",
+    "自我",
+    "自身",
+    "主体",
+    "意识",
+    "主脑",
+    "holo",
+    "agent",
+    "self",
+    "identity",
+    "conscious",
+)
+RUNTIME_DEEP_HINTS = (
+    "工具",
+    "调用",
+    "状态",
+    "内部",
+    "思考",
+    "反思",
+    "发包",
+    "provider",
+    "tool",
+    "state",
+    "internal",
+    "packet",
+)
+CONTEXTUAL_FOLLOWUP_HINTS = ("所以", "答案", "那", "？", "?", "也就是说", "到底")
+
 
 def build_stage124_fast_packet_prompt(
     *,
@@ -24,6 +67,8 @@ def build_stage124_fast_packet_prompt(
             "You are Holo's fast first packet. Return compact JSON only.",
             "Judge the external user's intent, scene, and whether a deeper packet is needed.",
             "You may include one optional shallow_reply that is safe as external_speech.",
+            "A shallow_reply is only the first reaction, not proof that internal thought is complete.",
+            "Set deep_packet_needed=true for memory, self-model, identity, runtime/tool/state, or unclear short follow-up turns.",
             "Do not expose raw hidden reasoning.",
             "",
             "Required JSON keys:",
@@ -96,6 +141,23 @@ def parse_stage124_fast_packet(text: str) -> dict[str, Any]:
         "speak_now": _coerce_bool(payload.get("speak_now"), default=bool(shallow_reply)),
         "continue_until": compact_text(str(payload.get("continue_until", "") or "external answer is sufficient"), 200),
     }
+
+
+def stage124_deep_packet_guard(user_text: str, fast_packet: dict[str, Any] | None = None) -> dict[str, Any]:
+    text = str(user_text or "").strip()
+    lowered = text.lower()
+    packet = dict(fast_packet or {})
+    shallow_reply = str(packet.get("shallow_reply", "") or "").strip()
+    meaningful_len = len(re.sub(r"\s+", "", text))
+    if any(hint in lowered or hint in text for hint in MEMORY_DEEP_HINTS):
+        return {"required": True, "reason": "memory_or_temporal_recall"}
+    if any(hint in lowered or hint in text for hint in SELF_DEEP_HINTS):
+        return {"required": True, "reason": "self_model_or_identity"}
+    if any(hint in lowered or hint in text for hint in RUNTIME_DEEP_HINTS):
+        return {"required": True, "reason": "runtime_tool_or_state"}
+    if shallow_reply and meaningful_len <= 16 and any(hint in text or hint in lowered for hint in CONTEXTUAL_FOLLOWUP_HINTS):
+        return {"required": True, "reason": "short_contextual_followup"}
+    return {"required": False, "reason": ""}
 
 
 def append_stage124_deep_packet_context(prompt: str, fast_packet: dict[str, Any]) -> str:

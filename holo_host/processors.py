@@ -20,6 +20,7 @@ from .stage124_fast_deep_thought_loop import (
     append_stage124_deep_packet_context,
     build_stage124_fast_packet_prompt,
     parse_stage124_fast_packet,
+    stage124_deep_packet_guard,
 )
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
@@ -1044,6 +1045,71 @@ def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> 
     return False
 
 
+def _needs_fact_grounded_self_report(context: TurnContext) -> bool:
+    packet = dict(context.mind_packet or context.sidecar)
+    text = str(context.user_text or "").strip()
+    lowered = text.lower()
+    tier = str(packet.get("tier", "") or "").strip().lower()
+    query_focus = str(packet.get("query_focus", "") or "").strip().lower()
+    memory_requested = any(
+        hint in lowered or hint in text
+        for hint in (
+            "memory",
+            "remember",
+            "recall",
+            "archive",
+            "记忆",
+            "回忆",
+            "记得",
+            "最深",
+            "什么时候",
+            "何时",
+            "档案",
+        )
+    )
+    self_requested = any(
+        hint in lowered or hint in text
+        for hint in (
+            "holo",
+            "agent",
+            "self",
+            "identity",
+            "conscious",
+            "runtime",
+            "你是什么",
+            "自我",
+            "自身",
+            "主体",
+            "意识",
+            "主脑",
+            "工具",
+            "发包",
+            "状态",
+            "内部",
+        )
+    )
+    factual_requested = any(hint in text or hint in lowered for hint in ("如实", "准确", "事实", "具体", "不要隐喻", "fact", "concrete"))
+    return bool(
+        (tier in {"recall", "deep_recall"} and memory_requested)
+        or query_focus in {"memory", "origin"}
+        or self_requested
+        or (factual_requested and (memory_requested or self_requested))
+    )
+
+
+def _fact_grounded_self_report_lines(context: TurnContext) -> list[str]:
+    if not _needs_fact_grounded_self_report(context):
+        return []
+    return [
+        "When the user asks for memory, self-model, runtime, tools, or factual self-report, answer concretely before style.",
+        "Holo is a single-subject agent runtime: one continuing thread over local WSL brain state, memory stores, tool loops, and provider packets.",
+        "Do not claim biological consciousness or private human feelings; describe observable runtime, memory, and state transitions instead.",
+        "memory answers must name concrete stores when available: archive, working memory, mind_graph, vector hits, active_thread_state, and timestamps or stage anchors.",
+        "If the current packet cannot prove a date or source, say that the current memory packet cannot confirm it instead of inventing a metaphor.",
+        "shallow first reaction cannot replace the deeper packet for memory, self-model, identity, runtime, tool, state, or unclear follow-up turns.",
+    ]
+
+
 def _parse_recall_reconstruction(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     if not raw:
@@ -1130,6 +1196,7 @@ def render_recall_reconstruct_prompt(context: TurnContext) -> str:
         "summary: one short natural recall summary in Chinese.\n"
         "anchors: 1 to 3 short concrete anchors in Chinese.\n"
         "Do not explain the system. Do not output a raw quote list.\n\n"
+        "If the user asks what the memory is, when it began, or asks for an honest/factual answer, prefer concrete stores, dates, stages, and source anchors over metaphor. If the packet lacks proof, say it is not confirmed by the current memory packet.\n\n"
         "Holo is not only solemn or mature. When the recalled material allows it, keep a little sly pride, lived-in warmth, or wolfish lightness instead of flattening into abstract solemnity.\n\n"
         f"{chronology_instruction}"
         f"Persona blend:\n{persona_block}\n\n"
@@ -1168,6 +1235,12 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     if turn_plan.fast_path:
         tool_lines = tool_lines[:1]
     tool_block = "\n".join(f"- {line}" for line in tool_lines) if tool_lines else "- 当前没有额外工具线索。"
+    fact_grounded_self_report = _fact_grounded_self_report_lines(context)
+    output_contract = (
+        "只输出最终要发送的聊天正文，不要编号，不要暴露隐藏推理；如果用户正在问记忆、自我、运行时、工具或状态，允许简明说明可验证的系统事实。\n"
+        if fact_grounded_self_report
+        else "只输出最终要发送的聊天正文，不要编号，不要解释，不要提内部状态、记忆系统、线程续流或工具调用。\n"
+    )
     speed_line = (
         "这是微信聊天。默认只回 1 到 2 句，像熟人之间即刻回话那样轻、准、贴身。"
         if turn_plan.fast_path
@@ -1231,6 +1304,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     if recall_style:
         reply_constraint_lines.append(recall_style)
     reply_constraints_block = _render_section("Reply Constraints:", reply_constraint_lines)
+    fact_grounded_block = _render_section("Fact Grounded Self Report:", fact_grounded_self_report)
     history_label = "Thread Origin Window:" if str(packet.get("query_focus", "") or "") == "origin" else "Recent Thread Window:"
     sections = [
         identity_block,
@@ -1262,11 +1336,12 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         outcome_block,
         recall_reconstruction_block,
         reply_constraints_block,
+        fact_grounded_block,
     ]
     memory_context = "\n\n".join(section for section in sections if section.strip())
     return (
         "你正在替 Holo 回复一条即时聊天消息。\n"
-        "只输出最终要发送的聊天正文，不要编号，不要解释，不要提内部状态、记忆系统、线程续流或工具调用。\n"
+        f"{output_contract}"
         f"聊天名：{context.chat_name}\n"
         f"发送者：{context.sender or context.chat_name}\n"
         f"线程键：{context.thread_key}\n"
@@ -1408,6 +1483,14 @@ class CodexCliProcessor:
             fast_packet["shallow_reply"] = ""
             fast_packet["speak_now"] = False
             fast_packet["continue_until"] = "fast packet failed; deep packet required"
+        deep_guard = stage124_deep_packet_guard(str(context.user_text or ""), fast_packet)
+        if bool(deep_guard.get("required", False)):
+            fast_packet["deep_packet_needed"] = True
+            fast_packet["deep_packet_forced"] = True
+            fast_packet["deep_packet_force_reason"] = str(deep_guard.get("reason", "") or "deterministic_guard")
+        else:
+            fast_packet["deep_packet_forced"] = False
+            fast_packet["deep_packet_force_reason"] = ""
 
         if not bool(fast_packet.get("deep_packet_needed", True)) and str(fast_packet.get("shallow_reply", "") or "").strip():
             processor_ms = int((time.perf_counter() - started_at) * 1000)
@@ -1525,6 +1608,9 @@ class CodexCliProcessor:
             raise RuntimeError(result.stderr or result.stdout or "codex processor failure")
         result_metadata = dict(getattr(result, "metadata", {}) or {})
         text = result.reply_text.strip()
+        first_reaction = str(fast_packet.get("shallow_reply", "") or "").strip()
+        if bool(fast_packet.get("deep_packet_forced", False)) and first_reaction and first_reaction not in text:
+            text = f"{first_reaction}\n{text}".strip()
         bubbles = build_reply_bubbles(
             text,
             channel=context.channel,
