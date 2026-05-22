@@ -789,7 +789,7 @@ class DeepSeekProvider(ProcessorProvider):
             followup_payload = dict(payload)
             followup_payload["messages"] = messages
             exhausted = exhausted or round_index + 1 >= max_rounds or total_tool_calls >= max_tool_calls
-            followup_payload["tool_choice"] = "none" if exhausted else str(payload.get("tool_choice", "auto") or "auto")
+            followup_payload["tool_choice"] = "none" if exhausted else "auto"
             current_decoded = self._post_json(self._completion_url(runner), api_key, followup_payload, timeout_seconds)
             final_request_sent = True
             current_message = self._first_choice_message(current_decoded)
@@ -845,7 +845,10 @@ class DeepSeekProvider(ProcessorProvider):
         }
         provider_tool_payload: dict[str, Any] = {}
         if bool(request.metadata.get("enable_provider_tools", False)):
-            provider_tool_payload = build_tool_payload(request.metadata.get("tool_requests", []))
+            provider_tool_payload = build_tool_payload(
+                request.metadata.get("tool_requests", []),
+                tool_choice=request.metadata.get("provider_tool_choice", "auto"),
+            )
             if provider_tool_payload.get("tools"):
                 payload.update(provider_tool_payload)
         payload = {key: value for key, value in payload.items() if value is not None}

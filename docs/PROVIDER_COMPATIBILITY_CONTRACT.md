@@ -162,6 +162,16 @@ Every provider result must expose enough data to record:
     empty assistant message
   - provider metadata must expose round count, executed/skipped counts, tool
     names per round, and whether the loop exhausted its budget
+- complete workspace tooling must use Stage117:
+  - the provider tool adapter must preserve named DeepSeek `tool_choice`
+    objects for forced live smoke tests
+  - `workspace_inspect` must support bounded list, read, and search operations
+    inside the configured repo root
+  - `local_command` must execute only allowlisted argv-based verification
+    commands, never shell strings
+  - ordinary Holo chat exposes memory, lookup, workspace inspection, and local
+    verification tools by default, while local execution authority remains in
+    Holo
 
 ## 7. Configuration Surface
 

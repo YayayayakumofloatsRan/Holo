@@ -89,6 +89,22 @@ def _agent_tool_requests(context: TurnContext) -> list[dict[str, Any]]:
                 },
             }
         )
+    if "workspace_inspect" not in names:
+        requests.append(
+            {
+                "name": "workspace_inspect",
+                "reason": "always_available_bounded_workspace_inspection",
+                "payload": {"operation": "search_text", "query": query, "max_results": 8},
+            }
+        )
+    if "local_command" not in names:
+        requests.append(
+            {
+                "name": "local_command",
+                "reason": "always_available_allowlisted_local_verification",
+                "payload": {"argv": ["git", "status", "--short"], "timeout_seconds": 10},
+            }
+        )
     return requests
 
 

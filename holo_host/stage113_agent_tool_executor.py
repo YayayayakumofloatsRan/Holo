@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from html import unescape
 from pathlib import Path
 from typing import Any, Callable
@@ -48,6 +49,10 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _clamp_int(value: Any, default: int, lower: int, upper: int) -> int:
+    return max(lower, min(_safe_int(value, default), upper))
 
 
 def _tokenize(text: Any) -> set[str]:
@@ -231,6 +236,208 @@ def _execute_external_lookup(
     }
 
 
+def _resolve_workspace_path(repo_root: str | Path | None, raw_path: Any = "") -> tuple[Path, str]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    relative = str(raw_path or ".").strip() or "."
+    candidate = Path(relative)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return resolved, "path_outside_workspace"
+    return resolved, ""
+
+
+def _execute_workspace_inspect(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    operation = str(arguments.get("operation", "") or "").strip()
+    max_results = _clamp_int(arguments.get("max_results"), 20, 1, 80)
+    max_chars = _clamp_int(arguments.get("max_chars"), 4000, 1, 12000)
+    path, path_error = _resolve_workspace_path(repo_root, arguments.get("path", "."))
+    if path_error:
+        return {
+            "tool": "workspace_inspect",
+            "status": "rejected",
+            "summary": f"workspace inspect rejected: {path_error}",
+            "data": {"operation": operation, "reason": path_error},
+        }
+    if operation == "list_dir":
+        if not path.exists() or not path.is_dir():
+            return {
+                "tool": "workspace_inspect",
+                "status": "error",
+                "summary": f"workspace list_dir: not a directory: {path.name}",
+                "data": {"operation": operation, "path": str(path), "entries": []},
+            }
+        entries = []
+        for item in sorted(path.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower()))[:max_results]:
+            entries.append({"name": item.name, "type": "dir" if item.is_dir() else "file"})
+        return {
+            "tool": "workspace_inspect",
+            "status": "ok",
+            "summary": _compact("workspace list_dir: " + ", ".join(entry["name"] for entry in entries), 420),
+            "data": {"operation": operation, "path": str(path), "entries": entries},
+        }
+    if operation == "read_file":
+        if not path.exists() or not path.is_file():
+            return {
+                "tool": "workspace_inspect",
+                "status": "error",
+                "summary": f"workspace read_file: not a file: {path.name}",
+                "data": {"operation": operation, "path": str(path), "text": ""},
+            }
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        start_line = _clamp_int(arguments.get("start_line"), 1, 1, max(1, len(lines) or 1))
+        end_line = _clamp_int(arguments.get("end_line"), len(lines) or 1, start_line, max(start_line, len(lines) or 1))
+        selected = "\n".join(lines[start_line - 1 : end_line]) if lines else text
+        selected = selected[:max_chars]
+        return {
+            "tool": "workspace_inspect",
+            "status": "ok",
+            "summary": _compact(f"workspace read_file {path.name}: {selected}", 520),
+            "data": {
+                "operation": operation,
+                "path": str(path),
+                "start_line": start_line,
+                "end_line": end_line,
+                "text": selected,
+                "truncated": len(selected) >= max_chars,
+            },
+        }
+    if operation == "search_text":
+        query = str(arguments.get("query", "") or "").strip()
+        if not query:
+            return {
+                "tool": "workspace_inspect",
+                "status": "rejected",
+                "summary": "workspace search_text rejected: missing query",
+                "data": {"operation": operation, "reason": "missing_query"},
+            }
+        search_root = path if path.exists() and path.is_dir() else Path(repo_root or Path.cwd()).resolve()
+        glob_pattern = str(arguments.get("glob", "") or "**/*").strip() or "**/*"
+        matches: list[dict[str, Any]] = []
+        files_seen = 0
+        for file_path in search_root.glob(glob_pattern):
+            if not file_path.is_file():
+                continue
+            files_seen += 1
+            if files_seen > 300:
+                break
+            try:
+                if file_path.stat().st_size > 2_000_000:
+                    continue
+                text = file_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if query.lower() in line.lower():
+                    matches.append(
+                        {
+                            "path": str(file_path),
+                            "line": line_number,
+                            "text": _compact(line, 240),
+                        }
+                    )
+                    if len(matches) >= max_results:
+                        break
+            if len(matches) >= max_results:
+                break
+        return {
+            "tool": "workspace_inspect",
+            "status": "ok" if matches else "empty",
+            "summary": _compact(f"workspace search_text: {len(matches)} matches for {query}", 420),
+            "data": {"operation": operation, "query": query, "matches": matches},
+        }
+    return {
+        "tool": "workspace_inspect",
+        "status": "rejected",
+        "summary": f"workspace inspect rejected: unknown operation {operation}",
+        "data": {"operation": operation, "reason": "unknown_operation"},
+    }
+
+
+def _is_allowlisted_command(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    head = argv[0].lower()
+    if head == "git":
+        allowed = {
+            ("status", "--short"),
+            ("diff", "--check"),
+            ("diff", "--stat"),
+            ("log", "-1", "--oneline"),
+        }
+        return tuple(argv[1:]) in allowed
+    if head in {"python", "python3", "py"}:
+        return len(argv) >= 3 and argv[1:3] == ["-m", "pytest"]
+    return False
+
+
+def _execute_local_command(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    raw_argv = arguments.get("argv", [])
+    argv = [str(item) for item in list(raw_argv or []) if str(item).strip()] if isinstance(raw_argv, list) else []
+    if not argv:
+        return {
+            "tool": "local_command",
+            "status": "rejected",
+            "summary": "local command rejected: missing argv",
+            "data": {"reason": "missing_argv"},
+        }
+    cwd, cwd_error = _resolve_workspace_path(repo_root, arguments.get("cwd", "."))
+    if cwd_error:
+        return {
+            "tool": "local_command",
+            "status": "rejected",
+            "summary": f"local command rejected: {cwd_error}",
+            "data": {"argv": argv, "reason": cwd_error},
+        }
+    if not _is_allowlisted_command(argv):
+        return {
+            "tool": "local_command",
+            "status": "rejected",
+            "summary": "local command rejected: command_not_allowlisted",
+            "data": {"argv": argv, "reason": "command_not_allowlisted"},
+        }
+    timeout_seconds = _clamp_int(arguments.get("timeout_seconds"), 15, 1, 60)
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            shell=False,
+            check=False,
+        )
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return {
+            "tool": "local_command",
+            "status": "error",
+            "summary": _compact(f"local command error: {exc}", 420),
+            "data": {"argv": argv, "error": str(exc), "timeout_seconds": timeout_seconds},
+        }
+    stdout = _compact(completed.stdout, 2400)
+    stderr = _compact(completed.stderr, 1200)
+    summary = f"local command exit={completed.returncode}: {stdout or stderr or 'no output'}"
+    return {
+        "tool": "local_command",
+        "status": "ok" if completed.returncode == 0 else "failed",
+        "summary": _compact(summary, 520),
+        "data": {
+            "argv": argv,
+            "cwd": str(cwd),
+            "returncode": int(completed.returncode),
+            "stdout": stdout,
+            "stderr": stderr,
+            "timeout_seconds": timeout_seconds,
+        },
+    }
+
+
 def _call_id(call: dict[str, Any], index: int) -> str:
     return str(call.get("id", "") or f"tool_call_{index + 1}")
 
@@ -269,6 +476,10 @@ def execute_stage113_agent_tools(
             )
         elif name == "memory_recall":
             observation = _execute_memory_recall(arguments, corpus)
+        elif name == "workspace_inspect":
+            observation = _execute_workspace_inspect(arguments, repo_root=repo_root)
+        elif name == "local_command":
+            observation = _execute_local_command(arguments, repo_root=repo_root)
         else:
             skipped.append({"provider_call_id": call_id, "tool": name, "reason": "unknown_tool"})
             continue

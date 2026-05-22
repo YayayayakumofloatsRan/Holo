@@ -71,6 +71,87 @@ TOOL_REGISTRY: dict[str, dict[str, Any]] = {
             "required": ["query"],
         },
     },
+    "workspace_inspect": {
+        "description": (
+            "Inspect the local Holo workspace through bounded read-only operations: list directories, "
+            "read files, or search text. Holo executes this locally inside the WSL brain."
+        ),
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "description": "One of list_dir, read_file, or search_text.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative path to inspect.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Plain text query for search_text.",
+                },
+                "glob": {
+                    "type": "string",
+                    "description": "Optional file glob for search_text.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "Optional 1-based first line for read_file.",
+                    "minimum": 1,
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Optional 1-based last line for read_file.",
+                    "minimum": 1,
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Maximum text characters returned.",
+                    "minimum": 1,
+                    "maximum": 12000,
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum entries or search hits.",
+                    "minimum": 1,
+                    "maximum": 80,
+                },
+            },
+            "required": ["operation"],
+        },
+    },
+    "local_command": {
+        "description": (
+            "Run a strictly allowlisted local workspace command for verification. Commands are passed as argv, "
+            "never through a shell, and Holo rejects destructive or unknown commands."
+        ),
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "argv": {
+                    "type": "array",
+                    "description": "Command argv. Allowed examples include git status --short and python -m pytest ...",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 32,
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional workspace-relative working directory.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Command timeout in seconds.",
+                    "minimum": 1,
+                    "maximum": 60,
+                },
+            },
+            "required": ["argv"],
+        },
+    },
 }
 
 
@@ -113,11 +194,15 @@ def _tool_schema(name: str) -> dict[str, Any]:
     }
 
 
-def build_tool_payload(tool_requests: Any, *, tool_choice: str = "auto") -> dict[str, Any]:
+def build_tool_payload(tool_requests: Any, *, tool_choice: Any = "auto") -> dict[str, Any]:
     tools = [_tool_schema(name) for name in _tool_names(tool_requests) if name in TOOL_REGISTRY]
     if not tools:
         return {"tools": [], "tool_choice": "none"}
-    return {"tools": tools, "tool_choice": str(tool_choice or "auto").strip() or "auto"}
+    if isinstance(tool_choice, dict):
+        choice: Any = dict(tool_choice)
+    else:
+        choice = str(tool_choice or "auto").strip() or "auto"
+    return {"tools": tools, "tool_choice": choice}
 
 
 def build_stage106_deepseek_adapter_plan(
