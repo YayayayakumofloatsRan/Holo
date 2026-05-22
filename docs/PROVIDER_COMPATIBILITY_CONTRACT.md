@@ -144,6 +144,15 @@ Every provider result must expose enough data to record:
     locally
   - the resulting observation must be present in the next provider packet
     inputs before reply commitment
+- live DeepSeek agent loops must use Stage115:
+  - ordinary Holo chat enables provider tool schemas by default
+  - `auto_execute_provider_tools=true` lets the provider propose allowlisted
+    calls, but execution still happens only inside Holo
+  - the DeepSeek provider must send a second `chat/completions` packet with
+    the original assistant `tool_calls` plus local `tool` observations before
+    committing the user-facing final reply
+  - combined usage accounting must include both the proposal packet and the
+    final reply packet
 
 ## 7. Configuration Surface
 

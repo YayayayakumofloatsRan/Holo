@@ -14,6 +14,7 @@ from typing import Any
 from .config import HostConfig, ProcessorLaneConfig, TaskRoutingConfig
 from .models import CodexResult, ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
 from .stage106_deepseek_tool_adapter import build_tool_payload, parse_provider_tool_calls
+from .stage113_agent_tool_executor import execute_stage113_agent_tools
 
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
     "reply": {
@@ -283,6 +284,15 @@ def _coerce_usage_payload(payload: Any) -> dict[str, int | bool]:
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
         "estimated": False,
+    }
+
+
+def _sum_usage_payloads(*usages: dict[str, int | bool]) -> dict[str, int | bool]:
+    return {
+        "prompt_tokens": sum(int(usage.get("prompt_tokens", 0) or 0) for usage in usages),
+        "completion_tokens": sum(int(usage.get("completion_tokens", 0) or 0) for usage in usages),
+        "total_tokens": sum(int(usage.get("total_tokens", 0) or 0) for usage in usages),
+        "estimated": any(bool(usage.get("estimated", False)) for usage in usages),
     }
 
 
@@ -613,6 +623,94 @@ class DeepSeekProvider(ProcessorProvider):
             raise RuntimeError("DeepSeek returned a non-object response")
         return decoded
 
+    def _tool_observation_messages(self, tool_report: dict[str, Any]) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        for observation in list(tool_report.get("observations", []) or []):
+            if not isinstance(observation, dict):
+                continue
+            content = {
+                "tool": str(observation.get("tool", "") or ""),
+                "status": str(observation.get("status", "") or ""),
+                "summary": str(observation.get("summary", "") or ""),
+                "data": dict(observation.get("data", {}) or {}),
+            }
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": str(observation.get("provider_call_id", "") or ""),
+                    "content": json.dumps(content, ensure_ascii=False, sort_keys=True),
+                }
+            )
+        return messages
+
+    def _maybe_run_agent_tool_loop(
+        self,
+        runner: "CodexRunner",
+        request: ProcessorTaskRequest,
+        *,
+        api_key: str,
+        payload: dict[str, Any],
+        timeout_seconds: int,
+        first_decoded: dict[str, Any],
+        first_message: dict[str, Any],
+        first_usage: dict[str, int | bool],
+    ) -> tuple[dict[str, Any], dict[str, int | bool], dict[str, Any]]:
+        if not bool(request.metadata.get("auto_execute_provider_tools", False)):
+            return first_decoded, first_usage, {}
+        tool_calls = parse_provider_tool_calls(first_decoded)
+        if not tool_calls:
+            return first_decoded, first_usage, {}
+        external_lookup_fn = request.metadata.get("external_lookup_fn")
+        if not callable(external_lookup_fn):
+            external_lookup_fn = None
+        tool_report = execute_stage113_agent_tools(
+            tool_calls,
+            external_lookup_fn=external_lookup_fn,
+            memory_corpus=request.metadata.get("tool_memory_corpus"),
+            memory_corpus_path=request.metadata.get("tool_memory_corpus_path"),
+            repo_root=runner.config.runtime.repo_root,
+            network_enabled=bool(runner.config.runtime.network_enabled),
+        )
+        tool_messages = self._tool_observation_messages(tool_report)
+        loop_metadata = {
+            "executed_count": int(tool_report.get("summary", {}).get("executed_count", 0) or 0),
+            "skipped_count": int(tool_report.get("summary", {}).get("skipped_count", 0) or 0),
+            "observation_summary": str(tool_report.get("summary", {}).get("observation_summary", "") or ""),
+            "final_request_sent": False,
+            "report_id": str(tool_report.get("report_id", "") or ""),
+        }
+        if not tool_messages:
+            return first_decoded, first_usage, loop_metadata
+
+        assistant_message = {
+            "role": "assistant",
+            "content": str(first_message.get("content", "") or ""),
+            "tool_calls": list(first_message.get("tool_calls", []) or []),
+        }
+        followup_payload = dict(payload)
+        followup_payload["messages"] = list(payload.get("messages", []) or []) + [assistant_message] + tool_messages
+        followup_payload["tool_choice"] = "none"
+        final_decoded = self._post_json(self._completion_url(runner), api_key, followup_payload, timeout_seconds)
+        final_usage = _coerce_usage_payload(final_decoded.get("usage"))
+        if not final_usage["total_tokens"]:
+            final_message = self._first_choice_message(final_decoded)
+            final_text = str(final_message.get("content", "") or "").strip()
+            final_usage = {
+                "prompt_tokens": _estimate_text_tokens(json.dumps(followup_payload.get("messages", []), ensure_ascii=False)),
+                "completion_tokens": _estimate_text_tokens(final_text),
+                "total_tokens": _estimate_text_tokens(json.dumps(followup_payload.get("messages", []), ensure_ascii=False))
+                + _estimate_text_tokens(final_text),
+                "estimated": True,
+            }
+        loop_metadata["final_request_sent"] = True
+        return final_decoded, _sum_usage_payloads(first_usage, final_usage), loop_metadata
+
+    def _first_choice_message(self, decoded: dict[str, Any]) -> dict[str, Any]:
+        choices = list(decoded.get("choices", []) or [])
+        first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
+        message = first_choice.get("message", {})
+        return dict(message) if isinstance(message, dict) else {}
+
     def run_task(
         self,
         runner: "CodexRunner",
@@ -643,13 +741,13 @@ class DeepSeekProvider(ProcessorProvider):
         payload = {key: value for key, value in payload.items() if value is not None}
         timeout_seconds = int(request.timeout_seconds or runner.config.runtime.codex_timeout_seconds or 60)
         decoded = self._post_json(self._completion_url(runner), api_key, payload, timeout_seconds)
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        first_decoded = decoded
         choices = list(decoded.get("choices", []) or [])
         first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
         message = dict(first_choice.get("message", {})) if isinstance(first_choice.get("message", {}), dict) else {}
         text = str(message.get("content", "") or "").strip()
-        reasoning_content = str(message.get("reasoning_content", "") or "").strip()
-        tool_calls = parse_provider_tool_calls(decoded)
+        initial_tool_calls = parse_provider_tool_calls(first_decoded)
+        initial_finish_reason = str(first_choice.get("finish_reason", "") or "")
         usage = _coerce_usage_payload(decoded.get("usage"))
         if not usage["total_tokens"]:
             usage = {
@@ -658,6 +756,44 @@ class DeepSeekProvider(ProcessorProvider):
                 "total_tokens": _estimate_text_tokens(request.prompt) + _estimate_text_tokens(text),
                 "estimated": True,
             }
+        decoded, usage, agent_tool_loop = self._maybe_run_agent_tool_loop(
+            runner,
+            request,
+            api_key=api_key,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+            first_decoded=decoded,
+            first_message=message,
+            first_usage=usage,
+        )
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        choices = list(decoded.get("choices", []) or [])
+        first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
+        message = dict(first_choice.get("message", {})) if isinstance(first_choice.get("message", {}), dict) else {}
+        text = str(message.get("content", "") or "").strip()
+        reasoning_content = str(message.get("reasoning_content", "") or "").strip()
+        tool_calls = parse_provider_tool_calls(decoded)
+        metadata = {
+            "allowed_data_layers": list(request.allowed_data_layers or tuple(spec.get("allowed_data_layers", ()))),
+            "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
+            "provider": self.name,
+            "lane": lane_name,
+            "model": model,
+            "reasoning_effort": effort,
+            "usage": usage,
+            "duration_ms": duration_ms,
+            "budget_tag": request.budget_tag,
+            "thinking": dict(payload.get("thinking", {})),
+            "reasoning_content_present": bool(reasoning_content),
+            "provider_tools_enabled": bool(provider_tool_payload.get("tools")),
+            "tool_calls": initial_tool_calls if agent_tool_loop else tool_calls,
+            "tool_call_count": len(initial_tool_calls if agent_tool_loop else tool_calls),
+            "finish_reason": str(first_choice.get("finish_reason", "") or ""),
+            "initial_finish_reason": initial_finish_reason,
+        }
+        if agent_tool_loop:
+            metadata["agent_tool_loop"] = agent_tool_loop
+            metadata["final_tool_calls"] = tool_calls
         return ProcessorTaskResult(
             task_type=request.task_type,
             text=text,
@@ -667,23 +803,7 @@ class DeepSeekProvider(ProcessorProvider):
             stderr="",
             command=[self.name, "chat.completions"],
             output_schema=request.output_schema or str(spec.get("output_schema", "plain_text")),
-            metadata={
-                "allowed_data_layers": list(request.allowed_data_layers or tuple(spec.get("allowed_data_layers", ()))),
-                "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
-                "provider": self.name,
-                "lane": lane_name,
-                "model": model,
-                "reasoning_effort": effort,
-                "usage": usage,
-                "duration_ms": duration_ms,
-                "budget_tag": request.budget_tag,
-                "thinking": dict(payload.get("thinking", {})),
-                "reasoning_content_present": bool(reasoning_content),
-                "provider_tools_enabled": bool(provider_tool_payload.get("tools")),
-                "tool_calls": tool_calls,
-                "tool_call_count": len(tool_calls),
-                "finish_reason": str(first_choice.get("finish_reason", "") or ""),
-            },
+            metadata=metadata,
         )
 
 

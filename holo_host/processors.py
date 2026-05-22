@@ -39,6 +39,59 @@ def _metric_float(raw: Any, default: float = 0.0) -> float:
         return float(default or 0.0)
 
 
+def _tool_request_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        item = dict(raw)
+    else:
+        to_dict = getattr(raw, "to_dict", None)
+        item = dict(to_dict()) if callable(to_dict) else {}
+    name = str(item.get("name", "") or "").strip()
+    if not name:
+        return {}
+    payload = item.get("payload", {})
+    return {
+        "name": name,
+        "reason": str(item.get("reason", "") or ""),
+        "payload": dict(payload) if isinstance(payload, dict) else {},
+    }
+
+
+def _agent_tool_requests(context: TurnContext) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for raw in list(context.capability_context.get("tool_requests", []) or []):
+        item = _tool_request_dict(raw)
+        if item:
+            requests.append(item)
+    names = {str(item.get("name", "") or "").strip() for item in requests}
+    query = str(context.user_text or "").strip() or str(context.chat_name or context.thread_key or "current turn")
+    if "memory_recall" not in names:
+        requests.append(
+            {
+                "name": "memory_recall",
+                "reason": "always_available_local_memory_recall",
+                "payload": {
+                    "query": query,
+                    "thread_key": context.thread_key,
+                    "chat_name": context.chat_name,
+                    "channel": context.channel,
+                    "limit": 6,
+                },
+            }
+        )
+    if "external_lookup" not in names:
+        requests.append(
+            {
+                "name": "external_lookup",
+                "reason": "always_available_external_evidence_lookup",
+                "payload": {
+                    "query": query,
+                    "max_results": 3,
+                },
+            }
+        )
+    return requests
+
+
 def _dynamic_wechat_bubble_target(context: TurnContext, *, fast_path: bool, mind_tier: str) -> int:
     text_len = len(str(context.user_text or "").strip())
     focus = str(context.attention_state.primary_focus or "").strip()
@@ -1262,6 +1315,7 @@ class CodexCliProcessor:
         selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
         lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
         timeout_seconds = _reply_processor_timeout_seconds(context, lane)
+        agent_tool_requests = _agent_tool_requests(context)
         result = self._run_runner(
             prompt,
             session_id=session_id,
@@ -1279,6 +1333,9 @@ class CodexCliProcessor:
                 "reply_lane_reason": lane_reason,
                 "reflex_micro_fast_candidate": bool(reflex_micro_fast_candidate),
                 "stage18_reflex": bool(reflex_micro_fast_candidate),
+                "enable_provider_tools": True,
+                "auto_execute_provider_tools": True,
+                "tool_requests": agent_tool_requests,
             },
         )
         processor_ms = int((time.perf_counter() - started_at) * 1000)
@@ -1319,6 +1376,8 @@ class CodexCliProcessor:
                 "usage": dict(result_metadata.get("usage", {})),
                 "reply_lane_reason": result_metadata.get("reply_lane_reason", lane_reason),
                 "reflex_micro_fast_candidate": bool(result_metadata.get("reflex_micro_fast_candidate", reflex_micro_fast_candidate)),
+                "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
+                "agent_tool_loop": dict(result_metadata.get("agent_tool_loop", {})),
                 "prompt_excerpt": compact_text(prompt, 240),
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
