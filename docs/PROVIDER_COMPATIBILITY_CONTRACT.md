@@ -239,6 +239,19 @@ Every provider result must expose enough data to record:
   - tool observations must re-enter the provider loop before external speech is
     committed, unless no tool was needed
   - Windows transport must not execute tools or become a second decision layer
+- fast-deep continuous thought loops must use Stage124:
+  - every external turn first sends a `micro_fast` packet with budget tag
+    `stage124_fast_packet`
+  - the fast packet returns structured triage metadata: intent, scene,
+    `deep_packet_needed`, optional `shallow_reply`, `speak_now`, and
+    `continue_until`
+  - if the fast packet is sufficient, Holo may commit the shallow external
+    speech without deep recall
+  - if deeper work is needed, the fast packet is appended as
+    `Stage124 Deep Packet Context` before Stage121/122/123 deep processing
+  - the fast packet is structured control metadata, not raw hidden reasoning
+  - Stage124 changes packet cadence only; tool execution authority still remains
+    in WSL Stage113
 
 ## 7. Configuration Surface
 

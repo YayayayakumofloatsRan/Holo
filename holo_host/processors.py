@@ -16,6 +16,11 @@ from .stage120_tool_affordance_optimizer import optimize_stage120_tool_requests
 from .stage121_conscious_packet_scheduler import build_stage121_packet_policy
 from .stage122_internal_external_channel_boundary import append_stage122_channel_contract, build_stage122_channel_frame
 from .stage123_internal_tool_flow import append_stage123_internal_tool_contract, build_stage123_internal_tool_flow
+from .stage124_fast_deep_thought_loop import (
+    append_stage124_deep_packet_context,
+    build_stage124_fast_packet_prompt,
+    parse_stage124_fast_packet,
+)
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
 COMPANIONSHIP_HINTS = ("陪", "在吗", "聊聊", "说说", "想你", "想找个陪伴", "陪伴")
@@ -1362,6 +1367,92 @@ class CodexCliProcessor:
     def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
         turn_plan = build_turn_plan(context, self.config)
         route = turn_plan.route
+        started_at = time.perf_counter()
+        selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
+        lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
+        timeout_seconds = _reply_processor_timeout_seconds(context, lane)
+        agent_tool_requests = _agent_tool_requests(context)
+        fast_packet_started_at = time.perf_counter()
+        fast_result = self._run_runner(
+            build_stage124_fast_packet_prompt(
+                user_text=str(context.user_text or ""),
+                channel=context.channel,
+                thread_key=context.thread_key,
+                chat_name=context.chat_name,
+            ),
+            session_id=session_id,
+            lane="micro_fast",
+            budget_tag="stage124_fast_packet",
+            max_output_tokens=600,
+            timeout_seconds=_reply_processor_timeout_seconds(context, "micro_fast"),
+            metadata={
+                "thread_key": context.thread_key,
+                "chat_name": context.chat_name,
+                "event_id": str(context.metadata.get("event_id", "") or ""),
+                "selected_action_type": selected_action_type,
+                "uncertainty_level": float(context.uncertainty_level or 0.0),
+                "stage124_fast_packet": True,
+                "enable_provider_tools": False,
+                "auto_execute_provider_tools": False,
+                "tool_requests": agent_tool_requests,
+            },
+        )
+        fast_packet_ms = int((time.perf_counter() - fast_packet_started_at) * 1000)
+        fast_packet = parse_stage124_fast_packet(getattr(fast_result, "reply_text", ""))
+        fast_packet_metadata = dict(getattr(fast_result, "metadata", {}) or {})
+        deep_session_id = str(getattr(fast_result, "session_id", "") or session_id)
+        fast_packet_error = ""
+        if getattr(fast_result, "returncode", 0) != 0:
+            fast_packet_error = str(getattr(fast_result, "stderr", "") or getattr(fast_result, "stdout", "") or "stage124 fast packet failure")
+            fast_packet["deep_packet_needed"] = True
+            fast_packet["shallow_reply"] = ""
+            fast_packet["speak_now"] = False
+            fast_packet["continue_until"] = "fast packet failed; deep packet required"
+
+        if not bool(fast_packet.get("deep_packet_needed", True)) and str(fast_packet.get("shallow_reply", "") or "").strip():
+            processor_ms = int((time.perf_counter() - started_at) * 1000)
+            text = str(fast_packet.get("shallow_reply", "") or "").strip()
+            bubbles = build_reply_bubbles(
+                text,
+                channel=context.channel,
+                attention_state=context.attention_state,
+                emotion_state=context.emotion_state,
+                utterance_plan=context.utterance_plan,
+                route=route,
+                target_count=turn_plan.bubble_target,
+                strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
+            )
+            joined = " ".join(bubble.text for bubble in bubbles).strip() or text
+            return ReplyPlan(
+                text=joined,
+                bubbles=bubbles,
+                attention_state=context.attention_state,
+                turn_plan=turn_plan,
+                emotion_state=dict(context.emotion_state),
+                utterance_plan=dict(context.utterance_plan),
+                random_state=dict(context.sidecar.get("state", {}).get("random_state", {})),
+                tool_requests=[ToolRequest(**request) for request in context.capability_context.get("tool_requests", [])],
+                route=route,
+                processor=self.name,
+                session_id=str(getattr(fast_result, "session_id", "") or session_id),
+                raw_text=text,
+                timing_ms={"processor_ms": processor_ms, "stage124_fast_packet_ms": fast_packet_ms, "recall_reconstruct_ms": 0},
+                debug={
+                    "model": fast_packet_metadata.get("model", ""),
+                    "provider": fast_packet_metadata.get("provider", ""),
+                    "lane": fast_packet_metadata.get("lane", "micro_fast"),
+                    "usage": dict(fast_packet_metadata.get("usage", {})),
+                    "reply_lane_reason": lane_reason,
+                    "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
+                    "stage124_thought_loop": {
+                        "fast_packet": fast_packet,
+                        "fast_packet_ms": fast_packet_ms,
+                        "fast_packet_error": fast_packet_error,
+                        "deep_packet_sent": False,
+                    },
+                },
+            )
+
         recall_reconstruct_ms = 0
         if _should_run_recall_reconstruct(context, self.config):
             reconstruct_started_at = time.perf_counter()
@@ -1375,11 +1466,7 @@ class CodexCliProcessor:
         prompt = render_chat_prompt(context, turn_plan=turn_plan)
         prompt = append_stage122_channel_contract(prompt)
         prompt = append_stage123_internal_tool_contract(prompt)
-        started_at = time.perf_counter()
-        selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
-        lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
-        timeout_seconds = _reply_processor_timeout_seconds(context, lane)
-        agent_tool_requests = _agent_tool_requests(context)
+        prompt = append_stage124_deep_packet_context(prompt, fast_packet)
         lane_config = self.config.processor_fabric.provider_backends.get(lane)
         lane_max_output_tokens = int(getattr(lane_config, "max_output_tokens", 0) or 0)
         packet_policy = build_stage121_packet_policy(
@@ -1404,7 +1491,7 @@ class CodexCliProcessor:
         )
         result = self._run_runner(
             prompt,
-            session_id=session_id,
+            session_id=deep_session_id,
             lane=lane,
             budget_tag="chat_reply",
             max_output_tokens=int(packet_policy.get("output_budget_tokens", 1200) or 1200),
@@ -1427,6 +1514,8 @@ class CodexCliProcessor:
                 "stage121_packet_policy": packet_policy,
                 "stage122_channel_frame": channel_frame,
                 "stage123_internal_tool_flow": internal_tool_flow,
+                "stage124_fast_packet": fast_packet,
+                "stage124_fast_packet_error": fast_packet_error,
                 "max_provider_tool_rounds": int(packet_policy.get("tool_loop", {}).get("max_rounds", 4) or 4),
                 "max_provider_tool_calls": int(packet_policy.get("tool_loop", {}).get("max_tool_calls", 16) or 16),
             },
@@ -1460,7 +1549,7 @@ class CodexCliProcessor:
             processor=self.name,
             session_id=result.session_id,
             raw_text=text,
-            timing_ms={"processor_ms": processor_ms, "recall_reconstruct_ms": recall_reconstruct_ms},
+            timing_ms={"processor_ms": processor_ms, "stage124_fast_packet_ms": fast_packet_ms, "recall_reconstruct_ms": recall_reconstruct_ms},
             debug={
                 "model": result_metadata.get("model", ""),
                 "provider": result_metadata.get("provider", ""),
@@ -1474,6 +1563,13 @@ class CodexCliProcessor:
                 "prompt_excerpt": compact_text(prompt, 240),
                 "stage122_channel_frame": channel_frame,
                 "stage123_internal_tool_flow": internal_tool_flow,
+                "stage124_thought_loop": {
+                    "fast_packet": fast_packet,
+                    "fast_packet_ms": fast_packet_ms,
+                    "fast_packet_error": fast_packet_error,
+                    "deep_packet_sent": True,
+                    "fast_packet_metadata": fast_packet_metadata,
+                },
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
                 "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),
