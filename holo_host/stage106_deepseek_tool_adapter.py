@@ -257,6 +257,284 @@ TOOL_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+def _object_parameters(properties: dict[str, Any], required: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(required),
+    }
+
+
+_PATH_PROPERTY = {"type": "string", "description": "Workspace-relative path."}
+_QUERY_PROPERTY = {"type": "string", "description": "Plain text query.", "minLength": 1}
+_MAX_RESULTS_PROPERTY = {
+    "type": "integer",
+    "description": "Maximum returned rows.",
+    "minimum": 1,
+    "maximum": 120,
+}
+_MAX_CHARS_PROPERTY = {
+    "type": "integer",
+    "description": "Maximum text characters returned.",
+    "minimum": 1,
+    "maximum": 20000,
+}
+_ARGV_PROPERTY = {
+    "type": "array",
+    "description": "Command argv. Shell strings are not accepted.",
+    "items": {"type": "string"},
+    "minItems": 1,
+    "maxItems": 40,
+}
+
+
+TOOL_REGISTRY.update(
+    {
+        "file_read": {
+            "description": "Read a bounded UTF-8 text file from the workspace.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "start_line": {"type": "integer", "minimum": 1},
+                    "end_line": {"type": "integer", "minimum": 1},
+                    "max_chars": _MAX_CHARS_PROPERTY,
+                },
+                ["path"],
+            ),
+        },
+        "file_list": {
+            "description": "List files and directories under a workspace path.",
+            "parameters": _object_parameters(
+                {"path": _PATH_PROPERTY, "max_results": _MAX_RESULTS_PROPERTY},
+            ),
+        },
+        "file_search": {
+            "description": "Search workspace text files for a plain text query.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "query": _QUERY_PROPERTY,
+                    "glob": {"type": "string", "description": "Optional file glob."},
+                    "max_results": _MAX_RESULTS_PROPERTY,
+                },
+                ["query"],
+            ),
+        },
+        "file_stat": {
+            "description": "Return basic metadata for one workspace file or directory.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY}, ["path"]),
+        },
+        "directory_tree": {
+            "description": "Return a bounded recursive directory tree.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "max_depth": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "max_entries": _MAX_RESULTS_PROPERTY,
+                },
+            ),
+        },
+        "json_read": {
+            "description": "Read and parse a workspace JSON file, returning keys and bounded content.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY, "max_chars": _MAX_CHARS_PROPERTY}, ["path"]),
+        },
+        "toml_read": {
+            "description": "Read and parse a workspace TOML file, returning keys and bounded content.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY, "max_chars": _MAX_CHARS_PROPERTY}, ["path"]),
+        },
+        "markdown_outline": {
+            "description": "Extract heading outline from a workspace Markdown file.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY, "max_results": _MAX_RESULTS_PROPERTY}, ["path"]),
+        },
+        "symbol_search": {
+            "description": "Search source files for a symbol-like text query.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "query": _QUERY_PROPERTY,
+                    "glob": {"type": "string", "description": "Optional source glob."},
+                    "max_results": _MAX_RESULTS_PROPERTY,
+                },
+                ["query"],
+            ),
+        },
+        "repo_overview": {
+            "description": "Summarize workspace top-level structure and git status.",
+            "parameters": _object_parameters({"max_results": _MAX_RESULTS_PROPERTY}),
+        },
+        "git_status": {
+            "description": "Read local git status in short form.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY}),
+        },
+        "git_diff": {
+            "description": "Read bounded git diff diagnostics.",
+            "parameters": _object_parameters(
+                {
+                    "operation": {"type": "string", "description": "One of stat or check."},
+                    "path": _PATH_PROPERTY,
+                },
+            ),
+        },
+        "git_log": {
+            "description": "Read the latest local git commit summary.",
+            "parameters": _object_parameters({"limit": {"type": "integer", "minimum": 1, "maximum": 10}}),
+        },
+        "test_discover": {
+            "description": "Discover likely local pytest test files without running them.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "glob": {"type": "string", "description": "Optional test file glob."},
+                    "max_results": _MAX_RESULTS_PROPERTY,
+                },
+            ),
+        },
+        "python_module_check": {
+            "description": "Parse a Python source file with ast to catch syntax errors without writing pyc files.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY}, ["path"]),
+        },
+        "config_inspect": {
+            "description": "Read the bounded Holo host config file or another workspace config path.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY, "max_chars": _MAX_CHARS_PROPERTY}),
+        },
+        "runtime_health": {
+            "description": "Inspect local runtime path health without touching live transports.",
+            "parameters": _object_parameters({}),
+        },
+        "memory_warehouse_search": {
+            "description": "Search the local memory warehouse text artifacts.",
+            "parameters": _object_parameters({"query": _QUERY_PROPERTY, "max_results": _MAX_RESULTS_PROPERTY}, ["query"]),
+        },
+        "doc_lookup": {
+            "description": "Search docs/*.md for a plain text query.",
+            "parameters": _object_parameters({"query": _QUERY_PROPERTY, "max_results": _MAX_RESULTS_PROPERTY}, ["query"]),
+        },
+        "artifact_list": {
+            "description": "List local artifact directories and files.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY, "max_results": _MAX_RESULTS_PROPERTY}),
+        },
+        "env_read": {
+            "description": "Report whether named environment variables are set; secret-like values remain redacted.",
+            "parameters": _object_parameters(
+                {
+                    "names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 20,
+                    },
+                    "include_values": {"type": "boolean"},
+                },
+                ["names"],
+            ),
+        },
+        "dependency_check": {
+            "description": "Inspect dependency manifest files such as pyproject.toml and requirements*.txt.",
+            "parameters": _object_parameters({"max_results": _MAX_RESULTS_PROPERTY}),
+        },
+        "time_now": {
+            "description": "Return current local and UTC time.",
+            "parameters": _object_parameters({}),
+        },
+        "path_resolve": {
+            "description": "Resolve a workspace path and report whether it remains inside the workspace.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY}, ["path"]),
+        },
+        "workspace_snapshot": {
+            "description": "Return bounded workspace file counts and top-level entries.",
+            "parameters": _object_parameters({"path": _PATH_PROPERTY, "max_entries": _MAX_RESULTS_PROPERTY}),
+        },
+        "command_run": {
+            "description": "Run a read-only allowlisted command. This is an alias of local_command.",
+            "parameters": _object_parameters(
+                {
+                    "argv": _ARGV_PROPERTY,
+                    "cwd": {"type": "string", "description": "Optional workspace-relative working directory."},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 60},
+                },
+                ["argv"],
+            ),
+        },
+        "file_write": {
+            "description": "Permissioned write of a bounded UTF-8 file inside the workspace.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "content": {"type": "string", "description": "File content."},
+                    "create_dirs": {"type": "boolean"},
+                },
+                ["path", "content"],
+            ),
+        },
+        "file_replace": {
+            "description": "Permissioned exact text replacement inside one workspace file.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "old_text": {"type": "string", "description": "Exact text to replace.", "minLength": 1},
+                    "new_text": {"type": "string", "description": "Replacement text."},
+                },
+                ["path", "old_text", "new_text"],
+            ),
+        },
+        "file_append": {
+            "description": "Permissioned append to a bounded UTF-8 file inside the workspace.",
+            "parameters": _object_parameters(
+                {
+                    "path": _PATH_PROPERTY,
+                    "content": {"type": "string", "description": "Text to append."},
+                    "create_dirs": {"type": "boolean"},
+                },
+                ["path", "content"],
+            ),
+        },
+        "note_append": {
+            "description": "Permissioned append of a progress note under docs/agent_progress_notes.",
+            "parameters": _object_parameters(
+                {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "category": {"type": "string"},
+                },
+                ["title", "summary"],
+            ),
+        },
+        "git_stage": {
+            "description": "Permissioned git add for validated workspace paths.",
+            "parameters": _object_parameters(
+                {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 40,
+                    }
+                },
+                ["paths"],
+            ),
+        },
+        "git_commit": {
+            "description": "Permissioned git commit with a supplied message.",
+            "parameters": _object_parameters({"message": {"type": "string", "minLength": 1}}, ["message"]),
+        },
+        "command_modify": {
+            "description": "Run a modifying command only after an explicit host permission grant.",
+            "parameters": _object_parameters(
+                {
+                    "argv": _ARGV_PROPERTY,
+                    "cwd": {"type": "string", "description": "Optional workspace-relative working directory."},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 60},
+                },
+                ["argv"],
+            ),
+        },
+    }
+)
+
+STAGE119_DEFAULT_TOOL_NAMES = tuple(TOOL_REGISTRY.keys())
+
+
 def _request_to_dict(request: Any) -> dict[str, Any]:
     if isinstance(request, dict):
         return dict(request)

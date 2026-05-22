@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ast
+import datetime as dt
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -9,6 +12,11 @@ from html import unescape
 from pathlib import Path
 from typing import Any, Callable
 from urllib import error, parse, request
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path.
+    tomllib = None  # type: ignore[assignment]
 
 STAGE113_SCHEMA = "holo.stage113.agent_tool_executor.v1"
 
@@ -671,6 +679,626 @@ def _execute_progress_note(arguments: dict[str, Any], *, repo_root: str | Path |
     }
 
 
+def _retag(observation: dict[str, Any], tool_name: str) -> dict[str, Any]:
+    tagged = dict(observation)
+    tagged["tool"] = tool_name
+    return tagged
+
+
+def _raw_argv(arguments: dict[str, Any]) -> list[str]:
+    raw_argv = arguments.get("argv", [])
+    return [str(item) for item in list(raw_argv or []) if str(item).strip()] if isinstance(raw_argv, list) else []
+
+
+def _permission_granted(tool_name: str, arguments: dict[str, Any], permission_grants: Any) -> bool:
+    argv = _raw_argv(arguments)
+    operation = str(arguments.get("operation", "") or "").strip()
+    for raw_grant in list(permission_grants or []):
+        if isinstance(raw_grant, str):
+            if raw_grant in {tool_name, "*"}:
+                return True
+            continue
+        grant = dict(raw_grant) if isinstance(raw_grant, dict) else {}
+        granted_tool = str(grant.get("tool", "") or grant.get("name", "") or "").strip()
+        if granted_tool not in {tool_name, "*"}:
+            continue
+        granted_operation = str(grant.get("operation", "") or "").strip()
+        if granted_operation and granted_operation != "*" and granted_operation != operation:
+            continue
+        prefix = grant.get("argv_prefix")
+        if prefix is not None:
+            expected = [str(item) for item in list(prefix or []) if str(item).strip()] if isinstance(prefix, list) else []
+            if not expected or argv[: len(expected)] != expected:
+                continue
+        return True
+    return False
+
+
+def _permission_denied(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tool": tool_name,
+        "status": "rejected",
+        "summary": f"{tool_name} rejected: host_permission_required",
+        "data": {
+            "reason": "host_permission_required",
+            "required_permission": {
+                "tool": tool_name,
+                "operation": str(arguments.get("operation", "") or ""),
+                "argv_prefix": _raw_argv(arguments)[:2],
+            },
+        },
+    }
+
+
+def _execute_file_stat(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    path, path_error = _resolve_workspace_path(repo_root, arguments.get("path", ""))
+    if path_error:
+        return {
+            "tool": "file_stat",
+            "status": "rejected",
+            "summary": f"file stat rejected: {path_error}",
+            "data": {"reason": path_error},
+        }
+    if not path.exists():
+        return {
+            "tool": "file_stat",
+            "status": "empty",
+            "summary": f"file stat: missing {path.name}",
+            "data": {"path": str(path), "exists": False},
+        }
+    stat = path.stat()
+    return {
+        "tool": "file_stat",
+        "status": "ok",
+        "summary": f"file stat {path.name}: {'dir' if path.is_dir() else 'file'} {stat.st_size} bytes",
+        "data": {
+            "path": str(path),
+            "exists": True,
+            "type": "dir" if path.is_dir() else "file",
+            "size_bytes": int(stat.st_size),
+            "modified_at": dt.datetime.fromtimestamp(stat.st_mtime, tz=dt.timezone.utc).isoformat(),
+        },
+    }
+
+
+def _execute_directory_tree(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    path, path_error = _resolve_workspace_path(root, arguments.get("path", "."))
+    if path_error:
+        return {
+            "tool": "directory_tree",
+            "status": "rejected",
+            "summary": f"directory tree rejected: {path_error}",
+            "data": {"reason": path_error},
+        }
+    if not path.exists() or not path.is_dir():
+        return {
+            "tool": "directory_tree",
+            "status": "empty",
+            "summary": f"directory tree: not a directory {path.name}",
+            "data": {"path": str(path), "entries": []},
+        }
+    max_depth = _clamp_int(arguments.get("max_depth"), 2, 1, 5)
+    max_entries = _clamp_int(arguments.get("max_entries"), 40, 1, 120)
+    entries: list[dict[str, Any]] = []
+
+    def visit(current: Path, depth: int) -> None:
+        if len(entries) >= max_entries or depth > max_depth:
+            return
+        for item in sorted(current.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower())):
+            if item.name in {".git", "__pycache__"}:
+                continue
+            if len(entries) >= max_entries:
+                break
+            try:
+                relative = str(item.relative_to(root))
+            except ValueError:
+                continue
+            entries.append({"path": relative, "type": "dir" if item.is_dir() else "file", "depth": depth})
+            if item.is_dir():
+                visit(item, depth + 1)
+
+    visit(path, 1)
+    return {
+        "tool": "directory_tree",
+        "status": "ok" if entries else "empty",
+        "summary": _compact(f"directory tree: {len(entries)} entries under {path.name or '.'}", 420),
+        "data": {"path": str(path), "entries": entries, "truncated": len(entries) >= max_entries},
+    }
+
+
+def _execute_structured_read(arguments: dict[str, Any], *, repo_root: str | Path | None, tool_name: str) -> dict[str, Any]:
+    path, path_error = _resolve_workspace_path(repo_root, arguments.get("path", ""))
+    if path_error:
+        return {
+            "tool": tool_name,
+            "status": "rejected",
+            "summary": f"{tool_name} rejected: {path_error}",
+            "data": {"reason": path_error},
+        }
+    if not path.exists() or not path.is_file():
+        return {
+            "tool": tool_name,
+            "status": "error",
+            "summary": f"{tool_name}: not a file: {path.name}",
+            "data": {"path": str(path), "reason": "not_file"},
+        }
+    max_chars = _clamp_int(arguments.get("max_chars"), 6000, 1, 20000)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        if tool_name == "json_read":
+            decoded = json.loads(text)
+        elif tomllib is not None:
+            decoded = tomllib.loads(text)
+        else:
+            decoded = {}
+    except Exception as exc:  # noqa: BLE001 - parser diagnostics are returned to the agent.
+        return {
+            "tool": tool_name,
+            "status": "error",
+            "summary": _compact(f"{tool_name} parse error: {exc}", 420),
+            "data": {"path": str(path), "error": str(exc), "text": text[:max_chars]},
+        }
+    keys = sorted(str(key) for key in decoded.keys()) if isinstance(decoded, dict) else []
+    return {
+        "tool": tool_name,
+        "status": "ok",
+        "summary": _compact(f"{tool_name} {path.name}: keys={', '.join(keys[:12])}", 420),
+        "data": {
+            "path": str(path),
+            "keys": keys,
+            "value_type": type(decoded).__name__,
+            "text": text[:max_chars],
+            "truncated": len(text) > max_chars,
+        },
+    }
+
+
+def _execute_markdown_outline(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    path, path_error = _resolve_workspace_path(repo_root, arguments.get("path", ""))
+    if path_error:
+        return {
+            "tool": "markdown_outline",
+            "status": "rejected",
+            "summary": f"markdown outline rejected: {path_error}",
+            "data": {"reason": path_error},
+        }
+    if not path.exists() or not path.is_file():
+        return {
+            "tool": "markdown_outline",
+            "status": "error",
+            "summary": f"markdown outline: not a file: {path.name}",
+            "data": {"path": str(path), "outline": []},
+        }
+    max_results = _clamp_int(arguments.get("max_results"), 40, 1, 120)
+    outline: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        outline.append({"line": line_number, "level": len(match.group(1)), "title": match.group(2).strip()})
+        if len(outline) >= max_results:
+            break
+    return {
+        "tool": "markdown_outline",
+        "status": "ok" if outline else "empty",
+        "summary": _compact("markdown outline: " + " > ".join(item["title"] for item in outline[:8]), 420),
+        "data": {"path": str(path), "outline": outline},
+    }
+
+
+def _execute_repo_overview(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    max_results = _clamp_int(arguments.get("max_results"), 40, 1, 120)
+    entries = []
+    for item in sorted(root.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower()))[:max_results]:
+        if item.name == ".git":
+            continue
+        entries.append({"name": item.name, "type": "dir" if item.is_dir() else "file"})
+    git_summary = ""
+    if (root / ".git").exists():
+        try:
+            status, returncode, stdout, stderr = _run_bounded_command(["git", "status", "--short"], cwd=root, timeout_seconds=10)
+            git_summary = f"{status}:{returncode}:{stdout or stderr or 'clean'}"
+        except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+            git_summary = f"git_error:{exc}"
+    return {
+        "tool": "repo_overview",
+        "status": "ok",
+        "summary": _compact("repo overview: " + ", ".join(item["name"] for item in entries[:12]), 420),
+        "data": {"root": str(root), "entries": entries, "git_summary": git_summary},
+    }
+
+
+def _execute_test_discover(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    path, path_error = _resolve_workspace_path(root, arguments.get("path", "tests"))
+    if path_error:
+        return {
+            "tool": "test_discover",
+            "status": "rejected",
+            "summary": f"test discover rejected: {path_error}",
+            "data": {"reason": path_error},
+        }
+    if not path.exists():
+        path = root
+    glob_pattern = str(arguments.get("glob", "") or "test_*.py")
+    max_results = _clamp_int(arguments.get("max_results"), 60, 1, 120)
+    files = []
+    search_root = path if path.is_dir() else path.parent
+    for file_path in sorted(search_root.rglob(glob_pattern))[:max_results]:
+        if file_path.is_file():
+            files.append(str(file_path.relative_to(root)))
+    return {
+        "tool": "test_discover",
+        "status": "ok" if files else "empty",
+        "summary": _compact(f"test discover: {len(files)} files", 420),
+        "data": {"files": files},
+    }
+
+
+def _execute_python_module_check(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    path, path_error = _resolve_workspace_path(repo_root, arguments.get("path", ""))
+    if path_error:
+        return {
+            "tool": "python_module_check",
+            "status": "rejected",
+            "summary": f"python module check rejected: {path_error}",
+            "data": {"reason": path_error},
+        }
+    if not path.exists() or not path.is_file():
+        return {
+            "tool": "python_module_check",
+            "status": "error",
+            "summary": f"python module check: not a file: {path.name}",
+            "data": {"path": str(path), "reason": "not_file"},
+        }
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        ast.parse(text, filename=str(path))
+    except SyntaxError as exc:
+        return {
+            "tool": "python_module_check",
+            "status": "failed",
+            "summary": f"python module check failed: line {exc.lineno}: {exc.msg}",
+            "data": {"path": str(path), "line": exc.lineno, "error": exc.msg},
+        }
+    return {
+        "tool": "python_module_check",
+        "status": "ok",
+        "summary": f"python module check ok: {path.name}",
+        "data": {"path": str(path)},
+    }
+
+
+def _execute_runtime_health(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    state_dir = root / ".holo_runtime"
+    health = {
+        "repo_root": str(root),
+        "python": sys.version.split()[0],
+        "state_dir_exists": state_dir.exists(),
+        "logs_dir_exists": (state_dir / "logs").exists(),
+        "wechat_touched": False,
+    }
+    return {
+        "tool": "runtime_health",
+        "status": "ok",
+        "summary": "runtime health: local paths inspected; live transports untouched",
+        "data": health,
+    }
+
+
+def _execute_env_read(arguments: dict[str, Any]) -> dict[str, Any]:
+    raw_names = arguments.get("names", [])
+    names = [str(item).strip() for item in list(raw_names or []) if str(item).strip()] if isinstance(raw_names, list) else []
+    include_values = bool(arguments.get("include_values", False))
+    rows = []
+    for name in names[:20]:
+        value = os.environ.get(name)
+        secret_like = any(token in name.upper() for token in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))
+        rows.append(
+            {
+                "name": name,
+                "is_set": value is not None,
+                "value": _compact(value, 200) if include_values and value is not None and not secret_like else "",
+                "redacted": value is not None and (secret_like or not include_values),
+            }
+        )
+    return {
+        "tool": "env_read",
+        "status": "ok",
+        "summary": _compact("env read: " + ", ".join(f"{row['name']}={'set' if row['is_set'] else 'unset'}" for row in rows), 420),
+        "data": {"variables": rows},
+    }
+
+
+def _execute_dependency_check(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    max_results = _clamp_int(arguments.get("max_results"), 20, 1, 120)
+    patterns = ["pyproject.toml", "requirements*.txt", "package.json", "uv.lock", "poetry.lock"]
+    manifests: list[dict[str, Any]] = []
+    for pattern in patterns:
+        for file_path in sorted(root.glob(pattern)):
+            if len(manifests) >= max_results:
+                break
+            manifests.append({"path": str(file_path.relative_to(root)), "size_bytes": file_path.stat().st_size})
+    return {
+        "tool": "dependency_check",
+        "status": "ok" if manifests else "empty",
+        "summary": _compact(f"dependency check: {len(manifests)} manifests", 420),
+        "data": {"manifests": manifests},
+    }
+
+
+def _execute_time_now(arguments: dict[str, Any]) -> dict[str, Any]:
+    now_local = dt.datetime.now().astimezone()
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    return {
+        "tool": "time_now",
+        "status": "ok",
+        "summary": f"time now: {now_local.isoformat()}",
+        "data": {"local": now_local.isoformat(), "utc": now_utc.isoformat()},
+    }
+
+
+def _execute_path_resolve(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    path, path_error = _resolve_workspace_path(repo_root, arguments.get("path", ""))
+    return {
+        "tool": "path_resolve",
+        "status": "rejected" if path_error else "ok",
+        "summary": f"path resolve: {path_error or path}",
+        "data": {"path": str(path), "inside_workspace": not bool(path_error), "reason": path_error},
+    }
+
+
+def _execute_workspace_snapshot(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    path, path_error = _resolve_workspace_path(root, arguments.get("path", "."))
+    if path_error:
+        return {
+            "tool": "workspace_snapshot",
+            "status": "rejected",
+            "summary": f"workspace snapshot rejected: {path_error}",
+            "data": {"reason": path_error},
+        }
+    max_entries = _clamp_int(arguments.get("max_entries"), 40, 1, 120)
+    files = 0
+    dirs = 0
+    total_bytes = 0
+    samples: list[str] = []
+    for item in path.rglob("*") if path.is_dir() else []:
+        if ".git" in item.parts or "__pycache__" in item.parts:
+            continue
+        if item.is_dir():
+            dirs += 1
+        elif item.is_file():
+            files += 1
+            try:
+                total_bytes += item.stat().st_size
+            except OSError:
+                pass
+        if len(samples) < max_entries:
+            try:
+                samples.append(str(item.relative_to(root)))
+            except ValueError:
+                pass
+    return {
+        "tool": "workspace_snapshot",
+        "status": "ok",
+        "summary": f"workspace snapshot: {files} files, {dirs} dirs",
+        "data": {"path": str(path), "files": files, "dirs": dirs, "total_bytes": total_bytes, "samples": samples},
+    }
+
+
+def _safe_git_relpaths(repo_root: str | Path | None, raw_paths: Any) -> tuple[list[str], str]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    paths = [str(item) for item in list(raw_paths or []) if str(item).strip()] if isinstance(raw_paths, list) else []
+    if not paths:
+        return [], "missing_paths"
+    relpaths: list[str] = []
+    for raw_path in paths[:40]:
+        resolved, path_error = _resolve_workspace_path(root, raw_path)
+        if path_error or _is_protected_workspace_path(resolved, repo_root=root):
+            return [], path_error or "protected_workspace_path"
+        relpaths.append(str(resolved.relative_to(root)))
+    return relpaths, ""
+
+
+def _execute_git_stage(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    relpaths, relpath_error = _safe_git_relpaths(root, arguments.get("paths", []))
+    if relpath_error:
+        return {
+            "tool": "git_stage",
+            "status": "rejected",
+            "summary": f"git stage rejected: {relpath_error}",
+            "data": {"reason": relpath_error},
+        }
+    try:
+        status, returncode, stdout, stderr = _run_bounded_command(["git", "add", "--", *relpaths], cwd=root, timeout_seconds=20)
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return {
+            "tool": "git_stage",
+            "status": "error",
+            "summary": _compact(f"git stage error: {exc}", 420),
+            "data": {"paths": relpaths, "error": str(exc)},
+        }
+    return {
+        "tool": "git_stage",
+        "status": status,
+        "summary": _compact(f"git stage exit={returncode}: {stdout or stderr or ', '.join(relpaths)}", 520),
+        "data": {"paths": relpaths, "returncode": returncode, "stdout": stdout, "stderr": stderr},
+    }
+
+
+def _execute_git_commit(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    message = str(arguments.get("message", "") or "").strip()
+    if not message:
+        return {
+            "tool": "git_commit",
+            "status": "rejected",
+            "summary": "git commit rejected: missing message",
+            "data": {"reason": "missing_message"},
+        }
+    try:
+        status, returncode, stdout, stderr = _run_bounded_command(["git", "commit", "-m", message], cwd=root, timeout_seconds=40)
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return {
+            "tool": "git_commit",
+            "status": "error",
+            "summary": _compact(f"git commit error: {exc}", 420),
+            "data": {"error": str(exc)},
+        }
+    return {
+        "tool": "git_commit",
+        "status": status,
+        "summary": _compact(f"git commit exit={returncode}: {stdout or stderr or message}", 520),
+        "data": {"returncode": returncode, "stdout": stdout, "stderr": stderr},
+    }
+
+
+def _execute_command_modify(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    argv = _raw_argv(arguments)
+    if len(argv) >= 3 and argv[0].lower() == "git" and argv[1] == "add":
+        return _retag(_execute_git_stage({"paths": argv[2:]}, repo_root=repo_root), "command_modify")
+    if len(argv) >= 4 and argv[0].lower() == "git" and argv[1] == "commit" and argv[2] == "-m":
+        return _retag(_execute_git_commit({"message": argv[3]}, repo_root=repo_root), "command_modify")
+    if len(argv) >= 4 and argv[0].lower() == "git" and argv[1:3] == ["restore", "--staged"]:
+        root = Path(repo_root or Path.cwd()).resolve()
+        relpaths, relpath_error = _safe_git_relpaths(root, argv[3:])
+        if relpath_error:
+            return {
+                "tool": "command_modify",
+                "status": "rejected",
+                "summary": f"command modify rejected: {relpath_error}",
+                "data": {"reason": relpath_error, "argv": argv},
+            }
+        try:
+            status, returncode, stdout, stderr = _run_bounded_command(
+                ["git", "restore", "--staged", "--", *relpaths],
+                cwd=root,
+                timeout_seconds=20,
+            )
+        except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+            return {
+                "tool": "command_modify",
+                "status": "error",
+                "summary": _compact(f"command modify error: {exc}", 420),
+                "data": {"argv": argv, "error": str(exc)},
+            }
+        return {
+            "tool": "command_modify",
+            "status": status,
+            "summary": _compact(f"command modify exit={returncode}: {stdout or stderr or ', '.join(relpaths)}", 520),
+            "data": {"argv": argv, "returncode": returncode, "stdout": stdout, "stderr": stderr},
+        }
+    return {
+        "tool": "command_modify",
+        "status": "rejected",
+        "summary": "command modify rejected: command_not_allowlisted",
+        "data": {"argv": argv, "reason": "command_not_allowlisted"},
+    }
+
+
+def _execute_stage119_tool(name: str, arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any] | None:
+    if name == "file_read":
+        return _retag(_execute_workspace_inspect({"operation": "read_file", **arguments}, repo_root=repo_root), name)
+    if name == "file_list":
+        return _retag(_execute_workspace_inspect({"operation": "list_dir", **arguments}, repo_root=repo_root), name)
+    if name == "file_search":
+        return _retag(_execute_workspace_inspect({"operation": "search_text", **arguments}, repo_root=repo_root), name)
+    if name == "file_stat":
+        return _execute_file_stat(arguments, repo_root=repo_root)
+    if name == "directory_tree":
+        return _execute_directory_tree(arguments, repo_root=repo_root)
+    if name in {"json_read", "toml_read"}:
+        return _execute_structured_read(arguments, repo_root=repo_root, tool_name=name)
+    if name == "markdown_outline":
+        return _execute_markdown_outline(arguments, repo_root=repo_root)
+    if name == "symbol_search":
+        payload = {"operation": "search_text", "glob": "**/*.py", **arguments}
+        return _retag(_execute_workspace_inspect(payload, repo_root=repo_root), name)
+    if name == "repo_overview":
+        return _execute_repo_overview(arguments, repo_root=repo_root)
+    if name == "git_status":
+        return _retag(_execute_git_inspect({"operation": "status_short", **arguments}, repo_root=repo_root), name)
+    if name == "git_diff":
+        operation = "diff_check" if str(arguments.get("operation", "") or "").strip() == "check" else "diff_stat"
+        return _retag(_execute_git_inspect({**arguments, "operation": operation}, repo_root=repo_root), name)
+    if name == "git_log":
+        return _retag(_execute_git_inspect({"operation": "log_latest"}, repo_root=repo_root), name)
+    if name == "test_discover":
+        return _execute_test_discover(arguments, repo_root=repo_root)
+    if name == "python_module_check":
+        return _execute_python_module_check(arguments, repo_root=repo_root)
+    if name == "config_inspect":
+        payload = {"operation": "read_file", "path": ".holo_host.toml", **arguments}
+        return _retag(_execute_workspace_inspect(payload, repo_root=repo_root), name)
+    if name == "runtime_health":
+        return _execute_runtime_health(arguments, repo_root=repo_root)
+    if name == "memory_warehouse_search":
+        root = Path(repo_root or Path.cwd()).resolve()
+        warehouse = root / ".holo_runtime" / "memory-warehouse-current"
+        if not warehouse.exists():
+            return {
+                "tool": name,
+                "status": "empty",
+                "summary": "memory warehouse search: warehouse missing",
+                "data": {"matches": []},
+            }
+        return _retag(
+            _execute_workspace_inspect(
+                {
+                    "operation": "search_text",
+                    "path": str(warehouse.relative_to(root)),
+                    "glob": "**/*",
+                    **arguments,
+                },
+                repo_root=repo_root,
+            ),
+            name,
+        )
+    if name == "doc_lookup":
+        return _retag(
+            _execute_workspace_inspect({"operation": "search_text", "path": "docs", "glob": "**/*.md", **arguments}, repo_root=repo_root),
+            name,
+        )
+    if name == "artifact_list":
+        return _retag(_execute_workspace_inspect({"operation": "list_dir", "path": "artifacts", **arguments}, repo_root=repo_root), name)
+    if name == "env_read":
+        return _execute_env_read(arguments)
+    if name == "dependency_check":
+        return _execute_dependency_check(arguments, repo_root=repo_root)
+    if name == "time_now":
+        return _execute_time_now(arguments)
+    if name == "path_resolve":
+        return _execute_path_resolve(arguments, repo_root=repo_root)
+    if name == "workspace_snapshot":
+        return _execute_workspace_snapshot(arguments, repo_root=repo_root)
+    if name == "command_run":
+        return _retag(_execute_local_command(arguments, repo_root=repo_root), name)
+    if name == "file_write":
+        payload = {"operation": "write_file", **arguments}
+        return _retag(_execute_workspace_edit(payload, repo_root=repo_root), name)
+    if name == "file_replace":
+        payload = {"operation": "replace_text", **arguments}
+        return _retag(_execute_workspace_edit(payload, repo_root=repo_root), name)
+    if name == "file_append":
+        payload = {"operation": "append_text", **arguments}
+        return _retag(_execute_workspace_edit(payload, repo_root=repo_root), name)
+    if name == "note_append":
+        return _retag(_execute_progress_note(arguments, repo_root=repo_root), name)
+    if name == "git_stage":
+        return _execute_git_stage(arguments, repo_root=repo_root)
+    if name == "git_commit":
+        return _execute_git_commit(arguments, repo_root=repo_root)
+    if name == "command_modify":
+        return _execute_command_modify(arguments, repo_root=repo_root)
+    return None
+
+
 def _call_id(call: dict[str, Any], index: int) -> str:
     return str(call.get("id", "") or f"tool_call_{index + 1}")
 
@@ -683,6 +1311,7 @@ def execute_stage113_agent_tools(
     memory_corpus_path: str | Path | None = None,
     repo_root: str | Path | None = None,
     network_enabled: bool = False,
+    permission_grants: Any = None,
 ) -> dict[str, Any]:
     corpus = memory_corpus if memory_corpus is not None else _load_memory_corpus(memory_corpus_path, repo_root=repo_root)
     observations: list[dict[str, Any]] = []
@@ -714,16 +1343,37 @@ def execute_stage113_agent_tools(
         elif name == "local_command":
             observation = _execute_local_command(arguments, repo_root=repo_root)
         elif name == "workspace_edit":
-            observation = _execute_workspace_edit(arguments, repo_root=repo_root)
+            if not _permission_granted(name, arguments, permission_grants):
+                observation = _permission_denied(name, arguments)
+            else:
+                observation = _execute_workspace_edit(arguments, repo_root=repo_root)
         elif name == "git_inspect":
             observation = _execute_git_inspect(arguments, repo_root=repo_root)
         elif name == "test_runner":
             observation = _execute_test_runner(arguments, repo_root=repo_root)
         elif name == "progress_note":
-            observation = _execute_progress_note(arguments, repo_root=repo_root)
+            if not _permission_granted(name, arguments, permission_grants):
+                observation = _permission_denied(name, arguments)
+            else:
+                observation = _execute_progress_note(arguments, repo_root=repo_root)
         else:
-            skipped.append({"provider_call_id": call_id, "tool": name, "reason": "unknown_tool"})
-            continue
+            permissioned_tools = {
+                "file_write",
+                "file_replace",
+                "file_append",
+                "note_append",
+                "git_stage",
+                "git_commit",
+                "command_modify",
+            }
+            if name in permissioned_tools and not _permission_granted(name, arguments, permission_grants):
+                observation = _permission_denied(name, arguments)
+            else:
+                stage119_observation = _execute_stage119_tool(name, arguments, repo_root=repo_root)
+                if stage119_observation is None:
+                    skipped.append({"provider_call_id": call_id, "tool": name, "reason": "unknown_tool"})
+                    continue
+                observation = stage119_observation
         observation["provider_call_id"] = call_id
         observations.append(observation)
     report_id = f"stage113:{_stable_digest([item.get('provider_call_id', '') for item in observations], [item.get('provider_call_id', '') for item in skipped])}"
@@ -742,6 +1392,7 @@ def execute_stage113_agent_tools(
             "executor": "holo_local_agent",
             "provider_may_execute_tools": False,
             "executed_tools_are_allowlisted": True,
+            "permission_required_for_modifying_tools": True,
             "network_enabled": bool(network_enabled),
         },
         "reentry_contract": {

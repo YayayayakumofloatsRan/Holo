@@ -183,6 +183,21 @@ Every provider result must expose enough data to record:
     broad shell access
   - `progress_note` appends short local progress notes under
     `docs/agent_progress_notes`
+- common agent tool libraries must use Stage119:
+  - the ordinary provider tool surface includes 41 tools, covering memory,
+    lookup, workspace reads, file metadata, JSON/TOML/Markdown inspection, git
+    inspection, tests, config/runtime health, docs/artifacts, env status,
+    dependency manifests, path resolution, snapshots, and command-line
+    affordances
+  - modifying tools require explicit local host permission grants before
+    execution: `workspace_edit`, `progress_note`, `file_write`, `file_replace`,
+    `file_append`, `note_append`, `git_stage`, `git_commit`, and
+    `command_modify`
+  - permission grants are passed through provider task metadata as
+    `tool_permission_grants` or `approved_tool_permissions`
+  - command tools must remain argv-only; `command_run` is read-only and
+    allowlisted, while `command_modify` is permissioned and currently limited to
+    bounded git mutation commands
 
 ## 7. Configuration Surface
 

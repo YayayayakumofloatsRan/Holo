@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import statistics
 import subprocess
 import sys
@@ -9010,6 +9011,7 @@ CHAT_HELP = """Commands:
   /recall <query>        trace hybrid recall for a query
   /activation            show activation state for this CLI thread
   /snapshot [label]      create a memory snapshot
+  /grant <tool> [prefix] grant one modifying tool for the next turn
   /json on|off           show or hide raw reply JSON after each turn
   /quit, /exit           leave the shell
 
@@ -9019,7 +9021,15 @@ privilege operation.
 """
 
 
-def _chat_payload(*, text: str, channel: str, thread_key: str, chat_name: str, sender: str) -> dict[str, Any]:
+def _chat_payload(
+    *,
+    text: str,
+    channel: str,
+    thread_key: str,
+    chat_name: str,
+    sender: str,
+    tool_permission_grants: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     now_ms = int(time.time() * 1000)
     return {
         "chat_name": chat_name,
@@ -9041,6 +9051,7 @@ def _chat_payload(*, text: str, channel: str, thread_key: str, chat_name: str, s
                 "memory_admin": False,
                 "subject_settings": False,
             },
+            "tool_permission_grants": list(tool_permission_grants or []),
         },
     }
 
@@ -9116,10 +9127,20 @@ def command_chat(
 ) -> int:
     service: HoloReplyService | None = None
     show_json = bool(json_output)
+    pending_tool_permission_grants: list[dict[str, Any]] = []
 
     def send_turn(text: str) -> tuple[dict[str, Any], str]:
-        nonlocal service
-        payload = _chat_payload(text=text, channel=channel, thread_key=thread_key, chat_name=chat_name, sender=sender)
+        nonlocal pending_tool_permission_grants, service
+        grants = list(pending_tool_permission_grants)
+        pending_tool_permission_grants = []
+        payload = _chat_payload(
+            text=text,
+            channel=channel,
+            thread_key=thread_key,
+            chat_name=chat_name,
+            sender=sender,
+            tool_permission_grants=grants,
+        )
         live_payload = _live_api_request(config_path, method="POST", path="/reply", payload=payload, timeout=timeout)
         if live_payload is not None:
             return live_payload, "live_http"
@@ -9139,7 +9160,7 @@ def command_chat(
         return result, "local_process"
 
     def run_slash(command_line: str) -> bool:
-        nonlocal show_json
+        nonlocal pending_tool_permission_grants, show_json
         command, _, rest = command_line.partition(" ")
         command = command.strip().lower()
         rest = rest.strip()
@@ -9222,6 +9243,21 @@ def command_chat(
         if command == "/snapshot":
             label = rest or "holo-cli"
             _print_chat_json(command_snapshot_memory_payload(config_path, path=None, label=label, query=None))
+            return True
+        if command == "/grant":
+            try:
+                parts = shlex.split(rest)
+            except ValueError as exc:
+                print(f"usage: /grant <tool> [argv prefix] ({exc})")
+                return True
+            if not parts:
+                print("usage: /grant <tool> [argv prefix]")
+                return True
+            grant: dict[str, Any] = {"tool": parts[0]}
+            if len(parts) > 1:
+                grant["argv_prefix"] = parts[1:]
+            pending_tool_permission_grants.append(grant)
+            print(f"grant queued for next turn: {json.dumps(grant, ensure_ascii=False)}")
             return True
         if command in {"/reset", "/reset-memory"}:
             print("reset-memory is not available inside interactive chat. Exit and run the WSL-only reset-memory command explicitly.")

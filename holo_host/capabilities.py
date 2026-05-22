@@ -169,6 +169,12 @@ class CapabilityBroker:
             "tool_context_lines": tool_context_lines,
             "tool_requests": [request.to_dict() for request in tool_requests],
             "attachment_summaries": attachment_summaries,
+            "tool_permission_grants": list(meta.get("tool_permission_grants", []) or [])
+            if isinstance(meta.get("tool_permission_grants", []), list)
+            else [],
+            "approved_tool_permissions": list(meta.get("approved_tool_permissions", []) or [])
+            if isinstance(meta.get("approved_tool_permissions", []), list)
+            else [],
         }
 
     def execute_external_lookup(self, text: str) -> dict[str, Any]:

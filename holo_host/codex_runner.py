@@ -756,6 +756,11 @@ class DeepSeekProvider(ProcessorProvider):
                 memory_corpus_path=request.metadata.get("tool_memory_corpus_path"),
                 repo_root=runner.config.runtime.repo_root,
                 network_enabled=bool(runner.config.runtime.network_enabled),
+                permission_grants=(
+                    request.metadata.get("tool_permission_grants")
+                    or request.metadata.get("approved_tool_permissions")
+                    or []
+                ),
             )
             if budget_skipped:
                 tool_report["skipped"] = list(tool_report.get("skipped", []) or []) + budget_skipped

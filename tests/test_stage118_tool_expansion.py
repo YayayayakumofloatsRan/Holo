@@ -142,6 +142,10 @@ def test_stage113_executes_workspace_edit_and_progress_note(tmp_path: Path) -> N
         ],
         repo_root=tmp_path,
         network_enabled=False,
+        permission_grants=[
+            {"tool": "workspace_edit"},
+            {"tool": "progress_note"},
+        ],
     )
 
     assert report["summary"]["executed_count"] == 3
@@ -243,6 +247,7 @@ def test_deepseek_provider_can_chain_edit_test_and_git_tools() -> None:
                                 {"name": "test_runner", "reason": "run tests", "payload": {}},
                                 {"name": "git_inspect", "reason": "inspect git", "payload": {}},
                             ],
+                            "tool_permission_grants": [{"tool": "workspace_edit"}],
                         },
                     ),
                     spec={"output_schema": "plain_text"},
