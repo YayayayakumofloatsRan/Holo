@@ -296,6 +296,14 @@ def _sum_usage_payloads(*usages: dict[str, int | bool]) -> dict[str, int | bool]
     }
 
 
+def _bounded_int(value: Any, *, default: int, lower: int, upper: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(lower, min(parsed, upper))
+
+
 class ProcessorProvider:
     name = "provider"
 
@@ -623,25 +631,71 @@ class DeepSeekProvider(ProcessorProvider):
             raise RuntimeError("DeepSeek returned a non-object response")
         return decoded
 
-    def _tool_observation_messages(self, tool_report: dict[str, Any]) -> list[dict[str, Any]]:
+    def _tool_observation_messages(self, tool_report: dict[str, Any], tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
-        for observation in list(tool_report.get("observations", []) or []):
-            if not isinstance(observation, dict):
+        observations = {
+            str(observation.get("provider_call_id", "") or ""): dict(observation)
+            for observation in list(tool_report.get("observations", []) or [])
+            if isinstance(observation, dict)
+        }
+        skipped = {
+            str(item.get("provider_call_id", "") or ""): dict(item)
+            for item in list(tool_report.get("skipped", []) or [])
+            if isinstance(item, dict)
+        }
+        for call in tool_calls:
+            call_id = str(call.get("id", "") or "")
+            if not call_id:
                 continue
-            content = {
-                "tool": str(observation.get("tool", "") or ""),
-                "status": str(observation.get("status", "") or ""),
-                "summary": str(observation.get("summary", "") or ""),
-                "data": dict(observation.get("data", {}) or {}),
-            }
+            if call_id in observations:
+                observation = observations[call_id]
+                content = {
+                    "tool": str(observation.get("tool", "") or ""),
+                    "status": str(observation.get("status", "") or ""),
+                    "summary": str(observation.get("summary", "") or ""),
+                    "data": dict(observation.get("data", {}) or {}),
+                }
+            else:
+                rejection = skipped.get(call_id, {})
+                reason = str(rejection.get("reason", "") or call.get("error", "") or "not_executed")
+                content = {
+                    "tool": str(rejection.get("tool", "") or call.get("name", "") or ""),
+                    "status": "rejected",
+                    "summary": f"tool rejected: {reason}",
+                    "data": {"reason": reason},
+                }
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": str(observation.get("provider_call_id", "") or ""),
+                    "tool_call_id": call_id,
                     "content": json.dumps(content, ensure_ascii=False, sort_keys=True),
                 }
             )
         return messages
+
+    def _usage_for_decoded(
+        self,
+        decoded: dict[str, Any],
+        *,
+        prompt_basis: Any,
+        completion_text: str,
+    ) -> dict[str, int | bool]:
+        usage = _coerce_usage_payload(decoded.get("usage"))
+        if usage["total_tokens"]:
+            return usage
+        prompt_text = (
+            json.dumps(prompt_basis, ensure_ascii=False, sort_keys=True)
+            if not isinstance(prompt_basis, str)
+            else prompt_basis
+        )
+        prompt_tokens = _estimate_text_tokens(prompt_text)
+        completion_tokens = _estimate_text_tokens(completion_text)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "estimated": True,
+        }
 
     def _maybe_run_agent_tool_loop(
         self,
@@ -657,53 +711,109 @@ class DeepSeekProvider(ProcessorProvider):
     ) -> tuple[dict[str, Any], dict[str, int | bool], dict[str, Any]]:
         if not bool(request.metadata.get("auto_execute_provider_tools", False)):
             return first_decoded, first_usage, {}
-        tool_calls = parse_provider_tool_calls(first_decoded)
-        if not tool_calls:
+        initial_tool_calls = parse_provider_tool_calls(first_decoded)
+        if not initial_tool_calls:
             return first_decoded, first_usage, {}
         external_lookup_fn = request.metadata.get("external_lookup_fn")
         if not callable(external_lookup_fn):
             external_lookup_fn = None
-        tool_report = execute_stage113_agent_tools(
-            tool_calls,
-            external_lookup_fn=external_lookup_fn,
-            memory_corpus=request.metadata.get("tool_memory_corpus"),
-            memory_corpus_path=request.metadata.get("tool_memory_corpus_path"),
-            repo_root=runner.config.runtime.repo_root,
-            network_enabled=bool(runner.config.runtime.network_enabled),
-        )
-        tool_messages = self._tool_observation_messages(tool_report)
-        loop_metadata = {
-            "executed_count": int(tool_report.get("summary", {}).get("executed_count", 0) or 0),
-            "skipped_count": int(tool_report.get("summary", {}).get("skipped_count", 0) or 0),
-            "observation_summary": str(tool_report.get("summary", {}).get("observation_summary", "") or ""),
-            "final_request_sent": False,
-            "report_id": str(tool_report.get("report_id", "") or ""),
-        }
-        if not tool_messages:
-            return first_decoded, first_usage, loop_metadata
+        max_rounds = _bounded_int(request.metadata.get("max_provider_tool_rounds"), default=4, lower=1, upper=8)
+        max_tool_calls = _bounded_int(request.metadata.get("max_provider_tool_calls"), default=16, lower=1, upper=64)
+        messages = list(payload.get("messages", []) or [])
+        current_decoded = first_decoded
+        current_message = dict(first_message)
+        usage = dict(first_usage)
+        rounds: list[dict[str, Any]] = []
+        executed_count = 0
+        skipped_count = 0
+        total_tool_calls = 0
+        final_request_sent = False
+        exhausted = False
 
-        assistant_message = {
-            "role": "assistant",
-            "content": str(first_message.get("content", "") or ""),
-            "tool_calls": list(first_message.get("tool_calls", []) or []),
-        }
-        followup_payload = dict(payload)
-        followup_payload["messages"] = list(payload.get("messages", []) or []) + [assistant_message] + tool_messages
-        followup_payload["tool_choice"] = "none"
-        final_decoded = self._post_json(self._completion_url(runner), api_key, followup_payload, timeout_seconds)
-        final_usage = _coerce_usage_payload(final_decoded.get("usage"))
-        if not final_usage["total_tokens"]:
-            final_message = self._first_choice_message(final_decoded)
-            final_text = str(final_message.get("content", "") or "").strip()
-            final_usage = {
-                "prompt_tokens": _estimate_text_tokens(json.dumps(followup_payload.get("messages", []), ensure_ascii=False)),
-                "completion_tokens": _estimate_text_tokens(final_text),
-                "total_tokens": _estimate_text_tokens(json.dumps(followup_payload.get("messages", []), ensure_ascii=False))
-                + _estimate_text_tokens(final_text),
-                "estimated": True,
+        for round_index in range(max_rounds):
+            tool_calls = parse_provider_tool_calls(current_decoded)
+            if not tool_calls:
+                break
+            if total_tool_calls >= max_tool_calls:
+                exhausted = True
+                break
+            remaining_calls = max_tool_calls - total_tool_calls
+            active_tool_calls = tool_calls[:remaining_calls]
+            budget_skipped = [
+                {
+                    "provider_call_id": str(call.get("id", "") or ""),
+                    "tool": str(call.get("name", "") or ""),
+                    "reason": "tool_call_budget_exceeded",
+                }
+                for call in tool_calls[remaining_calls:]
+            ]
+            if budget_skipped:
+                exhausted = True
+            tool_report = execute_stage113_agent_tools(
+                active_tool_calls,
+                external_lookup_fn=external_lookup_fn,
+                memory_corpus=request.metadata.get("tool_memory_corpus"),
+                memory_corpus_path=request.metadata.get("tool_memory_corpus_path"),
+                repo_root=runner.config.runtime.repo_root,
+                network_enabled=bool(runner.config.runtime.network_enabled),
+            )
+            if budget_skipped:
+                tool_report["skipped"] = list(tool_report.get("skipped", []) or []) + budget_skipped
+                summary = dict(tool_report.get("summary", {}) or {})
+                summary["skipped_count"] = int(summary.get("skipped_count", 0) or 0) + len(budget_skipped)
+                tool_report["summary"] = summary
+            tool_messages = self._tool_observation_messages(tool_report, active_tool_calls + tool_calls[remaining_calls:])
+            round_executed = int(tool_report.get("summary", {}).get("executed_count", 0) or 0)
+            round_skipped = int(tool_report.get("summary", {}).get("skipped_count", 0) or 0)
+            executed_count += round_executed
+            skipped_count += round_skipped
+            total_tool_calls += len(tool_calls)
+            rounds.append(
+                {
+                    "round": round_index + 1,
+                    "tool_names": [str(call.get("name", "") or "") for call in tool_calls],
+                    "executed_count": round_executed,
+                    "skipped_count": round_skipped,
+                    "observation_summary": str(tool_report.get("summary", {}).get("observation_summary", "") or ""),
+                }
+            )
+            if not tool_messages:
+                break
+
+            assistant_message = {
+                "role": "assistant",
+                "content": str(current_message.get("content", "") or ""),
+                "tool_calls": list(current_message.get("tool_calls", []) or []),
             }
-        loop_metadata["final_request_sent"] = True
-        return final_decoded, _sum_usage_payloads(first_usage, final_usage), loop_metadata
+            messages = messages + [assistant_message] + tool_messages
+            followup_payload = dict(payload)
+            followup_payload["messages"] = messages
+            exhausted = exhausted or round_index + 1 >= max_rounds or total_tool_calls >= max_tool_calls
+            followup_payload["tool_choice"] = "none" if exhausted else str(payload.get("tool_choice", "auto") or "auto")
+            current_decoded = self._post_json(self._completion_url(runner), api_key, followup_payload, timeout_seconds)
+            final_request_sent = True
+            current_message = self._first_choice_message(current_decoded)
+            completion_text = str(current_message.get("content", "") or "").strip()
+            next_usage = self._usage_for_decoded(
+                current_decoded,
+                prompt_basis=followup_payload.get("messages", []),
+                completion_text=completion_text,
+            )
+            usage = _sum_usage_payloads(usage, next_usage)
+
+        loop_metadata = {
+            "round_count": len(rounds),
+            "rounds": rounds,
+            "executed_count": executed_count,
+            "skipped_count": skipped_count,
+            "tool_call_count": total_tool_calls,
+            "max_rounds": max_rounds,
+            "max_tool_calls": max_tool_calls,
+            "final_request_sent": False,
+            "exhausted": exhausted,
+        }
+        loop_metadata["final_request_sent"] = final_request_sent
+        return current_decoded, usage, loop_metadata
 
     def _first_choice_message(self, decoded: dict[str, Any]) -> dict[str, Any]:
         choices = list(decoded.get("choices", []) or [])
@@ -748,14 +858,7 @@ class DeepSeekProvider(ProcessorProvider):
         text = str(message.get("content", "") or "").strip()
         initial_tool_calls = parse_provider_tool_calls(first_decoded)
         initial_finish_reason = str(first_choice.get("finish_reason", "") or "")
-        usage = _coerce_usage_payload(decoded.get("usage"))
-        if not usage["total_tokens"]:
-            usage = {
-                "prompt_tokens": _estimate_text_tokens(request.prompt),
-                "completion_tokens": _estimate_text_tokens(text),
-                "total_tokens": _estimate_text_tokens(request.prompt) + _estimate_text_tokens(text),
-                "estimated": True,
-            }
+        usage = self._usage_for_decoded(decoded, prompt_basis=request.prompt, completion_text=text)
         decoded, usage, agent_tool_loop = self._maybe_run_agent_tool_loop(
             runner,
             request,

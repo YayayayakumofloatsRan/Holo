@@ -134,7 +134,8 @@ def test_deepseek_provider_executes_tool_call_and_requests_final_reply() -> None
         assert messages[1]["tool_calls"][0]["id"] == "call_memory_1"
         assert messages[2]["tool_call_id"] == "call_memory_1"
         assert "provider packet continuity" in messages[2]["content"]
-        assert captured_payloads[1]["tool_choice"] == "none"
+        assert captured_payloads[1]["tool_choice"] == "auto"
+        assert result.metadata["agent_tool_loop"]["round_count"] == 1
         assert result.metadata["agent_tool_loop"]["executed_count"] == 1
         assert result.metadata["agent_tool_loop"]["final_request_sent"] is True
         assert result.metadata["usage"]["total_tokens"] == 83

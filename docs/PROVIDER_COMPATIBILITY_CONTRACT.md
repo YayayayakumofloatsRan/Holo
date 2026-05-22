@@ -148,11 +148,20 @@ Every provider result must expose enough data to record:
   - ordinary Holo chat enables provider tool schemas by default
   - `auto_execute_provider_tools=true` lets the provider propose allowlisted
     calls, but execution still happens only inside Holo
-  - the DeepSeek provider must send a second `chat/completions` packet with
+  - the DeepSeek provider must send follow-up `chat/completions` packets with
     the original assistant `tool_calls` plus local `tool` observations before
     committing the user-facing final reply
-  - combined usage accounting must include both the proposal packet and the
-    final reply packet
+  - combined usage accounting must include the proposal packet and every
+    follow-up packet
+- fluent agent tool loops must use Stage116:
+  - `tool_choice=auto` remains active across tool rounds until the model stops,
+    the configured round budget is exhausted, or the tool-call budget is
+    exhausted
+  - every provider `tool_call`, including rejected or unknown tools, receives a
+    local `tool` observation so the model can recover rather than hanging on an
+    empty assistant message
+  - provider metadata must expose round count, executed/skipped counts, tool
+    names per round, and whether the loop exhausted its budget
 
 ## 7. Configuration Surface
 
