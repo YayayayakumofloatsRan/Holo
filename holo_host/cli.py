@@ -37,6 +37,7 @@ from .stage111_category_simulation import run_stage111_category_simulation
 from .stage112_system_taxonomy import run_stage112_system_taxonomy
 from .stage113_agent_tool_executor import execute_stage113_agent_tools
 from .stage114_agent_tool_cycle import run_stage114_simulated_cycle
+from .stage120_tool_affordance_optimizer import build_stage120_tool_affordance_report
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -8953,6 +8954,19 @@ def command_stage114_agent_tool_cycle(
     return 0
 
 
+def command_stage120_tool_affordance(*, query: str, grant: list[str] | None, full: bool) -> int:
+    grants = [{"tool": str(item).strip()} for item in list(grant or []) if str(item).strip()]
+    report = build_stage120_tool_affordance_report(
+        [],
+        query=query,
+        permission_grants=grants,
+        tool_scope="full" if full else "bounded",
+    )
+    report["source"] = "cli"
+    print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9851,6 +9865,13 @@ def main(argv: list[str] | None = None) -> int:
     stage114_parser.add_argument("--memory-corpus", default=None)
     stage114_parser.add_argument("--repo-root", default=None)
     stage114_parser.add_argument("--live-network", action="store_true")
+    stage120_parser = subparsers.add_parser(
+        "stage120-tool-affordance",
+        help="Inspect bounded provider tool working-set selection for one query",
+    )
+    stage120_parser.add_argument("--query", required=True)
+    stage120_parser.add_argument("--grant", action="append", default=[])
+    stage120_parser.add_argument("--full", action="store_true")
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10814,6 +10835,12 @@ def main(argv: list[str] | None = None) -> int:
             memory_corpus=args.memory_corpus,
             live_network=args.live_network,
             repo_root=args.repo_root,
+        )
+    if args.command == "stage120-tool-affordance":
+        return command_stage120_tool_affordance(
+            query=args.query,
+            grant=args.grant,
+            full=args.full,
         )
     if args.command == "visualize-biomimetic-system":
         return command_visualize_biomimetic_system(args.config, output_dir=args.output_dir)

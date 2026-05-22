@@ -287,4 +287,6 @@ def test_holo_chat_defaults_include_stage118_tools() -> None:
 
     metadata = dict(runner.calls[-1]["metadata"])
     names = {item["name"] for item in metadata["tool_requests"]}
-    assert ALL_STAGE118_TOOLS.issubset(names)
+    assert (ALL_STAGE118_TOOLS - {"workspace_edit", "progress_note"}).issubset(names)
+    assert "workspace_edit" not in names
+    assert "progress_note" not in names

@@ -12,7 +12,7 @@ from holo_host.codex_runner import CodexRunner, DeepSeekProvider
 from holo_host.config import load_config
 from holo_host.models import ProcessorTaskRequest, TurnContext
 from holo_host.processors import CodexCliProcessor, _agent_tool_requests, build_attention_state
-from holo_host.stage106_deepseek_tool_adapter import build_tool_payload
+from holo_host.stage106_deepseek_tool_adapter import STAGE119_DEFAULT_TOOL_NAMES, build_tool_payload
 from holo_host.stage113_agent_tool_executor import execute_stage113_agent_tools
 
 
@@ -142,8 +142,8 @@ class _MetadataRecordingRunner:
         )
 
 
-def test_stage119_defaults_expose_dozens_of_common_tools() -> None:
-    requests = _agent_tool_requests(_context())
+def test_stage119_library_exposes_dozens_of_common_tools() -> None:
+    requests = [{"name": name, "reason": "stage119 full library", "payload": {}} for name in STAGE119_DEFAULT_TOOL_NAMES]
     requested_names = {item["name"] for item in requests}
     payload = build_tool_payload(requests)
     exposed_names = {tool["function"]["name"] for tool in payload["tools"]}

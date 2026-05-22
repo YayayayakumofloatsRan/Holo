@@ -6,6 +6,10 @@ Stage119 expands the provider-facing Holo agent tool surface from the Stage118
 8-tool core to 41 common tools. The provider may propose tool calls, but Holo
 still validates and executes every tool locally through the WSL/local brain.
 
+Stage120 later separates this full executable library from the smaller
+per-turn provider-visible working set. Use `tool_scope=full` only when a full
+library diagnostic is required.
+
 ## Tool Surface
 
 Core continuity tools:

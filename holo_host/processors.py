@@ -12,7 +12,7 @@ from .codex_runner import CodexRunner
 from .common import compact_text
 from .config import HostConfig
 from .models import AttentionState, ProcessorTaskRequest, ReplyBubble, ReplyPlan, ToolRequest, TurnContext, TurnPlan
-from .stage106_deepseek_tool_adapter import STAGE119_DEFAULT_TOOL_NAMES
+from .stage120_tool_affordance_optimizer import optimize_stage120_tool_requests
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
 COMPANIONSHIP_HINTS = ("陪", "在吗", "聊聊", "说说", "想你", "想找个陪伴", "陪伴")
@@ -138,19 +138,17 @@ def _agent_tool_requests(context: TurnContext) -> list[dict[str, Any]]:
                 "payload": {"category": "agent_tooling"},
             }
         )
-    names = {str(item.get("name", "") or "").strip() for item in requests}
-    for tool_name in STAGE119_DEFAULT_TOOL_NAMES:
-        if tool_name in names:
-            continue
-        requests.append(
-            {
-                "name": tool_name,
-                "reason": "stage119_default_common_tool_affordance",
-                "payload": {},
-            }
-        )
-        names.add(tool_name)
-    return requests
+    permission_grants = (
+        context.capability_context.get("tool_permission_grants")
+        or context.capability_context.get("approved_tool_permissions")
+        or []
+    )
+    return optimize_stage120_tool_requests(
+        requests,
+        query=query,
+        permission_grants=permission_grants,
+        tool_scope=str(context.capability_context.get("tool_scope", "") or ""),
+    )
 
 
 def _dynamic_wechat_bubble_target(context: TurnContext, *, fast_path: bool, mind_tier: str) -> int:

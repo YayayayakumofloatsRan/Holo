@@ -198,6 +198,15 @@ Every provider result must expose enough data to record:
   - command tools must remain argv-only; `command_run` is read-only and
     allowlisted, while `command_modify` is permissioned and currently limited to
     bounded git mutation commands
+- tool-affordance selection must use Stage120:
+  - Stage119's 41 tools are the executable library, not the mandatory visible
+    tool set for every provider packet
+  - ordinary provider packets use a bounded topic-sensitive working set, with
+    explicit tool requests and permission grants preserved
+  - `tool_scope=full` is reserved for diagnostics or explicit full-library
+    probes
+  - selection changes provider visibility only; Stage113 remains the execution
+    and permission boundary
 
 ## 7. Configuration Surface
 
