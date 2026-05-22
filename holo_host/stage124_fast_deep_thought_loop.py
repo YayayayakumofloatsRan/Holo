@@ -51,6 +51,7 @@ RUNTIME_DEEP_HINTS = (
     "internal",
     "packet",
 )
+FACTUAL_DEEP_HINTS = ("如实", "事实", "准确", "具体", "不要隐喻", "fact", "factual", "concrete")
 CONTEXTUAL_FOLLOWUP_HINTS = ("所以", "答案", "那", "？", "?", "也就是说", "到底")
 
 
@@ -155,6 +156,8 @@ def stage124_deep_packet_guard(user_text: str, fast_packet: dict[str, Any] | Non
         return {"required": True, "reason": "self_model_or_identity"}
     if any(hint in lowered or hint in text for hint in RUNTIME_DEEP_HINTS):
         return {"required": True, "reason": "runtime_tool_or_state"}
+    if any(hint in lowered or hint in text for hint in FACTUAL_DEEP_HINTS):
+        return {"required": True, "reason": "factual_answer_requested"}
     if shallow_reply and meaningful_len <= 16 and any(hint in text or hint in lowered for hint in CONTEXTUAL_FOLLOWUP_HINTS):
         return {"required": True, "reason": "short_contextual_followup"}
     return {"required": False, "reason": ""}

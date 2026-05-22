@@ -34,6 +34,7 @@ model says, Holo must continue to the deep packet for:
 - memory or temporal recall
 - self-model or identity questions
 - runtime, tool, internal state, or packet-flow questions
+- factual correction turns such as "answer honestly" or "do not use metaphor"
 - unclear short contextual follow-ups such as "so what is the answer?"
 
 When the guard fires, Holo preserves the shallow reply as the first reaction,
@@ -65,35 +66,35 @@ the memory is or when it began.
 Focused red/green test:
 
 ```powershell
-python -m pytest -q tests\test_stage128_biomimetic_continuous_thought_flow.py --basetemp=.pytest_tmp_stage128_green1
+python -m pytest -q tests\test_stage128_biomimetic_continuous_thought_flow.py tests\test_stage124_fast_deep_thought_loop.py --basetemp=.pytest_tmp_stage128_fact_green
 ```
 
 Result:
 
 ```text
-3 passed in 0.16s
+9 passed in 0.31s
 ```
 
 Related recall, packet, tool, and reply tests:
 
 ```powershell
-python -m pytest -q tests\test_stage124_fast_deep_thought_loop.py tests\test_stage128_biomimetic_continuous_thought_flow.py tests\test_stage123_internal_tool_flow.py tests\test_stage121_conscious_packet_scheduler.py tests\test_rag_memory.py tests\test_holo_host.py::ReplyServiceTests::test_reply_service_refreshes_wechat_history_before_recall_reply tests\test_holo_host.py::ReplyServiceTests::test_reply_probe_compares_graph_led_and_legacy_drafts --basetemp=.pytest_tmp_stage128_related
+python -m pytest -q tests\test_stage124_fast_deep_thought_loop.py tests\test_stage128_biomimetic_continuous_thought_flow.py tests\test_stage123_internal_tool_flow.py tests\test_stage121_conscious_packet_scheduler.py tests\test_rag_memory.py --basetemp=.pytest_tmp_stage128_related2
 ```
 
 Result:
 
 ```text
-53 passed in 4.38s
+52 passed in 3.94s
 ```
 
 Full repository verification:
 
 ```powershell
-python -m pytest -q --basetemp=.pytest_tmp_full_stage128_final
+python -m pytest -q --basetemp=.pytest_tmp_full_stage128_fact_final
 ```
 
 Result:
 
 ```text
-428 passed in 65.01s (0:01:05)
+429 passed in 69.19s (0:01:09)
 ```

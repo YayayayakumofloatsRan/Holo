@@ -1093,6 +1093,7 @@ def _needs_fact_grounded_self_report(context: TurnContext) -> bool:
         (tier in {"recall", "deep_recall"} and memory_requested)
         or query_focus in {"memory", "origin"}
         or self_requested
+        or factual_requested
         or (factual_requested and (memory_requested or self_requested))
     )
 

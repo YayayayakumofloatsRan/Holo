@@ -123,6 +123,16 @@ def test_stage128_short_contextual_followup_cannot_end_at_shallow_answer() -> No
     assert guard["reason"] == "short_contextual_followup"
 
 
+def test_stage128_factual_correction_cannot_end_at_ack() -> None:
+    guard = stage124_deep_packet_guard(
+        "可能还不够，如实回答，不必多言",
+        {"deep_packet_needed": False, "shallow_reply": "明白，保持简洁如实。", "speak_now": True},
+    )
+
+    assert guard["required"] is True
+    assert guard["reason"] == "factual_answer_requested"
+
+
 def test_stage128_self_memory_prompt_uses_fact_grounded_contract(tmp_path: Path) -> None:
     config = _config(tmp_path)
     context = _context("如实回答，你是什么，记忆系统最深处是什么")
