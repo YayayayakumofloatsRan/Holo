@@ -23,8 +23,8 @@ class _FallbackClient:
                     "distance": 0.82,
                     "entity": {
                         "channel": "wechat",
-                        "thread_key": "wechat:Nemoqi",
-                        "chat_name": "Nemoqi",
+                        "thread_key": "wechat:TestUser",
+                        "chat_name": "TestUser",
                         "memory_class": "episodic_memory",
                         "source_store": "archive",
                         "source_id": "archive-1",

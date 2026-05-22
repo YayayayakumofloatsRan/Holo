@@ -211,6 +211,35 @@ class MemoryFabricTests(unittest.TestCase):
             bridge.activation.close()
             bridge.graph.close()
 
+    def test_backfill_vector_memory_without_scope_exports_all_graph_docs(self) -> None:
+        with TempMemoryRepo() as temp:
+            rm.archive_turn(
+                "stage125 global vector backfill",
+                "unscoped maintenance should export every graph memory node",
+                source="unit.archive",
+                tags=["wechat", "chat_reply"],
+                turn_id="turn-global-vector-backfill",
+                metadata={"channel": "wechat", "thread_key": "TestUser", "chat_name": "TestUser"},
+            )
+            bridge = MemoryBridge(
+                temp.repo_root,
+                graph_db_path=temp.runtime_dir / "mind_graph.sqlite3",
+                vector_backend="milvus",
+                rag=rm,
+            )
+            bridge.backfill_mind_graph()
+            fake_vector = _FakeVectorMemory([])
+            bridge.vector = fake_vector
+
+            report = bridge.backfill_vector_memory()
+
+            self.assertEqual(report["status"], "ok")
+            self.assertTrue(fake_vector.upserts)
+            self.assertTrue(fake_vector.upserts[0])
+            self.assertIn("archive:archive-", str(fake_vector.upserts[0][0]["id"]))
+            bridge.activation.close()
+            bridge.graph.close()
+
     def test_fast_ping_sidecar_skips_hybrid_vector_expansion(self) -> None:
         with TempMemoryRepo() as temp:
             rm.archive_turn(

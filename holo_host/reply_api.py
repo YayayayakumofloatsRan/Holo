@@ -115,6 +115,14 @@ ORIGIN_RECALL_HINTS = (
 )
 
 
+def _optional_payload_str(payload: dict[str, Any], key: str) -> str | None:
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
 def _build_logger(log_dir: Path) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("holo_host.reply_api")
@@ -10292,9 +10300,9 @@ def _handler_factory() -> type[BaseHTTPRequestHandler]:
                     self._write_json(
                         HTTPStatus.OK,
                         self.server.reply_service.backfill_vector_memory(
-                            thread_key=str(payload.get("thread_key", "")).strip() or None,
-                            chat_name=str(payload.get("chat_name", "")).strip() or None,
-                            channel=str(payload.get("channel", "")).strip() or None,
+                            thread_key=_optional_payload_str(payload, "thread_key"),
+                            chat_name=_optional_payload_str(payload, "chat_name"),
+                            channel=_optional_payload_str(payload, "channel"),
                         ),
                     )
                     return

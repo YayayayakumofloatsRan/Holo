@@ -15,11 +15,25 @@ from holo_host.reply_api import _ReplyHTTPServer, _handler_factory
 class _FakeReplyService:
     logger = logging.getLogger("test.reply_api_auth")
 
+    def __init__(self) -> None:
+        self.backfill_calls: list[dict] = []
+
     def health(self) -> dict:
         return {"status": "ok"}
 
     def handle_reply(self, payload: dict) -> dict:
         return {"action": "reply", "text": str(payload.get("text", ""))}
+
+    def backfill_vector_memory(
+        self,
+        *,
+        channel: str | None = None,
+        thread_key: str | None = None,
+        chat_name: str | None = None,
+    ) -> dict:
+        call = {"channel": channel, "thread_key": thread_key, "chat_name": chat_name}
+        self.backfill_calls.append(call)
+        return {"status": "ok", **call}
 
 
 class _TelemetryReplyService(_FakeReplyService):
@@ -142,6 +156,22 @@ def test_reply_api_allows_local_unauthenticated_mode_when_no_token() -> None:
         assert status == HTTPStatus.OK
         assert payload["status"] == "ok"
         assert payload["auth_required"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_reply_api_backfill_vector_memory_keeps_json_null_unscoped() -> None:
+    service = _FakeReplyService()
+    server, base_url = _start_server_with_service(service, token="")
+    try:
+        status, payload = _open_json(
+            f"{base_url}/backfill-vector-memory",
+            data={"channel": None, "thread_key": None, "chat_name": None},
+        )
+        assert status == HTTPStatus.OK
+        assert payload == {"status": "ok", "channel": None, "thread_key": None, "chat_name": None}
+        assert service.backfill_calls == [{"channel": None, "thread_key": None, "chat_name": None}]
     finally:
         server.shutdown()
         server.server_close()

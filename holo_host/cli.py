@@ -2909,11 +2909,20 @@ def _backfill_vector_memory_payload(
     channel: str | None,
     allow_local_fallback: bool = True,
 ) -> tuple[dict, str]:
+    payload = {
+        key: value
+        for key, value in {
+            "channel": channel,
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+        }.items()
+        if value is not None
+    }
     live_payload = _live_api_request(
         config_path,
         method="POST",
         path="/backfill-vector-memory",
-        payload={"channel": channel, "thread_key": thread_key, "chat_name": chat_name},
+        payload=payload,
         timeout=30.0,
     )
     if live_payload is not None:
