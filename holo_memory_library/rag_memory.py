@@ -1950,9 +1950,13 @@ def prepare_thought_row(row: dict) -> dict:
         prepared["kind"] = "idle_thought"
     prepared["text"] = trim_text_block(str(prepared.get("text", "")), limit=320)
     prepared["motif"] = compact_text(str(prepared.get("motif", "")), 64)
-    prepared["channel"] = str(prepared.get("channel", metadata.get("channel", "")))
-    prepared["thread_key"] = str(prepared.get("thread_key", metadata.get("thread_key", "")))
+    prepared["channel"] = str(prepared.get("channel", metadata.get("channel", ""))).strip().lower()
     prepared["chat_name"] = str(prepared.get("chat_name", metadata.get("chat_name", "")))
+    prepared["thread_key"] = _canonical_archive_thread_key(
+        prepared["channel"],
+        str(prepared.get("thread_key", metadata.get("thread_key", ""))),
+        chat_name=prepared["chat_name"],
+    )
     prepared["source_archive_id"] = str(prepared.get("source_archive_id", metadata.get("source_archive_id", "")))
     prepared["created_at"] = str(prepared.get("created_at", now_utc()))
     prepared["last_seen_at"] = str(prepared.get("last_seen_at", prepared["created_at"]))
@@ -1967,6 +1971,12 @@ def prepare_thought_row(row: dict) -> dict:
         prepared.get("last_recalled_at", metadata.get("last_recalled_at", ""))
     ).strip()
     prepared["tags"] = normalize_tags(prepared.get("tags", []))
+    if prepared["channel"]:
+        metadata["channel"] = prepared["channel"]
+    if prepared["thread_key"]:
+        metadata["thread_key"] = prepared["thread_key"]
+    if prepared["chat_name"]:
+        metadata["chat_name"] = prepared["chat_name"]
     prepared["metadata"] = metadata
     if not str(prepared.get("id", "")).strip():
         prepared["id"] = (
@@ -2049,9 +2059,13 @@ def initiative_row_key(row: dict) -> tuple[str, str, str, str]:
 def prepare_initiative_row(row: dict) -> dict:
     prepared = dict(row)
     metadata = safe_json_metadata(prepared.get("metadata", {}))
-    prepared["channel"] = str(prepared.get("channel", metadata.get("channel", "")) or "wechat")
-    prepared["thread_key"] = str(prepared.get("thread_key", metadata.get("thread_key", "")))
+    prepared["channel"] = str(prepared.get("channel", metadata.get("channel", "")) or "wechat").strip().lower()
     prepared["chat_name"] = str(prepared.get("chat_name", metadata.get("chat_name", "")))
+    prepared["thread_key"] = _canonical_archive_thread_key(
+        prepared["channel"],
+        str(prepared.get("thread_key", metadata.get("thread_key", ""))),
+        chat_name=prepared["chat_name"],
+    )
     prepared["reason"] = compact_text(str(prepared.get("reason", "")), 220)
     prepared["prompt"] = trim_text_block(str(prepared.get("prompt", "")), limit=420)
     prepared["created_at"] = str(prepared.get("created_at", now_utc()))
@@ -2072,6 +2086,12 @@ def prepare_initiative_row(row: dict) -> dict:
     prepared["source_archive_id"] = str(prepared.get("source_archive_id", ""))
     prepared["status"] = str(prepared.get("status", "candidate"))
     prepared["tags"] = normalize_tags(prepared.get("tags", []))
+    if prepared["channel"]:
+        metadata["channel"] = prepared["channel"]
+    if prepared["thread_key"]:
+        metadata["thread_key"] = prepared["thread_key"]
+    if prepared["chat_name"]:
+        metadata["chat_name"] = prepared["chat_name"]
     prepared["metadata"] = metadata
     if not str(prepared.get("id", "")).strip():
         prepared["id"] = (

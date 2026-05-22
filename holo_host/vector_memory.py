@@ -212,6 +212,46 @@ class VectorMemory:
             clauses.append("(" + " or ".join(scoped) + ")")
         return " and ".join(clauses)
 
+    def _filter_candidates(self, *, channel: str, thread_key: str, chat_name: str) -> list[tuple[str, str]]:
+        exact = self._filter_expression(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        candidates: list[tuple[str, str]] = [("exact", exact)]
+        if channel:
+            channel_expr = f'channel == "{self._escape_filter_value(channel)}"'
+            if channel_expr != exact:
+                candidates.append(("channel", channel_expr))
+        candidates.append(("global", ""))
+        deduped: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for scope, expr in candidates:
+            if expr in seen:
+                continue
+            seen.add(expr)
+            deduped.append((scope, expr))
+        return deduped
+
+    def _search_once(self, client: Any, *, query: str, expr: str, limit: int) -> list[dict[str, Any]]:
+        kwargs: dict[str, Any] = {
+            "collection_name": self.collection_name,
+            "data": [hashed_embedding(query, dim=self.dimension)],
+            "limit": max(1, int(limit)),
+            "output_fields": [
+                "channel",
+                "thread_key",
+                "chat_name",
+                "memory_class",
+                "source_store",
+                "source_id",
+                "text",
+                "importance",
+                "confidence",
+            ],
+        }
+        if expr:
+            kwargs["filter"] = expr
+        else:
+            kwargs["filter"] = ""
+        return client.search(**kwargs)
+
     def search(
         self,
         query: str,
@@ -224,31 +264,21 @@ class VectorMemory:
         client = self._client_instance()
         if client is None:
             return {"status": "unavailable", "hits": [], **self.health()}
-        expr = self._filter_expression(channel=channel, thread_key=thread_key, chat_name=chat_name)
+        selected_scope = "exact"
+        selected_results: Any = []
         try:
-            results = client.search(
-                collection_name=self.collection_name,
-                data=[hashed_embedding(query, dim=self.dimension)],
-                filter=expr,
-                limit=max(1, int(limit)),
-                output_fields=[
-                    "channel",
-                    "thread_key",
-                    "chat_name",
-                    "memory_class",
-                    "source_store",
-                    "source_id",
-                    "text",
-                    "importance",
-                    "confidence",
-                ],
-            )
+            for scope, expr in self._filter_candidates(channel=channel, thread_key=thread_key, chat_name=chat_name):
+                selected_scope = scope
+                selected_results = self._search_once(client, query=query, expr=expr, limit=limit)
+                search_rows_probe = selected_results[0] if isinstance(selected_results, list) and selected_results else selected_results
+                if search_rows_probe:
+                    break
         except Exception as exc:  # noqa: BLE001
             self._last_error = str(exc)
             self._client_ready = False
-            return {"status": "error", "hits": [], **self.health()}
+            return {"status": "error", "scope": selected_scope, "hits": [], **self.health()}
         hits: list[dict[str, Any]] = []
-        search_rows = results[0] if isinstance(results, list) and results else results
+        search_rows = selected_results[0] if isinstance(selected_results, list) and selected_results else selected_results
         for item in search_rows or []:
             entity = dict(item.get("entity", {})) if isinstance(item, dict) else {}
             node_id = str(item.get("id", entity.get("id", ""))) if isinstance(item, dict) else ""
@@ -268,4 +298,4 @@ class VectorMemory:
                     "confidence": float(entity.get("confidence", 0.0) or 0.0),
                 }
             )
-        return {"status": "ok", "hits": hits[: max(1, int(limit))], **self.health()}
+        return {"status": "ok", "scope": selected_scope, "hits": hits[: max(1, int(limit))], **self.health()}

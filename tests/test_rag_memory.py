@@ -113,6 +113,31 @@ class TempMemoryRepo:
 
 
 class RagMemoryTests(unittest.TestCase):
+    def test_wechat_thought_and_initiative_rows_canonicalize_thread_key(self) -> None:
+        thought = rm.prepare_thought_row(
+            {
+                "kind": "reflection",
+                "text": "thread continuity",
+                "channel": "wechat",
+                "thread_key": "TestUser",
+                "chat_name": "TestUser",
+            }
+        )
+        initiative = rm.prepare_initiative_row(
+            {
+                "prompt": "resume the thread",
+                "reason": "continuity",
+                "channel": "wechat",
+                "thread_key": "TestUser",
+                "chat_name": "TestUser",
+            }
+        )
+
+        self.assertEqual(thought["thread_key"], "wechat:TestUser")
+        self.assertEqual(thought["metadata"]["thread_key"], "wechat:TestUser")
+        self.assertEqual(initiative["thread_key"], "wechat:TestUser")
+        self.assertEqual(initiative["metadata"]["thread_key"], "wechat:TestUser")
+
     def seed_voice_memory(self) -> None:
         rows: list[dict] = []
         rows.append(
