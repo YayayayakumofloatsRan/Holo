@@ -53,6 +53,47 @@ def merge_rows(
     return dedupe(list(target_rows) + list(source_rows))
 
 
+def persisted_rows(store: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if store == "working":
+        return rm.trim_working_rows(rm.dedupe_working_rows([rm.prepare_row(row, "working") for row in rows]))
+    if store == "durable":
+        return [rm.prepare_row(row, "durable") for row in rows]
+    if store == "candidate":
+        return [rm.prepare_row(row, "candidate") for row in rows]
+    if store == "archive":
+        return rm.dedupe_archive_rows([rm.prepare_archive_row(row) for row in rows if row])
+    if store == "emotion":
+        return rm.dedupe_emotion_rows([rm.prepare_emotion_trace_entry(row) for row in rows if row])
+    if store == "callback":
+        return rm.trim_callback_rows(rm.dedupe_callback_rows([rm.prepare_callback_row(row) for row in rows if row]))
+    if store == "thought":
+        return rm.trim_thought_rows(rm.dedupe_thought_rows([rm.prepare_thought_row(row) for row in rows if row]))
+    if store == "initiative":
+        return rm.trim_initiative_rows(
+            rm.dedupe_initiative_rows([rm.prepare_initiative_row(row) for row in rows if row])
+        )
+    raise ValueError(f"unknown memory store: {store}")
+
+
+def report_store(
+    filename: str,
+    *,
+    before: int,
+    source: int,
+    merged_rows: list[dict[str, Any]],
+    persisted: list[dict[str, Any]],
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "store": filename,
+        "before": before,
+        "source": source,
+        "after": len(persisted),
+    }
+    if len(merged_rows) != len(persisted):
+        report["merged"] = len(merged_rows)
+    return report
+
+
 def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[str, Any]]:
     target_dir = REPO_ROOT / "holo_memory_library" / "memories"
     reports: list[dict[str, Any]] = []
@@ -65,7 +106,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=lambda row: rm.prepare_row(row, "working"),
         dedupe=lambda rows: dedupe_by_id(rows, lambda row: rm.prepare_row(row, "working")),
     )
-    reports.append({"store": "working_store.jsonl", "before": len(working_target), "source": len(working_source), "after": len(working_merged)})
+    reports.append(
+        report_store(
+            "working_store.jsonl",
+            before=len(working_target),
+            source=len(working_source),
+            merged_rows=working_merged,
+            persisted=persisted_rows("working", working_merged),
+        )
+    )
     if not dry_run:
         rm.write_rows("working", working_merged)
 
@@ -77,7 +126,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=lambda row: rm.prepare_row(row, "durable"),
         dedupe=lambda rows: dedupe_by_id(rows, lambda row: rm.prepare_row(row, "durable")),
     )
-    reports.append({"store": "memory_store.jsonl", "before": len(durable_target), "source": len(durable_source), "after": len(durable_merged)})
+    reports.append(
+        report_store(
+            "memory_store.jsonl",
+            before=len(durable_target),
+            source=len(durable_source),
+            merged_rows=durable_merged,
+            persisted=persisted_rows("durable", durable_merged),
+        )
+    )
     if not dry_run:
         rm.write_rows("durable", durable_merged)
 
@@ -89,7 +146,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=lambda row: rm.prepare_row(row, "candidate"),
         dedupe=lambda rows: dedupe_by_id(rows, lambda row: rm.prepare_row(row, "candidate")),
     )
-    reports.append({"store": "candidate_store.jsonl", "before": len(candidate_target), "source": len(candidate_source), "after": len(candidate_merged)})
+    reports.append(
+        report_store(
+            "candidate_store.jsonl",
+            before=len(candidate_target),
+            source=len(candidate_source),
+            merged_rows=candidate_merged,
+            persisted=persisted_rows("candidate", candidate_merged),
+        )
+    )
     if not dry_run:
         rm.write_rows("candidate", candidate_merged)
 
@@ -101,7 +166,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=rm.prepare_archive_row,
         dedupe=rm.dedupe_archive_rows,
     )
-    reports.append({"store": "conversation_archive.jsonl", "before": len(archive_target), "source": len(archive_source), "after": len(archive_merged)})
+    reports.append(
+        report_store(
+            "conversation_archive.jsonl",
+            before=len(archive_target),
+            source=len(archive_source),
+            merged_rows=archive_merged,
+            persisted=persisted_rows("archive", archive_merged),
+        )
+    )
     if not dry_run:
         rm.write_archive(archive_merged)
 
@@ -113,7 +186,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=rm.prepare_emotion_trace_entry,
         dedupe=rm.dedupe_emotion_rows,
     )
-    reports.append({"store": "emotion_trace.jsonl", "before": len(emotion_target), "source": len(emotion_source), "after": len(emotion_merged)})
+    reports.append(
+        report_store(
+            "emotion_trace.jsonl",
+            before=len(emotion_target),
+            source=len(emotion_source),
+            merged_rows=emotion_merged,
+            persisted=persisted_rows("emotion", emotion_merged),
+        )
+    )
     if not dry_run:
         rm.write_emotion_trace(emotion_merged)
 
@@ -125,7 +206,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=rm.prepare_callback_row,
         dedupe=rm.dedupe_callback_rows,
     )
-    reports.append({"store": "callback_candidates.jsonl", "before": len(callback_target), "source": len(callback_source), "after": len(callback_merged)})
+    reports.append(
+        report_store(
+            "callback_candidates.jsonl",
+            before=len(callback_target),
+            source=len(callback_source),
+            merged_rows=callback_merged,
+            persisted=persisted_rows("callback", callback_merged),
+        )
+    )
     if not dry_run:
         rm.write_callback_candidates(callback_merged)
 
@@ -137,7 +226,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=rm.prepare_thought_row,
         dedupe=rm.dedupe_thought_rows,
     )
-    reports.append({"store": "thought_stream.jsonl", "before": len(thought_target), "source": len(thought_source), "after": len(thought_merged)})
+    reports.append(
+        report_store(
+            "thought_stream.jsonl",
+            before=len(thought_target),
+            source=len(thought_source),
+            merged_rows=thought_merged,
+            persisted=persisted_rows("thought", thought_merged),
+        )
+    )
     if not dry_run:
         rm.write_thought_stream(thought_merged)
 
@@ -149,7 +246,15 @@ def merge_memory_dir(source_dir: Path, *, dry_run: bool = False) -> list[dict[st
         prepare=rm.prepare_initiative_row,
         dedupe=rm.dedupe_initiative_rows,
     )
-    reports.append({"store": "initiative_candidates.jsonl", "before": len(initiative_target), "source": len(initiative_source), "after": len(initiative_merged)})
+    reports.append(
+        report_store(
+            "initiative_candidates.jsonl",
+            before=len(initiative_target),
+            source=len(initiative_source),
+            merged_rows=initiative_merged,
+            persisted=persisted_rows("initiative", initiative_merged),
+        )
+    )
     if not dry_run:
         rm.write_initiative_candidates(initiative_merged)
 
