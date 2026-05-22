@@ -55,3 +55,19 @@ Result:
 ```text
 424 passed in 62.35s
 ```
+
+Live WSL verification after deployment:
+
+```powershell
+wsl.exe -d HoloUbuntu -- bash -lc "cd /home/holo/holo && python3 -m holo_host backfill-vector-memory"
+wsl.exe -d HoloUbuntu -- bash -lc "cd /home/holo/holo && python3 -m holo_host vector-health"
+wsl.exe -d HoloUbuntu -- bash -lc "cd /home/holo/holo && python3 -m holo_host trace-hybrid-recall --query 'Holo RAG memory stage124 fast packet single brain global vector backfill' --thread-key 'holo_cli:stage126-live-vector' --chat-name 'Stage126LiveVector' --channel holo_cli --limit 8"
+```
+
+Observed result:
+
+```text
+backfill-vector-memory: status=ok document_count=1123 ready=true
+vector-health: available=true ready=true
+trace-hybrid-recall: memory_route=hybrid, vector_hits non-empty, top trace source=hybrid with vector_match
+```
