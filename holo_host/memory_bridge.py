@@ -96,6 +96,15 @@ LOCAL_MEMORY_HINTS = (
 )
 FAST_PING_HINTS = {"在吗", "你在吗", "嗯", "好", "收到", "说吧", "继续", "接着说", "ok", "okay"}
 
+STAGE130_CONTEXTUAL_FOLLOWUP_HINTS = {
+    "\u770b\u4e00\u770b",
+    "\u600e\u4e48\u6837",
+    "\u600e\u6837",
+    "\u7136\u540e\u5462",
+    "\u7ee7\u7eed",
+    "\u6240\u4ee5\u5462",
+}
+
 UNRESOLVED_REFERENCE_HINTS = (
     "that",
     "this",
@@ -482,6 +491,8 @@ class MemoryBridge:
         current = " ".join(str(query or "").strip().split())
         lowered = current.lower()
         compact = lowered.replace(" ", "")
+        if compact in STAGE130_CONTEXTUAL_FOLLOWUP_HINTS or any(hint in current for hint in STAGE130_CONTEXTUAL_FOLLOWUP_HINTS):
+            return False
         if compact in FAST_PING_HINTS:
             return True
         if lowered in {"you there", "you there?", "u there", "u there?", "still there", "still there?"}:

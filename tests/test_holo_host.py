@@ -2964,6 +2964,32 @@ class ReplyServiceTests(unittest.TestCase):
                 self.assertEqual(memory.sidecar_requests[-1]["context"]["thread_key"], "wechat:TestContact")
             finally:
                 close_service_handles(service)
+
+    def test_reply_service_normalizes_english_i_in_chinese_visible_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            runner = FakeRunner("I\u7406\u89e3\u4f60\u7684\u610f\u601d\uff0c\u4e4b\u540e\u6211\u4f1a\u6ce8\u610f\u51cf\u5c11\u4f7f\u7528\u8868\u60c5\u7b26\u53f7\u3002")
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=runner, memory=memory)
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestContact",
+                        "sender": "TestContact",
+                        "text": "\u4f60\u53ef\u4ee5\u8bd5\u7740\u4e0d\u8981\u518d\u7528\u8fd9\u4e48\u591aemoji\uff0c\u53ef\u4ee5\u5417\uff1f",
+                        "channel": "holo_cli",
+                        "ts": 1,
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertNotIn("I\u7406\u89e3", result["text"])
+                self.assertIn("\u6211\u7406\u89e3", result["text"])
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_uses_shorter_wechat_prompt_style(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

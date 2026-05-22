@@ -575,6 +575,127 @@ def _render_section(title: str, lines: list[str]) -> str:
     return f"{title}\n" + "\n".join(f"- {line}" for line in cleaned)
 
 
+def _recent_dialogue_memory_lines(context: TurnContext, *, limit: int = 6) -> list[str]:
+    packet_window = dict(context.mind_packet.get("recent_dialogue_window", {}))
+    packet_lines = [str(line).strip() for line in packet_window.get("lines", []) if str(line).strip()]
+    if packet_lines:
+        return [compact_text(line, 180) for line in packet_lines[-limit:]]
+    history_lines: list[str] = []
+    for item in context.history[-limit:]:
+        direction = "user" if item.get("direction") == "inbound" else "holo"
+        body = compact_text(str(item.get("body_text", "")), 160)
+        if body:
+            history_lines.append(f"{direction}: {body}")
+    return history_lines
+
+
+def _meaningful_text_len(text: str) -> int:
+    return len(re.sub(r"\s+", "", str(text or "")))
+
+
+def _is_short_continuation_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    lowered = raw.lower()
+    if _meaningful_text_len(raw) > 10:
+        return False
+    return bool(
+        raw in {"?", "??", "???", "\uff1f", "\uff1f\uff1f", "\uff1f\uff1f\uff1f"}
+        or any(
+            hint in lowered or hint in raw
+            for hint in (
+                "then",
+                "and?",
+                "continue",
+                "\u770b\u4e00\u770b",
+                "\u600e\u4e48\u6837",
+                "\u600e\u6837",
+                "\u7ee7\u7eed",
+                "\u7136\u540e\u5462",
+                "\u6240\u4ee5\u5462",
+            )
+        )
+    )
+
+
+def build_short_term_working_memory_lines(context: TurnContext) -> list[str]:
+    recent = _recent_dialogue_memory_lines(context)
+    joined = "\n".join(recent)
+    current = str(context.user_text or "").strip()
+    combined = f"{joined}\n{current}"
+    lowered = combined.lower()
+    lines: list[str] = []
+    include_recent_evidence = False
+
+    if "emoji" in lowered and any(hint in combined for hint in ("\u4e0d\u8981", "\u5c11", "\u6536\u4f4f", "\u9891\u7e41")):
+        include_recent_evidence = True
+        lines.append("tone_constraint: avoid frequent emoji and emoticons; user explicitly asked to reduce them.")
+
+    if any("\u4e0d\u8981" in line and any(word in line for word in ("\u8bf4\u6559", "\u8bf4\u660e\u4e66", "\u5ba2\u670d")) for line in recent):
+        include_recent_evidence = True
+        lines.append("tone_constraint: avoid manual-like, customer-service, or lecture tone.")
+
+    if any("\u3400" <= ch <= "\u9fff" for ch in combined):
+        lines.append(
+            "language_constraint: keep external speech in Chinese; do not start with English 'I' or mix English pronouns into Chinese unless the user asks otherwise."
+        )
+
+    current_short = _is_short_continuation_text(current)
+    research_context = any(
+        hint in lowered or hint in combined
+        for hint in (
+            "world model",
+            "interactive world model",
+            "\u4e16\u754c\u6a21\u578b",
+            "\u5b9e\u65f6\u4ea4\u4e92",
+            "\u8bba\u6587",
+            "\u641c",
+            "\u67e5",
+            "paper",
+            "arxiv",
+        )
+    )
+    if current_short and research_context:
+        include_recent_evidence = True
+        lines.append(
+            "pending_task: continue world-model paper/search thread; do not answer as a fresh greeting."
+        )
+
+    correction_context = any(
+        hint in combined
+        for hint in (
+            "\u9a97\u4e0d\u4e86",
+            "\u4e0d\u5bf9",
+            "\u4e0d\u662f",
+            "\u725b\u5934\u4e0d\u5bf9\u9a6c\u5634",
+            "???",
+            "\uff1f\uff1f\uff1f",
+        )
+    )
+    if current_short and correction_context:
+        include_recent_evidence = True
+        lines.append(
+            "repair_focus: previous reply likely missed the user's correction; do not quiz the user; clarify and repair."
+        )
+
+    if current_short and not any(line.startswith("pending_task:") for line in lines):
+        lines.append("continuation_rule: resolve this short turn against the immediately previous task, not as a new greeting.")
+
+    if include_recent_evidence and recent:
+        lines.insert(0, f"recent_turns: {' | '.join(recent[-4:])}")
+
+    return _dedupe_segments(lines[:8])
+
+
+def normalize_external_speech_for_context(context: TurnContext, text: str) -> str:
+    """Apply channel-visible language guards that provider prompts may still miss."""
+    current = str(context.user_text or "")
+    recent = "\n".join(_recent_dialogue_memory_lines(context, limit=4))
+    has_chinese_context = any("\u3400" <= ch <= "\u9fff" for ch in f"{current}\n{recent}")
+    if not has_chinese_context:
+        return text
+    return re.sub(r"(?<![A-Za-z])I(?=[\u3400-\u9fff])", "\u6211", str(text or ""))
+
+
 def _history_block(context: TurnContext, turn_plan: TurnPlan) -> str:
     if turn_plan.fast_path and str(context.mind_packet.get("memory_route", "") or "") == "active_thread":
         active_state = dict(context.mind_packet.get("active_thread_state", {}))
@@ -1282,6 +1403,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     vector_block = _render_section("Vector Echoes:", vector_lines[:4])
     visual_block = _render_section("Visual Memory:", _visual_memory_lines_for_prompt(packet))
     situational_block = _render_section("Situational Field:", _situational_field_lines_for_prompt(packet))
+    short_term_lines = build_short_term_working_memory_lines(context)
+    short_term_block = _render_section("Short Term Working Memory:", short_term_lines)
     activation_state = dict(packet.get("activation_state", {}))
     activation_lines = [
         f"heat={activation_state.get('heat', 0.0)}",
@@ -1322,6 +1445,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         intent_block,
         selected_action_block,
         situational_block,
+        short_term_block,
         relationship_block,
         game_state_block,
         f"Current User Turn:\n{context.user_text}",
@@ -1448,6 +1572,7 @@ class CodexCliProcessor:
         lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
         timeout_seconds = _reply_processor_timeout_seconds(context, lane)
         agent_tool_requests = _agent_tool_requests(context)
+        short_term_lines = build_short_term_working_memory_lines(context)
         fast_packet_started_at = time.perf_counter()
         fast_result = self._run_runner(
             build_stage124_fast_packet_prompt(
@@ -1455,6 +1580,7 @@ class CodexCliProcessor:
                 channel=context.channel,
                 thread_key=context.thread_key,
                 chat_name=context.chat_name,
+                short_term_lines=short_term_lines,
             ),
             session_id=session_id,
             lane="micro_fast",
@@ -1608,8 +1734,8 @@ class CodexCliProcessor:
         if result.returncode != 0:
             raise RuntimeError(result.stderr or result.stdout or "codex processor failure")
         result_metadata = dict(getattr(result, "metadata", {}) or {})
-        text = result.reply_text.strip()
-        first_reaction = str(fast_packet.get("shallow_reply", "") or "").strip()
+        text = normalize_external_speech_for_context(context, result.reply_text.strip())
+        first_reaction = normalize_external_speech_for_context(context, str(fast_packet.get("shallow_reply", "") or "").strip())
         if bool(fast_packet.get("deep_packet_forced", False)) and first_reaction and first_reaction not in text:
             text = f"{first_reaction}\n{text}".strip()
         bubbles = build_reply_bubbles(
@@ -1697,7 +1823,7 @@ class ResponsesProcessor:
             input=prompt,
         )
         processor_ms = int((time.perf_counter() - started_at) * 1000)
-        text = str(getattr(response, "output_text", "") or "").strip()
+        text = normalize_external_speech_for_context(context, str(getattr(response, "output_text", "") or "").strip())
         bubbles = build_reply_bubbles(
             text,
             channel=context.channel,

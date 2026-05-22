@@ -36,7 +36,7 @@ from .operator_bus import build_engineering_snapshot, build_homeostasis_state
 from .operator_bus import operator_probe as run_operator_probe
 from .operator_bus import refresh_self_model, run_operator_cycle
 from .policy import AutonomyPolicy
-from .processors import _select_reply_lane, build_attention_state, build_processor, build_reply_bubbles
+from .processors import _select_reply_lane, build_attention_state, build_processor, build_reply_bubbles, normalize_external_speech_for_context
 from .processors import build_turn_plan, render_chat_prompt
 from .reply_service_parts.acceptance import (
     accept_stage10 as _accept_stage10,
@@ -9246,7 +9246,10 @@ class HoloReplyService:
         with self._memory_lock:
             repaired = self.memory.repair_reply(turn.text, reply_plan.raw_text or reply_plan.text)
         repair_ms = int((time.perf_counter() - repair_started_at) * 1000)
-        repaired_text = str(repaired.get("final_draft", reply_plan.text)).strip()
+        repaired_text = normalize_external_speech_for_context(
+            turn_context,
+            str(repaired.get("final_draft", reply_plan.text)).strip(),
+        )
         bubbles = self._finalize_bubbles(
             repaired_text,
             channel=turn.channel,
@@ -9257,7 +9260,10 @@ class HoloReplyService:
             target_count=(reply_plan.turn_plan.bubble_target if reply_plan.turn_plan else 2),
             strict_target=bool(sidecar.get("selected_action", {})),
         )
-        final_reply = " ".join(bubble.text for bubble in bubbles).strip()
+        final_reply = normalize_external_speech_for_context(
+            turn_context,
+            " ".join(bubble.text for bubble in bubbles).strip(),
+        )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
             reply_text=final_reply,

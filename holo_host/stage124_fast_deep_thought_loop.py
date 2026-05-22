@@ -9,6 +9,16 @@ from .common import compact_text
 STAGE124_SCHEMA = "holo.stage124.fast_deep_thought_loop.v1"
 STAGE124_FAST_MARKER = "Stage124 Fast Packet"
 STAGE124_DEEP_MARKER = "Stage124 Deep Packet Context"
+STAGE130_CONTEXTUAL_FOLLOWUP_HINTS = (
+    "\u770b\u4e00\u770b",
+    "\u600e\u4e48\u6837",
+    "\u600e\u6837",
+    "\u7136\u540e\u5462",
+    "\u7ee7\u7eed",
+    "\uff1f",
+    "\uff1f\uff1f",
+    "\uff1f\uff1f\uff1f",
+)
 
 MEMORY_DEEP_HINTS = (
     "记忆",
@@ -61,7 +71,14 @@ def build_stage124_fast_packet_prompt(
     channel: str,
     thread_key: str,
     chat_name: str,
+    short_term_lines: list[str] | None = None,
 ) -> str:
+    short_term = [compact_text(str(line), 240) for line in list(short_term_lines or []) if str(line).strip()]
+    short_term_block = (
+        ["", "Short Term Working Memory:", *[f"- {line}" for line in short_term[:8]]]
+        if short_term
+        else []
+    )
     return "\n".join(
         [
             f"{STAGE124_FAST_MARKER}:",
@@ -69,6 +86,7 @@ def build_stage124_fast_packet_prompt(
             "Judge the external user's intent, scene, and whether a deeper packet is needed.",
             "You may include one optional shallow_reply that is safe as external_speech.",
             "A shallow_reply is only the first reaction, not proof that internal thought is complete.",
+            "Use Short Term Working Memory as higher-priority local context than generic persona habits.",
             "Set deep_packet_needed=true for memory, self-model, identity, runtime/tool/state, or unclear short follow-up turns.",
             "Do not expose raw hidden reasoning.",
             "",
@@ -83,6 +101,7 @@ def build_stage124_fast_packet_prompt(
             f"channel={channel}",
             f"thread_key={thread_key}",
             f"chat_name={chat_name}",
+            *short_term_block,
             f"user_text={compact_text(user_text, 1200)}",
         ]
     )
@@ -158,7 +177,8 @@ def stage124_deep_packet_guard(user_text: str, fast_packet: dict[str, Any] | Non
         return {"required": True, "reason": "runtime_tool_or_state"}
     if any(hint in lowered or hint in text for hint in FACTUAL_DEEP_HINTS):
         return {"required": True, "reason": "factual_answer_requested"}
-    if shallow_reply and meaningful_len <= 16 and any(hint in text or hint in lowered for hint in CONTEXTUAL_FOLLOWUP_HINTS):
+    followup_hints = tuple(CONTEXTUAL_FOLLOWUP_HINTS) + tuple(STAGE130_CONTEXTUAL_FOLLOWUP_HINTS)
+    if meaningful_len <= 16 and any(hint in text or hint in lowered for hint in followup_hints):
         return {"required": True, "reason": "short_contextual_followup"}
     return {"required": False, "reason": ""}
 
