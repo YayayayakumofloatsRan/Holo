@@ -216,6 +216,18 @@ Every provider result must expose enough data to record:
     `prompt_cache_miss_tokens` must be preserved when returned
   - Stage121 may adjust provider output budget and tool-loop depth, but does
     not execute tools or weaken Stage113 permissions
+- continuous thought channel separation must use Stage122:
+  - live reply metadata includes `stage122_channel_frame`
+  - provider prompts include a stable `Stage122 Channel Boundary` contract
+  - `internal_intent` is local planning metadata, not user-visible speech
+  - `internal_processing` is summary-only local runtime state and must not
+    expose raw hidden reasoning traces
+  - `external_speech` is the only user-visible expression channel and carries
+    `external_speech_only=true`
+  - Stage122 may classify the current packet as continued internal
+    deliberation, tool-grounded deliberation, grounding-before-expression, or
+    external reply composition, but it does not execute tools or weaken Stage113
+    permissions
 
 ## 7. Configuration Surface
 

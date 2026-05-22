@@ -39,6 +39,7 @@ from .stage113_agent_tool_executor import execute_stage113_agent_tools
 from .stage114_agent_tool_cycle import run_stage114_simulated_cycle
 from .stage120_tool_affordance_optimizer import build_stage120_tool_affordance_report
 from .stage121_conscious_packet_scheduler import build_stage121_packet_report
+from .stage122_internal_external_channel_boundary import build_stage122_channel_report
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -8991,6 +8992,34 @@ def command_stage121_packet_policy(
     return 0
 
 
+def command_stage122_channel_boundary(
+    *,
+    query: str,
+    uncertainty: float,
+    tool: list[str] | None,
+) -> int:
+    tool_requests = [{"name": str(name), "reason": "cli_stage122_probe", "payload": {}} for name in list(tool or [])]
+    packet_policy = build_stage121_packet_report(
+        prompt=query,
+        query=query,
+        tool_requests=tool_requests,
+        uncertainty_level=float(uncertainty or 0.0),
+        selected_action_type="reply_once",
+        lane_name="subject_main",
+        lane_max_output_tokens=4096,
+    )
+    report = build_stage122_channel_report(
+        user_text=query,
+        selected_action_type="reply_once",
+        stage121_packet_policy=packet_policy,
+        tool_requests=tool_requests,
+        uncertainty_level=float(uncertainty or 0.0),
+    )
+    report["source"] = "cli"
+    print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9904,6 +9933,13 @@ def main(argv: list[str] | None = None) -> int:
     stage121_parser.add_argument("--prompt-repeat", type=int, default=1)
     stage121_parser.add_argument("--uncertainty", type=float, default=0.0)
     stage121_parser.add_argument("--tool", action="append", default=[])
+    stage122_parser = subparsers.add_parser(
+        "stage122-channel-boundary",
+        help="Inspect internal-intent, local-processing, and external-speech channel separation",
+    )
+    stage122_parser.add_argument("--query", required=True)
+    stage122_parser.add_argument("--uncertainty", type=float, default=0.0)
+    stage122_parser.add_argument("--tool", action="append", default=[])
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10878,6 +10914,12 @@ def main(argv: list[str] | None = None) -> int:
         return command_stage121_packet_policy(
             query=args.query,
             prompt_repeat=args.prompt_repeat,
+            uncertainty=args.uncertainty,
+            tool=args.tool,
+        )
+    if args.command == "stage122-channel-boundary":
+        return command_stage122_channel_boundary(
+            query=args.query,
             uncertainty=args.uncertainty,
             tool=args.tool,
         )
