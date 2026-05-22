@@ -15,6 +15,7 @@ from .models import AttentionState, ProcessorTaskRequest, ReplyBubble, ReplyPlan
 from .stage120_tool_affordance_optimizer import optimize_stage120_tool_requests
 from .stage121_conscious_packet_scheduler import build_stage121_packet_policy
 from .stage122_internal_external_channel_boundary import append_stage122_channel_contract, build_stage122_channel_frame
+from .stage123_internal_tool_flow import append_stage123_internal_tool_contract, build_stage123_internal_tool_flow
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
 COMPANIONSHIP_HINTS = ("陪", "在吗", "聊聊", "说说", "想你", "想找个陪伴", "陪伴")
@@ -1371,7 +1372,9 @@ class CodexCliProcessor:
                 packet["recall_reconstruction"] = reconstruction
                 context.mind_packet = packet
                 context.sidecar = packet
-        prompt = append_stage122_channel_contract(render_chat_prompt(context, turn_plan=turn_plan))
+        prompt = render_chat_prompt(context, turn_plan=turn_plan)
+        prompt = append_stage122_channel_contract(prompt)
+        prompt = append_stage123_internal_tool_contract(prompt)
         started_at = time.perf_counter()
         selected_action_type = str(context.selected_action.get("action_type", context.mind_packet.get("selected_action", {}).get("action_type", "")) or "").strip()
         lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
@@ -1394,6 +1397,10 @@ class CodexCliProcessor:
             stage121_packet_policy=packet_policy,
             tool_requests=agent_tool_requests,
             uncertainty_level=float(context.uncertainty_level or 0.0),
+        )
+        internal_tool_flow = build_stage123_internal_tool_flow(
+            stage122_channel_frame=channel_frame,
+            tool_requests=agent_tool_requests,
         )
         result = self._run_runner(
             prompt,
@@ -1419,6 +1426,7 @@ class CodexCliProcessor:
                 "approved_tool_permissions": list(context.capability_context.get("approved_tool_permissions", []) or []),
                 "stage121_packet_policy": packet_policy,
                 "stage122_channel_frame": channel_frame,
+                "stage123_internal_tool_flow": internal_tool_flow,
                 "max_provider_tool_rounds": int(packet_policy.get("tool_loop", {}).get("max_rounds", 4) or 4),
                 "max_provider_tool_calls": int(packet_policy.get("tool_loop", {}).get("max_tool_calls", 16) or 16),
             },
@@ -1465,6 +1473,7 @@ class CodexCliProcessor:
                 "agent_tool_loop": dict(result_metadata.get("agent_tool_loop", {})),
                 "prompt_excerpt": compact_text(prompt, 240),
                 "stage122_channel_frame": channel_frame,
+                "stage123_internal_tool_flow": internal_tool_flow,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
                 "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),

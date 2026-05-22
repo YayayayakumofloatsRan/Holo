@@ -228,6 +228,17 @@ Every provider result must expose enough data to record:
     deliberation, tool-grounded deliberation, grounding-before-expression, or
     external reply composition, but it does not execute tools or weaken Stage113
     permissions
+- internal tool flow must use Stage123:
+  - live reply metadata includes `stage123_internal_tool_flow`
+  - provider prompts include a stable `Stage123 Internal Tool Flow` contract
+  - internal flow may decide that memory, evidence, lookup, workspace state, or
+    verification is needed before `external_speech`
+  - the provider may propose `tool_calls`, but must not execute tools
+  - execution remains inside the WSL brain through the Stage113 allowlist,
+    argument, and permission-grant boundary
+  - tool observations must re-enter the provider loop before external speech is
+    committed, unless no tool was needed
+  - Windows transport must not execute tools or become a second decision layer
 
 ## 7. Configuration Surface
 
