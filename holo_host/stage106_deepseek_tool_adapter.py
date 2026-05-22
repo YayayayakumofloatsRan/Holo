@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import copy
+import html
 import json
+import re
 from typing import Any
 
 STAGE106_SCHEMA = "holo.stage106.deepseek_tool_adapter.v1"
+
+_DSML_TOOL_BLOCK_RE = re.compile(r"<[^<>]*tool_calls[^<>]*>(?P<body>.*?)</[^<>]*tool_calls>", re.DOTALL)
+_DSML_INVOKE_RE = re.compile(r"<[^<>]*invoke\s+name=\"(?P<name>[^\"]+)\"[^<>]*>(?P<body>.*?)</[^<>]*invoke>", re.DOTALL)
+_DSML_PARAMETER_RE = re.compile(
+    r"<[^<>]*parameter\s+name=\"(?P<name>[^\"]+)\"\s+string=\"(?P<string>[^\"]+)\"[^<>]*>"
+    r"(?P<value>.*?)</[^<>]*parameter>",
+    re.DOTALL,
+)
 
 
 TOOL_REGISTRY: dict[str, dict[str, Any]] = {
@@ -645,6 +655,54 @@ def _parse_arguments(raw: Any) -> tuple[dict[str, Any], str]:
     return decoded, ""
 
 
+def _coerce_dsml_parameter(raw_value: str, *, is_string: bool) -> Any:
+    value = html.unescape(str(raw_value or "").strip())
+    if is_string:
+        return value
+    if not value:
+        return ""
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _parse_embedded_dsml_tool_calls(content: Any) -> list[dict[str, Any]]:
+    text = str(content or "")
+    if "tool_calls" not in text or "invoke" not in text:
+        return []
+    calls: list[dict[str, Any]] = []
+    for block in _DSML_TOOL_BLOCK_RE.finditer(text):
+        block_body = str(block.group("body") or "")
+        for invoke in _DSML_INVOKE_RE.finditer(block_body):
+            name = html.unescape(str(invoke.group("name") or "")).strip()
+            if not name:
+                continue
+            arguments: dict[str, Any] = {}
+            invoke_body = str(invoke.group("body") or "")
+            for parameter in _DSML_PARAMETER_RE.finditer(invoke_body):
+                key = html.unescape(str(parameter.group("name") or "")).strip()
+                if not key:
+                    continue
+                is_string = str(parameter.group("string") or "").strip().lower() == "true"
+                arguments[key] = _coerce_dsml_parameter(str(parameter.group("value") or ""), is_string=is_string)
+            calls.append(
+                {
+                    "id": f"dsml_{name}_{len(calls) + 1}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                }
+            )
+    return calls
+
+
+def strip_provider_tool_markup(content: Any) -> str:
+    text = str(content or "")
+    if "tool_calls" not in text:
+        return text.strip()
+    return _DSML_TOOL_BLOCK_RE.sub("", text).strip()
+
+
 def _validate_arguments(name: str, arguments: dict[str, Any]) -> str:
     schema = dict(TOOL_REGISTRY.get(name, {}).get("parameters", {}))
     required = list(schema.get("required", []) or [])
@@ -652,6 +710,29 @@ def _validate_arguments(name: str, arguments: dict[str, Any]) -> str:
         if key not in arguments or str(arguments.get(key, "") or "").strip() == "":
             return f"missing_required:{key}"
     return ""
+
+
+def _normalise_provider_tool_call(
+    *,
+    name: str,
+    call_id: str,
+    arguments: dict[str, Any],
+    call_type: str = "function",
+) -> dict[str, Any]:
+    error = ""
+    if name not in TOOL_REGISTRY:
+        error = "unknown_tool"
+    else:
+        error = _validate_arguments(name, arguments)
+    return {
+        "id": call_id,
+        "type": call_type or "function",
+        "name": name,
+        "arguments": arguments,
+        "allowed": not bool(error),
+        "status": "rejected" if error else "accepted",
+        "error": error,
+    }
 
 
 def parse_provider_tool_calls(decoded: Any) -> list[dict[str, Any]]:
@@ -665,22 +746,53 @@ def parse_provider_tool_calls(decoded: Any) -> list[dict[str, Any]]:
         name = str(function_payload.get("name", "") or "").strip()
         call_id = str(item.get("id", "") or f"tool_call_{index + 1}")
         arguments, argument_error = _parse_arguments(function_payload.get("arguments", {}))
-        error = ""
-        if name not in TOOL_REGISTRY:
-            error = "unknown_tool"
-        elif argument_error:
-            error = argument_error
-        else:
-            error = _validate_arguments(name, arguments)
-        parsed.append(
+        parsed_call = _normalise_provider_tool_call(
+            name=name,
+            call_id=call_id,
+            arguments=arguments,
+            call_type=str(item.get("type", "function") or "function"),
+        )
+        if argument_error:
+            parsed_call["allowed"] = False
+            parsed_call["status"] = "rejected"
+            parsed_call["error"] = argument_error
+        parsed.append(parsed_call)
+    for index, call in enumerate(_parse_embedded_dsml_tool_calls(message.get("content", ""))):
+        item = dict(call) if isinstance(call, dict) else {}
+        function = item.get("function", {})
+        function_payload = dict(function) if isinstance(function, dict) else {}
+        name = str(function_payload.get("name", "") or "").strip()
+        call_id = str(item.get("id", "") or f"dsml_tool_call_{index + 1}")
+        arguments, argument_error = _parse_arguments(function_payload.get("arguments", {}))
+        parsed_call = _normalise_provider_tool_call(
+            name=name,
+            call_id=call_id,
+            arguments=arguments,
+            call_type=str(item.get("type", "function") or "function"),
+        )
+        if argument_error:
+            parsed_call["allowed"] = False
+            parsed_call["status"] = "rejected"
+            parsed_call["error"] = argument_error
+        parsed.append(parsed_call)
+    return parsed
+
+
+def provider_tool_calls_for_message(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    provider_calls: list[dict[str, Any]] = []
+    for index, call in enumerate(list(tool_calls or [])):
+        item = dict(call) if isinstance(call, dict) else {}
+        arguments = item.get("arguments", {})
+        if not isinstance(arguments, dict):
+            arguments = {}
+        provider_calls.append(
             {
-                "id": call_id,
+                "id": str(item.get("id", "") or f"tool_call_{index + 1}"),
                 "type": str(item.get("type", "function") or "function"),
-                "name": name,
-                "arguments": arguments,
-                "allowed": not bool(error),
-                "status": "rejected" if error else "accepted",
-                "error": error,
+                "function": {
+                    "name": str(item.get("name", "") or ""),
+                    "arguments": json.dumps(arguments, ensure_ascii=False, sort_keys=True),
+                },
             }
         )
-    return parsed
+    return provider_calls

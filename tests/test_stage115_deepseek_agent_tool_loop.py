@@ -143,6 +143,79 @@ def test_deepseek_provider_executes_tool_call_and_requests_final_reply() -> None
         assert result.metadata["usage"]["total_tokens"] == 83
 
 
+def test_deepseek_provider_executes_dsml_content_tool_call_and_requests_final_reply() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config = _config(root)
+        runner = CodexRunner(config)
+        provider = DeepSeekProvider()
+        captured_payloads: list[dict[str, object]] = []
+
+        def fake_post_json(url: str, api_key: str, payload: dict[str, object], timeout_seconds: int) -> dict[str, object]:
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                return {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": (
+                                    'Need memory before final. <｜｜DSML｜｜tool_calls> '
+                                    '<｜｜DSML｜｜invoke name="memory_recall"> '
+                                    '<｜｜DSML｜｜parameter name="query" string="true">provider packet continuity</｜｜DSML｜｜parameter> '
+                                    '<｜｜DSML｜｜parameter name="limit" string="false">2</｜｜DSML｜｜parameter> '
+                                    "</｜｜DSML｜｜invoke> </｜｜DSML｜｜tool_calls>"
+                                ),
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35},
+                }
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "Final answer after DSML tool observation."},
+                    }
+                ],
+                "usage": {"prompt_tokens": 40, "completion_tokens": 8, "total_tokens": 48},
+            }
+
+        with mock.patch.dict("os.environ", {"TEST_DEEPSEEK_API_KEY": "test-key"}):
+            with mock.patch.object(provider, "_post_json", side_effect=fake_post_json):
+                result = provider.run_task(
+                    runner,
+                    ProcessorTaskRequest(
+                        task_type="reply",
+                        prompt="Explain provider packet continuity.",
+                        lane="micro_fast",
+                        metadata={
+                            "enable_provider_tools": True,
+                            "auto_execute_provider_tools": True,
+                            "tool_requests": [{"name": "memory_recall", "reason": "always available", "payload": {}}],
+                            "tool_memory_corpus": [
+                                {"id": "m1", "text": "provider packet continuity requires tool observations"},
+                            ],
+                        },
+                    ),
+                    spec={"output_schema": "plain_text"},
+                    lane_name="micro_fast",
+                    lane_config=config.processor_fabric.provider_backends["micro_fast"],
+                )
+
+        assert result.text == "Final answer after DSML tool observation."
+        assert len(captured_payloads) == 2
+        messages = captured_payloads[1]["messages"]
+        assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+        assert messages[1]["content"] == "Need memory before final."
+        assert messages[1]["tool_calls"][0]["id"] == "dsml_memory_recall_1"
+        assert messages[2]["tool_call_id"] == "dsml_memory_recall_1"
+        assert "provider packet continuity" in messages[2]["content"]
+        assert result.metadata["agent_tool_loop"]["round_count"] == 1
+        assert result.metadata["agent_tool_loop"]["executed_count"] == 1
+        assert result.metadata["agent_tool_loop"]["final_request_sent"] is True
+
+
 def test_holo_chat_enables_agent_tools_for_ordinary_turns() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)

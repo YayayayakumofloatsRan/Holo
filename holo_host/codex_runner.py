@@ -13,7 +13,12 @@ from typing import Any
 
 from .config import HostConfig, ProcessorLaneConfig, TaskRoutingConfig
 from .models import CodexResult, ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
-from .stage106_deepseek_tool_adapter import build_tool_payload, parse_provider_tool_calls
+from .stage106_deepseek_tool_adapter import (
+    build_tool_payload,
+    parse_provider_tool_calls,
+    provider_tool_calls_for_message,
+    strip_provider_tool_markup,
+)
 from .stage113_agent_tool_executor import execute_stage113_agent_tools
 
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
@@ -802,10 +807,13 @@ class DeepSeekProvider(ProcessorProvider):
             if not tool_messages:
                 break
 
+            assistant_tool_calls = list(current_message.get("tool_calls", []) or [])
+            if not assistant_tool_calls:
+                assistant_tool_calls = provider_tool_calls_for_message(tool_calls)
             assistant_message = {
                 "role": "assistant",
-                "content": str(current_message.get("content", "") or ""),
-                "tool_calls": list(current_message.get("tool_calls", []) or []),
+                "content": strip_provider_tool_markup(current_message.get("content", "")),
+                "tool_calls": assistant_tool_calls,
             }
             reasoning_content = str(current_message.get("reasoning_content", "") or "").strip()
             if reasoning_content:
@@ -883,7 +891,7 @@ class DeepSeekProvider(ProcessorProvider):
         choices = list(decoded.get("choices", []) or [])
         first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
         message = dict(first_choice.get("message", {})) if isinstance(first_choice.get("message", {}), dict) else {}
-        text = str(message.get("content", "") or "").strip()
+        text = strip_provider_tool_markup(message.get("content", ""))
         initial_tool_calls = parse_provider_tool_calls(first_decoded)
         initial_finish_reason = str(first_choice.get("finish_reason", "") or "")
         usage = self._usage_for_decoded(decoded, prompt_basis=request.prompt, completion_text=text)
@@ -901,7 +909,7 @@ class DeepSeekProvider(ProcessorProvider):
         choices = list(decoded.get("choices", []) or [])
         first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
         message = dict(first_choice.get("message", {})) if isinstance(first_choice.get("message", {}), dict) else {}
-        text = str(message.get("content", "") or "").strip()
+        text = strip_provider_tool_markup(message.get("content", ""))
         reasoning_content = str(message.get("reasoning_content", "") or "").strip()
         tool_calls = parse_provider_tool_calls(decoded)
         metadata = {

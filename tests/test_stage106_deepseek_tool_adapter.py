@@ -131,6 +131,46 @@ def test_stage106_parses_allowed_deepseek_tool_call() -> None:
     ]
 
 
+def test_stage106_parses_deepseek_dsml_tool_calls_from_content() -> None:
+    decoded = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": (
+                        'Need local evidence. <｜｜DSML｜｜tool_calls> '
+                        '<｜｜DSML｜｜invoke name="workspace_inspect"> '
+                        '<｜｜DSML｜｜parameter name="operation" string="true">read_file</｜｜DSML｜｜parameter> '
+                        '<｜｜DSML｜｜parameter name="path" string="true">holo_memory_library/memory_log.md</｜｜DSML｜｜parameter> '
+                        '<｜｜DSML｜｜parameter name="start_line" string="false">1</｜｜DSML｜｜parameter> '
+                        '<｜｜DSML｜｜parameter name="end_line" string="false">15</｜｜DSML｜｜parameter> '
+                        "</｜｜DSML｜｜invoke> </｜｜DSML｜｜tool_calls>"
+                    ),
+                },
+            }
+        ]
+    }
+
+    calls = parse_provider_tool_calls(decoded)
+
+    assert calls == [
+        {
+            "id": "dsml_workspace_inspect_1",
+            "type": "function",
+            "name": "workspace_inspect",
+            "arguments": {
+                "operation": "read_file",
+                "path": "holo_memory_library/memory_log.md",
+                "start_line": 1,
+                "end_line": 15,
+            },
+            "allowed": True,
+            "status": "accepted",
+            "error": "",
+        }
+    ]
+
+
 def test_deepseek_provider_attaches_tools_only_when_explicitly_enabled() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
