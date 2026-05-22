@@ -264,25 +264,40 @@ def _estimate_text_tokens(text: str) -> int:
 
 def _coerce_usage_payload(payload: Any) -> dict[str, int | bool]:
     if payload is None:
-        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated": True}
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 0,
+            "estimated": True,
+        }
     if isinstance(payload, dict):
         prompt_tokens = int(payload.get("prompt_tokens", payload.get("input_tokens", 0)) or 0)
         completion_tokens = int(payload.get("completion_tokens", payload.get("output_tokens", 0)) or 0)
         total_tokens = int(payload.get("total_tokens", prompt_tokens + completion_tokens) or 0)
+        cache_hit_tokens = int(payload.get("prompt_cache_hit_tokens", payload.get("cache_hit_tokens", 0)) or 0)
+        cache_miss_tokens = int(payload.get("prompt_cache_miss_tokens", payload.get("cache_miss_tokens", 0)) or 0)
         estimated = bool(payload.get("estimated", False))
         return {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "prompt_cache_hit_tokens": cache_hit_tokens,
+            "prompt_cache_miss_tokens": cache_miss_tokens,
             "estimated": estimated,
         }
     prompt_tokens = int(getattr(payload, "prompt_tokens", getattr(payload, "input_tokens", 0)) or 0)
     completion_tokens = int(getattr(payload, "completion_tokens", getattr(payload, "output_tokens", 0)) or 0)
     total_tokens = int(getattr(payload, "total_tokens", prompt_tokens + completion_tokens) or 0)
+    cache_hit_tokens = int(getattr(payload, "prompt_cache_hit_tokens", getattr(payload, "cache_hit_tokens", 0)) or 0)
+    cache_miss_tokens = int(getattr(payload, "prompt_cache_miss_tokens", getattr(payload, "cache_miss_tokens", 0)) or 0)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
+        "prompt_cache_hit_tokens": cache_hit_tokens,
+        "prompt_cache_miss_tokens": cache_miss_tokens,
         "estimated": False,
     }
 
@@ -292,6 +307,8 @@ def _sum_usage_payloads(*usages: dict[str, int | bool]) -> dict[str, int | bool]
         "prompt_tokens": sum(int(usage.get("prompt_tokens", 0) or 0) for usage in usages),
         "completion_tokens": sum(int(usage.get("completion_tokens", 0) or 0) for usage in usages),
         "total_tokens": sum(int(usage.get("total_tokens", 0) or 0) for usage in usages),
+        "prompt_cache_hit_tokens": sum(int(usage.get("prompt_cache_hit_tokens", 0) or 0) for usage in usages),
+        "prompt_cache_miss_tokens": sum(int(usage.get("prompt_cache_miss_tokens", 0) or 0) for usage in usages),
         "estimated": any(bool(usage.get("estimated", False)) for usage in usages),
     }
 

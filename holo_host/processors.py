@@ -13,6 +13,7 @@ from .common import compact_text
 from .config import HostConfig
 from .models import AttentionState, ProcessorTaskRequest, ReplyBubble, ReplyPlan, ToolRequest, TurnContext, TurnPlan
 from .stage120_tool_affordance_optimizer import optimize_stage120_tool_requests
+from .stage121_conscious_packet_scheduler import build_stage121_packet_policy
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
 COMPANIONSHIP_HINTS = ("陪", "在吗", "聊聊", "说说", "想你", "想找个陪伴", "陪伴")
@@ -1375,12 +1376,23 @@ class CodexCliProcessor:
         lane, lane_reason, reflex_micro_fast_candidate = _select_reply_lane(context, turn_plan, self.config)
         timeout_seconds = _reply_processor_timeout_seconds(context, lane)
         agent_tool_requests = _agent_tool_requests(context)
+        lane_config = self.config.processor_fabric.provider_backends.get(lane)
+        lane_max_output_tokens = int(getattr(lane_config, "max_output_tokens", 0) or 0)
+        packet_policy = build_stage121_packet_policy(
+            prompt=prompt,
+            query=str(context.user_text or ""),
+            tool_requests=agent_tool_requests,
+            uncertainty_level=float(context.uncertainty_level or 0.0),
+            selected_action_type=selected_action_type,
+            lane_name=lane,
+            lane_max_output_tokens=lane_max_output_tokens,
+        )
         result = self._run_runner(
             prompt,
             session_id=session_id,
             lane=lane,
             budget_tag="chat_reply",
-            max_output_tokens=1200,
+            max_output_tokens=int(packet_policy.get("output_budget_tokens", 1200) or 1200),
             timeout_seconds=timeout_seconds,
             metadata={
                 "thread_key": context.thread_key,
@@ -1397,6 +1409,9 @@ class CodexCliProcessor:
                 "tool_requests": agent_tool_requests,
                 "tool_permission_grants": list(context.capability_context.get("tool_permission_grants", []) or []),
                 "approved_tool_permissions": list(context.capability_context.get("approved_tool_permissions", []) or []),
+                "stage121_packet_policy": packet_policy,
+                "max_provider_tool_rounds": int(packet_policy.get("tool_loop", {}).get("max_rounds", 4) or 4),
+                "max_provider_tool_calls": int(packet_policy.get("tool_loop", {}).get("max_tool_calls", 16) or 16),
             },
         )
         processor_ms = int((time.perf_counter() - started_at) * 1000)

@@ -207,6 +207,15 @@ Every provider result must expose enough data to record:
     probes
   - selection changes provider visibility only; Stage113 remains the execution
     and permission boundary
+- theory-guided conscious packet scheduling must use Stage121:
+  - live reply metadata includes `stage121_packet_policy`
+  - packet budgets should be dynamic, not fixed small packets by default
+  - stable cacheable prefix content must precede volatile user turns and tool
+    observations
+  - DeepSeek cache usage counters such as `prompt_cache_hit_tokens` and
+    `prompt_cache_miss_tokens` must be preserved when returned
+  - Stage121 may adjust provider output budget and tool-loop depth, but does
+    not execute tools or weaken Stage113 permissions
 
 ## 7. Configuration Surface
 
