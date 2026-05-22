@@ -87,6 +87,19 @@ def test_stage105_lookup_query_triggers_tool_even_before_high_uncertainty() -> N
     assert plan["tool_requests"][0]["payload"]["query"] == LOOKUP_QUERY
 
 
+def test_stage105_research_word_does_not_trigger_search_lookup() -> None:
+    packet = {
+        "uncertainty_level": 0.4,
+        "selected_action": {"action_type": "reply_once", "why_now": "academic planning"},
+    }
+
+    plan = stage105_packet_stream_plan(packet, query="derive an academic research plan", max_packets=4)
+
+    assert plan["next_action"] == "provider_packet"
+    assert plan["tool_requests"] == []
+    assert plan["policy"]["send_decision"] != "tool_first"
+
+
 def test_stage105_deadline_sends_punctual_single_packet() -> None:
     packet = {
         "uncertainty_level": 0.66,

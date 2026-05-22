@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 STAGE105_SCHEMA = "holo.stage105.provider_packet_stream.v1"
@@ -61,7 +62,14 @@ def _action_type(packet: dict[str, Any]) -> str:
 
 def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
     lowered = text.lower()
-    return any(hint.lower() in lowered for hint in hints)
+    for hint in hints:
+        normalized = hint.lower()
+        if normalized.isascii():
+            if re.search(rf"(?<![a-z0-9_]){re.escape(normalized)}(?![a-z0-9_])", lowered):
+                return True
+        elif normalized in lowered:
+            return True
+    return False
 
 
 def _is_broad_recall(query: str) -> bool:
