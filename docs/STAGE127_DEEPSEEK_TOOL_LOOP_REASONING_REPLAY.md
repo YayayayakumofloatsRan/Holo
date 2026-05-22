@@ -87,3 +87,24 @@ Result:
 ```text
 425 passed in 85.66s (0:01:25)
 ```
+
+Live WSL verification after deployment:
+
+```powershell
+wsl.exe -d HoloUbuntu --cd /home/holo/holo -- git rev-parse --short HEAD
+wsl.exe -d HoloUbuntu --cd /home/holo/holo -- python3 -m holo_host show-provider-status
+wsl.exe -d HoloUbuntu --cd /home/holo/holo -- python3 -m holo_host chat --thread-key holo_cli:main --chat-name HoloCLI --channel holo_cli --once "read your own repository directory in read-only mode" --json
+wsl.exe -d HoloUbuntu --cd /home/holo/holo -- python3 -m holo_host show-usage-ledger --task-type reply --limit 8
+```
+
+Observed result:
+
+```text
+WSL head: 1a08c0b
+provider: deepseek available=true
+openai_compatible: available=false reason="openai package not installed"
+CLI reply: no [ignore: processor_failure]; reply listed repository root entries
+usage ledger: latest micro_fast and subject_main reply packets both status=ok provider=deepseek
+latest subject_main duration_ms=13340 total_tokens=11106
+transport: stopped; WeChat transport was not started
+```
