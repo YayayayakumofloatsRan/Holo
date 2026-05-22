@@ -79,6 +79,7 @@ def test_deepseek_provider_executes_tool_call_and_requests_final_reply() -> None
                             "finish_reason": "tool_calls",
                             "message": {
                                 "content": "",
+                                "reasoning_content": "need memory before final answer",
                                 "tool_calls": [
                                     {
                                         "id": "call_memory_1",
@@ -131,6 +132,7 @@ def test_deepseek_provider_executes_tool_call_and_requests_final_reply() -> None
         assert captured_payloads[0]["tools"][0]["function"]["name"] == "memory_recall"
         messages = captured_payloads[1]["messages"]
         assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+        assert messages[1]["reasoning_content"] == "need memory before final answer"
         assert messages[1]["tool_calls"][0]["id"] == "call_memory_1"
         assert messages[2]["tool_call_id"] == "call_memory_1"
         assert "provider packet continuity" in messages[2]["content"]

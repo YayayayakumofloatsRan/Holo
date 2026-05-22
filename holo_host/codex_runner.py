@@ -807,6 +807,9 @@ class DeepSeekProvider(ProcessorProvider):
                 "content": str(current_message.get("content", "") or ""),
                 "tool_calls": list(current_message.get("tool_calls", []) or []),
             }
+            reasoning_content = str(current_message.get("reasoning_content", "") or "").strip()
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
             messages = messages + [assistant_message] + tool_messages
             followup_payload = dict(payload)
             followup_payload["messages"] = messages
@@ -1253,17 +1256,21 @@ class CodexRunner:
         lane_config = self._lane_config(lane_name)
         provider_chain = self._provider_chain_for_lane(lane_name, lane_config, resolved_request.provider_hint)
         last_error: str = ""
+        provider_errors: list[str] = []
         for index, provider_name in enumerate(provider_chain):
             provider = self._providers.get(provider_name)
             if provider is None:
                 last_error = f"unknown provider: {provider_name}"
+                provider_errors.append(last_error)
                 continue
             availability = provider.availability()
             if not bool(availability.get("available", False)):
                 last_error = str(availability.get("reason", f"{provider_name} unavailable"))
+                provider_errors.append(f"{provider_name}: {last_error}")
                 continue
             if not provider.supports_request(resolved_request):
                 last_error = f"{provider_name} does not support task request"
+                provider_errors.append(last_error)
                 continue
             try:
                 result = provider.run_task(
@@ -1275,6 +1282,7 @@ class CodexRunner:
                 )
             except Exception as exc:  # noqa: BLE001
                 last_error = str(exc)
+                provider_errors.append(f"{provider_name}: {last_error}")
                 continue
             metadata = dict(result.metadata or {})
             metadata.setdefault("lane", lane_name)
@@ -1290,13 +1298,14 @@ class CodexRunner:
             result.metadata = metadata
             self._record_usage(resolved_request, result)
             return result
+        failure_detail = " | ".join(provider_errors) if provider_errors else (last_error or "no provider available")
         failed = ProcessorTaskResult(
             task_type=resolved_request.task_type,
             text="",
             session_id=resolved_request.session_id,
             returncode=1,
             stdout="",
-            stderr=last_error or "no provider available",
+            stderr=failure_detail,
             command=[],
             output_schema=resolved_request.output_schema,
             metadata={

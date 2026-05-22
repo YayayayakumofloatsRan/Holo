@@ -7,8 +7,8 @@ from unittest import mock
 from pathlib import Path
 
 from holo_host.config import load_config
-from holo_host.codex_runner import CodexRunner, DeepSeekProvider
-from holo_host.models import ProcessorTaskRequest, ProcessorUsageRecord
+from holo_host.codex_runner import CodexRunner, DeepSeekProvider, ProcessorProvider
+from holo_host.models import ProcessorTaskRequest, ProcessorTaskResult, ProcessorUsageRecord
 from holo_host.store import QueueStore
 
 
@@ -92,6 +92,34 @@ class ProcessorUsageLedgerTests(unittest.TestCase):
 
 
 class CodexRunnerRoutingTests(unittest.TestCase):
+    def test_failed_provider_result_keeps_primary_and_fallback_errors(self) -> None:
+        class FailingProvider(ProcessorProvider):
+            name = "deepseek"
+
+            def run_task(self, *args, **kwargs) -> ProcessorTaskResult:  # type: ignore[no-untyped-def]
+                raise RuntimeError("DeepSeek HTTP 400: reasoning_content missing")
+
+        class UnavailableProvider(ProcessorProvider):
+            name = "openai_compatible"
+
+            def availability(self) -> dict[str, object]:
+                return {"available": False, "reason": "openai package not installed"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            config.runtime.processor_backend = "deepseek"
+            config.processor_fabric.provider_backends["micro_fast"].primary_provider = "deepseek"
+            config.processor_fabric.provider_backends["micro_fast"].backup_provider = "openai_compatible"
+            runner = CodexRunner(config)
+            runner._providers = {"deepseek": FailingProvider(), "openai_compatible": UnavailableProvider()}
+
+            result = runner.run_task(ProcessorTaskRequest(task_type="reply", prompt="hello", lane="micro_fast"))
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("deepseek: DeepSeek HTTP 400: reasoning_content missing", result.stderr)
+            self.assertIn("openai_compatible: openai package not installed", result.stderr)
+
     def test_deepseek_backend_dispatch_does_not_append_codex_tail(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
