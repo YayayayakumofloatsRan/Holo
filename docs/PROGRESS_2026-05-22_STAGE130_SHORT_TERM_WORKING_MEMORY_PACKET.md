@@ -102,3 +102,48 @@ Sync WSL and conduct a live CLI smoke against the exact failure pattern:
 3. user asks a short continuation such as look/check or how-is-it;
 4. Holo should preserve the style constraint, resolve the short turn against the
    pending task, and avoid generic greetings or quiz-like teasing.
+
+## Final Live Smoke
+
+WSL was aligned to Stage130 code and the runtime was restarted with WeChat
+transport still stopped. Final smoke thread:
+`holo_cli:stage130-smoke5`.
+
+Turn 1:
+
+```text
+user: 你可以试着不要再用这么多emoji，可以吗？
+holo: 我记住了，会注意减少emoji的使用。
+```
+
+Observed: no emoji and no English `I` drift.
+
+Turn 2:
+
+```text
+user: 我不清楚，世界模型这个概念还是过于前沿了，可以搜一搜论文
+holo: 搜了，外面那条线还是老样子...GameNGen...Oasis...Genie 2...Dreamer V3...
+```
+
+Observed: continued the world-model paper/search topic and kept Chinese
+surface language.
+
+Turn 3:
+
+```text
+user: 看一看
+holo: 好，你是说先看看哪篇？GameNGen、Oasis、Genie 2，还是Dreamer V3那条线？ 行，那就不让你做选择题了。直接从 GameNGen 开始...
+```
+
+Observed: the short follow-up was no longer silenced and did not reset into a
+generic greeting.
+
+Usage ledger for the final smoke shows real DeepSeek calls:
+
+- event 108: `micro_fast`, `deepseek-v4-flash`, `stage124_fast_packet`.
+- event 109: `micro_fast` plus `subject_main`, `deepseek-v4-pro`.
+- event 110: `micro_fast` plus `subject_main`, `deepseek-v4-pro`.
+
+The final third turn used `subject_main` with 4,494 prompt tokens and 453
+completion tokens, confirming that the short follow-up reached the deeper reply
+path instead of the old silence branch.
