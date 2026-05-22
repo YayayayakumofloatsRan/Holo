@@ -33,6 +33,7 @@ from .stage108_expression_stream import build_stage108_expression_stream
 from .stage109_consciousness_flow_theory import build_stage109_theory_frame
 from .stage110_theory_guided_packets import build_stage110_packet_guidance
 from .stage111_category_simulation import run_stage111_category_simulation
+from .stage112_system_taxonomy import run_stage112_system_taxonomy
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -8877,6 +8878,16 @@ def command_stage111_category_simulation(*, max_packets: int, packet_budget_toke
     return 0
 
 
+def command_stage112_system_taxonomy(*, max_packets: int, packet_budget_tokens: int) -> int:
+    report = run_stage112_system_taxonomy(
+        max_packets=max_packets,
+        packet_budget_tokens=packet_budget_tokens,
+    )
+    report["source"] = "dry_run"
+    print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_visualize_biomimetic_system(config_path: str | None, *, output_dir: str | None) -> int:
     config = load_config(config_path=config_path)
     report = write_biomimetic_visualization(config.runtime.repo_root, output_dir=output_dir)
@@ -9716,6 +9727,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     stage111_parser.add_argument("--max-packets", type=int, default=4)
     stage111_parser.add_argument("--packet-budget-tokens", type=int, default=2400)
+    stage112_parser = subparsers.add_parser(
+        "stage112-system-taxonomy",
+        help="Run role-agnostic system category taxonomy and tool-call probe",
+    )
+    stage112_parser.add_argument("--max-packets", type=int, default=4)
+    stage112_parser.add_argument("--packet-budget-tokens", type=int, default=2400)
     biomimetic_visual_parser = subparsers.add_parser(
         "visualize-biomimetic-system",
         help="Write the redacted Stage100 biomimetic memory/topology visualization artifact",
@@ -10656,6 +10673,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "stage111-category-simulation":
         return command_stage111_category_simulation(
+            max_packets=args.max_packets,
+            packet_budget_tokens=args.packet_budget_tokens,
+        )
+    if args.command == "stage112-system-taxonomy":
+        return command_stage112_system_taxonomy(
             max_packets=args.max_packets,
             packet_budget_tokens=args.packet_budget_tokens,
         )
