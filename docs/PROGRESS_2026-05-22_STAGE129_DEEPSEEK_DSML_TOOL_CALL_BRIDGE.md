@@ -58,8 +58,39 @@ Full repository result:
 431 passed in 83.08s (0:01:23)
 ```
 
+## Live WSL Smoke
+
+After syncing WSL to commit `fbf2863`, a CLI read-only directory request
+returned a normal user-visible answer and did not leak DSML markup. The usage
+ledger showed the intended two-speed flow on event `82`:
+
+```text
+micro_fast: id=1228, status=ok, total_tokens=299
+subject_main: id=1231, status=ok, total_tokens=10043
+```
+
+A direct live provider probe reused the running WSL brain environment without
+printing the API key and exercised the internal tool loop:
+
+```text
+returncode=0
+initial_finish_reason=tool_calls
+finish_reason=stop
+tool_call_count=1
+agent_round_count=1
+agent_executed_count=1
+agent_skipped_count=0
+tool_names=["workspace_inspect"]
+observation_summary="workspace list_dir: .agent, .codex, .git, .github, .holo_runtime, .vendor, artifacts, deploy"
+```
+
+Provider constraint observed during the smoke: DeepSeek thinking mode rejects a
+forced function `tool_choice` with `Thinking mode does not support this
+tool_choice`. The operational path should keep `tool_choice=auto` and let the
+prompt/tool schema induce tool use.
+
 ## Remaining Work
 
-Run a live WSL CLI smoke after syncing this patch to the WSL brain. The desired
-evidence is an `agent_tool_loop.executed_count > 0` on a tool-seeking turn, with
-no DSML markup leaked into user-visible speech.
+The live tool loop is now confirmed. The next reliability improvement is to add
+first-class CLI/debug surfacing for `agent_tool_loop` metadata, so this evidence
+does not require a direct provider probe.

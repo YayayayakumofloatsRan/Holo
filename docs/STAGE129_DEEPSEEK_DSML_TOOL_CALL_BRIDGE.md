@@ -89,3 +89,24 @@ Result:
 ```text
 431 passed in 83.08s (0:01:23)
 ```
+
+Live WSL probe after syncing to commit `fbf2863`:
+
+```text
+returncode=0
+initial_finish_reason=tool_calls
+finish_reason=stop
+tool_call_count=1
+agent_round_count=1
+agent_executed_count=1
+agent_skipped_count=0
+tool_names=["workspace_inspect"]
+observation_summary="workspace list_dir: .agent, .codex, .git, .github, .holo_runtime, .vendor, artifacts, deploy"
+```
+
+The live CLI path also showed `micro_fast` followed by `subject_main` on the
+same event, and no DSML markup leaked into user-visible speech.
+
+DeepSeek-specific constraint: thinking mode rejects forced function
+`tool_choice`, so the runtime should keep provider `tool_choice=auto` and let
+the prompt plus tool schema induce the call.
