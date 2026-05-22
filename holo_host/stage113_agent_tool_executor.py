@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from html import unescape
 from pathlib import Path
 from typing import Any, Callable
@@ -438,6 +439,238 @@ def _execute_local_command(arguments: dict[str, Any], *, repo_root: str | Path |
     }
 
 
+def _is_protected_workspace_path(path: Path, *, repo_root: str | Path | None) -> bool:
+    root = Path(repo_root or Path.cwd()).resolve()
+    try:
+        relative = path.resolve().relative_to(root)
+    except ValueError:
+        return True
+    protected = {".git", ".holo_runtime", "__pycache__"}
+    return any(part in protected for part in relative.parts)
+
+
+def _safe_slug(text: Any, default: str = "note") -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(text or "").strip().lower()).strip("-")
+    return slug or default
+
+
+def _execute_workspace_edit(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    operation = str(arguments.get("operation", "") or "").strip()
+    path, path_error = _resolve_workspace_path(repo_root, arguments.get("path", ""))
+    if path_error or _is_protected_workspace_path(path, repo_root=repo_root):
+        reason = path_error or "protected_workspace_path"
+        return {
+            "tool": "workspace_edit",
+            "status": "rejected",
+            "summary": f"workspace edit rejected: {reason}",
+            "data": {"operation": operation, "reason": reason},
+        }
+    create_dirs = bool(arguments.get("create_dirs", False))
+    content_limit = 120_000
+    try:
+        if operation in {"write_file", "append_text"}:
+            content = str(arguments.get("content", "") or "")
+            if len(content) > content_limit:
+                return {
+                    "tool": "workspace_edit",
+                    "status": "rejected",
+                    "summary": "workspace edit rejected: content_too_large",
+                    "data": {"operation": operation, "path": str(path), "reason": "content_too_large"},
+                }
+            if create_dirs:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.parent.exists():
+                return {
+                    "tool": "workspace_edit",
+                    "status": "rejected",
+                    "summary": "workspace edit rejected: parent_missing",
+                    "data": {"operation": operation, "path": str(path), "reason": "parent_missing"},
+                }
+            if operation == "write_file":
+                path.write_text(content, encoding="utf-8")
+            else:
+                existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+                path.write_text(existing + content, encoding="utf-8")
+            return {
+                "tool": "workspace_edit",
+                "status": "ok",
+                "summary": _compact(f"workspace {operation} {path.name}: {len(content)} chars", 420),
+                "data": {"operation": operation, "path": str(path), "chars": len(content)},
+            }
+        if operation == "replace_text":
+            if not path.exists() or not path.is_file():
+                return {
+                    "tool": "workspace_edit",
+                    "status": "error",
+                    "summary": f"workspace replace_text: not a file: {path.name}",
+                    "data": {"operation": operation, "path": str(path), "reason": "not_file"},
+                }
+            old_text = str(arguments.get("old_text", "") or "")
+            new_text = str(arguments.get("new_text", "") or "")
+            if not old_text:
+                return {
+                    "tool": "workspace_edit",
+                    "status": "rejected",
+                    "summary": "workspace edit rejected: missing old_text",
+                    "data": {"operation": operation, "path": str(path), "reason": "missing_old_text"},
+                }
+            current = path.read_text(encoding="utf-8", errors="replace")
+            if old_text not in current:
+                return {
+                    "tool": "workspace_edit",
+                    "status": "empty",
+                    "summary": "workspace replace_text: old_text not found",
+                    "data": {"operation": operation, "path": str(path), "replacements": 0},
+                }
+            updated = current.replace(old_text, new_text, 1)
+            path.write_text(updated, encoding="utf-8")
+            return {
+                "tool": "workspace_edit",
+                "status": "ok",
+                "summary": _compact(f"workspace replace_text {path.name}: 1 replacement", 420),
+                "data": {"operation": operation, "path": str(path), "replacements": 1},
+            }
+    except OSError as exc:
+        return {
+            "tool": "workspace_edit",
+            "status": "error",
+            "summary": _compact(f"workspace edit error: {exc}", 420),
+            "data": {"operation": operation, "path": str(path), "error": str(exc)},
+        }
+    return {
+        "tool": "workspace_edit",
+        "status": "rejected",
+        "summary": f"workspace edit rejected: unknown operation {operation}",
+        "data": {"operation": operation, "path": str(path), "reason": "unknown_operation"},
+    }
+
+
+def _run_bounded_command(argv: list[str], *, cwd: Path, timeout_seconds: int) -> tuple[str, int, str, str]:
+    completed = subprocess.run(
+        argv,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_seconds,
+        shell=False,
+        check=False,
+    )
+    stdout = _compact(completed.stdout, 3200)
+    stderr = _compact(completed.stderr, 1600)
+    status = "ok" if completed.returncode == 0 else "failed"
+    return status, int(completed.returncode), stdout, stderr
+
+
+def _execute_git_inspect(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    operation = str(arguments.get("operation", "") or "").strip()
+    path_arg = str(arguments.get("path", "") or "").strip()
+    suffix: list[str] = []
+    if path_arg:
+        resolved, path_error = _resolve_workspace_path(root, path_arg)
+        if path_error:
+            return {
+                "tool": "git_inspect",
+                "status": "rejected",
+                "summary": f"git inspect rejected: {path_error}",
+                "data": {"operation": operation, "reason": path_error},
+            }
+        suffix = ["--", str(resolved.relative_to(root))]
+    commands = {
+        "status_short": ["git", "status", "--short", *suffix],
+        "diff_check": ["git", "diff", "--check", *suffix],
+        "diff_stat": ["git", "diff", "--stat", *suffix],
+        "log_latest": ["git", "log", "-1", "--oneline"],
+    }
+    if operation not in commands:
+        return {
+            "tool": "git_inspect",
+            "status": "rejected",
+            "summary": f"git inspect rejected: unknown operation {operation}",
+            "data": {"operation": operation, "reason": "unknown_operation"},
+        }
+    try:
+        status, returncode, stdout, stderr = _run_bounded_command(commands[operation], cwd=root, timeout_seconds=20)
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return {
+            "tool": "git_inspect",
+            "status": "error",
+            "summary": _compact(f"git inspect error: {exc}", 420),
+            "data": {"operation": operation, "error": str(exc)},
+        }
+    return {
+        "tool": "git_inspect",
+        "status": status,
+        "summary": _compact(f"git {operation} exit={returncode}: {stdout or stderr or 'no output'}", 520),
+        "data": {"operation": operation, "returncode": returncode, "stdout": stdout, "stderr": stderr},
+    }
+
+
+def _execute_test_runner(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    raw_patterns = arguments.get("path_patterns", [])
+    patterns = [str(item) for item in list(raw_patterns or []) if str(item).strip()] if isinstance(raw_patterns, list) else []
+    safe_patterns: list[str] = []
+    for pattern in patterns[:12]:
+        resolved, path_error = _resolve_workspace_path(root, pattern)
+        if path_error:
+            return {
+                "tool": "test_runner",
+                "status": "rejected",
+                "summary": f"test runner rejected: {path_error}",
+                "data": {"reason": path_error, "path": pattern},
+            }
+        safe_patterns.append(str(resolved.relative_to(root)))
+    argv = [sys.executable, "-m", "pytest", "-q", *(safe_patterns or ["tests"])]
+    keyword = str(arguments.get("keyword", "") or "").strip()
+    if keyword:
+        argv.extend(["-k", keyword])
+    timeout_seconds = _clamp_int(arguments.get("timeout_seconds"), 60, 1, 120)
+    try:
+        status, returncode, stdout, stderr = _run_bounded_command(argv, cwd=root, timeout_seconds=timeout_seconds)
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return {
+            "tool": "test_runner",
+            "status": "error",
+            "summary": _compact(f"test runner error: {exc}", 420),
+            "data": {"argv": argv, "error": str(exc), "timeout_seconds": timeout_seconds},
+        }
+    return {
+        "tool": "test_runner",
+        "status": status,
+        "summary": _compact(f"pytest exit={returncode}: {stdout or stderr or 'no output'}", 520),
+        "data": {"argv": argv, "returncode": returncode, "stdout": stdout, "stderr": stderr},
+    }
+
+
+def _execute_progress_note(arguments: dict[str, Any], *, repo_root: str | Path | None) -> dict[str, Any]:
+    root = Path(repo_root or Path.cwd()).resolve()
+    title = str(arguments.get("title", "") or "").strip()
+    summary = str(arguments.get("summary", "") or "").strip()
+    category = _safe_slug(arguments.get("category", "general"), "general")
+    if not title or not summary:
+        return {
+            "tool": "progress_note",
+            "status": "rejected",
+            "summary": "progress note rejected: missing title or summary",
+            "data": {"reason": "missing_title_or_summary"},
+        }
+    notes_dir = root / "docs" / "agent_progress_notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    note_path = notes_dir / f"{_safe_slug(title)}.md"
+    entry = f"\n## {title}\n\n- category: {category}\n- summary: {summary}\n"
+    existing = note_path.read_text(encoding="utf-8", errors="replace") if note_path.exists() else f"# {title}\n"
+    note_path.write_text(existing.rstrip() + "\n" + entry.lstrip(), encoding="utf-8")
+    return {
+        "tool": "progress_note",
+        "status": "ok",
+        "summary": _compact(f"progress note appended: {title} - {summary}", 420),
+        "data": {"path": str(note_path), "title": title, "category": category},
+    }
+
+
 def _call_id(call: dict[str, Any], index: int) -> str:
     return str(call.get("id", "") or f"tool_call_{index + 1}")
 
@@ -480,6 +713,14 @@ def execute_stage113_agent_tools(
             observation = _execute_workspace_inspect(arguments, repo_root=repo_root)
         elif name == "local_command":
             observation = _execute_local_command(arguments, repo_root=repo_root)
+        elif name == "workspace_edit":
+            observation = _execute_workspace_edit(arguments, repo_root=repo_root)
+        elif name == "git_inspect":
+            observation = _execute_git_inspect(arguments, repo_root=repo_root)
+        elif name == "test_runner":
+            observation = _execute_test_runner(arguments, repo_root=repo_root)
+        elif name == "progress_note":
+            observation = _execute_progress_note(arguments, repo_root=repo_root)
         else:
             skipped.append({"provider_call_id": call_id, "tool": name, "reason": "unknown_tool"})
             continue

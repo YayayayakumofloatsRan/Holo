@@ -152,6 +152,108 @@ TOOL_REGISTRY: dict[str, dict[str, Any]] = {
             "required": ["argv"],
         },
     },
+    "workspace_edit": {
+        "description": (
+            "Apply bounded text edits inside the Holo workspace. Supports write_file, append_text, "
+            "and replace_text. Holo rejects paths outside the workspace and protected runtime paths."
+        ),
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "description": "One of write_file, append_text, or replace_text.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative text file path.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Text content for write_file or append_text.",
+                },
+                "old_text": {
+                    "type": "string",
+                    "description": "Exact text to replace for replace_text.",
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "Replacement text for replace_text.",
+                },
+                "create_dirs": {
+                    "type": "boolean",
+                    "description": "Whether parent directories may be created.",
+                },
+            },
+            "required": ["operation", "path"],
+        },
+    },
+    "git_inspect": {
+        "description": "Inspect local git state through bounded read-only git commands.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "description": "One of status_short, diff_check, diff_stat, or log_latest.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional workspace-relative path for status or diff operations.",
+                },
+            },
+            "required": ["operation"],
+        },
+    },
+    "test_runner": {
+        "description": "Run bounded local pytest checks through argv, without shell execution.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "path_patterns": {
+                    "type": "array",
+                    "description": "Workspace-relative pytest path arguments.",
+                    "items": {"type": "string"},
+                    "maxItems": 12,
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "Optional pytest -k expression.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Command timeout in seconds.",
+                    "minimum": 1,
+                    "maximum": 120,
+                },
+            },
+        },
+    },
+    "progress_note": {
+        "description": "Append a short local progress note under docs/agent_progress_notes.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Short title for the note.",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Progress summary to append.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional category slug.",
+                },
+            },
+            "required": ["title", "summary"],
+        },
+    },
 }
 
 

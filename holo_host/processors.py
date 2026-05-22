@@ -105,6 +105,38 @@ def _agent_tool_requests(context: TurnContext) -> list[dict[str, Any]]:
                 "payload": {"argv": ["git", "status", "--short"], "timeout_seconds": 10},
             }
         )
+    if "workspace_edit" not in names:
+        requests.append(
+            {
+                "name": "workspace_edit",
+                "reason": "available_bounded_workspace_text_edit",
+                "payload": {"operation": "replace_text"},
+            }
+        )
+    if "git_inspect" not in names:
+        requests.append(
+            {
+                "name": "git_inspect",
+                "reason": "available_readonly_git_state_inspection",
+                "payload": {"operation": "status_short"},
+            }
+        )
+    if "test_runner" not in names:
+        requests.append(
+            {
+                "name": "test_runner",
+                "reason": "available_bounded_pytest_verification",
+                "payload": {"path_patterns": ["tests"], "timeout_seconds": 60},
+            }
+        )
+    if "progress_note" not in names:
+        requests.append(
+            {
+                "name": "progress_note",
+                "reason": "available_local_progress_note_append",
+                "payload": {"category": "agent_tooling"},
+            }
+        )
     return requests
 
 

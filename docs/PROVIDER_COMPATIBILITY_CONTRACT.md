@@ -172,6 +172,17 @@ Every provider result must expose enough data to record:
   - ordinary Holo chat exposes memory, lookup, workspace inspection, and local
     verification tools by default, while local execution authority remains in
     Holo
+- expanded agent tools must use Stage118:
+  - the ordinary provider tool surface includes eight tools:
+    `memory_recall`, `external_lookup`, `workspace_inspect`,
+    `local_command`, `workspace_edit`, `git_inspect`, `test_runner`, and
+    `progress_note`
+  - `workspace_edit` may only write bounded UTF-8 text inside the workspace and
+    must reject protected paths such as `.git` and `.holo_runtime`
+  - `git_inspect` and `test_runner` expose structured operations instead of
+    broad shell access
+  - `progress_note` appends short local progress notes under
+    `docs/agent_progress_notes`
 
 ## 7. Configuration Surface
 
