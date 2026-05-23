@@ -1248,7 +1248,7 @@ def _fact_grounded_self_report_lines(context: TurnContext) -> list[str]:
         "Do not claim biological consciousness or private human feelings; describe observable runtime, memory, and state transitions instead.",
         "memory answers must name concrete stores when available: archive, working memory, mind_graph, vector hits, active_thread_state, and timestamps or stage anchors.",
         "If the current packet cannot prove a date or source, say that the current memory packet cannot confirm it instead of inventing a metaphor.",
-        "shallow first reaction cannot replace the deeper packet for memory, self-model, identity, runtime, tool, state, or unclear follow-up turns.",
+        "for memory, self-model, identity, runtime, tool, state, or unclear follow-up turns, the fast packet should request deeper work when the current packet is not enough.",
     ]
 
 
@@ -1635,13 +1635,10 @@ class CodexCliProcessor:
             fast_packet["speak_now"] = False
             fast_packet["continue_until"] = "fast packet failed; deep packet required"
         deep_guard = stage124_deep_packet_guard(str(context.user_text or ""), fast_packet)
-        if bool(deep_guard.get("required", False)):
-            fast_packet["deep_packet_needed"] = True
-            fast_packet["deep_packet_forced"] = True
-            fast_packet["deep_packet_force_reason"] = str(deep_guard.get("reason", "") or "deterministic_guard")
-        else:
-            fast_packet["deep_packet_forced"] = False
-            fast_packet["deep_packet_force_reason"] = ""
+        fast_packet["host_deep_advisory"] = bool(deep_guard.get("required", False))
+        fast_packet["host_deep_advisory_reason"] = str(deep_guard.get("reason", "") or "")
+        fast_packet["deep_packet_forced"] = False
+        fast_packet["deep_packet_force_reason"] = ""
 
         stage132_stream_plan = plan_stage132_progressive_stream(
             fast_packet=fast_packet,

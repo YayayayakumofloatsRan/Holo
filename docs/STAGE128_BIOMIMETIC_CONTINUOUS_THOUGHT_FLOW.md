@@ -28,8 +28,8 @@ recent echo dominate over factual memory reporting.
 
 ## Runtime Contract
 
-Stage124 now has a deterministic deep-packet guard. Regardless of what the fast
-model says, Holo must continue to the deep packet for:
+Stage124 now has a deterministic deep-packet advisory. It highlights turns where
+the fast model should usually request deeper work:
 
 - memory or temporal recall
 - self-model or identity questions
@@ -37,9 +37,10 @@ model says, Holo must continue to the deep packet for:
 - factual correction turns such as "answer honestly" or "do not use metaphor"
 - unclear short contextual follow-ups such as "so what is the answer?"
 
-When the guard fires, Holo preserves the shallow reply as the first reaction,
-but still sends the deep packet. That keeps the biomimetic first moment without
-letting the first moment become the whole mind.
+When the advisory fires, Holo records the reason in metadata and makes it
+visible to diagnostics, but the optional continuation still follows the
+provider fast packet's `deep_packet_needed` decision. That keeps the biomimetic
+first moment without turning continuation into a fixed code script.
 
 ## Prompt Contract
 
@@ -55,7 +56,8 @@ prompt now injects a `Fact Grounded Self Report` section:
 - name concrete memory stores when available: archive, working memory,
   mind_graph, vector hits, active_thread_state
 - if a date/source is not proven by the current packet, say so
-- never let shallow first reaction replace the deeper packet
+- ask for a deeper packet when the current packet is not enough, but do not
+  make continuation mandatory in host code
 
 The recall reconstruction prompt also now tells the model to prefer concrete
 stores, dates, stages, and source anchors over metaphor when the user asks what

@@ -76,6 +76,35 @@ class _ProgressiveRunner:
         )
 
 
+class _FastOnlyRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, prompt: str, **kwargs: object) -> SimpleNamespace:
+        self.calls.append({"prompt": prompt, **kwargs})
+        if str(kwargs.get("budget_tag", "")) == "stage124_fast_packet":
+            return SimpleNamespace(
+                reply_text=(
+                    '{"intent":"brief_memory_ack","scene":"low pressure recall",'
+                    '"deep_packet_needed":false,"shallow_reply":"先按快包判断，这一轮不展开。",'
+                    '"speak_now":true,"continue_until":"fast answer is enough"}'
+                ),
+                session_id="stage132-fast-only",
+                returncode=0,
+                stdout="",
+                stderr="",
+                metadata={"provider": "fake", "lane": "micro_fast", "model": "fake-flash", "usage": {}},
+            )
+        return SimpleNamespace(
+            reply_text="This deep answer should not be called.",
+            session_id="stage132-unexpected-deep",
+            returncode=0,
+            stdout="",
+            stderr="",
+            metadata={"provider": "fake", "lane": "subject_main", "model": "fake-pro", "usage": {}},
+        )
+
+
 def _context(text: str) -> TurnContext:
     packet = {
         "selected_action": {"action_type": "reply_once", "score": 0.88},
@@ -158,6 +187,48 @@ def test_stage132_plan_marks_fast_reaction_before_deep_continuation() -> None:
     assert plan["rounds"][0]["lane"] == "micro_fast"
     assert plan["rounds"][1]["lane"] == "subject_main"
     assert plan["tool_loop_expected"] is True
+    assert plan["continuation_optional"] is True
+    assert plan["continuation_decision_source"] == "provider_fast_packet"
+    assert plan["rounds"][1]["condition"] == "fast_packet_deep_packet_needed"
+
+
+def test_stage132_plan_stops_after_fast_when_provider_says_no_deep() -> None:
+    plan = plan_stage132_progressive_stream(
+        fast_packet={
+            "intent": "simple_ack",
+            "scene": "low pressure cli",
+            "deep_packet_needed": False,
+            "shallow_reply": "收到，先这样处理。",
+            "speak_now": True,
+            "continue_until": "fast answer is enough",
+        },
+        continuation_lane="subject_main",
+        continuation_lane_reason="would_be_default",
+        selected_action_type="reply_once",
+        uncertainty_level=0.1,
+        channel="holo_cli",
+        expression_budget=1,
+        agent_tool_requests=[],
+        fast_context_frame={"cache_hint": "stage132:def", "line_count": 6, "char_count": 700},
+    )
+
+    assert plan["round_count"] == 1
+    assert [item["purpose"] for item in plan["rounds"]] == ["fast_reaction"]
+    assert plan["deep_packet_needed"] is False
+    assert plan["stop_reason"] == "provider_fast_packet_said_fast_answer_enough"
+
+
+def test_stage132_docs_and_ct_do_not_present_followups_as_mandatory() -> None:
+    root = Path(__file__).resolve().parents[1]
+    docs = (root / "docs" / "STAGE132_PROGRESSIVE_CONSCIOUS_STREAM.md").read_text(encoding="utf-8")
+    progress = (root / "docs" / "PROGRESS_2026-05-23_STAGE132_PROGRESSIVE_CONSCIOUS_STREAM.md").read_text(encoding="utf-8")
+    html = (root / "artifacts" / "stage132" / "stage132_progressive_conscious_stream_ct.html").read_text(encoding="utf-8")
+    payload = (root / "artifacts" / "stage132" / "stage132_progressive_conscious_stream_payload.json").read_text(encoding="utf-8")
+
+    combined = "\n".join([docs, progress, html, payload])
+    assert "optional" in combined
+    assert "A' A'' A'''" not in combined
+    assert "A -> A' -> A''" not in combined
 
 
 def test_stage132_merge_preserves_first_reaction_and_deep_cli_bubbles() -> None:
@@ -199,3 +270,19 @@ def test_stage132_processor_returns_visible_progressive_cli_bubbles(tmp_path: Pa
     assert plan.debug["stage132_progressive_stream"]["round_count"] == 2
     assert plan.debug["stage132_progressive_stream"]["rounds"][0]["lane"] == "micro_fast"
     assert plan.debug["stage132_progressive_stream"]["rounds"][1]["lane"] in {"subject_main", "kernel_xhigh"}
+
+
+def test_stage132_processor_does_not_force_optional_continuation_from_host_advisory(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    runner = _FastOnlyRunner()
+    processor = CodexCliProcessor(config, runner)  # type: ignore[arg-type]
+    plan = processor.generate(_context("回忆一下记忆深处是什么，但如果你判断够了就不要展开"), session_id="stage132")
+
+    assert [call["budget_tag"] for call in runner.calls] == ["stage124_fast_packet"]
+    stream = plan.debug["stage132_progressive_stream"]
+    fast_packet = plan.debug["stage124_thought_loop"]["fast_packet"]
+    assert stream["round_count"] == 1
+    assert stream["deep_packet_needed"] is False
+    assert stream["stop_reason"] == "provider_fast_packet_said_fast_answer_enough"
+    assert fast_packet["host_deep_advisory"] is True
+    assert fast_packet["deep_packet_forced"] is False

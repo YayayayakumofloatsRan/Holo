@@ -152,6 +152,7 @@ def plan_stage132_progressive_stream(
             "model_tier": "flash",
             "visible": visible_first,
             "emits_external_speech": visible_first,
+            "condition": "always_run_first_packet",
         }
     ]
     if deep_needed:
@@ -165,18 +166,23 @@ def plan_stage132_progressive_stream(
                 "visible": True,
                 "emits_external_speech": True,
                 "tool_loop_expected": tool_loop_expected,
+                "condition": "fast_packet_deep_packet_needed",
             }
         )
 
     cache_hint = str(dict(fast_context_frame or {}).get("cache_hint", "") or "")
+    stop_reason = "" if deep_needed else "provider_fast_packet_said_fast_answer_enough"
     return {
         "schema": STAGE132_SCHEMA,
         "stage": 132,
         "round_count": len(rounds),
         "rounds": rounds,
+        "continuation_optional": True,
+        "continuation_decision_source": "provider_fast_packet",
         "visible_first_reaction": visible_first,
         "deep_packet_needed": deep_needed,
         "tool_loop_expected": tool_loop_expected,
+        "stop_reason": stop_reason,
         "selected_action_type": str(selected_action_type or "").strip(),
         "uncertainty_level": float(uncertainty_level or 0.0),
         "channel": str(channel or "").strip(),

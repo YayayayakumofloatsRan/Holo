@@ -4,13 +4,15 @@ Stage132 turns the fast provider packet into the first round of a visible stream
 
 ## Practical Contract
 
-For one user input `A`, Holo now models the response as a packet sequence:
+For one user input `A`, Holo now models the response as a provider-governed packet sequence:
 
 1. `round 0`: `micro_fast` / flash lane. It receives a richer bounded context frame, judges intent and scene, and may emit a visible first reaction `A'`.
-2. `round 1`: `subject_main` or upgraded pro lane when the fast packet marks the turn as deep, uncertain, tool-grounded, memory-related, or self-model related. It emits the deeper continuation `A''`.
-3. Tool loops remain inside the deep lane metadata and are shown as part of the stream when provider tools are expected.
+2. `round 1+`: optional continuation rounds. They exist only when the fast packet marks the turn as needing more work; the host must not create them as a fixed script.
+3. Tool loops remain inside continuation metadata and are shown as part of the stream only when provider tools are expected.
 
 The fast packet is therefore not proof that the thought loop is complete. It is a first biological-style reflex plus a triage packet.
+The continuation decision source is the provider fast packet: `deep_packet_needed=true/false`.
+Host-side heuristics may add `host_deep_advisory=true` for diagnostic visibility, but they must not force a visible continuation by themselves.
 
 ## Fast Context Frame
 
@@ -28,14 +30,14 @@ The frame is capped and gets a stable `stage132:*` cache hint. This is meant to 
 
 ## External Stream Preservation
 
-`merge_stage132_reply_bubbles` preserves `A'` and `A''` as distinct bubbles for CLI and app channels. `reply_api` now honors Stage132 planned bubbles instead of rebuilding them into one generic bubble.
+`merge_stage132_reply_bubbles` preserves the first reaction and any optional continuation as distinct bubbles for CLI and app channels. `reply_api` now honors Stage132 planned bubbles instead of rebuilding them into one generic bubble.
 
 This makes the user-visible behavior match the underlying packet flow:
 
 ```text
 A
 A'
-A''
+optional continuation only if the fast packet asks for it
 ```
 
 ## CT Visibility
@@ -52,4 +54,4 @@ The companion static CT artifact is:
 
 `artifacts/stage132/stage132_progressive_conscious_stream_ct.html`
 
-It visualizes the same contract as a topology: input, working memory, episodic recall, flash packet, intent gate, tool loop, pro packet, and output stream.
+It visualizes the same contract as a topology: input, working memory, episodic recall, flash packet, intent gate, optional tool loop, optional continuation packet, and output stream.

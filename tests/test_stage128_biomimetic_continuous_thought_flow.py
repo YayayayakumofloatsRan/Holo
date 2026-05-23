@@ -98,19 +98,22 @@ def _context(text: str, *, tier: str = "deep_recall") -> TurnContext:
     )
 
 
-def test_stage128_memory_probe_forces_deep_packet_but_keeps_first_reaction(tmp_path: Path) -> None:
+def test_stage128_memory_probe_marks_deep_advisory_but_provider_fast_packet_controls_continuation(tmp_path: Path) -> None:
     config = _config(tmp_path)
     runner = _ShallowThenDeepRunner()
     processor = CodexCliProcessor(config, runner)  # type: ignore[arg-type]
 
     plan = processor.generate(_context("回忆一下，记忆最深处是些什么，什么时候的"), session_id="stage128")
 
-    assert [call["budget_tag"] for call in runner.calls] == ["stage124_fast_packet", "chat_reply"]
-    assert runner.calls[1]["metadata"]["stage124_fast_packet"]["deep_packet_needed"] is True
-    assert runner.calls[1]["metadata"]["stage124_fast_packet"]["deep_packet_forced"] is True
+    assert [call["budget_tag"] for call in runner.calls] == ["stage124_fast_packet"]
+    fast_packet = plan.debug["stage124_thought_loop"]["fast_packet"]
+    assert fast_packet["deep_packet_needed"] is False
+    assert fast_packet["host_deep_advisory"] is True
+    assert fast_packet["host_deep_advisory_reason"] == "memory_or_temporal_recall"
+    assert fast_packet["deep_packet_forced"] is False
     assert "明白，先按事实回答。" in plan.text
-    assert "事实回答：当前最深的可检索记忆" in plan.text
-    assert plan.debug["stage124_thought_loop"]["deep_packet_sent"] is True
+    assert "事实回答：当前最深的可检索记忆" not in plan.text
+    assert plan.debug["stage124_thought_loop"]["deep_packet_sent"] is False
 
 
 def test_stage128_short_contextual_followup_cannot_end_at_shallow_answer() -> None:
@@ -143,4 +146,4 @@ def test_stage128_self_memory_prompt_uses_fact_grounded_contract(tmp_path: Path)
     assert "Fact Grounded Self Report:" in prompt
     assert "single-subject agent runtime" in prompt
     assert "memory answers must name concrete stores" in prompt
-    assert "shallow first reaction cannot replace the deeper packet" in prompt
+    assert "the fast packet should request deeper work when the current packet is not enough" in prompt
