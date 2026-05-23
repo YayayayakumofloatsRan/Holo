@@ -151,6 +151,7 @@ This split keeps the "eyes and hands" off the launching terminal:
 - WSL writes a send task
 - the detached Windows sender grabs the task and performs the actual Weixin search/send
 - receipts and screenshots are written back for inspection
+- successful detached sends are recorded in the shared `state_file` so the live watcher can suppress outbound echoes
 
 If `pyweixin_repo_path` is configured, the detached sender now prefers the upstream `pyweixin` 4.1+ send path first. Only when that lane is unavailable should you fall back to the old coordinate-based sender.
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import importlib.machinery
+import importlib.util
 import os
 import sys
 import tempfile
@@ -61,6 +63,23 @@ class FakeClient:
 
 
 class WindowsHelperTests(unittest.TestCase):
+    def _load_weixin_sender_module(self):
+        helper_dir = Path(__file__).resolve().parents[1] / "windows_helper"
+        path = helper_dir / "weixin_sender.pyw"
+        loader = importlib.machinery.SourceFileLoader("weixin_sender_under_test", str(path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(helper_dir))
+        try:
+            loader.exec_module(module)
+        finally:
+            try:
+                sys.path.remove(str(helper_dir))
+            except ValueError:
+                pass
+        return module
+
     def test_contact_match_prefers_exact_remark(self) -> None:
         contacts = [
             {"wxid": "wxid_alice", "name": "Alice", "remark": "", "code": "alice_1"},
@@ -264,6 +283,57 @@ class WindowsHelperTests(unittest.TestCase):
             payload = json.loads(task_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["chat_name"], "TestUser")
             self.assertEqual(payload["search"], "TestUser")
+
+    def test_detached_sender_records_successful_outbound_for_echo_suppression(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = HelperConfig(
+                whitelist=["TestUser"],
+                state_file=root / "state.json",
+                send_queue_dir=root / "send_queue",
+                sent_dir=root / "sent",
+                failed_dir=root / "failed",
+                receipt_dir=root / "receipts",
+                pyweixin_repo_path="fake-pyweixin",
+            )
+            config.send_queue_dir.mkdir(parents=True)
+            task_path = config.send_queue_dir / "initiative-wechat-test.json"
+            task_path.write_text(
+                json.dumps(
+                    {
+                        "task_id": "initiative-wechat-test",
+                        "chat_name": "TestUser",
+                        "search": "TestUser",
+                        "text": "I just sent this.",
+                        "process_path": "D:/Weixin/Weixin.exe",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            sender = self._load_weixin_sender_module()
+            with mock.patch.object(
+                sender,
+                "send_via_pyweixin",
+                return_value={"ok": True, "resolved_chat": "TestUser", "send_mode": "current_chat_only"},
+            ):
+                result = sender.send_one(config, task_path)
+
+            self.assertTrue(result["ok"])
+            state = StateStore(config.state_file)
+            outbound = state.last_outbound("TestUser")
+            self.assertEqual(outbound["bubble_texts"], ["I just sent this."])
+            turn = ChatTurn(
+                chat_name="TestUser",
+                text="I just sent this.",
+                metadata={"direction": "unknown", "direction_confidence": 0.0},
+            )
+            adapter = JsonInboxAdapter(HelperConfig(inbox_dir=root / "inbox", processed_dir=root / "processed"))
+            client = FakeClient()
+            with mock.patch("windows_helper.wechat_helper.time.time", return_value=int(outbound["sent_at"]) + 3):
+                echo_result = process_one_turn(turn, client=client, state=state, adapter=adapter, config=config)
+            self.assertEqual(echo_result["reason"], "outbound_echo")
+            self.assertEqual(client.calls, [])
 
     def test_parse_pyweixin_session_unread_extracts_chat_and_count(self) -> None:
         parsed = parse_pyweixin_session_unread("session_item_TestUser", "TestUser\n[3条]\nbring holo back!")

@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from wechat_helper import HelperConfig, load_config, send_via_pyweixin
+from wechat_helper import HelperConfig, StateStore, load_config, send_via_pyweixin
 from weixin_debug import bring_front, capture_window, click_window, foreground_info, list_visible_windows, locate_window, maybe_search_and_send
 
 
@@ -43,6 +43,27 @@ def write_receipt(config: HelperConfig, task: dict, payload: dict) -> Path:
     return receipt
 
 
+def remember_detached_outbound(config: HelperConfig, *, chat_names: list[str], text: str) -> bool:
+    clean_text = str(text or "").strip()
+    names: list[str] = []
+    for raw in chat_names:
+        name = str(raw or "").strip()
+        if name and name not in names:
+            names.append(name)
+    if not clean_text or not names:
+        return False
+    try:
+        state = StateStore(config.state_file)
+        now = time.time()
+        for name in names:
+            state.mark_sent(name, now=now)
+            state.remember_outbound(name, text=clean_text, bubbles=[clean_text], now=now)
+        state.save()
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
 def fail_task(config: HelperConfig, task_path: Path, task: dict, payload: dict) -> dict:
     failed_path = move_task(task_path, config.failed_dir)
     payload = dict(payload)
@@ -65,12 +86,18 @@ def send_one(config: HelperConfig, task_path: Path) -> dict:
         pyweixin_result = send_via_pyweixin(config, chat_name=search, text=text, search_pages=0, clear=True, send_delay=0.25)
         if pyweixin_result.get("ok"):
             sent_path = move_task(task_path, config.sent_dir)
+            outbound_state_recorded = remember_detached_outbound(
+                config,
+                chat_names=[str(task.get("chat_name", "")), search, str(pyweixin_result.get("resolved_chat", ""))],
+                text=text,
+            )
             payload = {
                 "ok": True,
                 "transport": "pyweixin",
                 "task": task,
                 "task_path": str(sent_path),
                 "result": pyweixin_result,
+                "outbound_state_recorded": outbound_state_recorded,
             }
             write_receipt(config, {"task_id": task_id}, payload)
             return payload
@@ -118,6 +145,11 @@ def send_one(config: HelperConfig, task_path: Path) -> dict:
     capture = capture_window(int(current["hwnd"]), snap_path)
     foreground = foreground_info()
     sent_path = move_task(task_path, config.sent_dir)
+    outbound_state_recorded = remember_detached_outbound(
+        config,
+        chat_names=[str(task.get("chat_name", "")), search],
+        text=text,
+    )
     payload = {
         "ok": True,
         "task": task,
@@ -129,6 +161,7 @@ def send_one(config: HelperConfig, task_path: Path) -> dict:
         "before_capture": before_capture,
         "interaction": interaction,
         "capture": capture,
+        "outbound_state_recorded": outbound_state_recorded,
     }
     write_receipt(config, {"task_id": task_id}, payload)
     return payload
