@@ -14,7 +14,7 @@ from holo_host.codex_runner import CodexRunner
 from holo_host.daemon import HoloDaemon
 from holo_host.mail_gateway import MaildirGateway
 from holo_host.mind_graph import MindGraph
-from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, ProcessorUsageRecord, TurnContext
+from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, ProcessorUsageRecord, ReplyBubble, TurnContext
 from holo_host.policy import AutonomyPolicy
 from holo_host.reply_api import (
     HoloReplyService,
@@ -2407,6 +2407,26 @@ class ReplyBubbleTests(unittest.TestCase):
         self.assertIn("道理", joined)
         self.assertFalse(any(b.text.endswith("道") for b in bubbles))
         self.assertFalse(any(b.text.startswith("理") for b in bubbles))
+
+    def test_reply_service_finalizer_preserves_stage132_progressive_bubbles(self) -> None:
+        service = object.__new__(HoloReplyService)
+        attention = build_attention_state("show progressive stream", channel="holo_cli")
+
+        bubbles = service._finalize_bubbles(
+            "First reaction. Deep continuation.",
+            channel="holo_cli",
+            attention_state=attention,
+            emotion_state={},
+            utterance_plan={},
+            route="main",
+            planned_bubbles=[
+                ReplyBubble(text="First reaction.", delay_ms=0, purpose="fast_reaction"),
+                ReplyBubble(text="Deep continuation.", delay_ms=520, purpose="deep_continuation"),
+            ],
+        )
+
+        self.assertEqual([bubble.text for bubble in bubbles], ["First reaction.", "Deep continuation."])
+        self.assertEqual([bubble.purpose for bubble in bubbles], ["fast_reaction", "deep_continuation"])
 
     def test_build_turn_plan_can_expand_bubble_target_for_playful_companionship(self) -> None:
         attention = AttentionState(

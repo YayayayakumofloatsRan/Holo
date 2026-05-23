@@ -48,8 +48,26 @@ def _action_from_entry(entry: dict[str, Any]) -> str:
 def _stage124_flags(entry: dict[str, Any]) -> dict[str, Any]:
     payload = _payload(entry)
     stage124 = payload.get("stage124", {})
-    if isinstance(stage124, dict):
+    if isinstance(stage124, dict) and stage124:
         return dict(stage124)
+    result = payload.get("result", {})
+    if isinstance(result, dict):
+        nested = result.get("stage124", {})
+        if isinstance(nested, dict):
+            return dict(nested)
+    return {}
+
+
+def _stage132_stream(entry: dict[str, Any]) -> dict[str, Any]:
+    payload = _payload(entry)
+    direct = payload.get("stage132_progressive_stream", {})
+    if isinstance(direct, dict) and direct:
+        return dict(direct)
+    result = payload.get("result", {})
+    if isinstance(result, dict):
+        nested = result.get("stage132_progressive_stream", {})
+        if isinstance(nested, dict):
+            return dict(nested)
     return {}
 
 
@@ -88,6 +106,7 @@ def build_stage131_thought_flow_trace(
 
     latest_entry = deliberation_entries[0] if deliberation_entries else {}
     latest_flags = _stage124_flags(latest_entry)
+    latest_stage132 = _stage132_stream(latest_entry)
     fast_seen = bool(latest_flags.get("fast_packet_needed", False)) or any(
         str(row.get("lane", "") or "").strip() in {"micro_fast", "fast"} for row in reply_usage
     )
@@ -114,6 +133,7 @@ def build_stage131_thought_flow_trace(
             "deep_seen": deep_seen,
             "reply_usage": reply_usage[: max(1, int(limit))],
         },
+        "stage132_stream": latest_stage132,
         "actions": [
             {
                 "entry_type": str(entry.get("entry_type", "") or "").strip(),
@@ -152,6 +172,20 @@ def render_stage131_cli_ct(trace: dict[str, Any]) -> str:
         f"DEEP packet={'on' if bool(packets.get('deep_seen', False)) else 'off'} -> "
         "tool_loop -> expression"
     )
+    stream = dict(payload.get("stage132_stream", {})) if isinstance(payload.get("stage132_stream"), dict) else {}
+    if stream:
+        lines.append(
+            "STAGE132 STREAM "
+            f"rounds={int(stream.get('round_count', 0) or 0)} "
+            f"cache={compact_text(str(stream.get('cache_hint', '-') or '-'), 32)} "
+            f"context_lines={int(stream.get('fast_context_lines', 0) or 0)}"
+        )
+        for item in [dict(row) for row in stream.get("rounds", []) if isinstance(row, dict)][:5]:
+            index = int(item.get("index", 0) or 0)
+            lane = str(item.get("lane", "") or "-").strip()
+            purpose = str(item.get("purpose", "") or "-").strip()
+            visible = "yes" if bool(item.get("visible", False)) else "no"
+            lines.append(f"ROUND {index} lane={lane} purpose={purpose} visible={visible}")
 
     actions = [dict(item) for item in payload.get("actions", []) if isinstance(item, dict)]
     if actions:

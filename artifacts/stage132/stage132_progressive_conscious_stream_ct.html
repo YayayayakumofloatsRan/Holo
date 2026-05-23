@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stage132 Progressive Conscious Stream CT</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101315;
+      --panel: #171b1f;
+      --panel-2: #1d2329;
+      --line: #36424a;
+      --text: #edf2f4;
+      --muted: #9eabb2;
+      --cyan: #4cc9d9;
+      --green: #67d391;
+      --amber: #f4ba61;
+      --red: #ee6d65;
+      --blue: #7aa7ff;
+      --violet: #b892ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    }
+
+    aside {
+      border-right: 1px solid var(--line);
+      background: #12171a;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    main {
+      display: grid;
+      grid-template-rows: auto minmax(420px, 1fr) auto;
+      min-width: 0;
+    }
+
+    header {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: #11161a;
+    }
+
+    h1, h2 {
+      margin: 0;
+      font-weight: 680;
+      line-height: 1.1;
+    }
+
+    h1 { font-size: 20px; }
+    h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+    button {
+      border: 1px solid #42505a;
+      background: #20272d;
+      color: var(--text);
+      border-radius: 6px;
+      min-height: 34px;
+      padding: 0 11px;
+      cursor: pointer;
+    }
+
+    button.active { border-color: var(--cyan); background: #17323a; }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .metric, .round, .legend, .packet-text {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 10px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 16px;
+    }
+
+    .rounds {
+      display: grid;
+      gap: 8px;
+    }
+
+    .round {
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .round .idx {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #222b31;
+      color: var(--cyan);
+      font-weight: 700;
+    }
+
+    .round strong { display: block; font-size: 13px; }
+    .round span { color: var(--muted); font-size: 12px; }
+
+    .pill {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 3px 8px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .ct-wrap {
+      position: relative;
+      overflow: hidden;
+      min-height: 420px;
+      background: #0f1316;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 520px;
+    }
+
+    .readout {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      border-top: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .readout div {
+      background: var(--panel-2);
+      padding: 10px 12px;
+      min-height: 56px;
+    }
+
+    .readout span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+    }
+
+    .readout strong {
+      display: block;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+
+    .legend {
+      display: grid;
+      gap: 7px;
+    }
+
+    .legend-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+    }
+
+    .packet-text {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .packet-text strong {
+      color: var(--text);
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      .readout { grid-template-columns: 1fr 1fr; }
+      canvas { min-height: 460px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div>
+        <h1>Stage132 CT</h1>
+        <h2>progressive packet stream</h2>
+      </div>
+      <div class="metric-grid">
+        <div class="metric"><span>rounds</span><strong id="roundCount">3</strong></div>
+        <div class="metric"><span>cache</span><strong id="cacheHint">stage132:demo</strong></div>
+        <div class="metric"><span>context lines</span><strong id="contextLines">11</strong></div>
+        <div class="metric"><span>tokens</span><strong id="tokenCount">1270</strong></div>
+      </div>
+      <div>
+        <h2>packet rounds</h2>
+        <div class="rounds" id="rounds"></div>
+      </div>
+      <div class="legend">
+        <div class="legend-row"><span><i class="swatch" style="background: var(--cyan)"></i> flash packet</span><span>fast A'</span></div>
+        <div class="legend-row"><span><i class="swatch" style="background: var(--amber)"></i> pro packet</span><span>deep A''</span></div>
+        <div class="legend-row"><span><i class="swatch" style="background: var(--green)"></i> memory</span><span>context</span></div>
+        <div class="legend-row"><span><i class="swatch" style="background: var(--blue)"></i> tools</span><span>grounding</span></div>
+        <div class="legend-row"><span><i class="swatch" style="background: var(--red)"></i> gate</span><span>stop/go</span></div>
+      </div>
+      <div class="packet-text">
+        <strong>A -> A' -> A''</strong>
+        The first visible reply is kept as a separate surface event. Deep continuation is preserved as a later bubble and displayed with the provider lane that produced it.
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <h1>Semantic Topology During Provider Packet Flow</h1>
+          <h2 id="phaseLabel">phase: sensory input</h2>
+        </div>
+        <div class="toolbar">
+          <button id="playBtn" class="active">Pause</button>
+          <button id="sliceBtn">Slice</button>
+          <button id="densityBtn">Dense</button>
+        </div>
+      </header>
+      <div class="ct-wrap">
+        <canvas id="ct"></canvas>
+      </div>
+      <div class="readout">
+        <div><span>active lane</span><strong id="laneReadout">micro_fast</strong></div>
+        <div><span>surface</span><strong id="surfaceReadout">A'</strong></div>
+        <div><span>tool loop</span><strong id="toolReadout">armed</strong></div>
+        <div><span>stop condition</span><strong>answer sufficient</strong></div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const payload = {
+      cache_hint: "stage132:demo",
+      fast_context_lines: 11,
+      rounds: [
+        { index: 0, purpose: "fast_reaction", lane: "micro_fast", model_tier: "flash", visible: true, duration_ms: 430, tokens: 140 },
+        { index: 1, purpose: "deep_continuation", lane: "subject_main", model_tier: "pro", visible: true, duration_ms: 1680, tokens: 920 },
+        { index: 2, purpose: "tool_grounded_update", lane: "tool_loop", model_tier: "tool", visible: false, duration_ms: 760, tokens: 210 }
+      ],
+      nodes: [
+        { id: "user_A", label: "A", kind: "input", x: 0.10, y: 0.50 },
+        { id: "working_memory", label: "working memory", kind: "memory", x: 0.25, y: 0.28 },
+        { id: "episodic_memory", label: "episodic recall", kind: "memory", x: 0.26, y: 0.70 },
+        { id: "fast_packet", label: "flash A'", kind: "packet", x: 0.43, y: 0.42 },
+        { id: "intent_gate", label: "intent gate", kind: "gate", x: 0.55, y: 0.25 },
+        { id: "tool_loop", label: "tool loop", kind: "tool", x: 0.63, y: 0.68 },
+        { id: "deep_packet", label: "pro A''", kind: "packet", x: 0.76, y: 0.42 },
+        { id: "output_stream", label: "A' A'' A'''", kind: "output", x: 0.90, y: 0.50 }
+      ],
+      edges: [
+        ["user_A", "working_memory", 0.70],
+        ["user_A", "episodic_memory", 0.55],
+        ["working_memory", "fast_packet", 0.86],
+        ["episodic_memory", "fast_packet", 0.62],
+        ["fast_packet", "intent_gate", 0.94],
+        ["intent_gate", "deep_packet", 0.80],
+        ["intent_gate", "tool_loop", 0.64],
+        ["tool_loop", "deep_packet", 0.74],
+        ["deep_packet", "output_stream", 0.88],
+        ["fast_packet", "output_stream", 0.48]
+      ]
+    };
+
+    const colors = {
+      input: "#edf2f4",
+      memory: "#67d391",
+      packet: "#4cc9d9",
+      gate: "#ee6d65",
+      tool: "#7aa7ff",
+      output: "#f4ba61"
+    };
+    const phaseNames = ["sensory input", "flash intent packet", "tool/memory binding", "pro continuation", "surface stream"];
+    const canvas = document.getElementById("ct");
+    const ctx = canvas.getContext("2d");
+    let running = true;
+    let slice = false;
+    let dense = true;
+    let started = performance.now();
+
+    document.getElementById("rounds").innerHTML = payload.rounds.map((round) => `
+      <div class="round">
+        <div class="idx">${round.index}</div>
+        <div><strong>${round.purpose}</strong><span>${round.lane} · ${round.model_tier} · ${round.duration_ms}ms</span></div>
+        <div class="pill">${round.visible ? "visible" : "internal"}</div>
+      </div>
+    `).join("");
+    document.getElementById("roundCount").textContent = String(payload.rounds.length);
+    document.getElementById("cacheHint").textContent = payload.cache_hint;
+    document.getElementById("contextLines").textContent = String(payload.fast_context_lines);
+    document.getElementById("tokenCount").textContent = String(payload.rounds.reduce((sum, round) => sum + round.tokens, 0));
+
+    document.getElementById("playBtn").onclick = (event) => {
+      running = !running;
+      event.currentTarget.textContent = running ? "Pause" : "Play";
+      event.currentTarget.classList.toggle("active", running);
+      if (running) started = performance.now() - stateTime;
+    };
+    document.getElementById("sliceBtn").onclick = (event) => {
+      slice = !slice;
+      event.currentTarget.classList.toggle("active", slice);
+    };
+    document.getElementById("densityBtn").onclick = (event) => {
+      dense = !dense;
+      event.currentTarget.textContent = dense ? "Dense" : "Sparse";
+      event.currentTarget.classList.toggle("active", dense);
+    };
+
+    let stateTime = 0;
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+      canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    function nodePos(node, w, h, t) {
+      const amp = dense ? 7 : 3;
+      return {
+        x: node.x * w + Math.sin(t * 0.0012 + node.x * 11) * amp,
+        y: node.y * h + Math.cos(t * 0.0010 + node.y * 13) * amp
+      };
+    }
+
+    function drawGrid(w, h, t) {
+      ctx.strokeStyle = "#20282d";
+      ctx.lineWidth = 1;
+      const gap = slice ? 36 : 48;
+      const offset = (t * 0.012) % gap;
+      for (let x = -gap + offset; x < w + gap; x += gap) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x + (slice ? 16 : 0), h);
+        ctx.stroke();
+      }
+      for (let y = -gap + offset; y < h + gap; y += gap) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+    }
+
+    function draw() {
+      if (running) stateTime = performance.now() - started;
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#0f1316";
+      ctx.fillRect(0, 0, w, h);
+      drawGrid(w, h, stateTime);
+
+      const phase = Math.floor((stateTime / 1300) % phaseNames.length);
+      const phaseProgress = (stateTime % 1300) / 1300;
+      document.getElementById("phaseLabel").textContent = `phase: ${phaseNames[phase]}`;
+      const activeRound = payload.rounds[Math.min(payload.rounds.length - 1, Math.max(0, phase - 1))];
+      document.getElementById("laneReadout").textContent = activeRound.lane;
+      document.getElementById("surfaceReadout").textContent = activeRound.visible ? (activeRound.index === 0 ? "A'" : "A''") : "internal";
+      document.getElementById("toolReadout").textContent = phase >= 2 ? "executing" : "armed";
+
+      const byId = new Map(payload.nodes.map((node) => [node.id, node]));
+      for (const [fromId, toId, weight] of payload.edges) {
+        const from = byId.get(fromId);
+        const to = byId.get(toId);
+        const p1 = nodePos(from, w, h, stateTime);
+        const p2 = nodePos(to, w, h, stateTime);
+        const pulse = 0.35 + 0.65 * Math.max(0, Math.sin(stateTime * 0.003 + weight * 7));
+        ctx.strokeStyle = `rgba(124, 160, 170, ${0.12 + weight * 0.28})`;
+        ctx.lineWidth = 1 + weight * 2;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.bezierCurveTo((p1.x + p2.x) / 2, p1.y - 42, (p1.x + p2.x) / 2, p2.y + 42, p2.x, p2.y);
+        ctx.stroke();
+
+        if (dense) {
+          const px = p1.x + (p2.x - p1.x) * ((phaseProgress + weight * 0.3) % 1);
+          const py = p1.y + (p2.y - p1.y) * ((phaseProgress + weight * 0.3) % 1);
+          ctx.fillStyle = `rgba(244, 186, 97, ${pulse})`;
+          ctx.beginPath();
+          ctx.arc(px, py, 2.8 + weight * 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      for (const node of payload.nodes) {
+        const p = nodePos(node, w, h, stateTime);
+        const active = (
+          (phase === 0 && node.id === "user_A") ||
+          (phase === 1 && node.id === "fast_packet") ||
+          (phase === 2 && ["working_memory", "episodic_memory", "tool_loop", "intent_gate"].includes(node.id)) ||
+          (phase === 3 && node.id === "deep_packet") ||
+          (phase === 4 && node.id === "output_stream")
+        );
+        const radius = active ? 18 : 13;
+        ctx.fillStyle = active ? colors[node.kind] : "#20282d";
+        ctx.strokeStyle = colors[node.kind] || "#edf2f4";
+        ctx.lineWidth = active ? 3 : 1.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        if (active) {
+          ctx.strokeStyle = `${colors[node.kind]}55`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, radius + 10 + Math.sin(stateTime * 0.004) * 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.fillStyle = "#edf2f4";
+        ctx.font = "12px Inter, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(node.label, p.x, p.y + radius + 17);
+      }
+
+      if (slice) {
+        ctx.fillStyle = "rgba(238, 109, 101, 0.10)";
+        const x = (stateTime * 0.06) % w;
+        ctx.fillRect(x, 0, 3, h);
+      }
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>

@@ -168,7 +168,11 @@ def test_stage124_processor_sends_fast_packet_then_deep_packet_when_needed(tmp_p
     assert deep_call["metadata"]["stage124_fast_packet"]["deep_packet_needed"] is True
     assert plan.debug["stage124_thought_loop"]["fast_packet"]["intent"] == "tool_grounded_research"
     assert plan.debug["stage124_thought_loop"]["deep_packet_sent"] is True
-    assert plan.text == "Deep packet final answer with tool-aware continuity."
+    assert plan.bubbles[0].purpose == "fast_reaction"
+    assert plan.bubbles[1].purpose == "deep_continuation"
+    assert "I am checking the live brain first." in plan.text
+    assert "Deep packet final answer with tool-aware continuity." in plan.text
+    assert plan.debug["stage132_progressive_stream"]["round_count"] == 2
 
 
 def test_stage124_processor_can_return_shallow_reply_without_deep_packet(tmp_path: Path) -> None:

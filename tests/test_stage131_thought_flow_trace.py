@@ -200,3 +200,65 @@ def test_stage131_cli_ct_renders_packet_flow_and_background_usage() -> None:
     assert "ACTION reply_once" in rendered
     assert "USAGE total_tokens=450" in rendered
     assert "BACKGROUND reflect tokens=330" in rendered
+
+
+def test_stage131_cli_ct_renders_stage132_progressive_rounds() -> None:
+    trace = build_stage131_thought_flow_trace(
+        usage_payload={
+            "summary": {"total_tokens": 520, "by_lane": {"micro_fast": 140, "subject_main": 380}},
+            "items": [
+                {
+                    "task_type": "reply",
+                    "lane": "micro_fast",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "total_tokens": 140,
+                    "duration_ms": 430,
+                    "thread_key": "holo_cli:stage132",
+                    "metadata": {"budget_tag": "stage124_fast_packet"},
+                },
+                {
+                    "task_type": "reply",
+                    "lane": "subject_main",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4",
+                    "total_tokens": 380,
+                    "duration_ms": 1680,
+                    "thread_key": "holo_cli:stage132",
+                    "metadata": {"budget_tag": "chat_reply"},
+                },
+            ],
+        },
+        deliberation_payload={
+            "entries": [
+                {
+                    "entry_type": "execute_action",
+                    "payload": {
+                        "result": {
+                            "stage132_progressive_stream": {
+                                "round_count": 2,
+                                "cache_hint": "stage132:abc123",
+                                "fast_context_lines": 8,
+                                "rounds": [
+                                    {"index": 0, "lane": "micro_fast", "purpose": "fast_reaction", "visible": True},
+                                    {"index": 1, "lane": "subject_main", "purpose": "deep_continuation", "visible": True},
+                                ],
+                            }
+                        }
+                    },
+                    "created_at": "2026-05-23T10:10:00Z",
+                    "thread_key": "holo_cli:stage132",
+                }
+            ],
+        },
+        thread_key="holo_cli:stage132",
+        channel="holo_cli",
+        chat_name="HoloCLIStage132",
+        limit=6,
+    )
+
+    rendered = render_stage131_cli_ct(trace)
+
+    assert "STAGE132 STREAM rounds=2 cache=stage132:abc123 context_lines=8" in rendered
+    assert "ROUND 0 lane=micro_fast purpose=fast_reaction visible=yes" in rendered
+    assert "ROUND 1 lane=subject_main purpose=deep_continuation visible=yes" in rendered

@@ -9229,12 +9229,21 @@ def _chat_payload(
 
 
 def _chat_response_text(payload: dict[str, Any]) -> str:
-    text = str(payload.get("text", "") or "").strip()
-    if text:
-        return _utf8_safe_text(text)
     bubbles = payload.get("bubbles", [])
     if isinstance(bubbles, list):
         parts: list[str] = []
+        for item in bubbles:
+            if isinstance(item, str) and item.strip():
+                parts.append(_utf8_safe_text(item.strip()))
+            elif isinstance(item, dict) and str(item.get("text", "") or "").strip():
+                parts.append(_utf8_safe_text(str(item.get("text", "")).strip()))
+        if len(parts) >= 2:
+            return "\n".join(parts)
+    text = str(payload.get("text", "") or "").strip()
+    if text:
+        return _utf8_safe_text(text)
+    if isinstance(bubbles, list):
+        parts = []
         for item in bubbles:
             if isinstance(item, str) and item.strip():
                 parts.append(_utf8_safe_text(item.strip()))

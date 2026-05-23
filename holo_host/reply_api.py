@@ -9250,6 +9250,8 @@ class HoloReplyService:
             turn_context,
             str(repaired.get("final_draft", reply_plan.text)).strip(),
         )
+        stage132_progressive_stream = dict(reply_plan.debug.get("stage132_progressive_stream", {})) if isinstance(reply_plan.debug, dict) else {}
+        planned_bubbles = reply_plan.bubbles if bool(stage132_progressive_stream.get("preserve_bubbles", False)) else None
         bubbles = self._finalize_bubbles(
             repaired_text,
             channel=turn.channel,
@@ -9259,6 +9261,7 @@ class HoloReplyService:
             route=reply_plan.route,
             target_count=(reply_plan.turn_plan.bubble_target if reply_plan.turn_plan else 2),
             strict_target=bool(sidecar.get("selected_action", {})),
+            planned_bubbles=planned_bubbles,
         )
         final_reply = normalize_external_speech_for_context(
             turn_context,
@@ -9299,6 +9302,7 @@ class HoloReplyService:
                 "utterance_plan": dict(reply_plan.utterance_plan or turn_context.utterance_plan),
                 "processor": reply_plan.processor,
                 "route": reply_plan.route,
+                "stage132_progressive_stream": stage132_progressive_stream,
                 "timing_ms": {
                     "sidecar_ms": sidecar_ms,
                     "active_history_ms": active_history_ms,
@@ -9337,6 +9341,7 @@ class HoloReplyService:
             "random_state": dict(reply_plan.random_state),
             "processor": reply_plan.processor,
             "route": reply_plan.route,
+            "stage132_progressive_stream": stage132_progressive_stream,
             "mind_tier": str(sidecar.get("tier", "")),
             "recall_reason": str(sidecar.get("recall_reason", "")),
             "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
@@ -9432,6 +9437,7 @@ class HoloReplyService:
                 "emotion_state": dict(reply_plan.emotion_state or turn_context.emotion_state),
                 "processor": reply_plan.processor,
                 "route": reply_plan.route,
+                "stage132_progressive_stream": stage132_progressive_stream,
                 "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
                 "graph_confidence": float(sidecar.get("graph_confidence", 0.0) or 0.0),
                 "fallback_lanes": list(sidecar.get("fallback_lanes", [])),
@@ -9503,17 +9509,21 @@ class HoloReplyService:
         route: str,
         target_count: int = 2,
         strict_target: bool = False,
+        planned_bubbles: list[ReplyBubble] | None = None,
     ) -> list[ReplyBubble]:
-        raw_bubbles = build_reply_bubbles(
-            text,
-            channel=channel,
-            attention_state=attention_state,
-            emotion_state=emotion_state,
-            utterance_plan=utterance_plan,
-            route=route,
-            target_count=target_count,
-            strict_target=strict_target,
-        )
+        if planned_bubbles:
+            raw_bubbles = list(planned_bubbles)
+        else:
+            raw_bubbles = build_reply_bubbles(
+                text,
+                channel=channel,
+                attention_state=attention_state,
+                emotion_state=emotion_state,
+                utterance_plan=utterance_plan,
+                route=route,
+                target_count=target_count,
+                strict_target=strict_target,
+            )
         finalized: list[ReplyBubble] = []
         for bubble in raw_bubbles:
             bubble_text = bubble.text.strip()

@@ -22,6 +22,11 @@ from .stage124_fast_deep_thought_loop import (
     parse_stage124_fast_packet,
     stage124_deep_packet_guard,
 )
+from .stage132_progressive_conscious_stream import (
+    build_stage132_fast_context_frame,
+    merge_stage132_reply_bubbles,
+    plan_stage132_progressive_stream,
+)
 from .stage131_continuation import stage131_short_turn_requires_reply
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
@@ -1588,6 +1593,10 @@ class CodexCliProcessor:
         timeout_seconds = _reply_processor_timeout_seconds(context, lane)
         agent_tool_requests = _agent_tool_requests(context)
         short_term_lines = build_short_term_working_memory_lines(context)
+        stage132_fast_context_frame = build_stage132_fast_context_frame(
+            context,
+            short_term_lines=short_term_lines,
+        )
         fast_packet_started_at = time.perf_counter()
         fast_result = self._run_runner(
             build_stage124_fast_packet_prompt(
@@ -1595,7 +1604,7 @@ class CodexCliProcessor:
                 channel=context.channel,
                 thread_key=context.thread_key,
                 chat_name=context.chat_name,
-                short_term_lines=short_term_lines,
+                short_term_lines=list(stage132_fast_context_frame.get("lines", [])) or short_term_lines,
             ),
             session_id=session_id,
             lane="micro_fast",
@@ -1634,20 +1643,39 @@ class CodexCliProcessor:
             fast_packet["deep_packet_forced"] = False
             fast_packet["deep_packet_force_reason"] = ""
 
+        stage132_stream_plan = plan_stage132_progressive_stream(
+            fast_packet=fast_packet,
+            continuation_lane=lane,
+            continuation_lane_reason=lane_reason,
+            selected_action_type=selected_action_type,
+            uncertainty_level=float(context.uncertainty_level or 0.0),
+            channel=context.channel,
+            expression_budget=int(context.expression_budget or context.mind_packet.get("expression_budget", 0) or 0),
+            agent_tool_requests=agent_tool_requests,
+            fast_context_frame=stage132_fast_context_frame,
+        )
+
         if not bool(fast_packet.get("deep_packet_needed", True)) and str(fast_packet.get("shallow_reply", "") or "").strip():
             processor_ms = int((time.perf_counter() - started_at) * 1000)
             text = str(fast_packet.get("shallow_reply", "") or "").strip()
-            bubbles = build_reply_bubbles(
-                text,
+            bubbles = merge_stage132_reply_bubbles(
+                first_reaction=normalize_external_speech_for_context(context, text),
+                deep_text="",
+                stream_plan=stage132_stream_plan,
                 channel=context.channel,
-                attention_state=context.attention_state,
-                emotion_state=context.emotion_state,
-                utterance_plan=context.utterance_plan,
-                route=route,
-                target_count=turn_plan.bubble_target,
-                strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
             )
-            joined = " ".join(bubble.text for bubble in bubbles).strip() or text
+            if not bubbles:
+                bubbles = build_reply_bubbles(
+                    text,
+                    channel=context.channel,
+                    attention_state=context.attention_state,
+                    emotion_state=context.emotion_state,
+                    utterance_plan=context.utterance_plan,
+                    route=route,
+                    target_count=turn_plan.bubble_target,
+                    strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
+                )
+            joined = "\n".join(bubble.text for bubble in bubbles).strip() or text
             return ReplyPlan(
                 text=joined,
                 bubbles=bubbles,
@@ -1675,6 +1703,8 @@ class CodexCliProcessor:
                         "fast_packet_error": fast_packet_error,
                         "deep_packet_sent": False,
                     },
+                    "stage132_fast_context_frame": stage132_fast_context_frame,
+                    "stage132_progressive_stream": stage132_stream_plan,
                 },
             )
 
@@ -1751,19 +1781,24 @@ class CodexCliProcessor:
         result_metadata = dict(getattr(result, "metadata", {}) or {})
         text = normalize_external_speech_for_context(context, result.reply_text.strip())
         first_reaction = normalize_external_speech_for_context(context, str(fast_packet.get("shallow_reply", "") or "").strip())
-        if bool(fast_packet.get("deep_packet_forced", False)) and first_reaction and first_reaction not in text:
-            text = f"{first_reaction}\n{text}".strip()
-        bubbles = build_reply_bubbles(
-            text,
+        bubbles = merge_stage132_reply_bubbles(
+            first_reaction=first_reaction,
+            deep_text=text,
+            stream_plan=stage132_stream_plan,
             channel=context.channel,
-            attention_state=context.attention_state,
-            emotion_state=context.emotion_state,
-            utterance_plan=context.utterance_plan,
-            route=route,
-            target_count=turn_plan.bubble_target,
-            strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
         )
-        joined = " ".join(bubble.text for bubble in bubbles).strip() or text
+        if not bubbles:
+            bubbles = build_reply_bubbles(
+                text,
+                channel=context.channel,
+                attention_state=context.attention_state,
+                emotion_state=context.emotion_state,
+                utterance_plan=context.utterance_plan,
+                route=route,
+                target_count=turn_plan.bubble_target,
+                strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
+            )
+        joined = "\n".join(bubble.text for bubble in bubbles).strip() or text
         return ReplyPlan(
             text=joined,
             bubbles=bubbles,
@@ -1798,6 +1833,8 @@ class CodexCliProcessor:
                     "deep_packet_sent": True,
                     "fast_packet_metadata": fast_packet_metadata,
                 },
+                "stage132_fast_context_frame": stage132_fast_context_frame,
+                "stage132_progressive_stream": stage132_stream_plan,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
                 "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),
