@@ -22,6 +22,7 @@ from .stage124_fast_deep_thought_loop import (
     parse_stage124_fast_packet,
     stage124_deep_packet_guard,
 )
+from .stage131_continuation import stage131_short_turn_requires_reply
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
 COMPANIONSHIP_HINTS = ("陪", "在吗", "聊聊", "说说", "想你", "想找个陪伴", "陪伴")
@@ -679,6 +680,9 @@ def build_short_term_working_memory_lines(context: TurnContext) -> list[str]:
 
     if current_short and not any(line.startswith("pending_task:") for line in lines):
         lines.append("continuation_rule: resolve this short turn against the immediately previous task, not as a new greeting.")
+    if stage131_short_turn_requires_reply(current, context.mind_packet):
+        include_recent_evidence = True
+        lines.append("pending_open_loop: the user accepted a previous open continuation; answer the referenced flow instead of staying silent.")
 
     if include_recent_evidence and recent:
         lines.insert(0, f"recent_turns: {' | '.join(recent[-4:])}")
@@ -689,11 +693,22 @@ def build_short_term_working_memory_lines(context: TurnContext) -> list[str]:
 def normalize_external_speech_for_context(context: TurnContext, text: str) -> str:
     """Apply channel-visible language guards that provider prompts may still miss."""
     current = str(context.user_text or "")
-    recent = "\n".join(_recent_dialogue_memory_lines(context, limit=4))
+    recent = "\n".join(_recent_dialogue_memory_lines(context, limit=8))
     has_chinese_context = any("\u3400" <= ch <= "\u9fff" for ch in f"{current}\n{recent}")
     if not has_chinese_context:
         return text
-    return re.sub(r"(?<![A-Za-z])I(?=[\u3400-\u9fff])", "\u6211", str(text or ""))
+    normalized = re.sub(r"(?<![A-Za-z])I(?=[\u3400-\u9fff])", "\u6211", str(text or ""))
+    combined = f"{current}\n{recent}"
+    lowered = combined.lower()
+    emoji_constraint = (
+        "emoji" in lowered
+        and any(hint in combined for hint in ("\u4e0d\u8981", "\u5c11", "\u6536\u4f4f", "\u9891\u7e41"))
+    )
+    if emoji_constraint:
+        normalized = re.sub(r"[\U0001F300-\U0001FAFF\u2600-\u27BF\ufe0f]+", "", normalized)
+        normalized = re.sub(r"[ \t]+([\u3002\uff0c\uff1f\uff01])", r"\1", normalized)
+        normalized = re.sub(r"[ \t]{2,}", " ", normalized).strip()
+    return normalized
 
 
 def _history_block(context: TurnContext, turn_plan: TurnPlan) -> str:

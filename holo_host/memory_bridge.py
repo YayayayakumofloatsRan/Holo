@@ -24,6 +24,7 @@ from .policy_runtime.counterfactuals import fast_counterfactual_set as _fast_cou
 from .policy_runtime.world_calibration_trace import expression_budget_summary
 from .stage104_context_learning import inject_stage104_context, stage104_context_packet
 from .stage105_provider_packet_stream import inject_stage105_packet_stream, stage105_packet_stream_plan
+from .stage131_continuation import chinese_question_like, stage131_short_turn_requires_reply
 from .vector_memory import VectorMemory
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
@@ -647,9 +648,13 @@ class MemoryBridge:
         text = " ".join(str(query or "").strip().split())
         lowered = text.lower()
         low_signal = MemoryBridge._is_fast_ping_query(text)
+        stage131_question_like = chinese_question_like(text)
         question_like = any(marker in text for marker in ("?", "？")) or any(
             marker in lowered for marker in ("how", "why", "what", "remember", "before", "earlier")
         ) or any(marker in text for marker in ("怎么", "为什么", "记得", "之前", "最开始", "一开始"))
+        question_like = bool(question_like or stage131_question_like)
+        if question_like:
+            low_signal = False
         affirmation_like = text in {"好", "嗯", "收到", "ok", "okay", "行"} or lowered in {"ok", "okay"}
         search_requested = any(hint in lowered for hint in LOOKUP_HINTS) or any(hint in text for hint in LOOKUP_HINTS)
         local_memory_requested = any(hint in lowered for hint in LOCAL_MEMORY_HINTS) or any(hint in text for hint in LOCAL_MEMORY_HINTS)
@@ -687,6 +692,21 @@ class MemoryBridge:
             "local_memory_requested": local_memory_requested,
             "factual_lookup": factual_lookup,
         }
+
+    @staticmethod
+    def stage131_short_turn_requires_reply(query: str | None, packet: dict[str, Any] | None) -> bool:
+        return stage131_short_turn_requires_reply(query, packet)
+
+    @staticmethod
+    def stage131_contextual_reply_required(
+        query: str | None,
+        context: dict[str, Any] | None,
+        packet: dict[str, Any] | None,
+    ) -> bool:
+        return (
+            stage131_short_turn_requires_reply(query, context)
+            or stage131_short_turn_requires_reply(query, packet)
+        )
 
     def _contact_world_model(self, world_state: dict[str, Any], *, chat_name: str, thread_key: str) -> dict[str, Any]:
         contact_models = dict(world_state.get("contact_models", {}))
@@ -1049,6 +1069,10 @@ class MemoryBridge:
         visual_memory: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], dict[str, Any], int, str, str, str, list[dict[str, Any]], dict[str, Any]]:
         signal = self._query_signal(query)
+        contextual_reply_required = self.stage131_contextual_reply_required(query, context, packet)
+        if contextual_reply_required:
+            signal["low_signal"] = False
+            signal["contextual_reply_required"] = True
         capability_context = dict(context.get("capability_context", {})) if isinstance(context.get("capability_context"), dict) else {}
         tool_requests = [dict(item) for item in capability_context.get("tool_requests", []) if isinstance(item, dict)]
         planned_lookup = next((item for item in tool_requests if str(item.get("name", "")).strip() == "external_lookup"), {})
@@ -1117,6 +1141,7 @@ class MemoryBridge:
                 "score": round(
                     reply_pull
                     + (0.08 if signal["question_like"] else 0.0)
+                    + (0.28 if contextual_reply_required else 0.0)
                     + (0.02 if signal["affirmation_like"] else 0.0)
                     + (0.18 if temporal_due else 0.0)
                     + min(0.12, temporal_pressure * 0.4)
@@ -1298,10 +1323,12 @@ class MemoryBridge:
                 selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
         if signal["defer_requested"]:
             selected = next((dict(item) for item in action_market if item.get("action_type") == "defer_reply"), selected)
-        elif signal["low_signal"] and not signal["question_like"]:
+        elif signal["low_signal"] and not signal["question_like"] and not contextual_reply_required:
             selected = next((dict(item) for item in action_market if item.get("action_type") == "silence"), selected)
-        elif signal["affirmation_like"] and not signal["question_like"]:
+        elif signal["affirmation_like"] and not signal["question_like"] and not contextual_reply_required:
             selected = next((dict(item) for item in action_market if item.get("action_type") in {"silence", "reply_once"}), selected)
+        if contextual_reply_required and selected["action_type"] in {"silence", "defer_reply"}:
+            selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
         if selected["action_type"] == "silence" and signal["question_like"]:
             selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
         if selected["action_type"] == "history_refresh" and not history_refresh_needed:
@@ -2901,6 +2928,19 @@ class MemoryBridge:
         stage22_world_coupling = dict(context.get("stage22_world_coupling", {})) if isinstance(context.get("stage22_world_coupling", {}), dict) else self._stage22_world_coupling_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         stage25_dense = dict(context.get("stage25_dense_working_set", {})) if isinstance(context.get("stage25_dense_working_set", {}), dict) else self._stage25_dense_empty(channel=channel, thread_key=thread_key, chat_name=chat_name)
         limits = self._mind_limits(context, fast=True)
+        try:
+            recent_window = self.graph.recent_dialogue_window(
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=min(2, max(1, int(limits.get("history_messages", 2) or 2))),
+            )
+        except Exception:
+            recent_window = {"lines": [], "messages": [], "window_size": 0, "source": "active_thread_state"}
+        if not list(recent_window.get("lines", [])):
+            recent_window = {"lines": [], "messages": [], "window_size": 0, "source": "active_thread_state"}
+        else:
+            recent_window["source"] = "active_thread_state_minimal_recent"
         summary = str(active_state.get("continuity_summary", "") or "").strip()
         last_intent = str(active_state.get("last_user_intent", "") or "").strip()
         active_lines = self._unique_strings(
@@ -2930,7 +2970,7 @@ class MemoryBridge:
                 "closeness_score": 0.0,
                 "continuity_score": 0.42 if summary else 0.0,
             },
-            recent_dialogue_window={"lines": [], "messages": [], "window_size": 0, "source": "active_thread_state"},
+            recent_dialogue_window=recent_window,
             episodic_recall={"lines": [], "items": []},
             consciousness_stream={"thread_summary": summary, "lines": [], "items": []},
             activation_state={

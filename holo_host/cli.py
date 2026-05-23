@@ -41,6 +41,7 @@ from .stage120_tool_affordance_optimizer import build_stage120_tool_affordance_r
 from .stage121_conscious_packet_scheduler import build_stage121_packet_report
 from .stage122_internal_external_channel_boundary import build_stage122_channel_report
 from .stage123_internal_tool_flow import build_stage123_internal_tool_report
+from .stage131_thought_flow_trace import build_stage131_thought_flow_trace, render_stage131_cli_ct
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -2649,6 +2650,43 @@ def _deliberation_ledger_payload(
         return {"status": "live_http_unavailable"}, "live_http_unavailable"
     daemon = build_daemon(config_path)
     return daemon.memory.trace_deliberation_ledger(thread_key=thread_key, chat_name=chat_name, channel=channel, limit=limit), "local_process"
+
+
+def _stage131_thought_flow_payload(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+) -> tuple[dict[str, Any], str]:
+    usage_payload, usage_transport = _usage_ledger_payload(
+        config_path,
+        limit=max(12, int(limit) * 4),
+        task_type=None,
+        lane=None,
+        provider=None,
+    )
+    deliberation_payload, deliberation_transport = _deliberation_ledger_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=max(1, int(limit)),
+    )
+    trace = build_stage131_thought_flow_trace(
+        usage_payload=usage_payload,
+        deliberation_payload=deliberation_payload,
+        thread_key=str(thread_key or chat_name or "").strip(),
+        channel=channel,
+        chat_name=str(chat_name or thread_key or "").strip(),
+        limit=max(1, int(limit)),
+    )
+    trace["transport"] = {
+        "usage": usage_transport,
+        "deliberation": deliberation_transport,
+    }
+    return trace, f"usage={usage_transport} deliberation={deliberation_transport}"
 
 
 def _accept_stage6_payload(
@@ -5443,6 +5481,30 @@ def command_trace_deliberation_ledger(
         limit=limit,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_trace_thought_flow(
+    config_path: str | None,
+    *,
+    thread_key: str | None,
+    chat_name: str | None,
+    channel: str,
+    limit: int,
+    json_output: bool,
+) -> int:
+    payload, transport = _stage131_thought_flow_payload(
+        config_path,
+        thread_key=thread_key,
+        chat_name=chat_name,
+        channel=channel,
+        limit=limit,
+    )
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"[{transport}]")
+        print(render_stage131_cli_ct(payload))
     return 0
 
 
@@ -9116,6 +9178,7 @@ CHAT_HELP = """Commands:
   /status                show compact brain status
   /readiness             show live readiness
   /flow                  show live flow summary
+  /ct                    show Stage131 thought-flow CT for this CLI thread
   /mind <query>          inspect current mind packet for a query
   /recall <query>        trace hybrid recall for a query
   /activation            show activation state for this CLI thread
@@ -9301,6 +9364,19 @@ def command_chat(
         if command == "/flow":
             payload, transport = _live_flow_payload(config_path)
             print(f"[{transport}] {_compact_chat_flow(payload)}")
+            if show_json:
+                _print_chat_json(payload)
+            return True
+        if command in {"/ct", "/thought-flow"}:
+            payload, transport = _stage131_thought_flow_payload(
+                config_path,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=8,
+            )
+            print(f"[{transport}]")
+            print(render_stage131_cli_ct(payload))
             if show_json:
                 _print_chat_json(payload)
             return True
@@ -10149,6 +10225,12 @@ def main(argv: list[str] | None = None) -> int:
     trace_deliberation_parser.add_argument("--chat-name", default=None)
     trace_deliberation_parser.add_argument("--channel", default="wechat")
     trace_deliberation_parser.add_argument("--limit", type=int, default=24)
+    thought_flow_parser = subparsers.add_parser("trace-thought-flow", help="Render Stage131 biomimetic CT for packet flow, action gate, usage, and background calls")
+    thought_flow_parser.add_argument("--thread-key", default=None)
+    thought_flow_parser.add_argument("--chat-name", default=None)
+    thought_flow_parser.add_argument("--channel", default="holo_cli")
+    thought_flow_parser.add_argument("--limit", type=int, default=12)
+    thought_flow_parser.add_argument("--json", action="store_true")
     accept_stage6_parser = subparsers.add_parser("accept-stage6", help="Run the fixed Deliberative Subject Core Stage-6 acceptance gate")
     accept_stage6_parser.add_argument("--thread-key", default=None)
     accept_stage6_parser.add_argument("--chat-name", default=None)
@@ -11158,6 +11240,15 @@ def main(argv: list[str] | None = None) -> int:
             chat_name=args.chat_name,
             channel=args.channel,
             limit=args.limit,
+        )
+    if args.command == "trace-thought-flow":
+        return command_trace_thought_flow(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+            json_output=args.json,
         )
     if args.command == "accept-stage6":
         return command_accept_stage6(
