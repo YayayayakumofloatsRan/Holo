@@ -42,6 +42,7 @@ from .stage121_conscious_packet_scheduler import build_stage121_packet_report
 from .stage122_internal_external_channel_boundary import build_stage122_channel_report
 from .stage123_internal_tool_flow import build_stage123_internal_tool_report
 from .stage131_thought_flow_trace import build_stage131_thought_flow_trace, render_stage131_cli_ct
+from .stage133_core_problem_research_loop import write_stage133_research_artifacts
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -9173,6 +9174,24 @@ def command_simulate_biomimetic_telemetry(
     return 0
 
 
+def command_stage133_core_problem_loop(
+    config_path: str | None,
+    *,
+    output_dir: str | None,
+    probes_per_subproblem: int,
+    context_window_tokens: int,
+) -> int:
+    config = load_config(config_path=config_path)
+    report = write_stage133_research_artifacts(
+        config.runtime.repo_root,
+        output_dir=output_dir,
+        probes_per_subproblem=probes_per_subproblem,
+        context_window_tokens=context_window_tokens,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /status                show compact brain status
@@ -10099,6 +10118,13 @@ def main(argv: list[str] | None = None) -> int:
     biomimetic_simulation_parser.add_argument("--seed", type=int, default=103)
     biomimetic_simulation_parser.add_argument("--batch-id", default=None)
     biomimetic_simulation_parser.add_argument("--category", action="append", default=None, dest="categories")
+    stage133_parser = subparsers.add_parser(
+        "stage133-core-problem-loop",
+        help="Run the V2 core-problem research loop and write Stage133 artifacts",
+    )
+    stage133_parser.add_argument("--output-dir", default=None)
+    stage133_parser.add_argument("--probes-per-subproblem", type=int, default=2)
+    stage133_parser.add_argument("--context-window-tokens", type=int, default=65536)
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -11083,6 +11109,13 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             batch_id=args.batch_id,
             categories=args.categories,
+        )
+    if args.command == "stage133-core-problem-loop":
+        return command_stage133_core_problem_loop(
+            args.config,
+            output_dir=args.output_dir,
+            probes_per_subproblem=args.probes_per_subproblem,
+            context_window_tokens=args.context_window_tokens,
         )
     if args.command == "reply-probe":
         return command_reply_probe(
