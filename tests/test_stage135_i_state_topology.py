@@ -240,6 +240,62 @@ def test_stage135_topology_uses_actual_memory_observation_ledger_nodes() -> None
     assert any(edge["source"] == "memory_observation_selected_memory_origin" and edge["target"] == "memory_delta" for edge in payload["edges"])
 
 
+def test_stage135_topology_includes_memory_alignment_gate() -> None:
+    payload = build_stage135_i_state_topology(
+        context=_context("show memory claim alignment"),
+        fast_packet={"deep_packet_needed": True, "intent": "memory_alignment_trace"},
+        stream_plan={"deep_packet_needed": True},
+        memory_observation_ledger=[
+            {
+                "schema": "holo.memory_grounding.v1",
+                "memory_call_id": "selected_preference",
+                "source_family": "durable",
+                "selected_ids": ["memory:preference-emoji"],
+                "status": "grounded",
+                "summary": "user preference: fewer emoji",
+                "confidence": 0.9,
+                "freshness": "test",
+                "grounding_tags": ["memory", "durable"],
+                "contradiction_flags": [],
+                "missing_source": False,
+            }
+        ],
+        memory_alignment={
+            "schema": "holo.memory_alignment.v1",
+            "status": "aligned",
+            "claim_count": 1,
+            "aligned_claim_count": 1,
+            "weak_claim_count": 0,
+            "unsupported_claim_count": 0,
+            "contradicted_claim_count": 0,
+            "claims": [
+                {
+                    "claim_id": "claim:emoji",
+                    "claim_family": "preference",
+                    "claim_text": "I remember you prefer fewer emoji.",
+                    "key_terms": ["preference", "fewer", "emoji"],
+                    "evidence_ids": ["selected_preference"],
+                    "evidence_source_families": ["durable"],
+                    "alignment_score": 0.94,
+                    "missing_terms": [],
+                    "contradiction_flags": [],
+                    "status": "aligned",
+                }
+            ],
+            "repair_required": False,
+            "repair_reason": "",
+        },
+    )
+
+    assert _node(payload, "memory_alignment_gate")["channel"] == "memory_alignment"
+    assert payload["metrics"]["memory_alignment_node_count"] >= 1
+    assert payload["metrics"]["memory_alignment_claim_count"] == 1
+    assert payload["metrics"]["memory_alignment_unsupported_count"] == 0
+    assert payload["metrics"]["memory_alignment_status"] == "aligned"
+    assert any(edge["target"] == "memory_alignment_gate" for edge in payload["edges"])
+    assert any(edge["source"] == "memory_alignment_gate" and edge["target"] == "memory_delta" for edge in payload["edges"])
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)

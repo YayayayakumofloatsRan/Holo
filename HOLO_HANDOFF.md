@@ -62,6 +62,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 57. `docs/ENGINEERING_HANDOFF_STAGE139.md`
 58. `docs/STAGE140_MEMORY_GROUNDING.md`
 59. `docs/ENGINEERING_HANDOFF_STAGE140.md`
+60. `docs/STAGE141_MEMORY_CLAIM_ALIGNMENT.md`
+61. `docs/ENGINEERING_HANDOFF_STAGE141.md`
 
 ## What This Document Must Cover
 - current live state
@@ -76,9 +78,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage140-memory-grounding`.
+- The current milestone tag is `stage141-memory-claim-alignment`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage140 memory answer grounding: visible claims such as "I remember", "you said before", "we discussed", and Chinese equivalents must be backed by a normalized `memory_observation_ledger`; weak or missing memory sources are repaired into bounded language, and Stage135 topology shows actual memory-observation nodes.
+- Current focus is Stage141 memory claim alignment: after Stage140 verifies that a visible memory claim has a usable source, Stage141 checks whether that source actually supports the concrete preference, event, date, project, or prior-statement detail in the visible answer. Unsupported, weak, or contradicted memory details are repaired before delivery/archive, and Stage135 topology can show a memory alignment gate.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -248,6 +250,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host stage120-tool-affordance --query "inspect workspace, run pytest, check git diff"`
 - Stage140 memory grounding targeted regression:
   - `python -m pytest tests/test_memory_grounding.py tests/test_tool_grounding.py tests/test_stage135_i_state_topology.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage140-targeted`
+- Stage141 memory claim alignment targeted regression:
+  - `python -m pytest tests/test_memory_alignment.py tests/test_memory_grounding.py tests/test_stage135_i_state_topology.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage141-targeted`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -291,7 +295,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - cache reuse is still cold in practice
 - proactive initiative exists but is often blocked by `initiative_probe_blocked`
 - retrieval and expression control still feel more engineered than natural
-- memory answer grounding now blocks unsupported visible recall claims, but claim-to-source semantic sufficiency is not yet implemented
+- memory answer grounding and claim alignment now block unsupported visible recall claims and wrong-detail recall claims, but the scoring is deterministic and intentionally lexical, so broader semantic paraphrase coverage remains a future improvement
 - progressive A' to A'' replies still need semantic novelty and contradiction checks so the second visible segment absorbs the first instead of repeating it
 - main-brain override and initiative gate calibration can create false negatives under cold `initiative_window` states
 - token accounting now exists, but some providers still rely on estimates rather than ground-truth usage
@@ -307,6 +311,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - Stage26 task-world state is intentionally bounded and same-thread-first; do not let it become a second decision layer, a cross-thread hidden coupling path, or a heavy-recall trigger
 - Stage139 tool execution is intentionally WSL-main-brain-only; provider output may propose tool calls, but it must not be treated as proof that a tool ran
 - Stage140 memory grounding is intentionally read-only; it must not introduce self-memory writes or a second recall path outside the processor fabric
+- Stage141 memory claim alignment is intentionally deterministic and read-only; it checks source sufficiency from existing ledger/debug metadata only and must not add provider calls, memory writes, or transport authority
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -393,6 +398,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host stage139-tool-benchmark` passed on `2026-05-24` with `tool_precision=1.0`, `tool_recall=1.0`, `ungrounded_claim_count=1`
   - `python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base` passed with `486 passed in 70.52s` after Stage140 on `2026-05-24`
   - `python -m holo_host reply-probe --query "Stage140 live smoke: do you remember what the memory grounding gate should do? Answer briefly and include grounding metadata if available." --thread-key holo_cli:stage140 --chat-name Stage140Live --channel holo_cli --mode hybrid` returned live provider output with Stage135 `memory_observation_node_count=2` on `2026-05-24`
+  - Stage141 targeted regression passed with `24 passed in 1.00s`; reply API regression passed with `75 passed in 17.07s`; Stage139 tool grounding regression passed with `5 passed in 0.32s` on `2026-05-24`
+  - `python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base` passed with `498 passed in 70.70s` after Stage141 on `2026-05-24`
 
 ## Invariants
 - Do not silently change online transport modes

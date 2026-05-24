@@ -65,6 +65,8 @@ from .reply_service_parts.endpoints import try_acceptance_endpoint
 from .store import QueueStore
 from .tool_grounding import evaluate_tool_grounding, normalize_tool_observation_ledger, repair_ungrounded_tool_claims
 from .memory_grounding import evaluate_memory_grounding, normalize_memory_observation_ledger, repair_memory_claims
+from .memory_alignment import evaluate_memory_alignment, repair_memory_alignment
+from .stage135_i_state_topology import build_stage135_i_state_topology
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9273,6 +9275,7 @@ class HoloReplyService:
             tool_observation_ledger = normalize_tool_observation_ledger(
                 dict(reply_debug.get("agent_tool_loop", {})).get("tool_observation_ledger", [])
             )
+        grounding_repaired = False
         tool_grounding = evaluate_tool_grounding(repaired_text, tool_observation_ledger)
         if tool_grounding.get("missing_families") == ["memory"]:
             tool_grounding = {
@@ -9286,6 +9289,7 @@ class HoloReplyService:
                 turn_context,
                 repair_ungrounded_tool_claims(repaired_text, tool_grounding, channel=turn.channel),
             )
+            grounding_repaired = True
         memory_observation_ledger = normalize_memory_observation_ledger(
             sidecar=sidecar,
             reply_debug=reply_debug,
@@ -9294,6 +9298,7 @@ class HoloReplyService:
             query=turn.text,
         )
         memory_grounding = evaluate_memory_grounding(repaired_text, memory_observation_ledger)
+        memory_grounding_status = str(memory_grounding.get("status", "") or "")
         if memory_grounding.get("status") in {
             "ungrounded_memory_claim",
             "weak_memory_source",
@@ -9303,7 +9308,32 @@ class HoloReplyService:
                 turn_context,
                 repair_memory_claims(repaired_text, memory_grounding, channel=turn.channel),
             )
-        planned_bubbles = reply_plan.bubbles if bool(stage132_progressive_stream.get("preserve_bubbles", False)) else None
+            grounding_repaired = True
+        memory_alignment = evaluate_memory_alignment(
+            repaired_text,
+            memory_observation_ledger,
+            sidecar=sidecar,
+            reply_debug=reply_debug,
+        )
+        if bool(memory_alignment.get("repair_required", False)) and memory_grounding_status not in {
+            "ungrounded_memory_claim",
+            "contradicted_memory_claim",
+        }:
+            repaired_text = normalize_external_speech_for_context(
+                turn_context,
+                repair_memory_alignment(repaired_text, memory_alignment, channel=turn.channel),
+            )
+            grounding_repaired = True
+        reply_debug["memory_alignment"] = memory_alignment
+        memory_alignment_status = str(memory_alignment.get("status", "") or "")
+        memory_alignment_claim_count = int(memory_alignment.get("claim_count", 0) or 0)
+        memory_alignment_unsupported_count = int(memory_alignment.get("unsupported_claim_count", 0) or 0)
+        memory_alignment_contradicted_count = int(memory_alignment.get("contradicted_claim_count", 0) or 0)
+        planned_bubbles = (
+            reply_plan.bubbles
+            if bool(stage132_progressive_stream.get("preserve_bubbles", False)) and not grounding_repaired
+            else None
+        )
         bubbles = self._finalize_bubbles(
             repaired_text,
             channel=turn.channel,
@@ -9319,6 +9349,19 @@ class HoloReplyService:
             turn_context,
             " ".join(bubble.text for bubble in bubbles).strip(),
         )
+        if memory_alignment_claim_count > 0:
+            stage124_thought_loop = dict(reply_debug.get("stage124_thought_loop", {})) if isinstance(reply_debug.get("stage124_thought_loop", {}), dict) else {}
+            stage135_i_state_topology = build_stage135_i_state_topology(
+                context=turn_context,
+                fast_packet=dict(stage124_thought_loop.get("fast_packet", {})) if isinstance(stage124_thought_loop.get("fast_packet", {}), dict) else {},
+                stream_plan=stage132_progressive_stream,
+                channel_frame=dict(reply_debug.get("stage122_channel_frame", {})) if isinstance(reply_debug.get("stage122_channel_frame", {}), dict) else {},
+                internal_tool_flow=dict(reply_debug.get("stage123_internal_tool_flow", {})) if isinstance(reply_debug.get("stage123_internal_tool_flow", {}), dict) else {},
+                tool_loop=dict(reply_debug.get("agent_tool_loop", {})) if isinstance(reply_debug.get("agent_tool_loop", {}), dict) else {},
+                visible_segments=bubbles,
+                memory_observation_ledger=memory_observation_ledger,
+                memory_alignment=memory_alignment,
+            )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
             reply_text=final_reply,
@@ -9361,6 +9404,11 @@ class HoloReplyService:
                 "tool_grounding": tool_grounding,
                 "memory_observation_ledger": memory_observation_ledger,
                 "memory_grounding": memory_grounding,
+                "memory_alignment": memory_alignment,
+                "memory_alignment_status": memory_alignment_status,
+                "memory_alignment_claim_count": memory_alignment_claim_count,
+                "memory_alignment_unsupported_count": memory_alignment_unsupported_count,
+                "memory_alignment_contradicted_count": memory_alignment_contradicted_count,
                 "timing_ms": {
                     "sidecar_ms": sidecar_ms,
                     "active_history_ms": active_history_ms,
@@ -9406,6 +9454,11 @@ class HoloReplyService:
             "tool_grounding": tool_grounding,
             "memory_observation_ledger": memory_observation_ledger,
             "memory_grounding": memory_grounding,
+            "memory_alignment": memory_alignment,
+            "memory_alignment_status": memory_alignment_status,
+            "memory_alignment_claim_count": memory_alignment_claim_count,
+            "memory_alignment_unsupported_count": memory_alignment_unsupported_count,
+            "memory_alignment_contradicted_count": memory_alignment_contradicted_count,
             "mind_tier": str(sidecar.get("tier", "")),
             "recall_reason": str(sidecar.get("recall_reason", "")),
             "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
@@ -9508,6 +9561,11 @@ class HoloReplyService:
                 "tool_grounding": tool_grounding,
                 "memory_observation_ledger": memory_observation_ledger,
                 "memory_grounding": memory_grounding,
+                "memory_alignment": memory_alignment,
+                "memory_alignment_status": memory_alignment_status,
+                "memory_alignment_claim_count": memory_alignment_claim_count,
+                "memory_alignment_unsupported_count": memory_alignment_unsupported_count,
+                "memory_alignment_contradicted_count": memory_alignment_contradicted_count,
                 "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
                 "graph_confidence": float(sidecar.get("graph_confidence", 0.0) or 0.0),
                 "fallback_lanes": list(sidecar.get("fallback_lanes", [])),

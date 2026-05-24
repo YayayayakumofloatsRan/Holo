@@ -70,6 +70,22 @@ Stage28: multimodal homeostatic kernel
 - Preserves richer image-understanding metadata and renders situational grounding before verbatim history for ordinary hot-path turns.
 - Adds inspectable action-market `stage28_delta`, `stage28_rationale`, and `stage28_grounding_order` without adding a second brain, loop family, or transport decision path.
 
+## Implemented Trust And Grounding Optimization Track
+
+Stage139: tool calling maturity
+- Implemented normalized `tool_observation_ledger` propagation, visible tool-claim grounding, deterministic tool-need classification, rejected-tool reentry, and a tool benchmark.
+- Preserves WSL main-brain execution authority: provider output may propose tools, but only local observations count as proof that a tool ran.
+
+Stage140: memory answer grounding
+- Implemented normalized `memory_observation_ledger` propagation and visible memory-claim grounding.
+- Confident recall language is repaired when memory sources are missing, weak, or contradicted.
+- Stage135 topology can render actual memory observation nodes.
+
+Stage141: memory claim alignment
+- Implemented deterministic source-sufficiency checks for visible memory details.
+- Source-exists-but-wrong-detail claims are marked unsupported, weak claims are bounded, and contradiction flags dominate.
+- Stage135 topology can render a memory alignment gate and claim nodes without adding memory writes, provider calls, or transport authority.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

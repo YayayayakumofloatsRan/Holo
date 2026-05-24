@@ -3267,6 +3267,79 @@ class ReplyServiceTests(unittest.TestCase):
             finally:
                 close_service_handles(service)
 
+    def test_reply_service_propagates_memory_alignment_metadata(self) -> None:
+        class UnsupportedMemoryDetailProcessor:
+            name = "unsupported_memory_detail_processor"
+
+            def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
+                return ReplyPlan(
+                    text="I remember you prefer fewer emoji.",
+                    bubbles=[ReplyBubble("I remember you prefer fewer emoji.")],
+                    attention_state=context.attention_state,
+                    turn_plan=TurnPlan(route="main", bubble_target=1),
+                    emotion_state=dict(context.emotion_state),
+                    route="main",
+                    processor=self.name,
+                    session_id=session_id or "memory-alignment-session",
+                    raw_text="I remember you prefer fewer emoji.",
+                    timing_ms={"processor_ms": 5, "recall_reconstruct_ms": 0},
+                    debug={
+                        "memory_observation_ledger": [
+                            {
+                                "schema": "holo.memory_grounding.v1",
+                                "memory_call_id": "archive_wrong_topic",
+                                "source_family": "archive",
+                                "selected_ids": ["archive:git-tests"],
+                                "status": "grounded",
+                                "summary": "discussed git diff and tests",
+                                "confidence": 0.9,
+                                "freshness": "test",
+                                "grounding_tags": ["memory", "archive"],
+                                "contradiction_flags": [],
+                                "missing_source": False,
+                            }
+                        ],
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            service.processor = UnsupportedMemoryDetailProcessor()
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "text": "what do you remember about my style?",
+                        "channel": "holo_cli",
+                        "message_id": "memory-alignment-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(result["memory_grounding"]["status"], "grounded")
+                self.assertEqual(result["memory_alignment_status"], "unsupported_memory_detail")
+                self.assertEqual(result["memory_alignment"]["unsupported_claim_count"], 1)
+                self.assertIn("does not clearly support that exact detail", result["text"])
+                self.assertEqual(
+                    memory.observed_records[-1]["metadata"]["memory_alignment_status"],
+                    "unsupported_memory_detail",
+                )
+                self.assertEqual(
+                    memory.observed_records[-1]["metadata"]["memory_alignment"]["unsupported_claim_count"],
+                    1,
+                )
+                self.assertGreaterEqual(
+                    result["stage135_i_state_topology"]["metrics"]["memory_alignment_node_count"],
+                    1,
+                )
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

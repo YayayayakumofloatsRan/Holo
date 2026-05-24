@@ -190,6 +190,7 @@ def build_stage135_i_state_topology(
     visible_segments: list[Any] | None = None,
     memory_delta: dict[str, Any] | None = None,
     memory_observation_ledger: list[dict[str, Any]] | None = None,
+    memory_alignment: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -210,6 +211,7 @@ def build_stage135_i_state_topology(
     memory_ledger = _list_dicts(memory_observation_ledger)
     if not memory_ledger:
         memory_ledger = _list_dicts(loop.get("memory_observation_ledger", []))
+    alignment = _dict(memory_alignment)
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -297,10 +299,12 @@ def build_stage135_i_state_topology(
         edges.append(_edge("continue_gate", node_id, relation="local_tool_execution", weight=0.5, summary="Holo validates and executes provider-proposed tools"))
         edges.append(_edge(node_id, "state_delta", relation="tool_observation_reentry", weight=0.62, summary="actual tool observation re-enters the same I-state"))
 
+    memory_observation_node_ids: list[str] = []
     for index, item in enumerate(memory_ledger[:10]):
         call_id = str(item.get("memory_call_id", "") or item.get("source_family", "") or f"memory_{index + 1}")
         source_family = str(item.get("source_family", "") or "memory")
         node_id = "memory_observation_" + _safe_node_suffix(call_id)
+        memory_observation_node_ids.append(node_id)
         status = str(item.get("status", "") or "")
         summary = str(item.get("summary", "") or "")
         y = 0.62 + (index % 5) * 0.06
@@ -318,6 +322,54 @@ def build_stage135_i_state_topology(
         )
         edges.append(_edge(node_id, "holo_self", relation="memory_source_selected", weight=0.56, summary="selected memory evidence enters the current I-state"))
         edges.append(_edge(node_id, "memory_delta", relation="grounds_memory_delta", weight=0.62, summary="memory observation grounds visible recall claims"))
+
+    if alignment:
+        alignment_status = str(alignment.get("status", "") or "unknown")
+        claim_count = int(alignment.get("claim_count", 0) or 0)
+        unsupported_count = int(alignment.get("unsupported_claim_count", 0) or 0)
+        contradicted_count = int(alignment.get("contradicted_claim_count", 0) or 0)
+        if alignment_status == "aligned":
+            alignment_weight = 0.74
+        elif alignment_status == "weakly_aligned":
+            alignment_weight = 0.48
+        elif alignment_status == "no_memory_claim":
+            alignment_weight = 0.32
+        else:
+            alignment_weight = 0.26
+        nodes.append(
+            _node(
+                "memory_alignment_gate",
+                "memory alignment gate",
+                channel="memory_alignment",
+                kind="gate",
+                x=0.52,
+                y=0.68,
+                weight=alignment_weight,
+                summary=f"status={alignment_status}; claims={claim_count}; unsupported={unsupported_count}; contradicted={contradicted_count}",
+            )
+        )
+        if memory_observation_node_ids:
+            for node_id in memory_observation_node_ids[:6]:
+                edges.append(_edge(node_id, "memory_alignment_gate", relation="feeds_memory_alignment", weight=0.5, summary="memory evidence is checked against visible recall detail"))
+        else:
+            edges.append(_edge("memory_delta", "memory_alignment_gate", relation="memory_alignment_without_source", weight=0.32, summary="alignment gate saw no concrete memory observation node"))
+        edges.append(_edge("memory_alignment_gate", "memory_delta", relation="aligns_memory_claims", weight=0.58, summary="source sufficiency gates visible memory claims"))
+        for index, claim in enumerate(_list_dicts(alignment.get("claims", []))[:5]):
+            claim_status = str(claim.get("status", "") or "")
+            node_id = "claim_" + _safe_node_suffix(claim.get("claim_id", "") or f"{index + 1}")
+            nodes.append(
+                _node(
+                    node_id,
+                    str(claim.get("claim_family", "") or "memory claim"),
+                    channel="memory_alignment",
+                    kind="memory_claim",
+                    x=0.61,
+                    y=0.76 + min(index, 4) * 0.04,
+                    weight=0.62 if claim_status == "aligned" else 0.42 if claim_status == "weak" else 0.24,
+                    summary=str(claim.get("claim_text", "") or ""),
+                )
+            )
+            edges.append(_edge(node_id, "memory_alignment_gate", relation="claim_checked_by", weight=0.44, summary=f"claim status={claim_status}"))
 
     for index, name in enumerate(tool_names[:8]):
         node_id = "tool_" + _safe_node_suffix(name)
@@ -382,6 +434,10 @@ def build_stage135_i_state_topology(
             "channels": channel_counts,
             "tool_node_count": sum(1 for node in nodes if node["channel"] == "tool_result"),
             "memory_observation_node_count": sum(1 for node in nodes if node["channel"] == "memory_observation"),
+            "memory_alignment_node_count": sum(1 for node in nodes if node["channel"] == "memory_alignment"),
+            "memory_alignment_claim_count": int(alignment.get("claim_count", 0) or 0) if alignment else 0,
+            "memory_alignment_unsupported_count": int(alignment.get("unsupported_claim_count", 0) or 0) if alignment else 0,
+            "memory_alignment_status": str(alignment.get("status", "") or "") if alignment else "",
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },
@@ -443,6 +499,7 @@ const colors = {{
   holo_inner: "#6d5d9a",
   state_delta: "#3c8065",
   memory_delta: "#b78232",
+  memory_alignment: "#8b5a38",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"
