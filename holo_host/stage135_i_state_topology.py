@@ -192,6 +192,7 @@ def build_stage135_i_state_topology(
     memory_observation_ledger: list[dict[str, Any]] | None = None,
     memory_alignment: dict[str, Any] | None = None,
     stage142_semantic_novelty: dict[str, Any] | None = None,
+    stage143_packet_budget: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -214,6 +215,7 @@ def build_stage135_i_state_topology(
         memory_ledger = _list_dicts(loop.get("memory_observation_ledger", []))
     alignment = _dict(memory_alignment)
     novelty = _dict(stage142_semantic_novelty)
+    packet_budget = _dict(stage143_packet_budget)
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -295,6 +297,28 @@ def build_stage135_i_state_topology(
             )
         )
         edges.append(_edge("continue_gate", "semantic_novelty_gate", relation="gates_visible_continuation", weight=0.56, summary="A-prime to A-double-prime visible stream is checked for useful novelty"))
+
+    if packet_budget:
+        packet_count = int(packet_budget.get("packet_count", 0) or 0)
+        sent_count = int(packet_budget.get("sent_count", 0) or 0)
+        skipped_count = int(packet_budget.get("skipped_count", 0) or 0)
+        stop_reason = str(packet_budget.get("stop_reason", "") or "unknown")
+        nodes.append(
+            _node(
+                "packet_budget_gate",
+                "packet budget gate",
+                channel="packet_budget",
+                kind="observability",
+                x=0.78,
+                y=0.42,
+                weight=0.66 if skipped_count == 0 else 0.44,
+                summary=f"packets={packet_count}; sent={sent_count}; skipped={skipped_count}; stop={stop_reason}",
+            )
+        )
+        edges.append(_edge("fast_packet", "packet_budget_gate", relation="reports_packet_cost", weight=0.48, summary="fast packet timing and budget are observed"))
+        edges.append(_edge("continue_gate", "packet_budget_gate", relation="reports_stop_reason", weight=0.52, summary="continuation stop reason is recorded without changing the gate"))
+        if novelty:
+            edges.append(_edge("semantic_novelty_gate", "packet_budget_gate", relation="reports_visible_gate_result", weight=0.44, summary="Stage142 outcome is linked to packet stop reason"))
 
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
@@ -464,6 +488,9 @@ def build_stage135_i_state_topology(
             "semantic_novelty_node_count": sum(1 for node in nodes if node["channel"] == "semantic_novelty"),
             "semantic_novelty_status": str(novelty.get("status", "") or "") if novelty else "",
             "semantic_novelty_suppressed_count": int(novelty.get("suppressed_count", 0) or 0) if novelty else 0,
+            "packet_budget_node_count": sum(1 for node in nodes if node["channel"] == "packet_budget"),
+            "packet_budget_packet_count": int(packet_budget.get("packet_count", 0) or 0) if packet_budget else 0,
+            "packet_budget_stop_reason": str(packet_budget.get("stop_reason", "") or "") if packet_budget else "",
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },
@@ -527,6 +554,7 @@ const colors = {{
   memory_delta: "#b78232",
   memory_alignment: "#8b5a38",
   semantic_novelty: "#5a6b78",
+  packet_budget: "#6c7a2a",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"

@@ -14,6 +14,7 @@ from holo_host.stage135_i_state_topology import (
     build_stage135_i_state_topology,
     write_stage135_i_state_topology_artifacts,
 )
+from holo_host.stage143_packet_budget import STAGE143_SCHEMA, build_stage143_packet_budget
 
 
 def _config(root: Path):
@@ -323,6 +324,28 @@ def test_stage135_topology_includes_semantic_novelty_gate() -> None:
     assert any(edge["source"] == "semantic_novelty_gate" and edge["target"] == "visible_deep_continuation" for edge in payload["edges"])
 
 
+def test_stage135_topology_includes_packet_budget_gate() -> None:
+    packet_budget = build_stage143_packet_budget(
+        stage132_stream_plan={"deep_packet_needed": False, "stop_reason": "provider_fast_packet_said_fast_answer_enough"},
+        stage132_fast_context_frame={"cache_hint": "stage132:stage135-budget", "char_count": 800},
+        stage124_thought_loop={"deep_packet_sent": False, "fast_packet_ms": 17},
+        timing_ms={"processor_ms": 24},
+    )
+    payload = build_stage135_i_state_topology(
+        context=_context("show packet budget gate"),
+        fast_packet={"deep_packet_needed": False, "intent": "packet_budget_trace"},
+        stream_plan={"deep_packet_needed": False, "stop_reason": "provider_fast_packet_said_fast_answer_enough"},
+        stage143_packet_budget=packet_budget,
+    )
+
+    assert packet_budget["schema"] == STAGE143_SCHEMA
+    assert _node(payload, "packet_budget_gate")["channel"] == "packet_budget"
+    assert payload["metrics"]["packet_budget_node_count"] == 1
+    assert payload["metrics"]["packet_budget_packet_count"] == 2
+    assert payload["metrics"]["packet_budget_stop_reason"] == "provider_fast_packet_said_fast_answer_enough"
+    assert any(edge["target"] == "packet_budget_gate" for edge in payload["edges"])
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)
@@ -339,6 +362,8 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     assert "Stage135 I-State Frame" in str(deep_runner.calls[0]["prompt"])
     assert "Stage135 I-State Contract" in str(deep_runner.calls[1]["prompt"])
     assert deep_plan.debug["stage135_i_state_prompt_frame"]["marker"] == "Stage135 I-State Frame"
+    assert deep_plan.debug["stage143_packet_budget"]["schema"] == STAGE143_SCHEMA
+    assert topology["metrics"]["packet_budget_node_count"] == 1
 
     fast_runner = _Stage135Runner(deep_needed=False)
     fast_processor = CodexCliProcessor(config, fast_runner)  # type: ignore[arg-type]
@@ -349,6 +374,8 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     assert "deep_packet" not in {node["id"] for node in fast_topology["nodes"]}
     assert _node(fast_topology, "visible_fast_reaction")["channel"] == "holo_visible"
     assert "Stage135 I-State Frame" in str(fast_runner.calls[0]["prompt"])
+    assert fast_plan.debug["stage143_packet_budget"]["skipped_count"] == 1
+    assert fast_topology["metrics"]["packet_budget_node_count"] == 1
 
 
 def test_stage135_i_state_trace_does_not_trigger_recall_reconstruct_without_memory_request(tmp_path: Path) -> None:

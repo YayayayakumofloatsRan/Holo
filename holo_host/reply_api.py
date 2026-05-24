@@ -68,6 +68,7 @@ from .memory_grounding import evaluate_memory_grounding, normalize_memory_observ
 from .memory_alignment import evaluate_memory_alignment, repair_memory_alignment
 from .stage135_i_state_topology import build_stage135_i_state_topology
 from .stage142_semantic_novelty_gate import apply_stage142_gate
+from .stage143_packet_budget import build_stage143_packet_budget
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9370,8 +9371,29 @@ class HoloReplyService:
         stage142_candidate_count = int(stage142_semantic_novelty.get("candidate_count", 0) or 0)
         stage142_suppressed_count = int(stage142_semantic_novelty.get("suppressed_count", 0) or 0)
         stage142_status = str(stage142_semantic_novelty.get("status", "") or "")
-        if memory_alignment_claim_count > 0 or stage142_candidate_count > 1:
-            stage124_thought_loop = dict(reply_debug.get("stage124_thought_loop", {})) if isinstance(reply_debug.get("stage124_thought_loop", {}), dict) else {}
+        stage124_thought_loop = dict(reply_debug.get("stage124_thought_loop", {})) if isinstance(reply_debug.get("stage124_thought_loop", {}), dict) else {}
+        stage143_packet_budget = build_stage143_packet_budget(
+            stage132_stream_plan=stage132_progressive_stream,
+            stage132_fast_context_frame=dict(reply_debug.get("stage132_fast_context_frame", {})) if isinstance(reply_debug.get("stage132_fast_context_frame", {}), dict) else {},
+            stage124_thought_loop=stage124_thought_loop,
+            stage121_packet_policy=dict(reply_debug.get("stage121_packet_policy", {})) if isinstance(reply_debug.get("stage121_packet_policy", {}), dict) else {},
+            stage142_semantic_novelty=stage142_semantic_novelty,
+            tool_grounding=tool_grounding,
+            memory_grounding=memory_grounding,
+            memory_alignment=memory_alignment,
+            timing_ms=reply_plan.timing_ms,
+            usage=dict(reply_debug.get("usage", {})) if isinstance(reply_debug.get("usage", {}), dict) else {},
+            agent_tool_loop=dict(reply_debug.get("agent_tool_loop", {})) if isinstance(reply_debug.get("agent_tool_loop", {}), dict) else {},
+            reply_debug=reply_debug,
+            channel=turn.channel,
+        )
+        reply_debug["stage143_packet_budget"] = stage143_packet_budget
+        stage143_packet_count = int(stage143_packet_budget.get("packet_count", 0) or 0)
+        stage143_sent_count = int(stage143_packet_budget.get("sent_count", 0) or 0)
+        stage143_skipped_count = int(stage143_packet_budget.get("skipped_count", 0) or 0)
+        stage143_stop_reason = str(stage143_packet_budget.get("stop_reason", "") or "")
+        topology_present = bool(stage135_i_state_topology.get("schema"))
+        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
                 fast_packet=dict(stage124_thought_loop.get("fast_packet", {})) if isinstance(stage124_thought_loop.get("fast_packet", {}), dict) else {},
@@ -9383,6 +9405,7 @@ class HoloReplyService:
                 memory_observation_ledger=memory_observation_ledger,
                 memory_alignment=memory_alignment,
                 stage142_semantic_novelty=stage142_semantic_novelty,
+                stage143_packet_budget=stage143_packet_budget,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9424,6 +9447,11 @@ class HoloReplyService:
                 "stage142_semantic_novelty_status": stage142_status,
                 "stage142_semantic_novelty_candidate_count": stage142_candidate_count,
                 "stage142_semantic_novelty_suppressed_count": stage142_suppressed_count,
+                "stage143_packet_budget": stage143_packet_budget,
+                "stage143_packet_budget_stop_reason": stage143_stop_reason,
+                "stage143_packet_budget_packet_count": stage143_packet_count,
+                "stage143_packet_budget_sent_count": stage143_sent_count,
+                "stage143_packet_budget_skipped_count": stage143_skipped_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9478,6 +9506,11 @@ class HoloReplyService:
             "stage142_semantic_novelty_status": stage142_status,
             "stage142_semantic_novelty_candidate_count": stage142_candidate_count,
             "stage142_semantic_novelty_suppressed_count": stage142_suppressed_count,
+            "stage143_packet_budget": stage143_packet_budget,
+            "stage143_packet_budget_stop_reason": stage143_stop_reason,
+            "stage143_packet_budget_packet_count": stage143_packet_count,
+            "stage143_packet_budget_sent_count": stage143_sent_count,
+            "stage143_packet_budget_skipped_count": stage143_skipped_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9589,6 +9622,11 @@ class HoloReplyService:
                 "stage142_semantic_novelty_status": stage142_status,
                 "stage142_semantic_novelty_candidate_count": stage142_candidate_count,
                 "stage142_semantic_novelty_suppressed_count": stage142_suppressed_count,
+                "stage143_packet_budget": stage143_packet_budget,
+                "stage143_packet_budget_stop_reason": stage143_stop_reason,
+                "stage143_packet_budget_packet_count": stage143_packet_count,
+                "stage143_packet_budget_sent_count": stage143_sent_count,
+                "stage143_packet_budget_skipped_count": stage143_skipped_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

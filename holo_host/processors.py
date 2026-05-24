@@ -32,6 +32,7 @@ from .stage135_i_state_topology import (
     build_stage135_i_state_prompt_frame,
     build_stage135_i_state_topology,
 )
+from .stage143_packet_budget import build_stage143_packet_budget
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1744,6 +1745,22 @@ class CodexCliProcessor:
                 sidecar=context.mind_packet,
                 query=str(context.user_text or ""),
             )
+            stage124_thought_loop = {
+                "fast_packet": fast_packet,
+                "fast_packet_ms": fast_packet_ms,
+                "fast_packet_error": fast_packet_error,
+                "deep_packet_sent": False,
+            }
+            stage143_packet_budget = build_stage143_packet_budget(
+                stage132_stream_plan=stage132_stream_plan,
+                stage132_fast_context_frame=stage132_fast_context_frame,
+                stage124_thought_loop=stage124_thought_loop,
+                stage142_semantic_novelty=stage142_semantic_novelty,
+                timing_ms={"processor_ms": processor_ms, "stage124_fast_packet_ms": fast_packet_ms, "recall_reconstruct_ms": 0},
+                usage=dict(fast_packet_metadata.get("usage", {})),
+                reply_debug={"provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests]},
+                channel=context.channel,
+            )
             stage135_topology = build_stage135_i_state_topology(
                 context=context,
                 fast_packet=fast_packet,
@@ -1752,6 +1769,7 @@ class CodexCliProcessor:
                 visible_segments=bubbles,
                 memory_observation_ledger=memory_observation_ledger,
                 stage142_semantic_novelty=stage142_semantic_novelty,
+                stage143_packet_budget=stage143_packet_budget,
             )
             return ReplyPlan(
                 text=joined,
@@ -1774,15 +1792,11 @@ class CodexCliProcessor:
                     "usage": dict(fast_packet_metadata.get("usage", {})),
                     "reply_lane_reason": lane_reason,
                     "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
-                    "stage124_thought_loop": {
-                        "fast_packet": fast_packet,
-                        "fast_packet_ms": fast_packet_ms,
-                        "fast_packet_error": fast_packet_error,
-                        "deep_packet_sent": False,
-                    },
+                    "stage124_thought_loop": stage124_thought_loop,
                     "stage132_fast_context_frame": stage132_fast_context_frame,
                     "stage132_progressive_stream": stage132_stream_plan,
                     "stage142_semantic_novelty": stage142_semantic_novelty,
+                    "stage143_packet_budget": stage143_packet_budget,
                     "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                     "stage135_i_state_topology": stage135_topology,
                     "memory_observation_ledger": memory_observation_ledger,
@@ -1889,6 +1903,29 @@ class CodexCliProcessor:
                 strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
             )
         joined = "\n".join(bubble.text for bubble in bubbles).strip() or text
+        stage124_thought_loop = {
+            "fast_packet": fast_packet,
+            "fast_packet_ms": fast_packet_ms,
+            "fast_packet_error": fast_packet_error,
+            "deep_packet_sent": True,
+            "fast_packet_metadata": fast_packet_metadata,
+        }
+        stage143_packet_budget = build_stage143_packet_budget(
+            stage132_stream_plan=stage132_stream_plan,
+            stage132_fast_context_frame=stage132_fast_context_frame,
+            stage124_thought_loop=stage124_thought_loop,
+            stage121_packet_policy=packet_policy,
+            stage142_semantic_novelty=stage142_semantic_novelty,
+            timing_ms={"processor_ms": processor_ms, "stage124_fast_packet_ms": fast_packet_ms, "recall_reconstruct_ms": recall_reconstruct_ms},
+            usage=dict(result_metadata.get("usage", {})),
+            agent_tool_loop=dict(result_metadata.get("agent_tool_loop", {})),
+            reply_debug={
+                "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
+                "lane": result_metadata.get("lane", lane),
+                "prompt_excerpt": compact_text(prompt, 240),
+            },
+            channel=context.channel,
+        )
         stage135_topology = build_stage135_i_state_topology(
             context=context,
             fast_packet=fast_packet,
@@ -1900,6 +1937,7 @@ class CodexCliProcessor:
             visible_segments=bubbles,
             memory_observation_ledger=memory_observation_ledger,
             stage142_semantic_novelty=stage142_semantic_novelty,
+            stage143_packet_budget=stage143_packet_budget,
         )
         return ReplyPlan(
             text=joined,
@@ -1929,18 +1967,14 @@ class CodexCliProcessor:
                 "tool_failure_reentry": bool(result_metadata.get("tool_failure_reentry", False)),
                 "memory_observation_ledger": memory_observation_ledger,
                 "prompt_excerpt": compact_text(prompt, 240),
+                "stage121_packet_policy": packet_policy,
                 "stage122_channel_frame": channel_frame,
                 "stage123_internal_tool_flow": internal_tool_flow,
-                "stage124_thought_loop": {
-                    "fast_packet": fast_packet,
-                    "fast_packet_ms": fast_packet_ms,
-                    "fast_packet_error": fast_packet_error,
-                    "deep_packet_sent": True,
-                    "fast_packet_metadata": fast_packet_metadata,
-                },
+                "stage124_thought_loop": stage124_thought_loop,
                 "stage132_fast_context_frame": stage132_fast_context_frame,
                 "stage132_progressive_stream": stage132_stream_plan,
                 "stage142_semantic_novelty": stage142_semantic_novelty,
+                "stage143_packet_budget": stage143_packet_budget,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_topology,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),

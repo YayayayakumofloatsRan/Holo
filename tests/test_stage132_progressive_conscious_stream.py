@@ -11,6 +11,7 @@ from holo_host.stage132_progressive_conscious_stream import (
     merge_stage132_reply_bubbles,
     plan_stage132_progressive_stream,
 )
+from holo_host.stage143_packet_budget import STAGE143_SCHEMA
 
 
 def _config(root: Path):
@@ -272,6 +273,10 @@ def test_stage132_processor_returns_visible_progressive_cli_bubbles(tmp_path: Pa
     assert plan.debug["stage132_progressive_stream"]["rounds"][1]["lane"] in {"subject_main", "kernel_xhigh"}
     assert plan.debug["stage142_semantic_novelty"]["candidate_count"] == 2
     assert plan.debug["stage142_semantic_novelty"]["status"] == "passed"
+    assert plan.debug["stage143_packet_budget"]["schema"] == STAGE143_SCHEMA
+    assert plan.debug["stage143_packet_budget"]["sent_count"] == 2
+    assert plan.debug["stage143_packet_budget"]["continued_count"] == 1
+    assert plan.debug["stage143_packet_budget"]["stop_reason"] == "deep_packet_completed"
 
 
 def test_stage132_processor_does_not_force_optional_continuation_from_host_advisory(tmp_path: Path) -> None:
@@ -289,3 +294,7 @@ def test_stage132_processor_does_not_force_optional_continuation_from_host_advis
     assert fast_packet["host_deep_advisory"] is True
     assert fast_packet["deep_packet_forced"] is False
     assert plan.debug["stage142_semantic_novelty"]["candidate_count"] == 1
+    assert plan.debug["stage143_packet_budget"]["schema"] == STAGE143_SCHEMA
+    assert plan.debug["stage143_packet_budget"]["sent_count"] == 1
+    assert plan.debug["stage143_packet_budget"]["skipped_count"] == 1
+    assert plan.debug["stage143_packet_budget"]["stop_reason"] == "provider_fast_packet_said_fast_answer_enough"

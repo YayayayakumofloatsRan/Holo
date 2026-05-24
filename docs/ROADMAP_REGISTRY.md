@@ -91,6 +91,11 @@ Stage142: A' to A'' semantic novelty gate
 - Duplicate or low-value A'' segments are suppressed, prefix duplicates are trimmed, and valid tool feedback or memory limitations still emit.
 - Stage139, Stage140, and Stage141 failures cannot be reintroduced by continuation bubbles; Stage135 topology can render a compact semantic novelty gate.
 
+Stage143: packet budget and stop-reason report
+- Implemented deterministic packet-chain observability over Stage132 and Stage142.
+- Reports why fast/deep packets were sent or skipped, why continuation stopped, estimated token/timing cost, and grounding or novelty outcomes linked to the stop reason.
+- Stage143 does not add provider calls, memory writes, tool execution, transport authority, or a second loop; Stage135 topology can render a compact packet-budget gate.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

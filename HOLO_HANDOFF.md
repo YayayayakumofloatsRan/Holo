@@ -66,6 +66,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 61. `docs/ENGINEERING_HANDOFF_STAGE141.md`
 62. `docs/STAGE142_SEMANTIC_NOVELTY_GATE.md`
 63. `docs/ENGINEERING_HANDOFF_STAGE142.md`
+64. `docs/STAGE143_PACKET_BUDGET_STOP_REASON.md`
+65. `docs/ENGINEERING_HANDOFF_STAGE143.md`
 
 ## What This Document Must Cover
 - current live state
@@ -80,9 +82,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage142-semantic-novelty-gate`.
+- The current milestone tag is `stage143-packet-budget-stop-reason`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage142 semantic novelty gating: after Stage132 builds A' and optional A'' visible bubbles, Stage142 suppresses duplicate or low-value continuations, trims prefix duplicates, blocks unrepaired contradictions, and prevents unsupported Stage139/140/141 tool or memory claims from reappearing in A''. Stage135 topology can show a compact semantic novelty gate.
+- Current focus is Stage143 packet-budget observability: after Stage132 decides fast/deep packet flow and Stage142 gates visible A' to A'', Stage143 reports why packets were sent or skipped, why continuation stopped, what token/timing estimate was available, and which grounding or novelty status affected the stop reason. Stage135 topology can show a compact packet-budget gate.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
