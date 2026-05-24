@@ -64,6 +64,7 @@ from .reply_service_parts.diagnostics import (
 from .reply_service_parts.endpoints import try_acceptance_endpoint
 from .store import QueueStore
 from .tool_grounding import evaluate_tool_grounding, normalize_tool_observation_ledger, repair_ungrounded_tool_claims
+from .memory_grounding import evaluate_memory_grounding, normalize_memory_observation_ledger, repair_memory_claims
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9273,10 +9274,34 @@ class HoloReplyService:
                 dict(reply_debug.get("agent_tool_loop", {})).get("tool_observation_ledger", [])
             )
         tool_grounding = evaluate_tool_grounding(repaired_text, tool_observation_ledger)
+        if tool_grounding.get("missing_families") == ["memory"]:
+            tool_grounding = {
+                **tool_grounding,
+                "status": "grounded",
+                "missing_families": [],
+                "memory_claim_delegated_to_stage140": True,
+            }
         if tool_grounding.get("status") == "ungrounded_tool_claim":
             repaired_text = normalize_external_speech_for_context(
                 turn_context,
                 repair_ungrounded_tool_claims(repaired_text, tool_grounding, channel=turn.channel),
+            )
+        memory_observation_ledger = normalize_memory_observation_ledger(
+            sidecar=sidecar,
+            reply_debug=reply_debug,
+            tool_observation_ledger=tool_observation_ledger,
+            active_memory_refresh=active_history_report or demoted_history_refresh_report or {},
+            query=turn.text,
+        )
+        memory_grounding = evaluate_memory_grounding(repaired_text, memory_observation_ledger)
+        if memory_grounding.get("status") in {
+            "ungrounded_memory_claim",
+            "weak_memory_source",
+            "contradicted_memory_claim",
+        }:
+            repaired_text = normalize_external_speech_for_context(
+                turn_context,
+                repair_memory_claims(repaired_text, memory_grounding, channel=turn.channel),
             )
         planned_bubbles = reply_plan.bubbles if bool(stage132_progressive_stream.get("preserve_bubbles", False)) else None
         bubbles = self._finalize_bubbles(
@@ -9334,6 +9359,8 @@ class HoloReplyService:
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
                 "tool_grounding": tool_grounding,
+                "memory_observation_ledger": memory_observation_ledger,
+                "memory_grounding": memory_grounding,
                 "timing_ms": {
                     "sidecar_ms": sidecar_ms,
                     "active_history_ms": active_history_ms,
@@ -9377,6 +9404,8 @@ class HoloReplyService:
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
             "tool_grounding": tool_grounding,
+            "memory_observation_ledger": memory_observation_ledger,
+            "memory_grounding": memory_grounding,
             "mind_tier": str(sidecar.get("tier", "")),
             "recall_reason": str(sidecar.get("recall_reason", "")),
             "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
@@ -9477,6 +9506,8 @@ class HoloReplyService:
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
                 "tool_grounding": tool_grounding,
+                "memory_observation_ledger": memory_observation_ledger,
+                "memory_grounding": memory_grounding,
                 "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
                 "graph_confidence": float(sidecar.get("graph_confidence", 0.0) or 0.0),
                 "fallback_lanes": list(sidecar.get("fallback_lanes", [])),

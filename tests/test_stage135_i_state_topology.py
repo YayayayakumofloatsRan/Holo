@@ -210,6 +210,36 @@ def test_stage135_topology_uses_actual_tool_observation_ledger_nodes() -> None:
     assert any(edge["source"] == "tool_observation_call_workspace" and edge["target"] == "state_delta" for edge in payload["edges"])
 
 
+def test_stage135_topology_uses_actual_memory_observation_ledger_nodes() -> None:
+    payload = build_stage135_i_state_topology(
+        context=_context("show the actual memory observations"),
+        fast_packet={"deep_packet_needed": True, "intent": "memory_grounded_trace"},
+        stream_plan={"deep_packet_needed": True},
+        memory_observation_ledger=[
+            {
+                "schema": "holo.memory_grounding.v1",
+                "memory_call_id": "selected_memory_origin",
+                "source_family": "archive",
+                "selected_ids": ["archive:turn-1"],
+                "status": "grounded",
+                "summary": "origin turn selected from archive",
+                "confidence": 0.84,
+                "freshness": "graph-led",
+                "grounding_tags": ["memory", "archive"],
+                "contradiction_flags": [],
+                "missing_source": False,
+            }
+        ],
+    )
+
+    observation = _node(payload, "memory_observation_selected_memory_origin")
+    assert observation["channel"] == "memory_observation"
+    assert observation["kind"] == "memory_observation"
+    assert "origin turn" in observation["summary"]
+    assert payload["metrics"]["memory_observation_node_count"] == 1
+    assert any(edge["source"] == "memory_observation_selected_memory_origin" and edge["target"] == "memory_delta" for edge in payload["edges"])
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)
@@ -218,6 +248,7 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
 
     topology = deep_plan.debug["stage135_i_state_topology"]
     assert topology["schema"] == STAGE135_SCHEMA
+    assert deep_plan.debug["memory_observation_ledger"]
     assert topology["continue_gate"]["decision"] == "continue"
     assert _node(topology, "deep_packet")["channel"] == "holo_inner"
     assert _node(topology, "visible_deep_continuation")["channel"] == "holo_visible"
@@ -231,6 +262,7 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     fast_plan = fast_processor.generate(_context("收到就好"), session_id="stage135-fast")
     fast_topology = fast_plan.debug["stage135_i_state_topology"]
     assert fast_topology["continue_gate"]["decision"] == "stop"
+    assert fast_plan.debug["memory_observation_ledger"]
     assert "deep_packet" not in {node["id"] for node in fast_topology["nodes"]}
     assert _node(fast_topology, "visible_fast_reaction")["channel"] == "holo_visible"
     assert "Stage135 I-State Frame" in str(fast_runner.calls[0]["prompt"])

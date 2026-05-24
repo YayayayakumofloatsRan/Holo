@@ -3219,6 +3219,54 @@ class ReplyServiceTests(unittest.TestCase):
             finally:
                 close_service_handles(service)
 
+    def test_reply_service_repairs_ungrounded_memory_claims(self) -> None:
+        class UngroundedMemoryClaimProcessor:
+            name = "ungrounded_memory_claim_processor"
+
+            def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
+                return ReplyPlan(
+                    text="I remember you told me before that blue was preferred.",
+                    bubbles=[ReplyBubble("I remember you told me before that blue was preferred.")],
+                    attention_state=context.attention_state,
+                    turn_plan=TurnPlan(route="main", bubble_target=1),
+                    emotion_state=dict(context.emotion_state),
+                    route="main",
+                    processor=self.name,
+                    session_id=session_id or "memory-grounding-session",
+                    raw_text="I remember you told me before that blue was preferred.",
+                    timing_ms={"processor_ms": 5, "recall_reconstruct_ms": 0},
+                    debug={"memory_observation_ledger": []},
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            service.processor = UngroundedMemoryClaimProcessor()
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "text": "hello",
+                        "channel": "holo_cli",
+                        "message_id": "memory-grounding-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(result["memory_grounding"]["status"], "ungrounded_memory_claim")
+                self.assertIn("Memory source unavailable", result["text"])
+                self.assertTrue(result["tool_grounding"].get("memory_claim_delegated_to_stage140"))
+                self.assertEqual(
+                    memory.observed_records[-1]["metadata"]["memory_grounding"]["status"],
+                    "ungrounded_memory_claim",
+                )
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

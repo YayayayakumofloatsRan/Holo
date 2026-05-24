@@ -189,6 +189,7 @@ def build_stage135_i_state_topology(
     tool_loop: dict[str, Any] | None = None,
     visible_segments: list[Any] | None = None,
     memory_delta: dict[str, Any] | None = None,
+    memory_observation_ledger: list[dict[str, Any]] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -206,6 +207,9 @@ def build_stage135_i_state_topology(
     tool_flow = _dict(internal_tool_flow)
     loop = _dict(tool_loop)
     memory = _dict(memory_delta)
+    memory_ledger = _list_dicts(memory_observation_ledger)
+    if not memory_ledger:
+        memory_ledger = _list_dicts(loop.get("memory_observation_ledger", []))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -293,6 +297,28 @@ def build_stage135_i_state_topology(
         edges.append(_edge("continue_gate", node_id, relation="local_tool_execution", weight=0.5, summary="Holo validates and executes provider-proposed tools"))
         edges.append(_edge(node_id, "state_delta", relation="tool_observation_reentry", weight=0.62, summary="actual tool observation re-enters the same I-state"))
 
+    for index, item in enumerate(memory_ledger[:10]):
+        call_id = str(item.get("memory_call_id", "") or item.get("source_family", "") or f"memory_{index + 1}")
+        source_family = str(item.get("source_family", "") or "memory")
+        node_id = "memory_observation_" + _safe_node_suffix(call_id)
+        status = str(item.get("status", "") or "")
+        summary = str(item.get("summary", "") or "")
+        y = 0.62 + (index % 5) * 0.06
+        nodes.append(
+            _node(
+                node_id,
+                source_family,
+                channel="memory_observation",
+                kind="memory_observation",
+                x=0.33,
+                y=y,
+                weight=0.68 if status == "grounded" else 0.42 if status == "weak" else 0.24,
+                summary=summary or f"status={status}",
+            )
+        )
+        edges.append(_edge(node_id, "holo_self", relation="memory_source_selected", weight=0.56, summary="selected memory evidence enters the current I-state"))
+        edges.append(_edge(node_id, "memory_delta", relation="grounds_memory_delta", weight=0.62, summary="memory observation grounds visible recall claims"))
+
     for index, name in enumerate(tool_names[:8]):
         node_id = "tool_" + _safe_node_suffix(name)
         if node_id in ledger_nodes:
@@ -355,6 +381,7 @@ def build_stage135_i_state_topology(
             "channel_count": len(channel_counts),
             "channels": channel_counts,
             "tool_node_count": sum(1 for node in nodes if node["channel"] == "tool_result"),
+            "memory_observation_node_count": sum(1 for node in nodes if node["channel"] == "memory_observation"),
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },

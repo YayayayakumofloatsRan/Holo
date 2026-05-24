@@ -34,6 +34,7 @@ from .stage135_i_state_topology import (
 )
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
+from .memory_grounding import normalize_memory_observation_ledger
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
 COMPANIONSHIP_HINTS = ("陪", "在吗", "聊聊", "说说", "想你", "想找个陪伴", "陪伴")
@@ -1738,12 +1739,17 @@ class CodexCliProcessor:
                     strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
                 )
             joined = "\n".join(bubble.text for bubble in bubbles).strip() or text
+            memory_observation_ledger = normalize_memory_observation_ledger(
+                sidecar=context.mind_packet,
+                query=str(context.user_text or ""),
+            )
             stage135_topology = build_stage135_i_state_topology(
                 context=context,
                 fast_packet=fast_packet,
                 stream_plan=stage132_stream_plan,
                 tool_loop={},
                 visible_segments=bubbles,
+                memory_observation_ledger=memory_observation_ledger,
             )
             return ReplyPlan(
                 text=joined,
@@ -1776,6 +1782,7 @@ class CodexCliProcessor:
                     "stage132_progressive_stream": stage132_stream_plan,
                     "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                     "stage135_i_state_topology": stage135_topology,
+                    "memory_observation_ledger": memory_observation_ledger,
                 },
             )
 
@@ -1851,6 +1858,13 @@ class CodexCliProcessor:
         if result.returncode != 0:
             raise RuntimeError(result.stderr or result.stdout or "codex processor failure")
         result_metadata = dict(getattr(result, "metadata", {}) or {})
+        tool_observation_ledger = list(result_metadata.get("tool_observation_ledger", []) or [])
+        memory_observation_ledger = normalize_memory_observation_ledger(
+            sidecar=context.mind_packet,
+            reply_debug={"recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {}))},
+            tool_observation_ledger=tool_observation_ledger,
+            query=str(context.user_text or ""),
+        )
         text = normalize_external_speech_for_context(context, result.reply_text.strip())
         first_reaction = normalize_external_speech_for_context(context, str(fast_packet.get("shallow_reply", "") or "").strip())
         bubbles = merge_stage132_reply_bubbles(
@@ -1880,6 +1894,7 @@ class CodexCliProcessor:
             internal_tool_flow=internal_tool_flow,
             tool_loop=dict(result_metadata.get("agent_tool_loop", {})),
             visible_segments=bubbles,
+            memory_observation_ledger=memory_observation_ledger,
         )
         return ReplyPlan(
             text=joined,
@@ -1905,8 +1920,9 @@ class CodexCliProcessor:
                 "reflex_micro_fast_candidate": bool(result_metadata.get("reflex_micro_fast_candidate", reflex_micro_fast_candidate)),
                 "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
                 "agent_tool_loop": dict(result_metadata.get("agent_tool_loop", {})),
-                "tool_observation_ledger": list(result_metadata.get("tool_observation_ledger", []) or []),
+                "tool_observation_ledger": tool_observation_ledger,
                 "tool_failure_reentry": bool(result_metadata.get("tool_failure_reentry", False)),
+                "memory_observation_ledger": memory_observation_ledger,
                 "prompt_excerpt": compact_text(prompt, 240),
                 "stage122_channel_frame": channel_frame,
                 "stage123_internal_tool_flow": internal_tool_flow,
