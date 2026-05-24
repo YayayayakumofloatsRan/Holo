@@ -27,6 +27,11 @@ from .stage132_progressive_conscious_stream import (
     merge_stage132_reply_bubbles,
     plan_stage132_progressive_stream,
 )
+from .stage135_i_state_topology import (
+    append_stage135_i_state_contract,
+    build_stage135_i_state_prompt_frame,
+    build_stage135_i_state_topology,
+)
 from .stage131_continuation import stage131_short_turn_requires_reply
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
@@ -1593,9 +1598,10 @@ class CodexCliProcessor:
         timeout_seconds = _reply_processor_timeout_seconds(context, lane)
         agent_tool_requests = _agent_tool_requests(context)
         short_term_lines = build_short_term_working_memory_lines(context)
+        stage135_i_state_prompt_frame = build_stage135_i_state_prompt_frame(context)
         stage132_fast_context_frame = build_stage132_fast_context_frame(
             context,
-            short_term_lines=short_term_lines,
+            short_term_lines=list(stage135_i_state_prompt_frame.get("lines", [])) + short_term_lines,
         )
         fast_packet_started_at = time.perf_counter()
         fast_result = self._run_runner(
@@ -1673,6 +1679,13 @@ class CodexCliProcessor:
                     strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
                 )
             joined = "\n".join(bubble.text for bubble in bubbles).strip() or text
+            stage135_topology = build_stage135_i_state_topology(
+                context=context,
+                fast_packet=fast_packet,
+                stream_plan=stage132_stream_plan,
+                tool_loop={},
+                visible_segments=bubbles,
+            )
             return ReplyPlan(
                 text=joined,
                 bubbles=bubbles,
@@ -1702,6 +1715,8 @@ class CodexCliProcessor:
                     },
                     "stage132_fast_context_frame": stage132_fast_context_frame,
                     "stage132_progressive_stream": stage132_stream_plan,
+                    "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
+                    "stage135_i_state_topology": stage135_topology,
                 },
             )
 
@@ -1719,6 +1734,7 @@ class CodexCliProcessor:
         prompt = append_stage122_channel_contract(prompt)
         prompt = append_stage123_internal_tool_contract(prompt)
         prompt = append_stage124_deep_packet_context(prompt, fast_packet)
+        prompt = append_stage135_i_state_contract(prompt, stage135_i_state_prompt_frame)
         lane_config = self.config.processor_fabric.provider_backends.get(lane)
         lane_max_output_tokens = int(getattr(lane_config, "max_output_tokens", 0) or 0)
         packet_policy = build_stage121_packet_policy(
@@ -1796,6 +1812,16 @@ class CodexCliProcessor:
                 strict_target=bool(context.selected_action or context.mind_packet.get("selected_action")),
             )
         joined = "\n".join(bubble.text for bubble in bubbles).strip() or text
+        stage135_topology = build_stage135_i_state_topology(
+            context=context,
+            fast_packet=fast_packet,
+            stream_plan=stage132_stream_plan,
+            packet_policy=packet_policy,
+            channel_frame=channel_frame,
+            internal_tool_flow=internal_tool_flow,
+            tool_loop=dict(result_metadata.get("agent_tool_loop", {})),
+            visible_segments=bubbles,
+        )
         return ReplyPlan(
             text=joined,
             bubbles=bubbles,
@@ -1832,6 +1858,8 @@ class CodexCliProcessor:
                 },
                 "stage132_fast_context_frame": stage132_fast_context_frame,
                 "stage132_progressive_stream": stage132_stream_plan,
+                "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
+                "stage135_i_state_topology": stage135_topology,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),
                 "history_lines_in_prompt": int(context.metadata.get("history_lines_in_prompt", 0) or 0),
                 "active_state_lines_in_prompt": int(context.metadata.get("active_state_lines_in_prompt", 0) or 0),

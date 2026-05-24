@@ -43,6 +43,7 @@ from .stage122_internal_external_channel_boundary import build_stage122_channel_
 from .stage123_internal_tool_flow import build_stage123_internal_tool_report
 from .stage131_thought_flow_trace import build_stage131_thought_flow_trace, render_stage131_cli_ct
 from .stage133_core_problem_research_loop import write_stage133_research_artifacts
+from .stage135_i_state_topology import write_stage135_i_state_topology_artifacts
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -9192,6 +9193,22 @@ def command_stage133_core_problem_loop(
     return 0
 
 
+def command_stage135_i_state_topology(
+    config_path: str | None,
+    *,
+    output_dir: str | None,
+    sample_query: str,
+) -> int:
+    config = load_config(config_path=config_path)
+    report = write_stage135_i_state_topology_artifacts(
+        config.runtime.repo_root,
+        output_dir=output_dir,
+        sample_query=sample_query,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /status                show compact brain status
@@ -10125,6 +10142,12 @@ def main(argv: list[str] | None = None) -> int:
     stage133_parser.add_argument("--output-dir", default=None)
     stage133_parser.add_argument("--probes-per-subproblem", type=int, default=2)
     stage133_parser.add_argument("--context-window-tokens", type=int, default=65536)
+    stage135_parser = subparsers.add_parser(
+        "stage135-i-state-topology",
+        help="Write the Stage135 endogenous I-state topology visualization artifact",
+    )
+    stage135_parser.add_argument("--output-dir", default=None)
+    stage135_parser.add_argument("--sample-query", default="show Holo's I-state topology")
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -11116,6 +11139,12 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=args.output_dir,
             probes_per_subproblem=args.probes_per_subproblem,
             context_window_tokens=args.context_window_tokens,
+        )
+    if args.command == "stage135-i-state-topology":
+        return command_stage135_i_state_topology(
+            args.config,
+            output_dir=args.output_dir,
+            sample_query=args.sample_query,
         )
     if args.command == "reply-probe":
         return command_reply_probe(
