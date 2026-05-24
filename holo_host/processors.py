@@ -1176,6 +1176,60 @@ def _selected_action_lines_for_prompt(packet: dict[str, Any]) -> list[str]:
     return _dedupe_segments(lines)
 
 
+_RECALL_RECONSTRUCT_REASONS = {
+    "explicit_memory_query",
+    "stage17:explicit_memory_query",
+    "origin_query",
+    "stage17:origin_query",
+    "deep_memory_query",
+    "stage17:deep_memory_query",
+}
+_RECALL_RECONSTRUCT_FOCUSES = {"memory", "origin", "archive", "long_term_memory"}
+_MEMORY_RECONSTRUCT_HINTS = (
+    "memory",
+    "remember",
+    "recall",
+    "archive",
+    "\u8bb0\u5fc6",
+    "\u56de\u5fc6",
+    "\u8bb0\u5f97",
+    "\u8bb0\u4f4f",
+    "\u6863\u6848",
+)
+_ORIGIN_RECONSTRUCT_HINTS = (
+    "earliest",
+    "oldest",
+    "origin",
+    "\u6700\u65e9",
+    "\u6700\u521d",
+    "\u6df1\u5904",
+    "\u4ec0\u4e48\u65f6\u5019",
+    "\u4f55\u65f6",
+)
+
+
+def _recall_reconstruct_requested(context: TurnContext) -> bool:
+    packet = dict(context.mind_packet or context.sidecar)
+    if bool(packet.get("recall_reconstruct_requested", False)):
+        return True
+    if bool(packet.get("local_memory_requested", False)):
+        return True
+    reason = str(packet.get("recall_reason", "") or "").strip().lower()
+    if reason in _RECALL_RECONSTRUCT_REASONS:
+        return True
+    query_focus = str(packet.get("query_focus", "") or "").strip().lower()
+    if query_focus in _RECALL_RECONSTRUCT_FOCUSES:
+        return True
+    text = str(context.user_text or "")
+    lowered = text.lower()
+    if any(hint in lowered for hint in _MEMORY_RECONSTRUCT_HINTS[:4]) or any(hint in text for hint in _MEMORY_RECONSTRUCT_HINTS[4:]):
+        return True
+    if any(hint in lowered for hint in _ORIGIN_RECONSTRUCT_HINTS[:3]) or any(hint in text for hint in _ORIGIN_RECONSTRUCT_HINTS[3:]):
+        tier = str(packet.get("tier", "") or "").strip().lower()
+        return tier in {"recall", "deep_recall"}
+    return False
+
+
 def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> bool:
     if not config.memory.recall_reconstruct_enabled:
         return False
@@ -1183,6 +1237,8 @@ def _should_run_recall_reconstruct(context: TurnContext, config: HostConfig) -> 
     if tier not in {"recall", "deep_recall"}:
         return False
     if list(context.mind_packet.get("recall_reconstruction", {}).get("anchors", [])):
+        return False
+    if not _recall_reconstruct_requested(context):
         return False
     if list(context.mind_packet.get("activation_trace_ids", [])):
         return True

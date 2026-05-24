@@ -9250,7 +9250,22 @@ class HoloReplyService:
             turn_context,
             str(repaired.get("final_draft", reply_plan.text)).strip(),
         )
-        stage132_progressive_stream = dict(reply_plan.debug.get("stage132_progressive_stream", {})) if isinstance(reply_plan.debug, dict) else {}
+        reply_debug = reply_plan.debug if isinstance(reply_plan.debug, dict) else {}
+        stage132_progressive_stream = (
+            dict(reply_debug.get("stage132_progressive_stream", {}))
+            if isinstance(reply_debug.get("stage132_progressive_stream", {}), dict)
+            else {}
+        )
+        stage135_i_state_prompt_frame = (
+            dict(reply_debug.get("stage135_i_state_prompt_frame", {}))
+            if isinstance(reply_debug.get("stage135_i_state_prompt_frame", {}), dict)
+            else {}
+        )
+        stage135_i_state_topology = (
+            dict(reply_debug.get("stage135_i_state_topology", {}))
+            if isinstance(reply_debug.get("stage135_i_state_topology", {}), dict)
+            else {}
+        )
         planned_bubbles = reply_plan.bubbles if bool(stage132_progressive_stream.get("preserve_bubbles", False)) else None
         bubbles = self._finalize_bubbles(
             repaired_text,
@@ -9303,6 +9318,8 @@ class HoloReplyService:
                 "processor": reply_plan.processor,
                 "route": reply_plan.route,
                 "stage132_progressive_stream": stage132_progressive_stream,
+                "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
+                "stage135_i_state_topology": stage135_i_state_topology,
                 "timing_ms": {
                     "sidecar_ms": sidecar_ms,
                     "active_history_ms": active_history_ms,
@@ -9342,6 +9359,8 @@ class HoloReplyService:
             "processor": reply_plan.processor,
             "route": reply_plan.route,
             "stage132_progressive_stream": stage132_progressive_stream,
+            "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
+            "stage135_i_state_topology": stage135_i_state_topology,
             "mind_tier": str(sidecar.get("tier", "")),
             "recall_reason": str(sidecar.get("recall_reason", "")),
             "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
@@ -9438,6 +9457,8 @@ class HoloReplyService:
                 "processor": reply_plan.processor,
                 "route": reply_plan.route,
                 "stage132_progressive_stream": stage132_progressive_stream,
+                "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
+                "stage135_i_state_topology": stage135_i_state_topology,
                 "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
                 "graph_confidence": float(sidecar.get("graph_confidence", 0.0) or 0.0),
                 "fallback_lanes": list(sidecar.get("fallback_lanes", [])),

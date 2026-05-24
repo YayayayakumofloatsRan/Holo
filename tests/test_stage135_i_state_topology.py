@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from holo_host import cli
 from holo_host.config import load_config
 from holo_host.models import TurnContext
-from holo_host.processors import CodexCliProcessor, build_attention_state
+from holo_host.processors import CodexCliProcessor, _should_run_recall_reconstruct, build_attention_state
 from holo_host.stage132_progressive_conscious_stream import plan_stage132_progressive_stream
 from holo_host.stage135_i_state_topology import (
     STAGE135_SCHEMA,
@@ -208,6 +208,44 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     assert "deep_packet" not in {node["id"] for node in fast_topology["nodes"]}
     assert _node(fast_topology, "visible_fast_reaction")["channel"] == "holo_visible"
     assert "Stage135 I-State Frame" in str(fast_runner.calls[0]["prompt"])
+
+
+def test_stage135_i_state_trace_does_not_trigger_recall_reconstruct_without_memory_request(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    context = _context("show the current I-state topology and packet flow")
+    packet = dict(context.mind_packet)
+    packet.update(
+        {
+            "tier": "deep_recall",
+            "query_focus": "i_state_topology",
+            "recall_reason": "stage135_i_state_trace",
+            "activation_trace_ids": ["archive:recent-turn"],
+            "episodic_recall": {"lines": ["recent packet asked for topology"], "items": []},
+        }
+    )
+    context.mind_packet = packet
+    context.sidecar = packet
+
+    assert _should_run_recall_reconstruct(context, config) is False
+
+
+def test_stage135_explicit_memory_query_still_triggers_recall_reconstruct(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    context = _context("\u56de\u5fc6\u4e00\u4e0b\u6700\u65e9\u7684\u8bb0\u5fc6\u662f\u4ec0\u4e48")
+    packet = dict(context.mind_packet)
+    packet.update(
+        {
+            "tier": "deep_recall",
+            "query_focus": "memory",
+            "recall_reason": "stage17:explicit_memory_query",
+            "activation_trace_ids": ["archive:origin-turn"],
+            "episodic_recall": {"lines": ["origin memory candidate"], "items": []},
+        }
+    )
+    context.mind_packet = packet
+    context.sidecar = packet
+
+    assert _should_run_recall_reconstruct(context, config) is True
 
 
 def test_stage135_artifact_html_renders_topology_network(tmp_path: Path) -> None:

@@ -14,7 +14,18 @@ from holo_host.codex_runner import CodexRunner
 from holo_host.daemon import HoloDaemon
 from holo_host.mail_gateway import MaildirGateway
 from holo_host.mind_graph import MindGraph
-from holo_host.models import AttentionState, CodexResult, IncomingMessage, OutgoingMessage, ProcessorTaskResult, ProcessorUsageRecord, ReplyBubble, TurnContext
+from holo_host.models import (
+    AttentionState,
+    CodexResult,
+    IncomingMessage,
+    OutgoingMessage,
+    ProcessorTaskResult,
+    ProcessorUsageRecord,
+    ReplyBubble,
+    ReplyPlan,
+    TurnContext,
+    TurnPlan,
+)
 from holo_host.policy import AutonomyPolicy
 from holo_host.reply_api import (
     HoloReplyService,
@@ -3098,6 +3109,68 @@ class ReplyServiceTests(unittest.TestCase):
                 self.assertIn("utterance_plan", result)
             finally:
                 close_service_handles(service)
+
+    def test_reply_service_exposes_stage135_i_state_topology_trace(self) -> None:
+        class Stage135DebugProcessor:
+            name = "stage135_debug_processor"
+
+            def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
+                topology = {
+                    "schema": "holo.stage135.i_state_topology.v1",
+                    "stage": 135,
+                    "nodes": [
+                        {"id": "external_user_input", "channel": "external_user"},
+                        {"id": "fast_packet", "channel": "holo_inner"},
+                        {"id": "visible_fast_reaction", "channel": "holo_visible"},
+                    ],
+                    "edges": [{"source": "external_user_input", "target": "fast_packet"}],
+                    "continue_gate": {"decision": "continue"},
+                }
+                return ReplyPlan(
+                    text="I can show the trace.",
+                    bubbles=[ReplyBubble("I can show the trace.", purpose="fast_reaction")],
+                    attention_state=context.attention_state,
+                    turn_plan=TurnPlan(route="main", bubble_target=1),
+                    emotion_state=dict(context.emotion_state),
+                    route="main",
+                    processor=self.name,
+                    session_id=session_id or "stage135-session",
+                    raw_text="I can show the trace.",
+                    timing_ms={"processor_ms": 7, "recall_reconstruct_ms": 0},
+                    debug={
+                        "stage132_progressive_stream": {"round_count": 1, "preserve_bubbles": True},
+                        "stage135_i_state_prompt_frame": {"marker": "Stage135 I-State Frame"},
+                        "stage135_i_state_topology": topology,
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            service.processor = Stage135DebugProcessor()
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "text": "show the internal trace",
+                        "channel": "holo_cli",
+                        "message_id": "stage135-trace-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(result["stage135_i_state_topology"]["schema"], "holo.stage135.i_state_topology.v1")
+                self.assertEqual(
+                    memory.observed_records[-1]["metadata"]["stage135_i_state_topology"]["continue_gate"]["decision"],
+                    "continue",
+                )
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

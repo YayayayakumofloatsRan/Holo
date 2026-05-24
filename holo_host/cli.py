@@ -9215,6 +9215,7 @@ CHAT_HELP = """Commands:
   /readiness             show live readiness
   /flow                  show live flow summary
   /ct                    show Stage131 thought-flow CT for this CLI thread
+  /topology              show latest Stage135 I-state topology from the last reply
   /mind <query>          inspect current mind packet for a query
   /recall <query>        trace hybrid recall for a query
   /activation            show activation state for this CLI thread
@@ -9316,6 +9317,29 @@ def _compact_chat_flow(payload: dict[str, Any]) -> str:
     return f"status={status or 'unknown'} active={active or '-'} recommendation={recommendation or '-'}"
 
 
+def _compact_stage135_topology(payload: dict[str, Any]) -> str:
+    topology = payload.get("stage135_i_state_topology", {})
+    if not isinstance(topology, dict) or not topology:
+        return "stage135=no_topology"
+    nodes = list(topology.get("nodes", [])) if isinstance(topology.get("nodes", []), list) else []
+    edges = list(topology.get("edges", [])) if isinstance(topology.get("edges", []), list) else []
+    channels: dict[str, int] = {}
+    for item in nodes:
+        if not isinstance(item, dict):
+            continue
+        channel = str(item.get("channel", "") or "unknown").strip() or "unknown"
+        channels[channel] = channels.get(channel, 0) + 1
+    stream = payload.get("stage132_progressive_stream", {})
+    round_count = int(dict(stream).get("round_count", 0) or 0) if isinstance(stream, dict) else 0
+    continue_gate = topology.get("continue_gate", {})
+    decision = str(dict(continue_gate).get("decision", "") or "-") if isinstance(continue_gate, dict) else "-"
+    channel_summary = " ".join(f"{key}={value}" for key, value in sorted(channels.items()))
+    return (
+        f"stage135 nodes={len(nodes)} edges={len(edges)} rounds={round_count} "
+        f"continue={decision} channels={channel_summary or '-'}"
+    )
+
+
 def _print_chat_json(payload: dict[str, Any]) -> None:
     print(_json_dumps_utf8_safe(payload, ensure_ascii=False, indent=2))
 
@@ -9345,6 +9369,7 @@ def command_chat(
     service: HoloReplyService | None = None
     show_json = bool(json_output)
     pending_tool_permission_grants: list[dict[str, Any]] = []
+    last_reply_payload: dict[str, Any] = {}
 
     def send_turn(text: str) -> tuple[dict[str, Any], str]:
         nonlocal pending_tool_permission_grants, service
@@ -9377,7 +9402,7 @@ def command_chat(
         return result, "local_process"
 
     def run_slash(command_line: str) -> bool:
-        nonlocal pending_tool_permission_grants, show_json
+        nonlocal pending_tool_permission_grants, show_json, last_reply_payload
         command, _, rest = command_line.partition(" ")
         command = command.strip().lower()
         rest = rest.strip()
@@ -9424,6 +9449,17 @@ def command_chat(
             print(render_stage131_cli_ct(payload))
             if show_json:
                 _print_chat_json(payload)
+            return True
+        if command in {"/topology", "/topo"}:
+            print(f"[last_reply] {_compact_stage135_topology(last_reply_payload)}")
+            if show_json and last_reply_payload:
+                _print_chat_json(
+                    {
+                        "stage132_progressive_stream": last_reply_payload.get("stage132_progressive_stream", {}),
+                        "stage135_i_state_prompt_frame": last_reply_payload.get("stage135_i_state_prompt_frame", {}),
+                        "stage135_i_state_topology": last_reply_payload.get("stage135_i_state_topology", {}),
+                    }
+                )
             return True
         if command == "/mind":
             if not rest:
@@ -9501,6 +9537,7 @@ def command_chat(
             if not text:
                 return 0
             payload, transport = send_turn(text)
+            last_reply_payload = payload
             print(_chat_response_text(payload))
             if show_json:
                 print(f"\n[{transport}]")
@@ -9526,6 +9563,7 @@ def command_chat(
                     break
                 continue
             payload, transport = send_turn(text)
+            last_reply_payload = payload
             print(_chat_response_text(payload))
             if show_json:
                 print(f"\n[{transport}]")

@@ -61,6 +61,29 @@ class CliChatTests(unittest.TestCase):
     def test_chat_response_text_replaces_lone_surrogates_before_printing(self) -> None:
         self.assertEqual(cli._chat_response_text({"text": "bad\ud800"}), "bad?")
 
+    def test_compact_stage135_topology_summarizes_last_reply_trace(self) -> None:
+        summary = cli._compact_stage135_topology(
+            {
+                "stage135_i_state_topology": {
+                    "nodes": [
+                        {"id": "external_user_input", "channel": "external_user"},
+                        {"id": "fast_packet", "channel": "holo_inner"},
+                        {"id": "visible_fast_reaction", "channel": "holo_visible"},
+                    ],
+                    "edges": [{"source": "external_user_input", "target": "fast_packet"}],
+                    "continue_gate": {"decision": "continue"},
+                },
+                "stage132_progressive_stream": {"round_count": 2},
+            }
+        )
+
+        self.assertIn("nodes=3", summary)
+        self.assertIn("edges=1", summary)
+        self.assertIn("rounds=2", summary)
+        self.assertIn("continue=continue", summary)
+        self.assertIn("external_user=1", summary)
+        self.assertIn("holo_inner=1", summary)
+
     def test_chat_json_print_replaces_lone_surrogates_before_printing(self) -> None:
         with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
             cli._print_chat_json({"text": "bad\ud800"})
@@ -92,6 +115,41 @@ class CliChatTests(unittest.TestCase):
     def test_interactive_help_keeps_reset_outside_chat(self) -> None:
         self.assertIn("Reset is intentionally not available inside chat", cli.CHAT_HELP)
         self.assertIn("reset-memory", cli.CHAT_HELP)
+
+    def test_interactive_topology_uses_last_reply_trace(self) -> None:
+        response = {
+            "action": "reply",
+            "text": "trace ready",
+            "stage132_progressive_stream": {"round_count": 2},
+            "stage135_i_state_topology": {
+                "nodes": [
+                    {"id": "external_user_input", "channel": "external_user"},
+                    {"id": "fast_packet", "channel": "holo_inner"},
+                    {"id": "visible_fast_reaction", "channel": "holo_visible"},
+                ],
+                "edges": [{"source": "external_user_input", "target": "fast_packet"}],
+                "continue_gate": {"decision": "continue"},
+            },
+        }
+
+        with mock.patch("holo_host.cli._live_api_request", return_value=response), mock.patch(
+            "builtins.input", side_effect=["hello", "/topology", "/quit"]
+        ), mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            result = cli.command_chat(
+                None,
+                thread_key="holo_cli:main",
+                chat_name="HoloCLI",
+                channel="holo_cli",
+                sender="Operator",
+                once=None,
+                json_output=False,
+                no_local_fallback=True,
+                timeout=3.0,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn("[last_reply] stage135", stdout.getvalue())
+        self.assertIn("nodes=3", stdout.getvalue())
 
 
 if __name__ == "__main__":
