@@ -20,6 +20,7 @@ from .stage106_deepseek_tool_adapter import (
     strip_provider_tool_markup,
 )
 from .stage113_agent_tool_executor import execute_stage113_agent_tools
+from .tool_grounding import normalize_tool_observation_ledger
 
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
     "reply": {
@@ -751,6 +752,8 @@ class DeepSeekProvider(ProcessorProvider):
         total_tool_calls = 0
         final_request_sent = False
         exhausted = False
+        tool_observation_ledger: list[dict[str, Any]] = []
+        tool_failure_reentry = False
 
         for round_index in range(max_rounds):
             tool_calls = parse_provider_tool_calls(current_decoded)
@@ -790,11 +793,15 @@ class DeepSeekProvider(ProcessorProvider):
                 summary["skipped_count"] = int(summary.get("skipped_count", 0) or 0) + len(budget_skipped)
                 tool_report["summary"] = summary
             tool_messages = self._tool_observation_messages(tool_report, active_tool_calls + tool_calls[remaining_calls:])
+            round_ledger = normalize_tool_observation_ledger(tool_report)
             round_executed = int(tool_report.get("summary", {}).get("executed_count", 0) or 0)
             round_skipped = int(tool_report.get("summary", {}).get("skipped_count", 0) or 0)
             executed_count += round_executed
             skipped_count += round_skipped
             total_tool_calls += len(tool_calls)
+            tool_observation_ledger.extend(round_ledger)
+            if round_skipped or any(str(item.get("status", "") or "").lower() in {"rejected", "skipped", "denied", "error"} for item in round_ledger):
+                tool_failure_reentry = True
             rounds.append(
                 {
                     "round": round_index + 1,
@@ -802,6 +809,7 @@ class DeepSeekProvider(ProcessorProvider):
                     "executed_count": round_executed,
                     "skipped_count": round_skipped,
                     "observation_summary": str(tool_report.get("summary", {}).get("observation_summary", "") or ""),
+                    "tool_observation_ledger": round_ledger,
                 }
             )
             if not tool_messages:
@@ -844,6 +852,8 @@ class DeepSeekProvider(ProcessorProvider):
             "max_tool_calls": max_tool_calls,
             "final_request_sent": False,
             "exhausted": exhausted,
+            "tool_observation_ledger": tool_observation_ledger,
+            "tool_failure_reentry": tool_failure_reentry,
         }
         loop_metadata["final_request_sent"] = final_request_sent
         return current_decoded, usage, loop_metadata
@@ -933,6 +943,8 @@ class DeepSeekProvider(ProcessorProvider):
         if agent_tool_loop:
             metadata["agent_tool_loop"] = agent_tool_loop
             metadata["final_tool_calls"] = tool_calls
+            metadata["tool_observation_ledger"] = list(agent_tool_loop.get("tool_observation_ledger", []) or [])
+            metadata["tool_failure_reentry"] = bool(agent_tool_loop.get("tool_failure_reentry", False))
         return ProcessorTaskResult(
             task_type=request.task_type,
             text=text,

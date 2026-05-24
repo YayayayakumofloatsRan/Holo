@@ -184,3 +184,15 @@ def test_deepseek_provider_converts_rejected_tool_calls_into_tool_observations()
     assert tool_message["tool_call_id"] == "call_shell_1"
     assert "unknown_tool" in tool_message["content"]
     assert result.metadata["agent_tool_loop"]["skipped_count"] == 1
+    assert result.metadata["agent_tool_loop"]["tool_failure_reentry"] is True
+    assert result.metadata["tool_failure_reentry"] is True
+    assert result.metadata["tool_observation_ledger"] == [
+        {
+            "provider_call_id": "call_shell_1",
+            "tool": "shell_exec",
+            "status": "rejected",
+            "summary": "tool rejected: unknown_tool",
+            "data_keys": ["reason"],
+            "grounding_tags": [],
+        }
+    ]

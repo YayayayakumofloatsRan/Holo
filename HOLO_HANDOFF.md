@@ -57,6 +57,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 52. `docs/PUBLIC_RELEASE_HYGIENE.md`
 53. `holo_memory_library/MEMORY_LIBRARY.md`
 54. `windows_helper/README.md`
+55. `docs/STAGE138_SYSTEM_OPTIMIZATION_TASKS_AND_TOOL_CALLING.md`
+56. `docs/STAGE139_TOOL_CALLING_MATURITY.md`
+57. `docs/ENGINEERING_HANDOFF_STAGE139.md`
 
 ## What This Document Must Cover
 - current live state
@@ -71,9 +74,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage28-multimodal-homeostatic-kernel`.
+- The current milestone tag is `stage139-tool-calling-maturity`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage28 multimodal situational-field hardening while Holo remains offline for broader kernel reform. The next arc remains tracked in `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces it.
+- Current focus is Stage139 tool-calling maturity: provider-proposed tool calls are executed only by the WSL main brain, observations re-enter the next packet, visible tool claims are grounded against an observation ledger, and Stage135 topology shows actual tool-observation nodes.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -237,6 +240,10 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host trace-inquiry-shaping --thread-key TestUser --chat-name TestUser --channel wechat --query "continue"`
 - Stage28 multimodal kernel acceptance:
   - `python3 -m holo_host accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat`
+- Stage139 tool-calling benchmark:
+  - `python3 -m holo_host stage139-tool-benchmark`
+- Stage139 tool-affordance probe:
+  - `python3 -m holo_host stage120-tool-affordance --query "inspect workspace, run pytest, check git diff"`
 - Stage15 replay-preserving refactor tests:
   - `pytest -q tests/test_stage15_modularization.py`
 
@@ -280,6 +287,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - cache reuse is still cold in practice
 - proactive initiative exists but is often blocked by `initiative_probe_blocked`
 - retrieval and expression control still feel more engineered than natural
+- memory answer grounding is not yet as strict as tool grounding; use Stage139's `tool_observation_ledger` pattern for the next memory-source gate
+- progressive A' to A'' replies still need semantic novelty and contradiction checks so the second visible segment absorbs the first instead of repeating it
 - main-brain override and initiative gate calibration can create false negatives under cold `initiative_window` states
 - token accounting now exists, but some providers still rely on estimates rather than ground-truth usage
 - provider fallback behavior is standardized, but fallback paths still need more live soak time
@@ -292,6 +301,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - Stage22 canary is host-side and shadow-first; do not let it pick actions, grant send permission, hide metrics, or turn world-coupling cues into a recall trigger
 - Stage25 dense continuity is intentionally bounded and stream-driven; do not let it trigger heavy recall, create a new loop family, or become a watcher-side decision layer
 - Stage26 task-world state is intentionally bounded and same-thread-first; do not let it become a second decision layer, a cross-thread hidden coupling path, or a heavy-recall trigger
+- Stage139 tool execution is intentionally WSL-main-brain-only; provider output may propose tool calls, but it must not be treated as proof that a tool ran
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -374,6 +384,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage26 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage27 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-11`
   - `python3 -m holo_host --config .holo_host.example.toml accept-stage28 --thread-key TestUser --chat-name TestUser --channel wechat` passed on `2026-04-28`
+  - `python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base` passed with `479 passed in 86.76s` on `2026-05-24`
+  - `python3 -m holo_host stage139-tool-benchmark` passed on `2026-05-24` with `tool_precision=1.0`, `tool_recall=1.0`, `ungrounded_claim_count=1`
 
 ## Invariants
 - Do not silently change online transport modes

@@ -140,6 +140,18 @@ def test_deepseek_provider_executes_tool_call_and_requests_final_reply() -> None
         assert result.metadata["agent_tool_loop"]["round_count"] == 1
         assert result.metadata["agent_tool_loop"]["executed_count"] == 1
         assert result.metadata["agent_tool_loop"]["final_request_sent"] is True
+        ledger = result.metadata["agent_tool_loop"]["tool_observation_ledger"]
+        assert ledger == [
+            {
+                "provider_call_id": "call_memory_1",
+                "tool": "memory_recall",
+                "status": "ok",
+                "summary": "memory recall: m1:provider packet continuity requires tool observations",
+                "data_keys": ["matches", "query"],
+                "grounding_tags": ["memory"],
+            }
+        ]
+        assert result.metadata["tool_observation_ledger"] == ledger
         assert result.metadata["usage"]["total_tokens"] == 83
 
 

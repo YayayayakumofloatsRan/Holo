@@ -33,6 +33,7 @@ from .stage135_i_state_topology import (
     build_stage135_i_state_topology,
 )
 from .stage131_continuation import stage131_short_turn_requires_reply
+from .tool_need import classify_tool_need
 
 PRESSURE_HINTS = ("压力", "折磨", "退休", "累", "焦虑", "孤独", "压人", "burnout", "tired", "anxious")
 COMPANIONSHIP_HINTS = ("陪", "在吗", "聊聊", "说说", "想你", "想找个陪伴", "陪伴")
@@ -163,11 +164,13 @@ def _agent_tool_requests(context: TurnContext) -> list[dict[str, Any]]:
         or context.capability_context.get("approved_tool_permissions")
         or []
     )
+    tool_need = classify_tool_need(query)
     return optimize_stage120_tool_requests(
         requests,
         query=query,
         permission_grants=permission_grants,
         tool_scope=str(context.capability_context.get("tool_scope", "") or ""),
+        tool_need=tool_need,
     )
 
 
@@ -1902,6 +1905,8 @@ class CodexCliProcessor:
                 "reflex_micro_fast_candidate": bool(result_metadata.get("reflex_micro_fast_candidate", reflex_micro_fast_candidate)),
                 "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
                 "agent_tool_loop": dict(result_metadata.get("agent_tool_loop", {})),
+                "tool_observation_ledger": list(result_metadata.get("tool_observation_ledger", []) or []),
+                "tool_failure_reentry": bool(result_metadata.get("tool_failure_reentry", False)),
                 "prompt_excerpt": compact_text(prompt, 240),
                 "stage122_channel_frame": channel_frame,
                 "stage123_internal_tool_flow": internal_tool_flow,

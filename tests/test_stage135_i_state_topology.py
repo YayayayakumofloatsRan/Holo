@@ -184,6 +184,32 @@ def test_stage135_topology_separates_user_inner_visible_tool_and_memory_channels
     assert payload["continue_gate"]["decision"] == "continue"
 
 
+def test_stage135_topology_uses_actual_tool_observation_ledger_nodes() -> None:
+    payload = build_stage135_i_state_topology(
+        context=_context("show the actual tool observations"),
+        fast_packet={"deep_packet_needed": True, "intent": "tool_grounded_trace"},
+        stream_plan={"deep_packet_needed": True},
+        tool_loop={
+            "tool_observation_ledger": [
+                {
+                    "provider_call_id": "call_workspace",
+                    "tool": "workspace_inspect",
+                    "status": "ok",
+                    "summary": "workspace list_dir: docs, holo_host",
+                    "data_keys": ["entries", "path"],
+                    "grounding_tags": ["workspace"],
+                }
+            ]
+        },
+    )
+
+    observation = _node(payload, "tool_observation_call_workspace")
+    assert observation["channel"] == "tool_observation"
+    assert observation["kind"] == "tool_observation"
+    assert "workspace list_dir" in observation["summary"]
+    assert any(edge["source"] == "tool_observation_call_workspace" and edge["target"] == "state_delta" for edge in payload["edges"])
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)

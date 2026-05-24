@@ -63,6 +63,7 @@ from .reply_service_parts.diagnostics import (
 )
 from .reply_service_parts.endpoints import try_acceptance_endpoint
 from .store import QueueStore
+from .tool_grounding import evaluate_tool_grounding, normalize_tool_observation_ledger, repair_ungrounded_tool_claims
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9266,6 +9267,17 @@ class HoloReplyService:
             if isinstance(reply_debug.get("stage135_i_state_topology", {}), dict)
             else {}
         )
+        tool_observation_ledger = normalize_tool_observation_ledger(reply_debug.get("tool_observation_ledger", []))
+        if not tool_observation_ledger and isinstance(reply_debug.get("agent_tool_loop", {}), dict):
+            tool_observation_ledger = normalize_tool_observation_ledger(
+                dict(reply_debug.get("agent_tool_loop", {})).get("tool_observation_ledger", [])
+            )
+        tool_grounding = evaluate_tool_grounding(repaired_text, tool_observation_ledger)
+        if tool_grounding.get("status") == "ungrounded_tool_claim":
+            repaired_text = normalize_external_speech_for_context(
+                turn_context,
+                repair_ungrounded_tool_claims(repaired_text, tool_grounding, channel=turn.channel),
+            )
         planned_bubbles = reply_plan.bubbles if bool(stage132_progressive_stream.get("preserve_bubbles", False)) else None
         bubbles = self._finalize_bubbles(
             repaired_text,
@@ -9320,6 +9332,8 @@ class HoloReplyService:
                 "stage132_progressive_stream": stage132_progressive_stream,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
+                "tool_observation_ledger": tool_observation_ledger,
+                "tool_grounding": tool_grounding,
                 "timing_ms": {
                     "sidecar_ms": sidecar_ms,
                     "active_history_ms": active_history_ms,
@@ -9361,6 +9375,8 @@ class HoloReplyService:
             "stage132_progressive_stream": stage132_progressive_stream,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
+            "tool_observation_ledger": tool_observation_ledger,
+            "tool_grounding": tool_grounding,
             "mind_tier": str(sidecar.get("tier", "")),
             "recall_reason": str(sidecar.get("recall_reason", "")),
             "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
@@ -9459,6 +9475,8 @@ class HoloReplyService:
                 "stage132_progressive_stream": stage132_progressive_stream,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
+                "tool_observation_ledger": tool_observation_ledger,
+                "tool_grounding": tool_grounding,
                 "retrieval_mode": str(sidecar.get("retrieval_mode", "legacy")),
                 "graph_confidence": float(sidecar.get("graph_confidence", 0.0) or 0.0),
                 "fallback_lanes": list(sidecar.get("fallback_lanes", [])),

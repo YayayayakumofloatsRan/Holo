@@ -23,6 +23,7 @@ STAGE120_GROUPS: dict[str, tuple[str, ...]] = {
     "memory": ("memory_recall", "memory_warehouse_search", "doc_lookup"),
     "workspace": ("workspace_inspect", "file_read", "file_search", "file_list", "file_stat", "symbol_search", "repo_overview"),
     "docs": ("doc_lookup", "markdown_outline", "file_read"),
+    "external": ("external_lookup",),
     "git": ("git_status", "git_diff", "git_log", "git_inspect"),
     "tests": ("test_runner", "test_discover", "python_module_check"),
     "runtime": ("config_inspect", "runtime_health", "env_read", "dependency_check"),
@@ -127,6 +128,7 @@ def optimize_stage120_tool_requests(
     permission_grants: Any = None,
     tool_scope: str = "",
     max_tools: int = STAGE120_DEFAULT_MAX_TOOLS,
+    tool_need: Any = None,
 ) -> list[dict[str, Any]]:
     source: dict[str, dict[str, Any]] = {}
     explicit_names: list[str] = []
@@ -162,6 +164,17 @@ def optimize_stage120_tool_requests(
         _append_tool(selected, source, name, reason="stage120_baseline_tool")
 
     groups = _query_groups(query)
+    if isinstance(tool_need, dict):
+        for group in list(tool_need.get("tool_groups", []) or []):
+            group_name = str(group or "").strip()
+            if group_name == "external_lookup":
+                group_name = "external"
+            if group_name == "external":
+                if "external" not in groups:
+                    groups.append("external")
+                continue
+            if group_name in STAGE120_GROUPS and group_name not in groups:
+                groups.append(group_name)
     if not groups:
         groups = ["memory"]
     for group in groups:
@@ -183,14 +196,42 @@ def optimize_stage120_tool_requests(
     if len(selected) <= max_count:
         return list(selected.values())
 
-    protected = set(explicit_names).union(grant_names).union(STAGE120_BASELINE_TOOLS)
+    protected_explicit = {
+        name
+        for name in explicit_names
+        if str(source.get(name, {}).get("reason", "") or "").strip().lower() not in {"library", "stage119_library"}
+    }
+    priority_order: list[str] = []
+    for name in explicit_names:
+        if name in protected_explicit and name not in priority_order:
+            priority_order.append(name)
+    for name in grant_names:
+        if name not in priority_order:
+            priority_order.append(name)
+    for name in STAGE120_BASELINE_TOOLS:
+        if name not in priority_order:
+            priority_order.append(name)
+    topic_priority = set(STAGE120_BASELINE_TOOLS).union(grant_names).union(protected_explicit)
+    for group in groups:
+        for name in STAGE120_GROUPS.get(group, ()):
+            topic_priority.add(name)
+            if name not in priority_order:
+                priority_order.append(name)
+    protected = topic_priority
     kept: list[dict[str, Any]] = []
+    for name in priority_order:
+        if name in selected:
+            kept.append(selected[name])
+    kept_names = {str(item.get("name", "") or "") for item in kept}
     overflow: list[dict[str, Any]] = []
     for name, item in selected.items():
-        if name in protected:
-            kept.append(item)
-        else:
+        if name in kept_names:
+            continue
+        if name not in protected:
             overflow.append(item)
+        else:
+            kept.append(item)
+            kept_names.add(name)
     return (kept + overflow)[:max_count]
 
 
@@ -201,6 +242,7 @@ def build_stage120_tool_affordance_report(
     permission_grants: Any = None,
     tool_scope: str = "",
     max_tools: int = STAGE120_DEFAULT_MAX_TOOLS,
+    tool_need: Any = None,
 ) -> dict[str, Any]:
     selected = optimize_stage120_tool_requests(
         tool_requests,
@@ -208,6 +250,7 @@ def build_stage120_tool_affordance_report(
         permission_grants=permission_grants,
         tool_scope=tool_scope,
         max_tools=max_tools,
+        tool_need=tool_need,
     )
     return {
         "schema": STAGE120_SCHEMA,
@@ -217,6 +260,7 @@ def build_stage120_tool_affordance_report(
         "selected_tool_count": len(selected),
         "selected_tools": [str(item.get("name", "") or "") for item in selected],
         "query_groups": _query_groups(query),
+        "tool_need": dict(tool_need or {}) if isinstance(tool_need, dict) else {},
         "tool_scope": str(tool_scope or "bounded"),
         "permission_grants": list(permission_grants or []),
     }

@@ -30,6 +30,12 @@ def _list_dicts(value: Any) -> list[dict[str, Any]]:
     return items
 
 
+def _safe_node_suffix(value: Any) -> str:
+    text = str(value or "").strip()
+    cleaned = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in text)
+    return cleaned[:80] or stable_digest(text, limit=10)
+
+
 def _clamp(value: Any, low: float = 0.0, high: float = 1.0) -> float:
     try:
         current = float(value)
@@ -263,8 +269,34 @@ def build_stage135_i_state_topology(
         edges.append(_edge("continue_gate", "deep_packet", relation="continues_to", weight=0.72, summary="next packet is allowed because new state remains useful"))
         edges.append(_edge("deep_packet", "state_delta", relation="next_return_updates", weight=0.48, summary="future returns re-enter the same state delta node"))
 
+    ledger_nodes: set[str] = set()
+    for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
+        call_id = str(item.get("provider_call_id", "") or item.get("tool", "") or f"tool_{index + 1}")
+        tool_name = str(item.get("tool", "") or "tool")
+        node_id = "tool_observation_" + _safe_node_suffix(call_id)
+        ledger_nodes.add(node_id)
+        y = 0.12 + (index % 5) * 0.1
+        status = str(item.get("status", "") or "")
+        summary = str(item.get("summary", "") or "")
+        nodes.append(
+            _node(
+                node_id,
+                tool_name,
+                channel="tool_observation",
+                kind="tool_observation",
+                x=0.69,
+                y=y,
+                weight=0.66 if status not in {"rejected", "skipped", "denied"} else 0.34,
+                summary=summary,
+            )
+        )
+        edges.append(_edge("continue_gate", node_id, relation="local_tool_execution", weight=0.5, summary="Holo validates and executes provider-proposed tools"))
+        edges.append(_edge(node_id, "state_delta", relation="tool_observation_reentry", weight=0.62, summary="actual tool observation re-enters the same I-state"))
+
     for index, name in enumerate(tool_names[:8]):
-        node_id = "tool_" + "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in name)[:80]
+        node_id = "tool_" + _safe_node_suffix(name)
+        if node_id in ledger_nodes:
+            continue
         y = 0.18 + (index % 4) * 0.12
         nodes.append(_node(node_id, name, channel="tool_result", kind="tool", x=0.7, y=y, weight=0.5, summary="local WSL-authorized tool observation"))
         edges.append(_edge("continue_gate", node_id, relation="may_request_tool", weight=0.42, summary="provider may propose, Holo validates and executes locally"))

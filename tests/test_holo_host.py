@@ -3171,6 +3171,54 @@ class ReplyServiceTests(unittest.TestCase):
             finally:
                 close_service_handles(service)
 
+    def test_reply_service_repairs_ungrounded_workspace_claims(self) -> None:
+        class UngroundedToolClaimProcessor:
+            name = "ungrounded_tool_claim_processor"
+
+            def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
+                return ReplyPlan(
+                    text="I checked the project directory and saw docs.",
+                    bubbles=[ReplyBubble("I checked the project directory and saw docs.")],
+                    attention_state=context.attention_state,
+                    turn_plan=TurnPlan(route="main", bubble_target=1),
+                    emotion_state=dict(context.emotion_state),
+                    route="main",
+                    processor=self.name,
+                    session_id=session_id or "grounding-session",
+                    raw_text="I checked the project directory and saw docs.",
+                    timing_ms={"processor_ms": 5, "recall_reconstruct_ms": 0},
+                    debug={"tool_observation_ledger": []},
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            service.processor = UngroundedToolClaimProcessor()
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "text": "read your own directory",
+                        "channel": "holo_cli",
+                        "message_id": "tool-grounding-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(result["tool_grounding"]["status"], "ungrounded_tool_claim")
+                self.assertIn("not executed", result["text"])
+                self.assertIn("workspace", result["text"])
+                self.assertEqual(
+                    memory.observed_records[-1]["metadata"]["tool_grounding"]["missing_families"],
+                    ["workspace"],
+                )
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

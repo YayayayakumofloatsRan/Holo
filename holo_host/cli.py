@@ -44,6 +44,7 @@ from .stage123_internal_tool_flow import build_stage123_internal_tool_report
 from .stage131_thought_flow_trace import build_stage131_thought_flow_trace, render_stage131_cli_ct
 from .stage133_core_problem_research_loop import write_stage133_research_artifacts
 from .stage135_i_state_topology import write_stage135_i_state_topology_artifacts
+from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 
 FAST_QUERY_CANDIDATES = ("在吗", "继续", "嗯")
@@ -9043,6 +9044,13 @@ def command_stage120_tool_affordance(*, query: str, grant: list[str] | None, ful
     return 0
 
 
+def command_stage139_tool_benchmark() -> int:
+    report = run_tool_benchmark()
+    report["source"] = "cli"
+    print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_stage121_packet_policy(
     *,
     query: str,
@@ -10126,6 +10134,10 @@ def main(argv: list[str] | None = None) -> int:
     stage120_parser.add_argument("--query", required=True)
     stage120_parser.add_argument("--grant", action="append", default=[])
     stage120_parser.add_argument("--full", action="store_true")
+    subparsers.add_parser(
+        "stage139-tool-benchmark",
+        help="Run the deterministic tool-need and tool-grounding benchmark",
+    )
     stage121_parser = subparsers.add_parser(
         "stage121-packet-policy",
         help="Inspect dynamic long-packet scheduling and cache-prefix guidance",
@@ -11137,6 +11149,8 @@ def main(argv: list[str] | None = None) -> int:
             grant=args.grant,
             full=args.full,
         )
+    if args.command == "stage139-tool-benchmark":
+        return command_stage139_tool_benchmark()
     if args.command == "stage121-packet-policy":
         return command_stage121_packet_policy(
             query=args.query,
