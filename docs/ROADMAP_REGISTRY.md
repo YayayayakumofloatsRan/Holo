@@ -86,6 +86,11 @@ Stage141: memory claim alignment
 - Source-exists-but-wrong-detail claims are marked unsupported, weak claims are bounded, and contradiction flags dominate.
 - Stage135 topology can render a memory alignment gate and claim nodes without adding memory writes, provider calls, or transport authority.
 
+Stage142: A' to A'' semantic novelty gate
+- Implemented deterministic visible-bubble novelty, contradiction, and grounding gates over Stage132 progressive streams.
+- Duplicate or low-value A'' segments are suppressed, prefix duplicates are trimmed, and valid tool feedback or memory limitations still emit.
+- Stage139, Stage140, and Stage141 failures cannot be reintroduced by continuation bubbles; Stage135 topology can render a compact semantic novelty gate.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

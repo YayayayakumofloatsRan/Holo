@@ -32,6 +32,8 @@ The frame is capped and gets a stable `stage132:*` cache hint. This is meant to 
 
 `merge_stage132_reply_bubbles` preserves the first reaction and any optional continuation as distinct bubbles for CLI and app channels. `reply_api` now honors Stage132 planned bubbles instead of rebuilding them into one generic bubble.
 
+Stage142 now gates this merge path. The continuation bubble is still provider-requested, but it is emitted only when it adds useful semantic novelty, grounded evidence, task progress, an explicit correction, or a meaningful limitation. Duplicate, low-value, contradictory, or ungrounded continuations are trimmed or suppressed before delivery and archive.
+
 This makes the user-visible behavior match the underlying packet flow:
 
 ```text

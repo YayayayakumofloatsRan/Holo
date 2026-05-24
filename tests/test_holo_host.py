@@ -3340,6 +3340,68 @@ class ReplyServiceTests(unittest.TestCase):
             finally:
                 close_service_handles(service)
 
+    def test_reply_service_propagates_stage142_semantic_novelty_metadata(self) -> None:
+        class DuplicateProgressiveProcessor:
+            name = "duplicate_progressive_processor"
+
+            def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
+                return ReplyPlan(
+                    text="I can do that.\nI can do that.",
+                    bubbles=[
+                        ReplyBubble("I can do that.", purpose="fast_reaction"),
+                        ReplyBubble("I can do that.", delay_ms=520, purpose="deep_continuation"),
+                    ],
+                    attention_state=context.attention_state,
+                    turn_plan=TurnPlan(route="main", bubble_target=2),
+                    emotion_state=dict(context.emotion_state),
+                    route="main",
+                    processor=self.name,
+                    session_id=session_id or "stage142-session",
+                    raw_text="I can do that.\nI can do that.",
+                    timing_ms={"processor_ms": 5, "recall_reconstruct_ms": 0},
+                    debug={
+                        "stage132_progressive_stream": {
+                            "round_count": 2,
+                            "preserve_bubbles": True,
+                            "visible_first_reaction": True,
+                            "expression_budget": 2,
+                        }
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            service.processor = DuplicateProgressiveProcessor()
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "text": "try a duplicate progressive reply",
+                        "channel": "holo_cli",
+                        "message_id": "stage142-novelty-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(result["bubbles"], ["I can do that."])
+                self.assertEqual(result["stage142_semantic_novelty_status"], "suppressed_duplicate")
+                self.assertEqual(result["stage142_semantic_novelty"]["suppressed_count"], 1)
+                self.assertEqual(
+                    memory.observed_records[-1]["metadata"]["stage142_semantic_novelty_status"],
+                    "suppressed_duplicate",
+                )
+                self.assertGreaterEqual(
+                    result["stage135_i_state_topology"]["metrics"]["semantic_novelty_node_count"],
+                    1,
+                )
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

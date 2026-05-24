@@ -1721,11 +1721,12 @@ class CodexCliProcessor:
         if not bool(fast_packet.get("deep_packet_needed", True)) and str(fast_packet.get("shallow_reply", "") or "").strip():
             processor_ms = int((time.perf_counter() - started_at) * 1000)
             text = str(fast_packet.get("shallow_reply", "") or "").strip()
-            bubbles = merge_stage132_reply_bubbles(
+            bubbles, stage142_semantic_novelty = merge_stage132_reply_bubbles(
                 first_reaction=normalize_external_speech_for_context(context, text),
                 deep_text="",
                 stream_plan=stage132_stream_plan,
                 channel=context.channel,
+                return_metadata=True,
             )
             if not bubbles:
                 bubbles = build_reply_bubbles(
@@ -1750,6 +1751,7 @@ class CodexCliProcessor:
                 tool_loop={},
                 visible_segments=bubbles,
                 memory_observation_ledger=memory_observation_ledger,
+                stage142_semantic_novelty=stage142_semantic_novelty,
             )
             return ReplyPlan(
                 text=joined,
@@ -1780,6 +1782,7 @@ class CodexCliProcessor:
                     },
                     "stage132_fast_context_frame": stage132_fast_context_frame,
                     "stage132_progressive_stream": stage132_stream_plan,
+                    "stage142_semantic_novelty": stage142_semantic_novelty,
                     "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                     "stage135_i_state_topology": stage135_topology,
                     "memory_observation_ledger": memory_observation_ledger,
@@ -1867,11 +1870,12 @@ class CodexCliProcessor:
         )
         text = normalize_external_speech_for_context(context, result.reply_text.strip())
         first_reaction = normalize_external_speech_for_context(context, str(fast_packet.get("shallow_reply", "") or "").strip())
-        bubbles = merge_stage132_reply_bubbles(
+        bubbles, stage142_semantic_novelty = merge_stage132_reply_bubbles(
             first_reaction=first_reaction,
             deep_text=text,
             stream_plan=stage132_stream_plan,
             channel=context.channel,
+            return_metadata=True,
         )
         if not bubbles:
             bubbles = build_reply_bubbles(
@@ -1895,6 +1899,7 @@ class CodexCliProcessor:
             tool_loop=dict(result_metadata.get("agent_tool_loop", {})),
             visible_segments=bubbles,
             memory_observation_ledger=memory_observation_ledger,
+            stage142_semantic_novelty=stage142_semantic_novelty,
         )
         return ReplyPlan(
             text=joined,
@@ -1935,6 +1940,7 @@ class CodexCliProcessor:
                 },
                 "stage132_fast_context_frame": stage132_fast_context_frame,
                 "stage132_progressive_stream": stage132_stream_plan,
+                "stage142_semantic_novelty": stage142_semantic_novelty,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_topology,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),

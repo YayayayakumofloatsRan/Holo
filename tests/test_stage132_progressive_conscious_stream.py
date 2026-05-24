@@ -270,6 +270,8 @@ def test_stage132_processor_returns_visible_progressive_cli_bubbles(tmp_path: Pa
     assert plan.debug["stage132_progressive_stream"]["round_count"] == 2
     assert plan.debug["stage132_progressive_stream"]["rounds"][0]["lane"] == "micro_fast"
     assert plan.debug["stage132_progressive_stream"]["rounds"][1]["lane"] in {"subject_main", "kernel_xhigh"}
+    assert plan.debug["stage142_semantic_novelty"]["candidate_count"] == 2
+    assert plan.debug["stage142_semantic_novelty"]["status"] == "passed"
 
 
 def test_stage132_processor_does_not_force_optional_continuation_from_host_advisory(tmp_path: Path) -> None:
@@ -286,3 +288,4 @@ def test_stage132_processor_does_not_force_optional_continuation_from_host_advis
     assert stream["stop_reason"] == "provider_fast_packet_said_fast_answer_enough"
     assert fast_packet["host_deep_advisory"] is True
     assert fast_packet["deep_packet_forced"] is False
+    assert plan.debug["stage142_semantic_novelty"]["candidate_count"] == 1

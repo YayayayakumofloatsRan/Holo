@@ -191,6 +191,7 @@ def build_stage135_i_state_topology(
     memory_delta: dict[str, Any] | None = None,
     memory_observation_ledger: list[dict[str, Any]] | None = None,
     memory_alignment: dict[str, Any] | None = None,
+    stage142_semantic_novelty: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -212,6 +213,7 @@ def build_stage135_i_state_topology(
     if not memory_ledger:
         memory_ledger = _list_dicts(loop.get("memory_observation_ledger", []))
     alignment = _dict(memory_alignment)
+    novelty = _dict(stage142_semantic_novelty)
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -274,6 +276,25 @@ def build_stage135_i_state_topology(
         )
         edges.append(_edge("continue_gate", "deep_packet", relation="continues_to", weight=0.72, summary="next packet is allowed because new state remains useful"))
         edges.append(_edge("deep_packet", "state_delta", relation="next_return_updates", weight=0.48, summary="future returns re-enter the same state delta node"))
+
+    if novelty:
+        novelty_status = str(novelty.get("status", "") or "unknown")
+        suppressed_count = int(novelty.get("suppressed_count", 0) or 0)
+        candidate_count = int(novelty.get("candidate_count", 0) or 0)
+        emitted_count = int(novelty.get("emitted_count", 0) or 0)
+        nodes.append(
+            _node(
+                "semantic_novelty_gate",
+                "semantic novelty gate",
+                channel="semantic_novelty",
+                kind="gate",
+                x=0.78,
+                y=0.58,
+                weight=0.68 if novelty_status == "passed" else 0.36,
+                summary=f"status={novelty_status}; emitted={emitted_count}/{candidate_count}; suppressed={suppressed_count}",
+            )
+        )
+        edges.append(_edge("continue_gate", "semantic_novelty_gate", relation="gates_visible_continuation", weight=0.56, summary="A-prime to A-double-prime visible stream is checked for useful novelty"))
 
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
@@ -398,6 +419,8 @@ def build_stage135_i_state_topology(
         source = "fast_packet" if role == "fast_reaction" else "deep_packet" if deep_needed else "continue_gate"
         if source in {node["id"] for node in nodes}:
             edges.append(_edge(source, node_id, relation="expresses_as", weight=0.64, summary="visible speech segment"))
+        if novelty and node_id != "visible_fast_reaction":
+            edges.append(_edge("semantic_novelty_gate", node_id, relation="allows_visible_segment", weight=0.48, summary="continuation passed deterministic novelty gate"))
 
     channel_counts = _channel_counts(nodes)
     return {
@@ -438,6 +461,9 @@ def build_stage135_i_state_topology(
             "memory_alignment_claim_count": int(alignment.get("claim_count", 0) or 0) if alignment else 0,
             "memory_alignment_unsupported_count": int(alignment.get("unsupported_claim_count", 0) or 0) if alignment else 0,
             "memory_alignment_status": str(alignment.get("status", "") or "") if alignment else "",
+            "semantic_novelty_node_count": sum(1 for node in nodes if node["channel"] == "semantic_novelty"),
+            "semantic_novelty_status": str(novelty.get("status", "") or "") if novelty else "",
+            "semantic_novelty_suppressed_count": int(novelty.get("suppressed_count", 0) or 0) if novelty else 0,
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },
@@ -500,6 +526,7 @@ const colors = {{
   state_delta: "#3c8065",
   memory_delta: "#b78232",
   memory_alignment: "#8b5a38",
+  semantic_novelty: "#5a6b78",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"

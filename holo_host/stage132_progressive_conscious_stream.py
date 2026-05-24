@@ -4,6 +4,7 @@ from typing import Any
 
 from .common import compact_text, stable_digest
 from .models import ReplyBubble
+from .stage142_semantic_novelty_gate import apply_stage142_gate
 
 STAGE132_SCHEMA = "holo.stage132.progressive_conscious_stream.v1"
 STAGE132_FAST_CONTEXT_MARKER = "Stage132 Fast Context Frame"
@@ -214,7 +215,11 @@ def merge_stage132_reply_bubbles(
     deep_text: str,
     stream_plan: dict[str, Any],
     channel: str,
-) -> list[ReplyBubble]:
+    tool_grounding: dict[str, Any] | None = None,
+    memory_grounding: dict[str, Any] | None = None,
+    memory_alignment: dict[str, Any] | None = None,
+    return_metadata: bool = False,
+) -> list[ReplyBubble] | tuple[list[ReplyBubble], dict[str, Any]]:
     plan = dict(stream_plan or {})
     first = compact_text(str(first_reaction or ""), 600)
     deep = _remove_leading_duplicate(str(deep_text or "").strip(), first)
@@ -228,4 +233,14 @@ def merge_stage132_reply_bubbles(
         bubbles.append(ReplyBubble(text=deep, delay_ms=delay if bubbles else 0, purpose="deep_continuation"))
     if not bubbles and first:
         bubbles.append(ReplyBubble(text=first, delay_ms=0, purpose="fast_reaction"))
-    return bubbles[:5]
+    gated, report = apply_stage142_gate(
+        bubbles[:5],
+        stream_plan=plan,
+        tool_grounding=tool_grounding,
+        memory_grounding=memory_grounding,
+        memory_alignment=memory_alignment,
+        channel=channel,
+    )
+    if return_metadata:
+        return gated, report
+    return gated

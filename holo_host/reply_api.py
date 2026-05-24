@@ -67,6 +67,7 @@ from .tool_grounding import evaluate_tool_grounding, normalize_tool_observation_
 from .memory_grounding import evaluate_memory_grounding, normalize_memory_observation_ledger, repair_memory_claims
 from .memory_alignment import evaluate_memory_alignment, repair_memory_alignment
 from .stage135_i_state_topology import build_stage135_i_state_topology
+from .stage142_semantic_novelty_gate import apply_stage142_gate
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9260,6 +9261,11 @@ class HoloReplyService:
             if isinstance(reply_debug.get("stage132_progressive_stream", {}), dict)
             else {}
         )
+        stage142_semantic_novelty = (
+            dict(reply_debug.get("stage142_semantic_novelty", {}))
+            if isinstance(reply_debug.get("stage142_semantic_novelty", {}), dict)
+            else {}
+        )
         stage135_i_state_prompt_frame = (
             dict(reply_debug.get("stage135_i_state_prompt_frame", {}))
             if isinstance(reply_debug.get("stage135_i_state_prompt_frame", {}), dict)
@@ -9334,6 +9340,18 @@ class HoloReplyService:
             if bool(stage132_progressive_stream.get("preserve_bubbles", False)) and not grounding_repaired
             else None
         )
+        if planned_bubbles and not int(stage142_semantic_novelty.get("candidate_count", 0) or 0):
+            planned_bubbles, stage142_semantic_novelty = apply_stage142_gate(
+                list(planned_bubbles),
+                stream_plan=stage132_progressive_stream,
+                tool_grounding=tool_grounding,
+                memory_grounding=memory_grounding,
+                memory_alignment=memory_alignment,
+                channel=turn.channel,
+            )
+            reply_debug["stage142_semantic_novelty"] = stage142_semantic_novelty
+            if not planned_bubbles:
+                planned_bubbles = None
         bubbles = self._finalize_bubbles(
             repaired_text,
             channel=turn.channel,
@@ -9349,7 +9367,10 @@ class HoloReplyService:
             turn_context,
             " ".join(bubble.text for bubble in bubbles).strip(),
         )
-        if memory_alignment_claim_count > 0:
+        stage142_candidate_count = int(stage142_semantic_novelty.get("candidate_count", 0) or 0)
+        stage142_suppressed_count = int(stage142_semantic_novelty.get("suppressed_count", 0) or 0)
+        stage142_status = str(stage142_semantic_novelty.get("status", "") or "")
+        if memory_alignment_claim_count > 0 or stage142_candidate_count > 1:
             stage124_thought_loop = dict(reply_debug.get("stage124_thought_loop", {})) if isinstance(reply_debug.get("stage124_thought_loop", {}), dict) else {}
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
@@ -9361,6 +9382,7 @@ class HoloReplyService:
                 visible_segments=bubbles,
                 memory_observation_ledger=memory_observation_ledger,
                 memory_alignment=memory_alignment,
+                stage142_semantic_novelty=stage142_semantic_novelty,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9398,6 +9420,10 @@ class HoloReplyService:
                 "processor": reply_plan.processor,
                 "route": reply_plan.route,
                 "stage132_progressive_stream": stage132_progressive_stream,
+                "stage142_semantic_novelty": stage142_semantic_novelty,
+                "stage142_semantic_novelty_status": stage142_status,
+                "stage142_semantic_novelty_candidate_count": stage142_candidate_count,
+                "stage142_semantic_novelty_suppressed_count": stage142_suppressed_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9448,6 +9474,10 @@ class HoloReplyService:
             "processor": reply_plan.processor,
             "route": reply_plan.route,
             "stage132_progressive_stream": stage132_progressive_stream,
+            "stage142_semantic_novelty": stage142_semantic_novelty,
+            "stage142_semantic_novelty_status": stage142_status,
+            "stage142_semantic_novelty_candidate_count": stage142_candidate_count,
+            "stage142_semantic_novelty_suppressed_count": stage142_suppressed_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9555,6 +9585,10 @@ class HoloReplyService:
                 "processor": reply_plan.processor,
                 "route": reply_plan.route,
                 "stage132_progressive_stream": stage132_progressive_stream,
+                "stage142_semantic_novelty": stage142_semantic_novelty,
+                "stage142_semantic_novelty_status": stage142_status,
+                "stage142_semantic_novelty_candidate_count": stage142_candidate_count,
+                "stage142_semantic_novelty_suppressed_count": stage142_suppressed_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

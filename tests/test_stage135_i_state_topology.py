@@ -296,6 +296,33 @@ def test_stage135_topology_includes_memory_alignment_gate() -> None:
     assert any(edge["source"] == "memory_alignment_gate" and edge["target"] == "memory_delta" for edge in payload["edges"])
 
 
+def test_stage135_topology_includes_semantic_novelty_gate() -> None:
+    payload = build_stage135_i_state_topology(
+        context=_context("show semantic novelty gating"),
+        fast_packet={"deep_packet_needed": True, "intent": "novelty_trace"},
+        stream_plan={"deep_packet_needed": True},
+        visible_segments=[
+            {"role": "fast_reaction", "text": "First I catch the intent."},
+            {"role": "deep_continuation", "text": "Then I add the concrete next step."},
+        ],
+        stage142_semantic_novelty={
+            "schema": "holo.stage142.semantic_novelty_gate.v1",
+            "candidate_count": 2,
+            "emitted_count": 2,
+            "suppressed_count": 0,
+            "repaired_count": 0,
+            "evaluations": [],
+            "status": "passed",
+        },
+    )
+
+    assert _node(payload, "semantic_novelty_gate")["channel"] == "semantic_novelty"
+    assert payload["metrics"]["semantic_novelty_node_count"] == 1
+    assert payload["metrics"]["semantic_novelty_status"] == "passed"
+    assert any(edge["source"] == "continue_gate" and edge["target"] == "semantic_novelty_gate" for edge in payload["edges"])
+    assert any(edge["source"] == "semantic_novelty_gate" and edge["target"] == "visible_deep_continuation" for edge in payload["edges"])
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)
