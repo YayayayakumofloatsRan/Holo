@@ -70,6 +70,7 @@ from .stage135_i_state_topology import build_stage135_i_state_topology
 from .stage142_semantic_novelty_gate import apply_stage142_gate
 from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
+from .stage145_reaction_kernel import build_stage145_shadow_reports
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9419,8 +9420,24 @@ class HoloReplyService:
         stage144_context_sufficiency_score = float(stage144_context_economy.get("context_sufficiency_score", 0.0) or 0.0)
         stage144_context_waste_score = float(stage144_context_economy.get("context_waste_score", 0.0) or 0.0)
         stage144_shadow_only = bool(stage144_context_economy.get("shadow_only", True))
+        stage145_outcome_appraisal, stage145_reaction_kernel_shadow = build_stage145_shadow_reports(
+            user_text=turn.text,
+            selected_action=dict(sidecar.get("selected_action", {})),
+            tool_grounding=tool_grounding,
+            memory_grounding=memory_grounding,
+            memory_alignment=memory_alignment,
+            stage142_semantic_novelty=stage142_semantic_novelty,
+            stage143_packet_budget=stage143_packet_budget,
+            stage144_context_economy=stage144_context_economy,
+            reply_metadata={"processor": reply_plan.processor, "route": reply_plan.route, "action": "reply"},
+        )
+        reply_debug["stage145_outcome_appraisal"] = stage145_outcome_appraisal
+        reply_debug["stage145_reaction_kernel_shadow"] = stage145_reaction_kernel_shadow
+        stage145_prediction_error = float(stage145_outcome_appraisal.get("prediction_error", 0.0) or 0.0)
+        stage145_kernel_delta_count = int(stage145_reaction_kernel_shadow.get("delta_count", 0) or 0)
+        stage145_shadow_only = bool(stage145_reaction_kernel_shadow.get("shadow_only", True))
         topology_present = bool(stage135_i_state_topology.get("schema"))
-        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0 or stage144_context_economy):
+        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0 or stage144_context_economy or stage145_outcome_appraisal):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
                 fast_packet=dict(stage124_thought_loop.get("fast_packet", {})) if isinstance(stage124_thought_loop.get("fast_packet", {}), dict) else {},
@@ -9434,6 +9451,8 @@ class HoloReplyService:
                 stage142_semantic_novelty=stage142_semantic_novelty,
                 stage143_packet_budget=stage143_packet_budget,
                 stage144_context_economy=stage144_context_economy,
+                stage145_outcome_appraisal=stage145_outcome_appraisal,
+                stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9485,6 +9504,11 @@ class HoloReplyService:
                 "stage144_recommended_deep_policy": stage144_recommended_deep_policy,
                 "stage144_context_sufficiency_score": stage144_context_sufficiency_score,
                 "stage144_context_waste_score": stage144_context_waste_score,
+                "stage145_outcome_appraisal": stage145_outcome_appraisal,
+                "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
+                "stage145_prediction_error": stage145_prediction_error,
+                "stage145_kernel_delta_count": stage145_kernel_delta_count,
+                "stage145_shadow_only": stage145_shadow_only,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9549,6 +9573,11 @@ class HoloReplyService:
             "stage144_recommended_deep_policy": stage144_recommended_deep_policy,
             "stage144_context_sufficiency_score": stage144_context_sufficiency_score,
             "stage144_context_waste_score": stage144_context_waste_score,
+            "stage145_outcome_appraisal": stage145_outcome_appraisal,
+            "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
+            "stage145_prediction_error": stage145_prediction_error,
+            "stage145_kernel_delta_count": stage145_kernel_delta_count,
+            "stage145_shadow_only": stage145_shadow_only,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9670,6 +9699,11 @@ class HoloReplyService:
                 "stage144_recommended_deep_policy": stage144_recommended_deep_policy,
                 "stage144_context_sufficiency_score": stage144_context_sufficiency_score,
                 "stage144_context_waste_score": stage144_context_waste_score,
+                "stage145_outcome_appraisal": stage145_outcome_appraisal,
+                "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
+                "stage145_prediction_error": stage145_prediction_error,
+                "stage145_kernel_delta_count": stage145_kernel_delta_count,
+                "stage145_shadow_only": stage145_shadow_only,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

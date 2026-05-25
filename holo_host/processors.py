@@ -34,6 +34,7 @@ from .stage135_i_state_topology import (
 )
 from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
+from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1773,6 +1774,14 @@ class CodexCliProcessor:
                 sidecar=context.mind_packet,
                 reply_debug={"provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests]},
             )
+            stage145_outcome_appraisal, stage145_reaction_kernel_shadow = build_stage145_shadow_reports(
+                user_text=str(context.user_text or ""),
+                selected_action=dict(context.selected_action or context.mind_packet.get("selected_action", {})),
+                stage142_semantic_novelty=stage142_semantic_novelty,
+                stage143_packet_budget=stage143_packet_budget,
+                stage144_context_economy=stage144_context_economy,
+                reply_metadata={"processor": self.name, "route": route},
+            )
             stage135_topology = build_stage135_i_state_topology(
                 context=context,
                 fast_packet=fast_packet,
@@ -1783,6 +1792,8 @@ class CodexCliProcessor:
                 stage142_semantic_novelty=stage142_semantic_novelty,
                 stage143_packet_budget=stage143_packet_budget,
                 stage144_context_economy=stage144_context_economy,
+                stage145_outcome_appraisal=stage145_outcome_appraisal,
+                stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
             )
             return ReplyPlan(
                 text=joined,
@@ -1811,6 +1822,8 @@ class CodexCliProcessor:
                     "stage142_semantic_novelty": stage142_semantic_novelty,
                     "stage143_packet_budget": stage143_packet_budget,
                     "stage144_context_economy": stage144_context_economy,
+                    "stage145_outcome_appraisal": stage145_outcome_appraisal,
+                    "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
                     "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                     "stage135_i_state_topology": stage135_topology,
                     "memory_observation_ledger": memory_observation_ledger,
@@ -1956,6 +1969,14 @@ class CodexCliProcessor:
                 "prompt_excerpt": compact_text(prompt, 240),
             },
         )
+        stage145_outcome_appraisal, stage145_reaction_kernel_shadow = build_stage145_shadow_reports(
+            user_text=str(context.user_text or ""),
+            selected_action=dict(context.selected_action or context.mind_packet.get("selected_action", {})),
+            stage142_semantic_novelty=stage142_semantic_novelty,
+            stage143_packet_budget=stage143_packet_budget,
+            stage144_context_economy=stage144_context_economy,
+            reply_metadata={"processor": self.name, "route": route, "lane": result_metadata.get("lane", lane)},
+        )
         stage135_topology = build_stage135_i_state_topology(
             context=context,
             fast_packet=fast_packet,
@@ -1969,6 +1990,8 @@ class CodexCliProcessor:
             stage142_semantic_novelty=stage142_semantic_novelty,
             stage143_packet_budget=stage143_packet_budget,
             stage144_context_economy=stage144_context_economy,
+            stage145_outcome_appraisal=stage145_outcome_appraisal,
+            stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
         )
         return ReplyPlan(
             text=joined,
@@ -2007,6 +2030,8 @@ class CodexCliProcessor:
                 "stage142_semantic_novelty": stage142_semantic_novelty,
                 "stage143_packet_budget": stage143_packet_budget,
                 "stage144_context_economy": stage144_context_economy,
+                "stage145_outcome_appraisal": stage145_outcome_appraisal,
+                "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_topology,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),

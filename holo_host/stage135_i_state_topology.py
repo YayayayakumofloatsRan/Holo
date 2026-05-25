@@ -194,6 +194,8 @@ def build_stage135_i_state_topology(
     stage142_semantic_novelty: dict[str, Any] | None = None,
     stage143_packet_budget: dict[str, Any] | None = None,
     stage144_context_economy: dict[str, Any] | None = None,
+    stage145_outcome_appraisal: dict[str, Any] | None = None,
+    stage145_reaction_kernel_shadow: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -218,6 +220,8 @@ def build_stage135_i_state_topology(
     novelty = _dict(stage142_semantic_novelty)
     packet_budget = _dict(stage143_packet_budget)
     context_economy = _dict(stage144_context_economy)
+    outcome_appraisal = _dict(stage145_outcome_appraisal)
+    reaction_kernel = _dict(stage145_reaction_kernel_shadow)
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -355,6 +359,38 @@ def build_stage135_i_state_topology(
         if alignment:
             edges.append(_edge("memory_alignment_gate", "context_economy_gate", relation="feeds_context_sufficiency", weight=0.42, summary="memory sufficiency informs context policy recommendation"))
         edges.append(_edge("context_economy_gate", "continue_gate", relation="shadow_recommendation_only", weight=0.28, summary="diagnostic recommendation is not enforced by Stage144"))
+
+    if outcome_appraisal or reaction_kernel:
+        prediction_error = 0.0
+        try:
+            prediction_error = float((outcome_appraisal or reaction_kernel).get("prediction_error", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            prediction_error = 0.0
+        delta_count = int(reaction_kernel.get("delta_count", len(_list_dicts(reaction_kernel.get("kernel_delta_candidates", [])))) or 0) if reaction_kernel else 0
+        shadow_only = bool(reaction_kernel.get("shadow_only", outcome_appraisal.get("shadow_only", True)))
+        applied = bool(reaction_kernel.get("applied", False))
+        predicted_need = str(outcome_appraisal.get("predicted_user_need", "") or "")
+        nodes.append(
+            _node(
+                "reaction_kernel_shadow",
+                "reaction kernel shadow",
+                channel="reaction_kernel",
+                kind="observability",
+                x=0.92,
+                y=0.52,
+                weight=0.34 + min(0.42, max(0.0, prediction_error) * 0.42),
+                summary=f"prediction_error={prediction_error:.2f}; deltas={delta_count}; need={predicted_need}; shadow_only={shadow_only}; applied={applied}",
+            )
+        )
+        if context_economy:
+            edges.append(_edge("context_economy_gate", "reaction_kernel_shadow", relation="feeds_prediction_error", weight=0.54, summary="context economy is appraised against observed outcome"))
+        if packet_budget:
+            edges.append(_edge("packet_budget_gate", "reaction_kernel_shadow", relation="feeds_packet_outcome", weight=0.48, summary="packet cost and stop reason feed prediction-error appraisal"))
+        if novelty:
+            edges.append(_edge("semantic_novelty_gate", "reaction_kernel_shadow", relation="feeds_visible_outcome", weight=0.46, summary="visible novelty outcome feeds reaction-kernel shadow deltas"))
+        if alignment:
+            edges.append(_edge("memory_alignment_gate", "reaction_kernel_shadow", relation="feeds_memory_outcome", weight=0.42, summary="memory sufficiency affects reaction-kernel shadow deltas"))
+        edges.append(_edge("reaction_kernel_shadow", "holo_self", relation="shadow_reaction_delta", weight=0.26, summary="shadow deltas are observed but not applied to durable policy"))
 
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
@@ -532,6 +568,10 @@ def build_stage135_i_state_topology(
             "context_economy_waste_score": float(context_economy.get("context_waste_score", 0.0) or 0.0) if context_economy else 0.0,
             "context_economy_sufficiency_score": float(context_economy.get("context_sufficiency_score", 0.0) or 0.0) if context_economy else 0.0,
             "context_economy_shadow_only": bool(context_economy.get("shadow_only", True)) if context_economy else False,
+            "reaction_kernel_node_count": sum(1 for node in nodes if node["channel"] == "reaction_kernel"),
+            "reaction_kernel_prediction_error": float(outcome_appraisal.get("prediction_error", reaction_kernel.get("prediction_error", 0.0)) or 0.0) if (outcome_appraisal or reaction_kernel) else 0.0,
+            "reaction_kernel_delta_count": int(reaction_kernel.get("delta_count", 0) or 0) if reaction_kernel else 0,
+            "reaction_kernel_shadow_only": bool(reaction_kernel.get("shadow_only", outcome_appraisal.get("shadow_only", True))) if (outcome_appraisal or reaction_kernel) else False,
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },
@@ -597,6 +637,7 @@ const colors = {{
   semantic_novelty: "#5a6b78",
   packet_budget: "#6c7a2a",
   context_economy: "#8a6f2a",
+  reaction_kernel: "#a45d55",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"

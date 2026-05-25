@@ -394,6 +394,56 @@ def test_stage135_topology_includes_context_economy_gate() -> None:
     assert any(edge["source"] == "context_economy_gate" and edge["target"] == "continue_gate" for edge in payload["edges"])
 
 
+def test_stage135_topology_includes_reaction_kernel_shadow_node() -> None:
+    packet_budget = build_stage143_packet_budget(
+        stage132_stream_plan={"deep_packet_needed": True, "stop_reason": "stage142:suppressed_duplicate"},
+        stage132_fast_context_frame={"cache_hint": "stage132:stage135-reaction", "char_count": 800},
+        stage124_thought_loop={"deep_packet_sent": True, "fast_packet_ms": 17},
+        stage142_semantic_novelty={"status": "suppressed_duplicate", "candidate_count": 2, "suppressed_count": 1},
+        timing_ms={"processor_ms": 90},
+    )
+    context_economy = {
+        "schema": "holo.stage144.context_economy.v1",
+        "context_sufficiency_score": 0.44,
+        "context_waste_score": 0.78,
+        "recommended_deep_policy": "skip",
+        "shadow_only": True,
+    }
+    outcome_appraisal = {
+        "schema": "holo.stage145.outcome_appraisal.v1",
+        "predicted_user_need": "nonredundant_continuation",
+        "prediction_error": 0.72,
+        "observed_stage142_status": "suppressed_duplicate",
+        "observed_packet_waste": 0.78,
+        "shadow_only": True,
+    }
+    reaction_kernel = {
+        "schema": "holo.stage145.reaction_kernel_shadow.v1",
+        "prediction_error": 0.72,
+        "kernel_delta_candidates": [{"parameter": "novelty_threshold", "delta": 0.12, "applied": False}],
+        "delta_count": 1,
+        "shadow_only": True,
+        "applied": False,
+    }
+    payload = build_stage135_i_state_topology(
+        context=_context("show reaction kernel gate"),
+        fast_packet={"deep_packet_needed": True, "intent": "reaction_kernel_trace"},
+        stream_plan={"deep_packet_needed": True, "stop_reason": "stage142:suppressed_duplicate"},
+        stage142_semantic_novelty={"status": "suppressed_duplicate", "candidate_count": 2, "suppressed_count": 1},
+        stage143_packet_budget=packet_budget,
+        stage144_context_economy=context_economy,
+        stage145_outcome_appraisal=outcome_appraisal,
+        stage145_reaction_kernel_shadow=reaction_kernel,
+    )
+
+    assert _node(payload, "reaction_kernel_shadow")["channel"] == "reaction_kernel"
+    assert payload["metrics"]["reaction_kernel_node_count"] == 1
+    assert payload["metrics"]["reaction_kernel_delta_count"] == 1
+    assert payload["metrics"]["reaction_kernel_shadow_only"] is True
+    assert any(edge["target"] == "reaction_kernel_shadow" for edge in payload["edges"])
+    assert any(edge["source"] == "reaction_kernel_shadow" and edge["target"] == "holo_self" for edge in payload["edges"])
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)
@@ -414,6 +464,9 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     assert topology["metrics"]["packet_budget_node_count"] == 1
     assert deep_plan.debug["stage144_context_economy"]["schema"] == "holo.stage144.context_economy.v1"
     assert topology["metrics"]["context_economy_node_count"] == 1
+    assert deep_plan.debug["stage145_outcome_appraisal"]["schema"] == "holo.stage145.outcome_appraisal.v1"
+    assert deep_plan.debug["stage145_reaction_kernel_shadow"]["schema"] == "holo.stage145.reaction_kernel_shadow.v1"
+    assert topology["metrics"]["reaction_kernel_node_count"] == 1
 
     fast_runner = _Stage135Runner(deep_needed=False)
     fast_processor = CodexCliProcessor(config, fast_runner)  # type: ignore[arg-type]
@@ -428,6 +481,8 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     assert fast_topology["metrics"]["packet_budget_node_count"] == 1
     assert fast_plan.debug["stage144_context_economy"]["shadow_only"] is True
     assert fast_topology["metrics"]["context_economy_node_count"] == 1
+    assert fast_plan.debug["stage145_reaction_kernel_shadow"]["shadow_only"] is True
+    assert fast_topology["metrics"]["reaction_kernel_node_count"] == 1
 
 
 def test_stage135_i_state_trace_does_not_trigger_recall_reconstruct_without_memory_request(tmp_path: Path) -> None:

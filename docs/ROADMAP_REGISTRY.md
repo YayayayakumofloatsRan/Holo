@@ -101,6 +101,11 @@ Stage144: context economy and packet policy calibration
 - Reports bounded working-set slots, context sufficiency, context waste, and a recommended deep-packet policy: `keep`, `skip`, `defer`, `tool_first`, or `memory_first`.
 - Stage144 does not enforce recommendations, add provider calls, write memory, execute tools, widen transport authority, or add a second loop; Stage135 topology can render a compact context-economy gate.
 
+Stage145: predictive outcome and reaction kernel shadow
+- Implemented deterministic prediction-error appraisal over Stage139-144 evidence.
+- Reports predicted user need, best expected outcome, observed grounding/novelty/packet waste, and bounded reaction-kernel delta candidates.
+- Stage145 does not apply deltas, mutate durable policy, learn model weights, write self-memory, call providers, change transport, start WeChat, or add a second loop; Stage135 topology can render a compact reaction-kernel shadow node.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
