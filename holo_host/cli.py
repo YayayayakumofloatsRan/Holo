@@ -44,6 +44,8 @@ from .stage123_internal_tool_flow import build_stage123_internal_tool_report
 from .stage131_thought_flow_trace import build_stage131_thought_flow_trace, render_stage131_cli_ct
 from .stage133_core_problem_research_loop import write_stage133_research_artifacts
 from .stage135_i_state_topology import write_stage135_i_state_topology_artifacts
+from .stage146_benchmark_bundle import run_biomimetic_benchmark
+from .stage146_biomimetic_replay import export_biomimetic_replay
 from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 
@@ -9217,6 +9219,58 @@ def command_stage135_i_state_topology(
     return 0
 
 
+def command_export_biomimetic_replay(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    limit: int,
+    output: str,
+    dry_run: bool,
+    channel: str = "holo_cli",
+) -> int:
+    if dry_run:
+        report = export_biomimetic_replay(
+            thread_key=thread_key,
+            limit=limit,
+            output=output,
+            dry_run=True,
+            repo_root=Path.cwd(),
+            channel=channel,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        report = export_biomimetic_replay(
+            thread_key=thread_key,
+            limit=limit,
+            output=output,
+            dry_run=False,
+            store=store,
+            channel=channel,
+            repo_root=config.runtime.repo_root,
+        )
+    finally:
+        store.close()
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_run_biomimetic_benchmark(
+    config_path: str | None,
+    *,
+    output: str,
+    dry_run: bool,
+) -> int:
+    repo_root = Path.cwd() if dry_run else load_config(config_path=config_path).runtime.repo_root
+    report = run_biomimetic_benchmark(output=output, dry_run=dry_run, repo_root=repo_root)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /status                show compact brain status
@@ -10198,6 +10252,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     stage135_parser.add_argument("--output-dir", default=None)
     stage135_parser.add_argument("--sample-query", default="show Holo's I-state topology")
+    biomimetic_replay_parser = subparsers.add_parser(
+        "export-biomimetic-replay",
+        help="Export a Stage146 multi-turn biomimetic replay from stored metadata or deterministic fixtures",
+    )
+    biomimetic_replay_parser.add_argument("--thread-key", required=True)
+    biomimetic_replay_parser.add_argument("--limit", type=int, default=20)
+    biomimetic_replay_parser.add_argument("--output", required=True)
+    biomimetic_replay_parser.add_argument("--channel", default="holo_cli")
+    biomimetic_replay_parser.add_argument("--dry-run", action="store_true")
+    biomimetic_benchmark_parser = subparsers.add_parser(
+        "run-biomimetic-benchmark",
+        help="Write the Stage146 deterministic biomimetic benchmark bundle",
+    )
+    biomimetic_benchmark_parser.add_argument("--output", required=True)
+    biomimetic_benchmark_parser.add_argument("--dry-run", action="store_true")
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -11197,6 +11266,21 @@ def main(argv: list[str] | None = None) -> int:
             args.config,
             output_dir=args.output_dir,
             sample_query=args.sample_query,
+        )
+    if args.command == "export-biomimetic-replay":
+        return command_export_biomimetic_replay(
+            args.config,
+            thread_key=args.thread_key,
+            limit=args.limit,
+            output=args.output,
+            dry_run=args.dry_run,
+            channel=args.channel,
+        )
+    if args.command == "run-biomimetic-benchmark":
+        return command_run_biomimetic_benchmark(
+            args.config,
+            output=args.output,
+            dry_run=args.dry_run,
         )
     if args.command == "reply-probe":
         return command_reply_probe(

@@ -72,6 +72,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 67. `docs/ENGINEERING_HANDOFF_STAGE144.md`
 68. `docs/STAGE145_PREDICTIVE_REACTION_KERNEL.md`
 69. `docs/ENGINEERING_HANDOFF_STAGE145.md`
+70. `docs/STAGE146_BIOMIMETIC_REPLAY_BENCHMARK.md`
+71. `docs/ENGINEERING_HANDOFF_STAGE146.md`
 
 ## What This Document Must Cover
 - current live state
@@ -86,9 +88,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage145-predictive-reaction-kernel`.
+- The current milestone tag is `stage146-biomimetic-replay-benchmark`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage145 predictive reaction-kernel shadowing: after Stage144 reports context economy, Stage145 appraises predicted need versus observed grounding/novelty/packet waste and emits bounded reaction-kernel delta candidates without applying them. Stage135 topology can show a compact reaction-kernel shadow node.
+- Current focus is Stage146 unified biomimetic replay and benchmark export: after Stage139-145 produce per-turn ledgers and gates, Stage146 derives multi-turn replay rows and deterministic benchmark bundles without provider calls, tool execution, memory writes, transport changes, or policy mutation.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

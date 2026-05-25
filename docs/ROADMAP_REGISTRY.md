@@ -106,6 +106,11 @@ Stage145: predictive outcome and reaction kernel shadow
 - Reports predicted user need, best expected outcome, observed grounding/novelty/packet waste, and bounded reaction-kernel delta candidates.
 - Stage145 does not apply deltas, mutate durable policy, learn model weights, write self-memory, call providers, change transport, start WeChat, or add a second loop; Stage135 topology can render a compact reaction-kernel shadow node.
 
+Stage146: unified biomimetic replay and benchmark bundle
+- Implemented read-only multi-turn replay export over stored Stage139-145 reply metadata with deterministic synthetic fixtures when runtime rows are unavailable.
+- Exports `.html`, `.json`, and `.jsonl` artifacts that show packet timelines, A'/A'' gating, tool/memory observations, memory alignment, context slots, prediction error, reaction-kernel deltas, and stop reasons.
+- Adds a deterministic benchmark bundle comparing single-call, simple RAG, fixed two-bubble, ungated multi-packet, and full RK-CSM stack conditions without provider calls, memory writes, tool execution, transport changes, policy mutation, or a second loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
