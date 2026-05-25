@@ -346,6 +346,54 @@ def test_stage135_topology_includes_packet_budget_gate() -> None:
     assert any(edge["target"] == "packet_budget_gate" for edge in payload["edges"])
 
 
+def test_stage135_topology_includes_context_economy_gate() -> None:
+    packet_budget = build_stage143_packet_budget(
+        stage132_stream_plan={"deep_packet_needed": True, "stop_reason": "stage142:suppressed_duplicate"},
+        stage132_fast_context_frame={"cache_hint": "stage132:stage135-context", "char_count": 800},
+        stage124_thought_loop={"deep_packet_sent": True, "fast_packet_ms": 17},
+        stage142_semantic_novelty={"status": "suppressed_duplicate", "candidate_count": 2, "suppressed_count": 1},
+        timing_ms={"processor_ms": 90},
+    )
+    context_economy = {
+        "schema": "holo.stage144.context_economy.v1",
+        "working_set_slots": [
+            {
+                "slot_id": "packet_budget:test",
+                "slot_type": "packet_budget",
+                "summary": "deep ran but Stage142 suppressed duplicate continuation",
+                "priority": 0.8,
+                "freshness": "current_turn",
+                "confidence": 0.8,
+                "token_estimate": 12,
+                "include_reason": "packet budget exposes cost and stop reason",
+                "eviction_reason": "",
+            }
+        ],
+        "context_sufficiency_score": 0.52,
+        "context_waste_score": 0.78,
+        "packet_policy_recommendation": "skip: deep packet produced low-novelty duplicate visible content.",
+        "recommended_deep_policy": "skip",
+        "confidence": 0.78,
+        "reason": "deep packet produced low-novelty duplicate visible content.",
+        "shadow_only": True,
+    }
+    payload = build_stage135_i_state_topology(
+        context=_context("show context economy gate"),
+        fast_packet={"deep_packet_needed": True, "intent": "context_economy_trace"},
+        stream_plan={"deep_packet_needed": True, "stop_reason": "stage142:suppressed_duplicate"},
+        stage142_semantic_novelty={"status": "suppressed_duplicate", "candidate_count": 2, "suppressed_count": 1},
+        stage143_packet_budget=packet_budget,
+        stage144_context_economy=context_economy,
+    )
+
+    assert _node(payload, "context_economy_gate")["channel"] == "context_economy"
+    assert payload["metrics"]["context_economy_node_count"] == 1
+    assert payload["metrics"]["context_economy_recommended_deep_policy"] == "skip"
+    assert payload["metrics"]["context_economy_shadow_only"] is True
+    assert any(edge["source"] == "packet_budget_gate" and edge["target"] == "context_economy_gate" for edge in payload["edges"])
+    assert any(edge["source"] == "context_economy_gate" and edge["target"] == "continue_gate" for edge in payload["edges"])
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)
@@ -364,6 +412,8 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     assert deep_plan.debug["stage135_i_state_prompt_frame"]["marker"] == "Stage135 I-State Frame"
     assert deep_plan.debug["stage143_packet_budget"]["schema"] == STAGE143_SCHEMA
     assert topology["metrics"]["packet_budget_node_count"] == 1
+    assert deep_plan.debug["stage144_context_economy"]["schema"] == "holo.stage144.context_economy.v1"
+    assert topology["metrics"]["context_economy_node_count"] == 1
 
     fast_runner = _Stage135Runner(deep_needed=False)
     fast_processor = CodexCliProcessor(config, fast_runner)  # type: ignore[arg-type]
@@ -376,6 +426,8 @@ def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_onl
     assert "Stage135 I-State Frame" in str(fast_runner.calls[0]["prompt"])
     assert fast_plan.debug["stage143_packet_budget"]["skipped_count"] == 1
     assert fast_topology["metrics"]["packet_budget_node_count"] == 1
+    assert fast_plan.debug["stage144_context_economy"]["shadow_only"] is True
+    assert fast_topology["metrics"]["context_economy_node_count"] == 1
 
 
 def test_stage135_i_state_trace_does_not_trigger_recall_reconstruct_without_memory_request(tmp_path: Path) -> None:

@@ -193,6 +193,7 @@ def build_stage135_i_state_topology(
     memory_alignment: dict[str, Any] | None = None,
     stage142_semantic_novelty: dict[str, Any] | None = None,
     stage143_packet_budget: dict[str, Any] | None = None,
+    stage144_context_economy: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -216,6 +217,7 @@ def build_stage135_i_state_topology(
     alignment = _dict(memory_alignment)
     novelty = _dict(stage142_semantic_novelty)
     packet_budget = _dict(stage143_packet_budget)
+    context_economy = _dict(stage144_context_economy)
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -319,6 +321,40 @@ def build_stage135_i_state_topology(
         edges.append(_edge("continue_gate", "packet_budget_gate", relation="reports_stop_reason", weight=0.52, summary="continuation stop reason is recorded without changing the gate"))
         if novelty:
             edges.append(_edge("semantic_novelty_gate", "packet_budget_gate", relation="reports_visible_gate_result", weight=0.44, summary="Stage142 outcome is linked to packet stop reason"))
+
+    if context_economy:
+        recommendation = str(context_economy.get("recommended_deep_policy", "") or context_economy.get("packet_policy_recommendation", "") or "keep")
+        try:
+            sufficiency = float(context_economy.get("context_sufficiency_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            sufficiency = 0.0
+        try:
+            waste = float(context_economy.get("context_waste_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            waste = 0.0
+        shadow_only = bool(context_economy.get("shadow_only", True))
+        weight = 0.36 + min(0.34, max(sufficiency, 1.0 - waste) * 0.34)
+        nodes.append(
+            _node(
+                "context_economy_gate",
+                "context economy gate",
+                channel="context_economy",
+                kind="observability",
+                x=0.86,
+                y=0.5,
+                weight=weight,
+                summary=f"policy={recommendation}; sufficiency={sufficiency:.2f}; waste={waste:.2f}; shadow_only={shadow_only}",
+            )
+        )
+        if packet_budget:
+            edges.append(_edge("packet_budget_gate", "context_economy_gate", relation="feeds_shadow_policy", weight=0.54, summary="packet budget evidence informs diagnostic context policy"))
+        else:
+            edges.append(_edge("continue_gate", "context_economy_gate", relation="feeds_shadow_policy", weight=0.36, summary="continuation state informs diagnostic context policy"))
+        if novelty:
+            edges.append(_edge("semantic_novelty_gate", "context_economy_gate", relation="feeds_context_waste_estimate", weight=0.46, summary="visible novelty outcome informs context waste estimate"))
+        if alignment:
+            edges.append(_edge("memory_alignment_gate", "context_economy_gate", relation="feeds_context_sufficiency", weight=0.42, summary="memory sufficiency informs context policy recommendation"))
+        edges.append(_edge("context_economy_gate", "continue_gate", relation="shadow_recommendation_only", weight=0.28, summary="diagnostic recommendation is not enforced by Stage144"))
 
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
@@ -491,6 +527,11 @@ def build_stage135_i_state_topology(
             "packet_budget_node_count": sum(1 for node in nodes if node["channel"] == "packet_budget"),
             "packet_budget_packet_count": int(packet_budget.get("packet_count", 0) or 0) if packet_budget else 0,
             "packet_budget_stop_reason": str(packet_budget.get("stop_reason", "") or "") if packet_budget else "",
+            "context_economy_node_count": sum(1 for node in nodes if node["channel"] == "context_economy"),
+            "context_economy_recommended_deep_policy": str(context_economy.get("recommended_deep_policy", "") or "") if context_economy else "",
+            "context_economy_waste_score": float(context_economy.get("context_waste_score", 0.0) or 0.0) if context_economy else 0.0,
+            "context_economy_sufficiency_score": float(context_economy.get("context_sufficiency_score", 0.0) or 0.0) if context_economy else 0.0,
+            "context_economy_shadow_only": bool(context_economy.get("shadow_only", True)) if context_economy else False,
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },
@@ -555,6 +596,7 @@ const colors = {{
   memory_alignment: "#8b5a38",
   semantic_novelty: "#5a6b78",
   packet_budget: "#6c7a2a",
+  context_economy: "#8a6f2a",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"

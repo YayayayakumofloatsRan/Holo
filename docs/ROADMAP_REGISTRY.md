@@ -96,6 +96,11 @@ Stage143: packet budget and stop-reason report
 - Reports why fast/deep packets were sent or skipped, why continuation stopped, estimated token/timing cost, and grounding or novelty outcomes linked to the stop reason.
 - Stage143 does not add provider calls, memory writes, tool execution, transport authority, or a second loop; Stage135 topology can render a compact packet-budget gate.
 
+Stage144: context economy and packet policy calibration
+- Implemented deterministic shadow diagnostics over Stage139-143 evidence.
+- Reports bounded working-set slots, context sufficiency, context waste, and a recommended deep-packet policy: `keep`, `skip`, `defer`, `tool_first`, or `memory_first`.
+- Stage144 does not enforce recommendations, add provider calls, write memory, execute tools, widen transport authority, or add a second loop; Stage135 topology can render a compact context-economy gate.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

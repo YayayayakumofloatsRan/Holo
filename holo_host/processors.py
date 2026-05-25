@@ -33,6 +33,7 @@ from .stage135_i_state_topology import (
     build_stage135_i_state_topology,
 )
 from .stage143_packet_budget import build_stage143_packet_budget
+from .stage144_context_economy import build_stage144_context_economy
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1761,6 +1762,17 @@ class CodexCliProcessor:
                 reply_debug={"provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests]},
                 channel=context.channel,
             )
+            stage144_context_economy = build_stage144_context_economy(
+                user_text=str(context.user_text or ""),
+                selected_action=dict(context.selected_action or context.mind_packet.get("selected_action", {})),
+                active_thread_state=dict(context.mind_packet.get("active_thread_state", {})),
+                recent_dialogue_window=dict(context.mind_packet.get("recent_dialogue_window", {})),
+                memory_observation_ledger=memory_observation_ledger,
+                stage142_semantic_novelty=stage142_semantic_novelty,
+                stage143_packet_budget=stage143_packet_budget,
+                sidecar=context.mind_packet,
+                reply_debug={"provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests]},
+            )
             stage135_topology = build_stage135_i_state_topology(
                 context=context,
                 fast_packet=fast_packet,
@@ -1770,6 +1782,7 @@ class CodexCliProcessor:
                 memory_observation_ledger=memory_observation_ledger,
                 stage142_semantic_novelty=stage142_semantic_novelty,
                 stage143_packet_budget=stage143_packet_budget,
+                stage144_context_economy=stage144_context_economy,
             )
             return ReplyPlan(
                 text=joined,
@@ -1797,6 +1810,7 @@ class CodexCliProcessor:
                     "stage132_progressive_stream": stage132_stream_plan,
                     "stage142_semantic_novelty": stage142_semantic_novelty,
                     "stage143_packet_budget": stage143_packet_budget,
+                    "stage144_context_economy": stage144_context_economy,
                     "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                     "stage135_i_state_topology": stage135_topology,
                     "memory_observation_ledger": memory_observation_ledger,
@@ -1926,6 +1940,22 @@ class CodexCliProcessor:
             },
             channel=context.channel,
         )
+        stage144_context_economy = build_stage144_context_economy(
+            user_text=str(context.user_text or ""),
+            selected_action=dict(context.selected_action or context.mind_packet.get("selected_action", {})),
+            active_thread_state=dict(context.mind_packet.get("active_thread_state", {})),
+            recent_dialogue_window=dict(context.mind_packet.get("recent_dialogue_window", {})),
+            tool_observation_ledger=tool_observation_ledger,
+            memory_observation_ledger=memory_observation_ledger,
+            stage142_semantic_novelty=stage142_semantic_novelty,
+            stage143_packet_budget=stage143_packet_budget,
+            sidecar=context.mind_packet,
+            reply_debug={
+                "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
+                "lane": result_metadata.get("lane", lane),
+                "prompt_excerpt": compact_text(prompt, 240),
+            },
+        )
         stage135_topology = build_stage135_i_state_topology(
             context=context,
             fast_packet=fast_packet,
@@ -1938,6 +1968,7 @@ class CodexCliProcessor:
             memory_observation_ledger=memory_observation_ledger,
             stage142_semantic_novelty=stage142_semantic_novelty,
             stage143_packet_budget=stage143_packet_budget,
+            stage144_context_economy=stage144_context_economy,
         )
         return ReplyPlan(
             text=joined,
@@ -1975,6 +2006,7 @@ class CodexCliProcessor:
                 "stage132_progressive_stream": stage132_stream_plan,
                 "stage142_semantic_novelty": stage142_semantic_novelty,
                 "stage143_packet_budget": stage143_packet_budget,
+                "stage144_context_economy": stage144_context_economy,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_topology,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),

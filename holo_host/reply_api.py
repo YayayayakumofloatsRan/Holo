@@ -69,6 +69,7 @@ from .memory_alignment import evaluate_memory_alignment, repair_memory_alignment
 from .stage135_i_state_topology import build_stage135_i_state_topology
 from .stage142_semantic_novelty_gate import apply_stage142_gate
 from .stage143_packet_budget import build_stage143_packet_budget
+from .stage144_context_economy import build_stage144_context_economy
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9392,8 +9393,34 @@ class HoloReplyService:
         stage143_sent_count = int(stage143_packet_budget.get("sent_count", 0) or 0)
         stage143_skipped_count = int(stage143_packet_budget.get("skipped_count", 0) or 0)
         stage143_stop_reason = str(stage143_packet_budget.get("stop_reason", "") or "")
+        stage144_context_economy = build_stage144_context_economy(
+            user_text=turn.text,
+            selected_action=dict(sidecar.get("selected_action", {})),
+            active_thread_state=dict(sidecar.get("active_thread_state", {})),
+            recent_dialogue_window=dict(sidecar.get("recent_dialogue_window", {})),
+            tool_observation_ledger=tool_observation_ledger,
+            memory_observation_ledger=memory_observation_ledger,
+            memory_grounding=memory_grounding,
+            memory_alignment=memory_alignment,
+            tool_grounding=tool_grounding,
+            stage142_semantic_novelty=stage142_semantic_novelty,
+            stage143_packet_budget=stage143_packet_budget,
+            visual_memory=dict(visual_report or {}),
+            risk_permission={
+                "risk_tags": [],
+                "approved_tool_permissions": list(capability_context.get("approved_tool_permissions", []) or []),
+                "tool_permission_grants": list(capability_context.get("tool_permission_grants", []) or []),
+            },
+            sidecar=sidecar,
+            reply_debug=reply_debug,
+        )
+        reply_debug["stage144_context_economy"] = stage144_context_economy
+        stage144_recommended_deep_policy = str(stage144_context_economy.get("recommended_deep_policy", "") or "")
+        stage144_context_sufficiency_score = float(stage144_context_economy.get("context_sufficiency_score", 0.0) or 0.0)
+        stage144_context_waste_score = float(stage144_context_economy.get("context_waste_score", 0.0) or 0.0)
+        stage144_shadow_only = bool(stage144_context_economy.get("shadow_only", True))
         topology_present = bool(stage135_i_state_topology.get("schema"))
-        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0):
+        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0 or stage144_context_economy):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
                 fast_packet=dict(stage124_thought_loop.get("fast_packet", {})) if isinstance(stage124_thought_loop.get("fast_packet", {}), dict) else {},
@@ -9406,6 +9433,7 @@ class HoloReplyService:
                 memory_alignment=memory_alignment,
                 stage142_semantic_novelty=stage142_semantic_novelty,
                 stage143_packet_budget=stage143_packet_budget,
+                stage144_context_economy=stage144_context_economy,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9452,6 +9480,11 @@ class HoloReplyService:
                 "stage143_packet_budget_packet_count": stage143_packet_count,
                 "stage143_packet_budget_sent_count": stage143_sent_count,
                 "stage143_packet_budget_skipped_count": stage143_skipped_count,
+                "stage144_context_economy": stage144_context_economy,
+                "stage144_context_economy_shadow_only": stage144_shadow_only,
+                "stage144_recommended_deep_policy": stage144_recommended_deep_policy,
+                "stage144_context_sufficiency_score": stage144_context_sufficiency_score,
+                "stage144_context_waste_score": stage144_context_waste_score,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9511,6 +9544,11 @@ class HoloReplyService:
             "stage143_packet_budget_packet_count": stage143_packet_count,
             "stage143_packet_budget_sent_count": stage143_sent_count,
             "stage143_packet_budget_skipped_count": stage143_skipped_count,
+            "stage144_context_economy": stage144_context_economy,
+            "stage144_context_economy_shadow_only": stage144_shadow_only,
+            "stage144_recommended_deep_policy": stage144_recommended_deep_policy,
+            "stage144_context_sufficiency_score": stage144_context_sufficiency_score,
+            "stage144_context_waste_score": stage144_context_waste_score,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9627,6 +9665,11 @@ class HoloReplyService:
                 "stage143_packet_budget_packet_count": stage143_packet_count,
                 "stage143_packet_budget_sent_count": stage143_sent_count,
                 "stage143_packet_budget_skipped_count": stage143_skipped_count,
+                "stage144_context_economy": stage144_context_economy,
+                "stage144_context_economy_shadow_only": stage144_shadow_only,
+                "stage144_recommended_deep_policy": stage144_recommended_deep_policy,
+                "stage144_context_sufficiency_score": stage144_context_sufficiency_score,
+                "stage144_context_waste_score": stage144_context_waste_score,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

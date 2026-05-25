@@ -68,6 +68,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 63. `docs/ENGINEERING_HANDOFF_STAGE142.md`
 64. `docs/STAGE143_PACKET_BUDGET_STOP_REASON.md`
 65. `docs/ENGINEERING_HANDOFF_STAGE143.md`
+66. `docs/STAGE144_CONTEXT_ECONOMY_AND_PACKET_POLICY.md`
+67. `docs/ENGINEERING_HANDOFF_STAGE144.md`
 
 ## What This Document Must Cover
 - current live state
@@ -82,9 +84,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage143-packet-budget-stop-reason`.
+- The current milestone tag is `stage144-context-economy-packet-policy`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage143 packet-budget observability: after Stage132 decides fast/deep packet flow and Stage142 gates visible A' to A'', Stage143 reports why packets were sent or skipped, why continuation stopped, what token/timing estimate was available, and which grounding or novelty status affected the stop reason. Stage135 topology can show a compact packet-budget gate.
+- Current focus is Stage144 context-economy shadow policy: after Stage143 reports packet cost and stop reasons, Stage144 builds bounded working-set slots, estimates context sufficiency and waste, and recommends `keep`, `skip`, `defer`, `tool_first`, or `memory_first` without changing live packet behavior. Stage135 topology can show a compact context-economy gate.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
