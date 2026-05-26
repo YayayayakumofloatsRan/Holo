@@ -83,6 +83,7 @@ from .stage151_live_tool_trace import (
 from .stage151_tool_decision_loop import (
     build_stage151_live_trace,
     evaluate_tool_decision_grounding,
+    maybe_ground_visible_web_reply,
     repair_tool_decision_grounding,
 )
 
@@ -9461,6 +9462,14 @@ class HoloReplyService:
             if stage152_memory_rows:
                 sidecar["stage152_memory_observation_ledger"] = stage152_memory_rows
             sidecar["stage152_deepseek_tool_loop"] = stage152_deepseek_tool_loop
+        repaired_text = maybe_ground_visible_web_reply(
+            user_text=turn.text,
+            text=repaired_text,
+            web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+            time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
+        )
+        repaired_text = normalize_external_speech_for_context(turn_context, repaired_text)
+        repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
         grounding_repaired = False
         stage151_tool_decision_grounding = evaluate_tool_decision_grounding(
             repaired_text,

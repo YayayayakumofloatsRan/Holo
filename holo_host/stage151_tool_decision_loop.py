@@ -501,6 +501,94 @@ def repair_tool_decision_grounding(text: str, grounding_report: dict[str, Any], 
     return "我有本机时间观测不足，不能确认这个时间相关说法。"
 
 
+def build_grounded_web_observation_answer(
+    *,
+    user_text: str = "",
+    web_observation_ledger: Any = None,
+    time_observation: dict[str, Any] | None = None,
+    max_results: int = 3,
+) -> str:
+    rows = [
+        dict(item)
+        for item in list(web_observation_ledger or [])
+        if isinstance(item, dict) and str(item.get("status", "") or "") == "ok"
+    ]
+    results: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for row in rows:
+        for result in list(row.get("results", []) or []):
+            if not isinstance(result, dict):
+                continue
+            url = str(result.get("url", "") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            results.append(
+                {
+                    "title": _compact(result.get("title", "") or url, 90),
+                    "url": url,
+                    "snippet": _compact(result.get("snippet", ""), 150),
+                }
+            )
+            if len(results) >= max_results:
+                break
+        if len(results) >= max_results:
+            break
+    if not results:
+        return ""
+    query = _compact(user_text, 120)
+    lines = ["我已完成联网检索，下面是可核验来源："]
+    if query:
+        lines.append(f"查询：{query}")
+    observed_at = str((time_observation or {}).get("local_time", "") or (time_observation or {}).get("observed_at", "")).strip()
+    if observed_at:
+        lines.append(f"检索时间：{observed_at}")
+    for index, result in enumerate(results, start=1):
+        line = f"{index}. {result['title']} - {result['url']}"
+        if result["snippet"]:
+            line += f"\n   {result['snippet']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def maybe_ground_visible_web_reply(
+    *,
+    user_text: str = "",
+    text: str = "",
+    web_observation_ledger: Any = None,
+    time_observation: dict[str, Any] | None = None,
+) -> str:
+    current = str(text or "").strip()
+    rows = [
+        dict(item)
+        for item in list(web_observation_ledger or [])
+        if isinstance(item, dict) and str(item.get("status", "") or "") == "ok" and list(item.get("source_urls", []) or [])
+    ]
+    if not rows:
+        return current
+    lowered = current.lower()
+    user_lowered = str(user_text or "").lower()
+    unresolved_markers = (
+        "没有可核验的联网观察",
+        "需要先完成 web_search",
+        "need to complete web_search",
+        "no verifiable web observation",
+        "没有联网观察",
+    )
+    source_requested = any(marker in user_lowered or marker in str(user_text or "") for marker in ("来源", "链接", "source", "sources", "url", "官方", "官网"))
+    only_intends_lookup = any(marker in current for marker in ("让我联网", "我来联网", "我去查", "我查一下", "让我查"))
+    missing_visible_source = source_requested and not URL_RE.search(current)
+    if any(marker in lowered or marker in current for marker in unresolved_markers) or missing_visible_source or only_intends_lookup:
+        grounded = build_grounded_web_observation_answer(
+            user_text=user_text,
+            web_observation_ledger=rows,
+            time_observation=time_observation,
+        )
+        if grounded:
+            return grounded
+    return current
+
+
 def build_stage151_live_trace(
     *,
     user_text: str = "",

@@ -25,6 +25,7 @@ The CLI trace now prefers Stage152 when available and shows `purpose`, `candidat
 - `DeepSeekProvider` uses Stage152 native tools when `stage152_native_tool_loop=true`.
 - `CodexCliProcessor` sets that flag for the live reply deep packet.
 - Stage152 observations are merged into reply-side web/time/tool ledgers before grounding repair.
+- If a successful web observation exists but the visible draft still says lookup is unverified or omits requested sources, Holo now rewrites that visible draft from the recorded observation ledger instead of telling the user no lookup happened.
 - Reply JSON, outgoing metadata, and archive metadata include:
   - `stage152_deepseek_tool_loop`
   - `stage152_live_trace`
@@ -65,15 +66,15 @@ Network disabled:
 Targeted:
 
 ```text
-python -m pytest tests\test_stage152_deepseek_tool_loop.py tests\test_stage151_tool_decision_loop.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage152-targeted
-19 passed in 2.68s
+python -m pytest tests\test_stage152_deepseek_tool_loop.py tests\test_stage151_tool_decision_loop.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage152-webfix-targeted
+21 passed in 3.41s
 ```
 
 Full regression and hygiene should be recorded below by the completing thread:
 
 ```text
 python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base
-596 passed in 76.22s (0:01:16)
+598 passed in 82.91s (0:01:22)
 
 python scripts\check_public_release_hygiene.py
 Public release hygiene passed: no private profile, memory, runtime, artifact, live transport path, or blocked persona marker is tracked.

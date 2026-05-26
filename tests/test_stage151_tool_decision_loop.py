@@ -17,6 +17,7 @@ from holo_host.stage151_tool_decision_loop import (
     evaluate_tool_decision_grounding,
     execute_tool_decision,
     format_stage151_live_trace,
+    maybe_ground_visible_web_reply,
     repair_tool_decision_grounding,
 )
 
@@ -116,6 +117,39 @@ def test_final_reply_cannot_claim_web_search_without_web_ledger() -> None:
     repaired = repair_tool_decision_grounding("我已经联网搜索到最新官方文档。", report, channel="holo_cli")
     assert "web_search" in repaired
     assert "Stage151" not in repaired
+
+
+def test_grounded_web_observation_replaces_unresolved_visible_lookup_reply() -> None:
+    observation = {
+        "schema": WEB_OBSERVATION_SCHEMA,
+        "observation_id": "web:test",
+        "action_type": "web_search",
+        "query": "OpenAI Codex CLI docs",
+        "status": "ok",
+        "provider": "mock",
+        "results": [
+            {
+                "title": "Codex CLI",
+                "url": "https://developers.openai.com/codex/cli",
+                "snippet": "Official Codex CLI documentation.",
+            }
+        ],
+        "source_urls": ["https://developers.openai.com/codex/cli"],
+        "fetched_at": "2026-05-27T00:00:00Z",
+        "error": "",
+        "confidence": 0.9,
+    }
+
+    repaired = maybe_ground_visible_web_reply(
+        user_text="联网搜索 OpenAI Codex CLI 官方文档，给出来源",
+        text="我没有可核验的联网观察，不能把这当作已经查到的当前信息。",
+        web_observation_ledger=[observation],
+        time_observation=build_time_observation(),
+    )
+
+    assert "我已完成联网检索" in repaired
+    assert "https://developers.openai.com/codex/cli" in repaired
+    assert "没有可核验的联网观察" not in repaired
 
 
 def test_cli_trace_shows_purpose_tool_call_observation_grounding_final() -> None:

@@ -39,6 +39,7 @@ from .stage148_react_agent_loop import stage148_prompt_lines
 from .stage149_user_directives import merge_stage149_semantic_directives, stage149_prompt_lines
 from .stage150_context_memory_fabric import build_stage150_context_memory_fabric, stage150_prompt_lines
 from .stage152_deepseek_tool_loop import deepseek_native_tool_names
+from .stage151_tool_decision_loop import maybe_ground_visible_web_reply
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1965,6 +1966,20 @@ class CodexCliProcessor:
             query=str(context.user_text or ""),
         )
         text = normalize_external_speech_for_context(context, result.reply_text.strip())
+        visible_web_rows = list(context.capability_context.get("web_observation_ledger", []) or [])
+        if isinstance(stage152_deepseek_tool_loop.get("web_observation_ledger", []), list):
+            visible_web_rows.extend(list(stage152_deepseek_tool_loop.get("web_observation_ledger", []) or []))
+        visible_time_observation = (
+            dict(stage152_deepseek_tool_loop.get("time_observation", {}))
+            if isinstance(stage152_deepseek_tool_loop.get("time_observation", {}), dict) and stage152_deepseek_tool_loop.get("time_observation")
+            else dict(context.capability_context.get("time_observation", {}) or {})
+        )
+        text = maybe_ground_visible_web_reply(
+            user_text=str(context.user_text or ""),
+            text=text,
+            web_observation_ledger=visible_web_rows,
+            time_observation=visible_time_observation,
+        )
         first_reaction = normalize_external_speech_for_context(context, str(fast_packet.get("shallow_reply", "") or "").strip())
         bubbles, stage142_semantic_novelty = merge_stage132_reply_bubbles(
             first_reaction=first_reaction,
