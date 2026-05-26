@@ -41,6 +41,7 @@ from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
 from .stage152_deepseek_tool_loop import deepseek_native_tool_names
 from .stage151_tool_decision_loop import maybe_ground_visible_web_reply
 from .stage131_continuation import stage131_short_turn_requires_reply
+from .engineering_action_fabric import normalize_engineering_action_ledger
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
 
@@ -1926,6 +1927,8 @@ class CodexCliProcessor:
                 "auto_execute_provider_tools": True,
                 "stage152_native_tool_loop": True,
                 "stage152_native_tool_names": list(deepseek_native_tool_names()),
+                "stage154_engineering_action_fabric": True,
+                "stage154_engineering_tool_names": ["workspace_search", "file_read", "apply_patch", "test_run", "git_status", "git_diff"],
                 "tool_requests": agent_tool_requests,
                 "tool_permission_grants": list(context.capability_context.get("tool_permission_grants", []) or []),
                 "approved_tool_permissions": list(context.capability_context.get("approved_tool_permissions", []) or []),
@@ -1943,6 +1946,14 @@ class CodexCliProcessor:
             raise RuntimeError(result.stderr or result.stdout or "codex processor failure")
         result_metadata = dict(getattr(result, "metadata", {}) or {})
         tool_observation_ledger = list(result_metadata.get("tool_observation_ledger", []) or [])
+        engineering_action_ledger = normalize_engineering_action_ledger(
+            result_metadata.get("engineering_action_ledger", context.mind_packet.get("engineering_action_ledger", []))
+        )
+        if engineering_action_ledger:
+            packet_after_engineering = dict(context.mind_packet or context.sidecar)
+            packet_after_engineering["engineering_action_ledger"] = engineering_action_ledger
+            context.mind_packet = packet_after_engineering
+            context.sidecar = packet_after_engineering
         stage152_deepseek_tool_loop = (
             dict(result_metadata.get("stage152_deepseek_tool_loop", {}))
             if isinstance(result_metadata.get("stage152_deepseek_tool_loop", {}), dict)
@@ -2063,6 +2074,7 @@ class CodexCliProcessor:
             stage145_outcome_appraisal=stage145_outcome_appraisal,
             stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
             stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
+            engineering_action_ledger=engineering_action_ledger,
         )
         return ReplyPlan(
             text=joined,
@@ -2093,6 +2105,7 @@ class CodexCliProcessor:
                 "web_observation_ledger": list(result_metadata.get("web_observation_ledger", [])) if isinstance(result_metadata.get("web_observation_ledger", []), list) else [],
                 "time_observation": dict(result_metadata.get("time_observation", {})) if isinstance(result_metadata.get("time_observation", {}), dict) else {},
                 "tool_observation_ledger": tool_observation_ledger,
+                "engineering_action_ledger": engineering_action_ledger,
                 "tool_failure_reentry": bool(result_metadata.get("tool_failure_reentry", False)),
                 "memory_observation_ledger": memory_observation_ledger,
                 "prompt_excerpt": compact_text(prompt, 240),

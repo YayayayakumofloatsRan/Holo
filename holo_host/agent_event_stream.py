@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from .common import compact_text
+from .engineering_action_fabric import normalize_engineering_action_ledger
 
 AGENT_EVENT_STREAM_SCHEMA = "holo.stage153.agent_event_stream.v1"
 
@@ -129,6 +130,34 @@ def _observation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    label_by_action = {
+        "workspace_search": "eng:search",
+        "file_read": "eng:read",
+        "apply_patch": "eng:patch",
+        "test_run": "eng:test",
+        "git_status": "eng:diff",
+        "git_diff": "eng:diff",
+        "handoff": "eng:handoff",
+    }
+    for row in normalize_engineering_action_ledger(payload.get("engineering_action_ledger", []))[:12]:
+        action_type = str(row.get("action_type", "") or "")
+        label = label_by_action.get(action_type, "eng:handoff")
+        events.append(
+            {
+                "event": label,
+                "action_type": action_type,
+                "status": str(row.get("status", "") or ""),
+                "files_read": list(row.get("files_read", []) or []),
+                "files_changed": list(row.get("files_changed", []) or []),
+                "commands_run": list(row.get("commands_run", []) or []),
+                "summary": _compact(row.get("stdout_summary", row.get("stderr_summary", "")), 160),
+            }
+        )
+    return events
+
+
 def _cache_event(payload: dict[str, Any]) -> dict[str, Any]:
     usage = {}
     if isinstance(payload.get("usage", {}), dict):
@@ -154,7 +183,7 @@ def build_agent_event_stream(
 ) -> dict[str, Any]:
     source = sanitize_event_payload(dict(payload or {}))
     final_text = _final_text(source)
-    grounding = source.get("stage151_tool_decision_grounding", source.get("tool_grounding", {}))
+    grounding = source.get("engineering_claim_grounding", source.get("stage151_tool_decision_grounding", source.get("tool_grounding", {})))
     if not isinstance(grounding, dict):
         grounding = {}
     loop = source.get("stage152_deepseek_tool_loop", {})
@@ -178,6 +207,7 @@ def build_agent_event_stream(
     events.extend(_stage151_candidates(source))
     events.extend(_tool_call_events(source))
     events.extend(_observation_events(source))
+    events.extend(_engineering_events(source))
     events.append(
         {
             "event": "grounding",
@@ -226,6 +256,19 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[observation] {item.get('action_type', '')} status={item.get('status', '')} "
                 f"sources={sources} results={item.get('result_count', 0)}"
             )
+        elif event.startswith("eng:"):
+            files_read = len(list(item.get("files_read", []) or []))
+            files_changed = len(list(item.get("files_changed", []) or []))
+            commands = len(list(item.get("commands_run", []) or []))
+            detail = []
+            if files_read:
+                detail.append(f"read={files_read}")
+            if files_changed:
+                detail.append(f"changed={files_changed}")
+            if commands:
+                detail.append(f"commands={commands}")
+            suffix = (" " + " ".join(detail)) if detail else ""
+            lines.append(f"[{event}] status={item.get('status', '')}{suffix}")
         elif event == "grounding":
             missing = ",".join(str(x) for x in list(item.get("missing", []) or [])) or "-"
             lines.append(f"[grounding] status={item.get('status', '-') or '-'} missing={missing}")
@@ -243,6 +286,7 @@ def render_tool_observations(payload: dict[str, Any] | None) -> str:
     source = sanitize_event_payload(dict(payload or {}))
     rows = [row for row in list(source.get("web_observation_ledger", []) or []) if isinstance(row, dict)]
     rows.extend(row for row in list(source.get("tool_observation_ledger", []) or []) if isinstance(row, dict))
+    rows.extend(row for row in normalize_engineering_action_ledger(source.get("engineering_action_ledger", [])))
     if not rows:
         return "[tools] no tool observations"
     lines = ["[tools]"]

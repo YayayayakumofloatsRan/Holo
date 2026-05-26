@@ -257,6 +257,7 @@ def _evidence_items(
 ) -> list[dict[str, Any]]:
     debug = _dict(reply_debug)
     tools = _list_dicts(tool_observation_ledger if tool_observation_ledger is not None else debug.get("tool_observation_ledger", sidecar.get("tool_observation_ledger", [])))
+    engineering_rows = _list_dicts(debug.get("engineering_action_ledger", sidecar.get("engineering_action_ledger", [])))
     memories = _list_dicts(memory_observation_ledger if memory_observation_ledger is not None else debug.get("memory_observation_ledger", sidecar.get("memory_observation_ledger", [])))
     web_rows = _list_dicts(web_observation_ledger if web_observation_ledger is not None else debug.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])))
     time_row = _dict(time_observation if time_observation is not None else debug.get("time_observation", sidecar.get("time_observation", {})))
@@ -271,6 +272,25 @@ def _evidence_items(
                 "status": str(row.get("status", "") or "unknown"),
                 "summary": _compact(row.get("summary", row.get("result_summary", "")), 220),
                 "confidence": _clamp(row.get("confidence", 0.75), 0.75),
+            }
+        )
+    for index, row in enumerate(engineering_rows[:10]):
+        action_type = str(row.get("action_type", "") or "engineering")
+        status = str(row.get("status", "") or "unknown")
+        files_read = len(list(row.get("files_read", []) or []))
+        files_changed = len(list(row.get("files_changed", []) or []))
+        commands = len(list(row.get("commands_run", []) or []))
+        items.append(
+            {
+                "evidence_id": str(row.get("action_id", "") or f"engineering:{index}"),
+                "family": "engineering",
+                "source_family": action_type,
+                "status": status,
+                "summary": _compact(
+                    f"{action_type} {status}; files_read={files_read}; files_changed={files_changed}; commands={commands}; {row.get('stdout_summary', row.get('stderr_summary', ''))}",
+                    220,
+                ),
+                "confidence": 0.95 if status == "ok" else 0.35,
             }
         )
     for index, row in enumerate(memories[:10]):
@@ -473,6 +493,7 @@ def build_stage150_context_memory_fabric(
         "evidence_ledger_view": evidence,
         "tool_memory_visual_observations": {
             "tool_observations": [item for item in evidence if item.get("family") == "tool"],
+            "engineering_observations": [item for item in evidence if item.get("family") == "engineering"],
             "memory_observations": [item for item in evidence if item.get("family") == "memory"],
             "web_observations": [item for item in evidence if item.get("family") == "web"],
             "time_observation": _dict(time_observation),

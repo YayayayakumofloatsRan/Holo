@@ -50,6 +50,15 @@ from .stage147_replay_calibration import evaluate_replay_calibration
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
+from .engineering_action_fabric import evaluate_engineering_claim_grounding
+from .engineering_workspace_tools import (
+    apply_patch as apply_workspace_patch,
+    file_read as engineering_file_read,
+    git_diff as engineering_git_diff,
+    git_status as engineering_git_status,
+    test_run as engineering_test_run,
+    workspace_search as engineering_workspace_search,
+)
 from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 
@@ -9308,6 +9317,12 @@ CHAT_HELP = """Commands:
   /trace                 show last turn agent event stream
   /json                  print last turn JSON metadata
   /tools                 show last turn tool observations
+  /eng search <query> [glob]  repo-scoped search with Stage154 ledger
+  /eng read <path> [start] [end]  read workspace file lines
+  /eng patch <patch-file>     apply a unified patch file inside the repo
+  /eng test <command>         run a guarded test command inside the repo
+  /eng status                 record git status
+  /eng diff [path]            record git diff
   /health                show live readiness/health
   /memory [query]        show recall trace for current topic or query
   /compact               show compact status metadata only
@@ -9508,6 +9523,77 @@ def command_chat(
         result["biomimetic_telemetry"] = {"frame_id": frame["id"]}
         return result, "local_process"
 
+    def run_engineering_command(rest: str) -> bool:
+        nonlocal last_reply_payload
+        try:
+            parts = shlex.split(rest)
+        except ValueError as exc:
+            print(f"usage: /eng <search|read|patch|test|status|diff> ... ({exc})")
+            return True
+        if not parts:
+            print("usage: /eng <search|read|patch|test|status|diff> ...")
+            return True
+        action = parts[0].lower()
+        repo_root = Path.cwd()
+        if action == "search":
+            if len(parts) < 2:
+                print("usage: /eng search <query> [glob]")
+                return True
+            row = engineering_workspace_search(repo_root, query=parts[1], glob=parts[2] if len(parts) > 2 else "*")
+            final_text = f"workspace_search status={row.get('status', '')}"
+        elif action == "read":
+            if len(parts) < 2:
+                print("usage: /eng read <path> [start] [end]")
+                return True
+            start = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+            end = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else None
+            row = engineering_file_read(repo_root, parts[1], start_line=start, end_line=end)
+            final_text = f"file_read status={row.get('status', '')}"
+        elif action == "patch":
+            if len(parts) < 2:
+                print("usage: /eng patch <patch-file>")
+                return True
+            patch_path = Path(parts[1])
+            try:
+                patch_text = patch_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                print(f"patch file read failed: {exc}")
+                return True
+            row = apply_workspace_patch(repo_root, patch_text)
+            final_text = f"apply_patch status={row.get('status', '')}"
+        elif action == "test":
+            command = rest.partition(" ")[2].strip()
+            if not command:
+                print("usage: /eng test <command>")
+                return True
+            row = engineering_test_run(repo_root, command)
+            final_text = f"test_run status={row.get('status', '')}"
+        elif action == "status":
+            row = engineering_git_status(repo_root)
+            final_text = f"git_status status={row.get('status', '')}"
+        elif action == "diff":
+            row = engineering_git_diff(repo_root, parts[1] if len(parts) > 1 else None)
+            final_text = f"git_diff status={row.get('status', '')}"
+        else:
+            print("usage: /eng <search|read|patch|test|status|diff> ...")
+            return True
+        ledger = [row]
+        payload = {
+            "action": "engineering_action",
+            "text": final_text,
+            "thread_key": thread_key,
+            "chat_name": chat_name,
+            "channel": channel,
+            "engineering_action_ledger": ledger,
+            "engineering_claim_grounding": evaluate_engineering_claim_grounding(final_text, ledger),
+        }
+        last_reply_payload = payload
+        cli_session.record_turn(payload, user_text=f"/eng {rest}", transport="local_engineering")
+        print(cli_session.render_trace())
+        if show_json:
+            print(cli_session.render_json())
+        return True
+
     def run_slash(command_line: str) -> bool:
         nonlocal pending_tool_permission_grants, show_json, auto_event_stream, last_reply_payload
         command, _, rest = command_line.partition(" ")
@@ -9541,6 +9627,8 @@ def command_chat(
         if command == "/tools":
             print(cli_session.render_tools())
             return True
+        if command == "/eng":
+            return run_engineering_command(rest)
         if command == "/compact":
             print(cli_session.render_compact())
             return True

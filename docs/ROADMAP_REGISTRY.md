@@ -147,6 +147,11 @@ Stage153: interactive agent CLI and event stream
 - The `chat` command defaults to `holo_cli:default`, preserves the passed thread key and chat name, and supports `/trace`, `/json`, `/tools`, `/health`, `/memory`, `/compact`, `/clear`, and `/exit`.
 - Stage153 redacts raw DeepSeek `reasoning_content`, does not start WeChat, does not execute new tools, does not add provider calls, and preserves Stage149-152 grounding constraints while adding a Stage135 `agent_event_stream` topology node.
 
+Stage154: engineering action fabric
+- Implemented workspace-scoped engineering actions for repo search, file read, patch application, guarded test commands, git status, and git diff.
+- Every engineering action records an `engineering_action_ledger` row, and visible read/patch/test/diff claims are checked against the matching host evidence before delivery/archive.
+- CLI can render `[eng:search]`, `[eng:read]`, `[eng:patch]`, `[eng:test]`, `[eng:diff]`, and `[eng:handoff]`; Stage154 rejects destructive commands by default, does not add provider calls, does not write memory, does not start WeChat, and adds a Stage135 `engineering_action_fabric` topology node.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

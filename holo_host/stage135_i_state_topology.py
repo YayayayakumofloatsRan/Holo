@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import atomic_write_text, compact_text, stable_digest, utc_now
+from .engineering_action_fabric import normalize_engineering_action_ledger
 
 STAGE135_SCHEMA = "holo.stage135.i_state_topology.v1"
 STAGE135_PROMPT_MARKER = "Stage135 I-State Frame"
@@ -201,6 +202,7 @@ def build_stage135_i_state_topology(
     stage151_tool_decision: dict[str, Any] | None = None,
     stage152_deepseek_tool_loop: dict[str, Any] | None = None,
     stage153_agent_event_stream: dict[str, Any] | None = None,
+    engineering_action_ledger: list[dict[str, Any]] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -232,6 +234,7 @@ def build_stage135_i_state_topology(
     tool_decision = _dict(stage151_tool_decision or packet.get("stage151_tool_decision", {}))
     native_tool_loop = _dict(stage152_deepseek_tool_loop or packet.get("stage152_deepseek_tool_loop", {}))
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
+    engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
@@ -540,6 +543,26 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage153_agent_event_stream", relation="renders_auditable_cli_events", weight=0.54, summary="grounded tool and packet evidence is rendered as CLI events without hidden reasoning"))
         edges.append(_edge("stage153_agent_event_stream", "visible_fast_reaction" if visible else "state_delta", relation="frames_interactive_console", weight=0.42, summary="the console shows external events before or with final speech"))
 
+    if engineering_ledger:
+        ok_count = sum(1 for row in engineering_ledger if str(row.get("status", "") or "") == "ok")
+        changed_count = sum(len(list(row.get("files_changed", []) or [])) for row in engineering_ledger)
+        read_count = sum(len(list(row.get("files_read", []) or [])) for row in engineering_ledger)
+        nodes.append(
+            _node(
+                "stage154_engineering_action_fabric",
+                "engineering action fabric",
+                channel="engineering_action_fabric",
+                kind="tool_fabric",
+                x=0.66,
+                y=0.22,
+                weight=0.68 if ok_count else 0.36,
+                summary=f"actions={len(engineering_ledger)}; ok={ok_count}; read={read_count}; changed={changed_count}",
+            )
+        )
+        source = "stage153_agent_event_stream" if agent_event_stream else "stage151_tool_decision_loop" if tool_decision else "holo_self"
+        edges.append(_edge(source, "stage154_engineering_action_fabric", relation="executes_workspace_actions", weight=0.58, summary="repo-scoped engineering actions produce auditable ledgers"))
+        edges.append(_edge("stage154_engineering_action_fabric", "state_delta", relation="engineering_observation_reentry", weight=0.6, summary="search/read/patch/test/diff evidence re-enters the same subject state"))
+
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
         call_id = str(item.get("provider_call_id", "") or item.get("tool", "") or f"tool_{index + 1}")
@@ -736,6 +759,9 @@ def build_stage135_i_state_topology(
             "deepseek_native_tool_loop_stop_reason": str(native_tool_loop.get("stop_reason", "") or "") if native_tool_loop else "",
             "agent_event_stream_node_count": sum(1 for node in nodes if node["channel"] == "agent_event_stream"),
             "agent_event_stream_event_count": int(agent_event_stream.get("event_count", 0) or len(_list_dicts(agent_event_stream.get("events", [])))) if agent_event_stream else 0,
+            "engineering_action_fabric_node_count": sum(1 for node in nodes if node["channel"] == "engineering_action_fabric"),
+            "engineering_action_count": len(engineering_ledger),
+            "engineering_action_ok_count": sum(1 for row in engineering_ledger if str(row.get("status", "") or "") == "ok"),
             "user_directive_node_count": sum(1 for node in nodes if node["channel"] == "user_directive"),
             "user_directive_count": int(user_directives.get("hard_directive_count", 0) or 0) if user_directives else 0,
             "user_directive_status": str(user_directives.get("status", "") or "") if user_directives else "",
@@ -785,6 +811,49 @@ def attach_stage153_agent_event_stream_topology(
     metrics["edge_count"] = len(edges)
     metrics["agent_event_stream_node_count"] = 1
     metrics["agent_event_stream_event_count"] = event_count
+    payload["metrics"] = metrics
+    return payload
+
+
+def attach_stage154_engineering_action_topology(
+    topology: dict[str, Any] | None,
+    engineering_action_ledger: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    ledger = normalize_engineering_action_ledger(engineering_action_ledger or [])
+    if not payload.get("schema") or not ledger:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if any(isinstance(node, dict) and node.get("id") == "stage154_engineering_action_fabric" for node in nodes):
+        return payload
+    ok_count = sum(1 for row in ledger if str(row.get("status", "") or "") == "ok")
+    changed_count = sum(len(list(row.get("files_changed", []) or [])) for row in ledger)
+    read_count = sum(len(list(row.get("files_read", []) or [])) for row in ledger)
+    nodes.append(
+        _node(
+            "stage154_engineering_action_fabric",
+            "engineering action fabric",
+            channel="engineering_action_fabric",
+            kind="tool_fabric",
+            x=0.66,
+            y=0.22,
+            weight=0.68 if ok_count else 0.36,
+            summary=f"actions={len(ledger)}; ok={ok_count}; read={read_count}; changed={changed_count}",
+        )
+    )
+    node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+    source = "stage153_agent_event_stream" if "stage153_agent_event_stream" in node_ids else "stage151_tool_decision_loop" if "stage151_tool_decision_loop" in node_ids else "holo_self"
+    edges.append(_edge(source, "stage154_engineering_action_fabric", relation="executes_workspace_actions", weight=0.58, summary="repo-scoped engineering actions produce auditable ledgers"))
+    edges.append(_edge("stage154_engineering_action_fabric", "state_delta", relation="engineering_observation_reentry", weight=0.6, summary="search/read/patch/test/diff evidence re-enters the same subject state"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["engineering_action_fabric_node_count"] = 1
+    metrics["engineering_action_count"] = len(ledger)
+    metrics["engineering_action_ok_count"] = ok_count
     payload["metrics"] = metrics
     return payload
 

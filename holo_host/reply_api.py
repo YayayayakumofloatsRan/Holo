@@ -66,7 +66,17 @@ from .store import QueueStore
 from .tool_grounding import evaluate_tool_grounding, normalize_tool_observation_ledger, repair_ungrounded_tool_claims
 from .memory_grounding import evaluate_memory_grounding, normalize_memory_observation_ledger, repair_memory_claims
 from .memory_alignment import evaluate_memory_alignment, repair_memory_alignment
-from .stage135_i_state_topology import attach_stage153_agent_event_stream_topology, build_stage135_i_state_topology
+from .engineering_action_fabric import (
+    engineering_ledger_to_tool_observations,
+    evaluate_engineering_claim_grounding,
+    normalize_engineering_action_ledger,
+    repair_engineering_claims,
+)
+from .stage135_i_state_topology import (
+    attach_stage153_agent_event_stream_topology,
+    attach_stage154_engineering_action_topology,
+    build_stage135_i_state_topology,
+)
 from .stage142_semantic_novelty_gate import apply_stage142_gate
 from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
@@ -9421,6 +9431,27 @@ class HoloReplyService:
             capability_context.get("tool_observation_ledger", []),
             tool_observation_ledger,
         )
+        metadata_engineering_rows = (turn.metadata or {}).get("engineering_action_ledger", [])
+        sidecar_engineering_rows = sidecar.get("engineering_action_ledger", [])
+        capability_engineering_rows = capability_context.get("engineering_action_ledger", [])
+        debug_engineering_rows = reply_debug.get("engineering_action_ledger", [])
+        engineering_action_ledger = normalize_engineering_action_ledger(
+            [
+                *(metadata_engineering_rows if isinstance(metadata_engineering_rows, list) else []),
+                *(sidecar_engineering_rows if isinstance(sidecar_engineering_rows, list) else []),
+                *(capability_engineering_rows if isinstance(capability_engineering_rows, list) else []),
+                *(debug_engineering_rows if isinstance(debug_engineering_rows, list) else []),
+            ]
+        )
+        if engineering_action_ledger:
+            sidecar["engineering_action_ledger"] = engineering_action_ledger
+            capability_context = dict(capability_context)
+            capability_context["engineering_action_ledger"] = engineering_action_ledger
+            tool_observation_ledger = merge_tool_observation_ledgers(
+                tool_observation_ledger,
+                engineering_ledger_to_tool_observations(engineering_action_ledger),
+            )
+        reply_debug["engineering_action_ledger"] = engineering_action_ledger
         stage152_deepseek_tool_loop = (
             dict(reply_debug.get("stage152_deepseek_tool_loop", {}))
             if isinstance(reply_debug.get("stage152_deepseek_tool_loop", {}), dict)
@@ -9508,6 +9539,15 @@ class HoloReplyService:
             )
             repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
             grounding_repaired = True
+        engineering_claim_grounding = evaluate_engineering_claim_grounding(repaired_text, engineering_action_ledger)
+        if bool(engineering_claim_grounding.get("repair_required", False)) and tool_grounding.get("status") != "ungrounded_tool_claim":
+            repaired_text = normalize_external_speech_for_context(
+                turn_context,
+                repair_engineering_claims(repaired_text, engineering_claim_grounding, channel=turn.channel),
+            )
+            repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
+            grounding_repaired = True
+        reply_debug["engineering_claim_grounding"] = engineering_claim_grounding
         stage151_network_grounding = evaluate_network_grounding(repaired_text, tool_observation_ledger)
         stage151_tool_decision_grounding = evaluate_tool_decision_grounding(
             repaired_text,
@@ -9599,6 +9639,11 @@ class HoloReplyService:
             " ".join(bubble.text for bubble in bubbles).strip(),
         )
         final_reply = apply_stage149_visible_directives(final_reply, stage149_user_directives) or "收到。"
+        engineering_claim_grounding = evaluate_engineering_claim_grounding(final_reply, engineering_action_ledger)
+        reply_debug["engineering_claim_grounding"] = engineering_claim_grounding
+        engineering_claim_grounding_status = str(engineering_claim_grounding.get("status", "") or "")
+        engineering_action_count = len(engineering_action_ledger)
+        engineering_claim_unverified_count = int(engineering_claim_grounding.get("unverified_claim_count", 0) or 0)
         stage142_candidate_count = int(stage142_semantic_novelty.get("candidate_count", 0) or 0)
         stage142_suppressed_count = int(stage142_semantic_novelty.get("suppressed_count", 0) or 0)
         stage142_status = str(stage142_semantic_novelty.get("status", "") or "")
@@ -9765,6 +9810,8 @@ class HoloReplyService:
                 "web_observation_ledger": capability_context.get("web_observation_ledger", []),
                 "tool_observation_ledger": tool_observation_ledger,
                 "tool_grounding": tool_grounding,
+                "engineering_action_ledger": engineering_action_ledger,
+                "engineering_claim_grounding": engineering_claim_grounding,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
             },
@@ -9795,6 +9842,11 @@ class HoloReplyService:
                 stage135_i_state_topology,
                 stage153_agent_event_stream,
             )
+        if topology_present and engineering_action_ledger:
+            stage135_i_state_topology = attach_stage154_engineering_action_topology(
+                stage135_i_state_topology,
+                engineering_action_ledger,
+            )
         elif not topology_present and (
             memory_alignment_claim_count > 0
             or stage142_candidate_count > 1
@@ -9823,6 +9875,7 @@ class HoloReplyService:
                 stage151_tool_decision=capability_context.get("stage151_tool_decision", {}),
                 stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
                 stage153_agent_event_stream=stage153_agent_event_stream,
+                engineering_action_ledger=engineering_action_ledger,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9908,6 +9961,11 @@ class HoloReplyService:
                 "stage152_stop_reason": stage152_stop_reason,
                 "stage153_agent_event_stream": stage153_agent_event_stream,
                 "stage153_interactive_cli_session": stage153_interactive_cli_session,
+                "engineering_action_ledger": engineering_action_ledger,
+                "engineering_action_count": engineering_action_count,
+                "engineering_claim_grounding": engineering_claim_grounding,
+                "engineering_claim_grounding_status": engineering_claim_grounding_status,
+                "engineering_claim_unverified_count": engineering_claim_unverified_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -10004,6 +10062,11 @@ class HoloReplyService:
             "stage152_tool_call_count": stage152_tool_call_count,
             "stage152_round_count": stage152_round_count,
             "stage152_stop_reason": stage152_stop_reason,
+            "engineering_action_ledger": engineering_action_ledger,
+            "engineering_action_count": engineering_action_count,
+            "engineering_claim_grounding": engineering_claim_grounding,
+            "engineering_claim_grounding_status": engineering_claim_grounding_status,
+            "engineering_claim_unverified_count": engineering_claim_unverified_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -10159,6 +10222,13 @@ class HoloReplyService:
                 "stage152_tool_call_count": stage152_tool_call_count,
                 "stage152_round_count": stage152_round_count,
                 "stage152_stop_reason": stage152_stop_reason,
+                "stage153_agent_event_stream": stage153_agent_event_stream,
+                "stage153_interactive_cli_session": stage153_interactive_cli_session,
+                "engineering_action_ledger": engineering_action_ledger,
+                "engineering_action_count": engineering_action_count,
+                "engineering_claim_grounding": engineering_claim_grounding,
+                "engineering_claim_grounding_status": engineering_claim_grounding_status,
+                "engineering_claim_unverified_count": engineering_claim_unverified_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
