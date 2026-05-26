@@ -49,6 +49,7 @@ from .stage146_biomimetic_replay import export_biomimetic_replay
 from .stage147_replay_calibration import evaluate_replay_calibration
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
+from .interactive_cli import InteractiveCliSession
 from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 
@@ -9304,17 +9305,24 @@ def command_evaluate_replay_calibration(
 
 CHAT_HELP = """Commands:
   /help                  show this help
+  /trace                 show last turn agent event stream
+  /json                  print last turn JSON metadata
+  /tools                 show last turn tool observations
+  /health                show live readiness/health
+  /memory [query]        show recall trace for current topic or query
+  /compact               show compact status metadata only
+  /clear                 clear the terminal screen only
   /status                show compact brain status
   /readiness             show live readiness
   /flow                  show live flow summary
   /ct                    show Stage131 thought-flow CT for this CLI thread
   /topology              show latest Stage135 I-state topology from the last reply
-  /trace on|off          show or hide Codex-like live tool trace after replies
   /mind <query>          inspect current mind packet for a query
   /recall <query>        trace hybrid recall for a query
   /activation            show activation state for this CLI thread
   /snapshot [label]      create a memory snapshot
   /grant <tool> [prefix] grant one modifying tool for the next turn
+  /trace on|off          enable or disable automatic event stream after replies
   /json on|off           show or hide raw reply JSON after each turn
   /quit, /exit           leave the shell
 
@@ -9465,9 +9473,10 @@ def command_chat(
 ) -> int:
     service: HoloReplyService | None = None
     show_json = bool(json_output)
-    show_trace = bool(trace_output)
+    auto_event_stream = True if not trace_output else bool(trace_output)
     pending_tool_permission_grants: list[dict[str, Any]] = []
     last_reply_payload: dict[str, Any] = {}
+    cli_session = InteractiveCliSession(thread_key=thread_key, chat_name=chat_name, channel=channel, sender=sender)
 
     def send_turn(text: str) -> tuple[dict[str, Any], str]:
         nonlocal pending_tool_permission_grants, service
@@ -9500,7 +9509,7 @@ def command_chat(
         return result, "local_process"
 
     def run_slash(command_line: str) -> bool:
-        nonlocal pending_tool_permission_grants, show_json, show_trace, last_reply_payload
+        nonlocal pending_tool_permission_grants, show_json, auto_event_stream, last_reply_payload
         command, _, rest = command_line.partition(" ")
         command = command.strip().lower()
         rest = rest.strip()
@@ -9517,17 +9526,56 @@ def command_chat(
                 show_json = False
                 print("json=off")
             else:
-                print("usage: /json on|off")
+                print(cli_session.render_json())
             return True
         if command == "/trace":
             if rest.lower() in {"on", "1", "true", "yes"}:
-                show_trace = True
+                auto_event_stream = True
                 print("trace=on")
             elif rest.lower() in {"off", "0", "false", "no"}:
-                show_trace = False
+                auto_event_stream = False
                 print("trace=off")
             else:
-                print("usage: /trace on|off")
+                print(cli_session.render_trace())
+            return True
+        if command == "/tools":
+            print(cli_session.render_tools())
+            return True
+        if command == "/compact":
+            print(cli_session.render_compact())
+            return True
+        if command == "/clear":
+            print("\033[2J\033[H", end="")
+            return True
+        if command == "/health":
+            payload = _live_api_request(config_path, method="GET", path="/health", timeout=timeout)
+            if payload is None:
+                print("[health] unavailable")
+            else:
+                print(f"[health] status={payload.get('status', 'unknown')} processor={payload.get('processor_backend', payload.get('active_processor', '-'))}")
+                if show_json:
+                    _print_chat_json(payload)
+            return True
+        if command == "/memory":
+            query = rest or cli_session.last_user_text
+            if not query:
+                print("usage: /memory <query>")
+                return True
+            payload, transport = _trace_hybrid_payload(
+                config_path,
+                query=query,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+                limit=8,
+            )
+            print(f"[{transport}] tier={payload.get('tier', '-')} recall_confidence={payload.get('recall_confidence', '-')}")
+            for item in list(payload.get("graph_hits", []))[:4]:
+                text = str(dict(item).get("text", "") or "").strip()
+                if text:
+                    print(f"- {text}")
+            if show_json:
+                _print_chat_json(payload)
             return True
         if command == "/status":
             payload, transport = _brain_status_payload(config_path)
@@ -9646,12 +9694,14 @@ def command_chat(
                 return 0
             payload, transport = send_turn(text)
             last_reply_payload = payload
-            print(_chat_response_text(payload))
-            if show_trace:
-                print(_format_codex_like_live_trace(payload))
+            cli_session.record_turn(payload, user_text=text, transport=transport)
+            if auto_event_stream:
+                print(cli_session.render_trace())
+            else:
+                print(_chat_response_text(payload))
             if show_json:
                 print(f"\n[{transport}]")
-                _print_chat_json(payload)
+                print(cli_session.render_json())
             return 0
 
         print(f"Holo CLI chat | channel={channel} thread={thread_key} chat={chat_name}")
@@ -9674,12 +9724,14 @@ def command_chat(
                 continue
             payload, transport = send_turn(text)
             last_reply_payload = payload
-            print(_chat_response_text(payload))
-            if show_trace:
-                print(_format_codex_like_live_trace(payload))
+            cli_session.record_turn(payload, user_text=text, transport=transport)
+            if auto_event_stream:
+                print(cli_session.render_trace())
+            else:
+                print(_chat_response_text(payload))
             if show_json:
                 print(f"\n[{transport}]")
-                _print_chat_json(payload)
+                print(cli_session.render_json())
     finally:
         _close_chat_service(service)
     return 0
@@ -10332,7 +10384,7 @@ def main(argv: list[str] | None = None) -> int:
     reply_probe_parser.add_argument("--sender", default=None)
     reply_probe_parser.add_argument("--mode", choices=("all", "graph", "hybrid", "legacy"), default="all")
     chat_parser = subparsers.add_parser("chat", help="Run an interactive single-thread Holo CLI chat shell")
-    chat_parser.add_argument("--thread-key", default="holo_cli:main")
+    chat_parser.add_argument("--thread-key", default="holo_cli:default")
     chat_parser.add_argument("--chat-name", default="HoloCLI")
     chat_parser.add_argument("--channel", default="holo_cli")
     chat_parser.add_argument("--sender", default="Operator")

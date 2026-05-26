@@ -142,6 +142,11 @@ Stage152: DeepSeek native tool loop
 - CLI trace now prefers Stage152 `purpose`, `candidate`, `tool`, `observation`, `evaluate`, `stop`, and `final` events when available; raw `reasoning_content` is never printed or archived as visible trace.
 - Stage152 preserves host authority: web tools respect `runtime.network_enabled`, observations are recorded as ledgers, final web/current claims are grounded by Stage151, and no WeChat, memory-write, transport, approval, or sandbox boundary is widened.
 
+Stage153: interactive agent CLI and event stream
+- Implemented `stage153_agent_event_stream` and `stage153_interactive_cli_session` so CLI turns render auditable agent events: goal, context, candidates, tool calls, observations, grounding, cache, stop, and final speech.
+- The `chat` command defaults to `holo_cli:default`, preserves the passed thread key and chat name, and supports `/trace`, `/json`, `/tools`, `/health`, `/memory`, `/compact`, `/clear`, and `/exit`.
+- Stage153 redacts raw DeepSeek `reasoning_content`, does not start WeChat, does not execute new tools, does not add provider calls, and preserves Stage149-152 grounding constraints while adding a Stage135 `agent_event_stream` topology node.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

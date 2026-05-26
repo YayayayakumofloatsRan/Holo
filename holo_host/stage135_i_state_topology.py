@@ -200,6 +200,7 @@ def build_stage135_i_state_topology(
     stage150_context_memory_fabric: dict[str, Any] | None = None,
     stage151_tool_decision: dict[str, Any] | None = None,
     stage152_deepseek_tool_loop: dict[str, Any] | None = None,
+    stage153_agent_event_stream: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -230,6 +231,7 @@ def build_stage135_i_state_topology(
     context_memory_fabric = _dict(stage150_context_memory_fabric or packet.get("stage150_context_memory_fabric", {}))
     tool_decision = _dict(stage151_tool_decision or packet.get("stage151_tool_decision", {}))
     native_tool_loop = _dict(stage152_deepseek_tool_loop or packet.get("stage152_deepseek_tool_loop", {}))
+    agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
     user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
@@ -520,6 +522,24 @@ def build_stage135_i_state_topology(
             edges.append(_edge("external_user_input", "stage152_deepseek_tool_loop", relation="provider_tool_intent", weight=0.44, summary="provider may request host tools after seeing the packet"))
         edges.append(_edge("stage152_deepseek_tool_loop", "state_delta", relation="tool_observation_reentry", weight=0.62, summary="native DeepSeek tool results are appended as role=tool and re-enter the provider loop"))
 
+    if agent_event_stream:
+        event_count = int(agent_event_stream.get("event_count", 0) or len(_list_dicts(agent_event_stream.get("events", []))))
+        nodes.append(
+            _node(
+                "stage153_agent_event_stream",
+                "interactive agent event stream",
+                channel="agent_event_stream",
+                kind="observability",
+                x=0.74,
+                y=0.2,
+                weight=0.58 if event_count else 0.32,
+                summary=f"events={event_count}; hidden reasoning redacted",
+            )
+        )
+        source = "stage152_deepseek_tool_loop" if native_tool_loop else "stage151_tool_decision_loop" if tool_decision else "state_delta"
+        edges.append(_edge(source, "stage153_agent_event_stream", relation="renders_auditable_cli_events", weight=0.54, summary="grounded tool and packet evidence is rendered as CLI events without hidden reasoning"))
+        edges.append(_edge("stage153_agent_event_stream", "visible_fast_reaction" if visible else "state_delta", relation="frames_interactive_console", weight=0.42, summary="the console shows external events before or with final speech"))
+
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
         call_id = str(item.get("provider_call_id", "") or item.get("tool", "") or f"tool_{index + 1}")
@@ -714,6 +734,8 @@ def build_stage135_i_state_topology(
             "deepseek_native_tool_loop_node_count": sum(1 for node in nodes if node["channel"] == "deepseek_native_tool_loop"),
             "deepseek_native_tool_loop_tool_call_count": int(native_tool_loop.get("tool_call_count", 0) or 0) if native_tool_loop else 0,
             "deepseek_native_tool_loop_stop_reason": str(native_tool_loop.get("stop_reason", "") or "") if native_tool_loop else "",
+            "agent_event_stream_node_count": sum(1 for node in nodes if node["channel"] == "agent_event_stream"),
+            "agent_event_stream_event_count": int(agent_event_stream.get("event_count", 0) or len(_list_dicts(agent_event_stream.get("events", [])))) if agent_event_stream else 0,
             "user_directive_node_count": sum(1 for node in nodes if node["channel"] == "user_directive"),
             "user_directive_count": int(user_directives.get("hard_directive_count", 0) or 0) if user_directives else 0,
             "user_directive_status": str(user_directives.get("status", "") or "") if user_directives else "",
@@ -726,6 +748,45 @@ def build_stage135_i_state_topology(
             "raw_memory_text_included": False,
         },
     }
+
+
+def attach_stage153_agent_event_stream_topology(
+    topology: dict[str, Any] | None,
+    stage153_agent_event_stream: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    stream = _dict(stage153_agent_event_stream)
+    if not payload.get("schema") or not stream:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if any(isinstance(node, dict) and node.get("id") == "stage153_agent_event_stream" for node in nodes):
+        return payload
+    event_count = int(stream.get("event_count", 0) or len(_list_dicts(stream.get("events", []))))
+    nodes.append(
+        _node(
+            "stage153_agent_event_stream",
+            "interactive agent event stream",
+            channel="agent_event_stream",
+            kind="observability",
+            x=0.74,
+            y=0.2,
+            weight=0.58 if event_count else 0.32,
+            summary=f"events={event_count}; hidden reasoning redacted",
+        )
+    )
+    node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+    source = "stage152_deepseek_tool_loop" if "stage152_deepseek_tool_loop" in node_ids else "stage151_tool_decision_loop" if "stage151_tool_decision_loop" in node_ids else "state_delta"
+    edges.append(_edge(source, "stage153_agent_event_stream", relation="renders_auditable_cli_events", weight=0.54, summary="grounded tool and packet evidence is rendered as CLI events without hidden reasoning"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["agent_event_stream_node_count"] = 1
+    metrics["agent_event_stream_event_count"] = event_count
+    payload["metrics"] = metrics
+    return payload
 
 
 def render_stage135_i_state_topology_html(payload: dict[str, Any]) -> str:

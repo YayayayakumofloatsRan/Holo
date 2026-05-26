@@ -66,7 +66,7 @@ from .store import QueueStore
 from .tool_grounding import evaluate_tool_grounding, normalize_tool_observation_ledger, repair_ungrounded_tool_claims
 from .memory_grounding import evaluate_memory_grounding, normalize_memory_observation_ledger, repair_memory_claims
 from .memory_alignment import evaluate_memory_alignment, repair_memory_alignment
-from .stage135_i_state_topology import build_stage135_i_state_topology
+from .stage135_i_state_topology import attach_stage153_agent_event_stream_topology, build_stage135_i_state_topology
 from .stage142_semantic_novelty_gate import apply_stage142_gate
 from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
@@ -86,6 +86,8 @@ from .stage151_tool_decision_loop import (
     maybe_ground_visible_web_reply,
     repair_tool_decision_grounding,
 )
+from .agent_event_stream import build_agent_event_stream
+from .interactive_cli import INTERACTIVE_CLI_SESSION_SCHEMA
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9738,6 +9740,42 @@ class HoloReplyService:
         stage152_tool_call_count = int(stage152_deepseek_tool_loop.get("tool_call_count", 0) or 0) if stage152_deepseek_tool_loop else 0
         stage152_round_count = int(stage152_deepseek_tool_loop.get("round_count", 0) or 0) if stage152_deepseek_tool_loop else 0
         stage152_stop_reason = str(stage152_deepseek_tool_loop.get("stop_reason", "") or "") if stage152_deepseek_tool_loop else ""
+        stage153_interactive_cli_session = {
+            "schema": INTERACTIVE_CLI_SESSION_SCHEMA,
+            "thread_key": incoming.thread_key,
+            "chat_name": turn.chat_name,
+            "channel": turn.channel,
+            "sender": turn.sender,
+            "transport": "reply_api",
+            "has_last_turn": True,
+        }
+        stage153_agent_event_stream = build_agent_event_stream(
+            {
+                "action": "reply",
+                "text": final_reply,
+                "bubbles": [bubble.text for bubble in bubbles],
+                "thread_key": incoming.thread_key,
+                "chat_name": turn.chat_name,
+                "channel": turn.channel,
+                "stage150_context_memory_fabric": stage150_context_memory_fabric,
+                "stage150_context_memory_fabric_slot_count": stage150_slot_count,
+                "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
+                "stage151_tool_decision": capability_context.get("stage151_tool_decision", {}),
+                "stage151_tool_decision_grounding": stage151_tool_decision_grounding,
+                "web_observation_ledger": capability_context.get("web_observation_ledger", []),
+                "tool_observation_ledger": tool_observation_ledger,
+                "tool_grounding": tool_grounding,
+                "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
+                "stage152_stop_reason": stage152_stop_reason,
+            },
+            user_text=turn.text,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            channel=turn.channel,
+            transport="reply_api",
+        )
+        reply_debug["stage153_agent_event_stream"] = stage153_agent_event_stream
+        reply_debug["stage153_interactive_cli_session"] = stage153_interactive_cli_session
         turn_context.mind_packet = sidecar
         turn_context.sidecar = sidecar
         stage148_react_loop = stage148_react_state.get("react_loop", {})
@@ -9748,7 +9786,24 @@ class HoloReplyService:
             stage148_react_plan = {}
         stage148_react_plan_action = str(stage148_react_plan.get("selected_action_hint", "") or "")
         topology_present = bool(stage135_i_state_topology.get("schema"))
-        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0 or stage144_context_economy or stage145_outcome_appraisal or capability_context.get("stage151_tool_decision")):
+        topology_has_stage153 = bool(
+            isinstance(stage135_i_state_topology.get("metrics", {}), dict)
+            and int(stage135_i_state_topology.get("metrics", {}).get("agent_event_stream_node_count", 0) or 0) > 0
+        )
+        if topology_present and not topology_has_stage153 and stage153_agent_event_stream:
+            stage135_i_state_topology = attach_stage153_agent_event_stream_topology(
+                stage135_i_state_topology,
+                stage153_agent_event_stream,
+            )
+        elif not topology_present and (
+            memory_alignment_claim_count > 0
+            or stage142_candidate_count > 1
+            or stage143_packet_count > 0
+            or stage144_context_economy
+            or stage145_outcome_appraisal
+            or capability_context.get("stage151_tool_decision")
+            or stage153_agent_event_stream
+        ):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
                 fast_packet=dict(stage124_thought_loop.get("fast_packet", {})) if isinstance(stage124_thought_loop.get("fast_packet", {}), dict) else {},
@@ -9767,6 +9822,7 @@ class HoloReplyService:
                 stage150_context_memory_fabric=stage150_context_memory_fabric,
                 stage151_tool_decision=capability_context.get("stage151_tool_decision", {}),
                 stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
+                stage153_agent_event_stream=stage153_agent_event_stream,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9850,6 +9906,8 @@ class HoloReplyService:
                 "stage152_tool_call_count": stage152_tool_call_count,
                 "stage152_round_count": stage152_round_count,
                 "stage152_stop_reason": stage152_stop_reason,
+                "stage153_agent_event_stream": stage153_agent_event_stream,
+                "stage153_interactive_cli_session": stage153_interactive_cli_session,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9981,6 +10039,8 @@ class HoloReplyService:
             "visual_ingest": visual_report or {},
             **(turn.metadata or {}),
         }
+        archive_metadata["stage153_agent_event_stream"] = stage153_agent_event_stream
+        archive_metadata["stage153_interactive_cli_session"] = stage153_interactive_cli_session
         memory_write_report: dict[str, Any] = {}
         if self.config.memory.auto_observe:
             with self._memory_lock:

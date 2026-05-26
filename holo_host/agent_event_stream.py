@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from .common import compact_text
+
+AGENT_EVENT_STREAM_SCHEMA = "holo.stage153.agent_event_stream.v1"
+
+
+def _compact(value: Any, limit: int = 180) -> str:
+    return compact_text(" ".join(str(value or "").split()), limit)
+
+
+def _final_text(payload: dict[str, Any]) -> str:
+    bubbles = payload.get("bubbles", [])
+    if isinstance(bubbles, list):
+        lines = [str(item.get("text", item) if isinstance(item, dict) else item).strip() for item in bubbles]
+        text = "\n".join(line for line in lines if line)
+        if text:
+            return text
+    return str(payload.get("text", "") or "").strip()
+
+
+def sanitize_event_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        clean: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            lowered = key_text.lower()
+            if lowered in {"reasoning_content", "chain_of_thought", "hidden_reasoning"}:
+                continue
+            if lowered in {"internal_messages", "assistant_messages"}:
+                continue
+            clean[key] = sanitize_event_payload(item)
+        return clean
+    if isinstance(value, list):
+        return [sanitize_event_payload(item) for item in value]
+    if isinstance(value, str):
+        if "reasoning_content" in value.lower() or "chain_of_thought" in value.lower():
+            return "[redacted]"
+    return value
+
+
+def _stage151_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    decision = payload.get("stage151_tool_decision", {})
+    if not isinstance(decision, dict):
+        return []
+    rows = []
+    for item in list(decision.get("action_candidates", []) or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "event": "candidate",
+                "action_type": str(item.get("action_type", "") or ""),
+                "score": float(item.get("score", 0.0) or 0.0),
+                "required_observations": [str(x) for x in list(item.get("required_observations", []) or [])],
+                "reason": _compact(item.get("reason", ""), 140),
+            }
+        )
+    return rows
+
+
+def _tool_call_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    trace = payload.get("stage152_live_trace", {})
+    if isinstance(trace, dict):
+        for item in list(trace.get("events", []) or []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("event", "")) in {"tool", "tool_call"}:
+                events.append(
+                    {
+                        "event": "tool_call",
+                        "action_type": str(item.get("tool", item.get("action_type", "")) or ""),
+                        "query": _compact(item.get("query", item.get("url", "")), 160),
+                        "status": str(item.get("status", "accepted") or "accepted"),
+                    }
+                )
+    if events:
+        return events
+    web_rows = [row for row in list(payload.get("web_observation_ledger", []) or []) if isinstance(row, dict)]
+    if web_rows:
+        return [
+            {
+                "event": "tool_call",
+                "action_type": str(row.get("action_type", "web_search") or "web_search"),
+                "query": _compact(row.get("query", row.get("url", "")), 160),
+                "status": "recorded",
+            }
+            for row in web_rows[:5]
+        ]
+    return [{"event": "tool_call", "action_type": "none", "status": "no_tool_calls", "query": ""}]
+
+
+def _observation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for row in list(payload.get("web_observation_ledger", []) or [])[:8]:
+        if not isinstance(row, dict):
+            continue
+        events.append(
+            {
+                "event": "observation",
+                "action_type": str(row.get("action_type", "web_search") or "web_search"),
+                "status": str(row.get("status", "") or ""),
+                "query": _compact(row.get("query", row.get("url", "")), 160),
+                "source_count": len(list(row.get("source_urls", []) or [])),
+                "source_urls": [str(url) for url in list(row.get("source_urls", []) or [])[:3]],
+                "result_count": len(list(row.get("results", []) or [])),
+            }
+        )
+    for row in list(payload.get("tool_observation_ledger", []) or [])[:8]:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("tool", row.get("tool_name", "")) or "").startswith("web_"):
+            continue
+        events.append(
+            {
+                "event": "observation",
+                "action_type": str(row.get("tool", row.get("tool_name", "tool")) or "tool"),
+                "status": str(row.get("status", "") or ""),
+                "query": _compact(row.get("summary", ""), 160),
+                "source_count": 0,
+                "source_urls": [],
+                "result_count": 1 if row.get("summary") else 0,
+            }
+        )
+    return events
+
+
+def _cache_event(payload: dict[str, Any]) -> dict[str, Any]:
+    usage = {}
+    if isinstance(payload.get("usage", {}), dict):
+        usage.update(payload.get("usage", {}))
+    loop = payload.get("stage152_deepseek_tool_loop", {})
+    if isinstance(loop, dict) and isinstance(loop.get("usage", {}), dict):
+        usage.update(loop.get("usage", {}))
+    return {
+        "event": "cache",
+        "prompt_cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens", 0) or 0),
+        "prompt_cache_miss_tokens": int(usage.get("prompt_cache_miss_tokens", 0) or 0),
+    }
+
+
+def build_agent_event_stream(
+    payload: dict[str, Any] | None,
+    *,
+    user_text: str = "",
+    thread_key: str = "",
+    chat_name: str = "",
+    channel: str = "",
+    transport: str = "",
+) -> dict[str, Any]:
+    source = sanitize_event_payload(dict(payload or {}))
+    final_text = _final_text(source)
+    grounding = source.get("stage151_tool_decision_grounding", source.get("tool_grounding", {}))
+    if not isinstance(grounding, dict):
+        grounding = {}
+    loop = source.get("stage152_deepseek_tool_loop", {})
+    if not isinstance(loop, dict):
+        loop = {}
+    stage150 = source.get("stage150_context_memory_fabric", {})
+    if not isinstance(stage150, dict):
+        stage150 = {}
+    events: list[dict[str, Any]] = [
+        {"event": "goal", "summary": _compact(user_text or source.get("input_summary", ""), 220)},
+        {
+            "event": "context",
+            "thread_key": str(thread_key or source.get("thread_key", "") or ""),
+            "chat_name": str(chat_name or source.get("chat_name", "") or ""),
+            "channel": str(channel or source.get("channel", "") or ""),
+            "transport": str(transport or source.get("transport", "") or ""),
+            "slot_count": int(source.get("stage150_context_memory_fabric_slot_count", stage150.get("slot_count", 0)) or 0),
+            "evidence_count": int(source.get("stage150_context_memory_fabric_evidence_count", stage150.get("evidence_count", 0)) or 0),
+        },
+    ]
+    events.extend(_stage151_candidates(source))
+    events.extend(_tool_call_events(source))
+    events.extend(_observation_events(source))
+    events.append(
+        {
+            "event": "grounding",
+            "status": str(grounding.get("status", source.get("stage151_tool_decision_grounding_status", "")) or "-"),
+            "missing": [str(item) for item in list(grounding.get("missing_observations", []) or grounding.get("missing_families", []) or [])],
+        }
+    )
+    events.append(_cache_event(source))
+    events.append({"event": "stop", "reason": str(loop.get("stop_reason", source.get("stage152_stop_reason", "")) or "final")})
+    events.append({"event": "final", "summary": final_text})
+    return {
+        "schema": AGENT_EVENT_STREAM_SCHEMA,
+        "status": "recorded",
+        "event_count": len(events),
+        "events": events,
+    }
+
+
+def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
+    trace = stream if isinstance(stream, dict) else {}
+    lines: list[str] = []
+    for item in list(trace.get("events", []) or []):
+        if not isinstance(item, dict):
+            continue
+        event = str(item.get("event", "") or "")
+        if event == "goal":
+            lines.append(f"[goal] {item.get('summary', '')}")
+        elif event == "context":
+            lines.append(
+                f"[context] thread={item.get('thread_key', '-') or '-'} chat={item.get('chat_name', '-') or '-'} "
+                f"channel={item.get('channel', '-') or '-'} evidence={item.get('evidence_count', 0)}"
+            )
+        elif event == "candidate":
+            need = ",".join(str(x) for x in list(item.get("required_observations", []) or [])) or "-"
+            lines.append(f"[candidate] {item.get('action_type', '')} score={item.get('score', 0)} need={need}")
+        elif event == "tool_call":
+            if item.get("status") == "no_tool_calls" or item.get("action_type") == "none":
+                lines.append("[tool_call] no tool calls")
+            else:
+                query = str(item.get("query", "") or "")
+                detail = f" query={query}" if query else ""
+                lines.append(f"[tool_call] {item.get('action_type', '')} status={item.get('status', '')}{detail}")
+        elif event == "observation":
+            sources = int(item.get("source_count", 0) or 0)
+            lines.append(
+                f"[observation] {item.get('action_type', '')} status={item.get('status', '')} "
+                f"sources={sources} results={item.get('result_count', 0)}"
+            )
+        elif event == "grounding":
+            missing = ",".join(str(x) for x in list(item.get("missing", []) or [])) or "-"
+            lines.append(f"[grounding] status={item.get('status', '-') or '-'} missing={missing}")
+        elif event == "cache":
+            lines.append(f"[cache] hit={item.get('prompt_cache_hit_tokens', 0)} miss={item.get('prompt_cache_miss_tokens', 0)}")
+        elif event == "stop":
+            lines.append(f"[stop] {item.get('reason', '') or 'final'}")
+        elif event == "final":
+            summary = str(item.get("summary", "") or "")
+            lines.append("[final]" if not summary else f"[final]\n{summary}")
+    return "\n".join(lines)
+
+
+def render_tool_observations(payload: dict[str, Any] | None) -> str:
+    source = sanitize_event_payload(dict(payload or {}))
+    rows = [row for row in list(source.get("web_observation_ledger", []) or []) if isinstance(row, dict)]
+    rows.extend(row for row in list(source.get("tool_observation_ledger", []) or []) if isinstance(row, dict))
+    if not rows:
+        return "[tools] no tool observations"
+    lines = ["[tools]"]
+    for row in rows[:10]:
+        action = str(row.get("action_type", row.get("tool", row.get("tool_name", "tool"))) or "tool")
+        status = str(row.get("status", "") or "-")
+        query = _compact(row.get("query", row.get("url", row.get("summary", ""))), 130)
+        sources = list(row.get("source_urls", []) or [])
+        line = f"- {action} status={status}"
+        if query:
+            line += f" query={query}"
+        if sources:
+            line += f" sources={len(sources)} first={sources[0]}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def render_compact_status(payload: dict[str, Any] | None) -> str:
+    source = sanitize_event_payload(dict(payload or {}))
+    fabric = source.get("stage150_context_memory_fabric", {})
+    if not isinstance(fabric, dict):
+        fabric = {}
+    return (
+        "[compact] "
+        f"internal_only={bool(fabric.get('background_compact_internal_only', source.get('stage150_background_compact_internal', True)))} "
+        f"slots={source.get('stage150_context_memory_fabric_slot_count', fabric.get('slot_count', 0)) or 0} "
+        f"evidence={source.get('stage150_context_memory_fabric_evidence_count', fabric.get('evidence_count', 0)) or 0} "
+        f"open_loops={source.get('stage150_context_memory_fabric_open_loop_count', fabric.get('open_loop_count', 0)) or 0}"
+    )
+
+
+def safe_json_dumps(value: Any) -> str:
+    return json.dumps(sanitize_event_payload(value), ensure_ascii=False, indent=2)

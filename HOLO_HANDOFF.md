@@ -82,6 +82,11 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 77. `docs/ENGINEERING_HANDOFF_STAGE149.md`
 78. `docs/STAGE150_CODEX_STYLE_CONTEXT_MEMORY.md`
 79. `docs/ENGINEERING_HANDOFF_STAGE150.md`
+80. `docs/STAGE151_TOOL_DECISION_LIVE_TRACE.md`
+81. `docs/STAGE152_DEEPSEEK_NATIVE_TOOL_LOOP.md`
+82. `docs/ENGINEERING_HANDOFF_STAGE152.md`
+83. `docs/STAGE153_INTERACTIVE_AGENT_CLI.md`
+84. `docs/ENGINEERING_HANDOFF_STAGE153.md`
 
 ## What This Document Must Cover
 - current live state
@@ -96,9 +101,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage150-codex-style-context-memory`.
+- The current milestone tag is `stage153-interactive-agent-cli`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage150 Codex-style context memory fabric: Holo now builds a structured working-context packet with instruction scope, current user goal, active task state, reusable state slots, Stage149 directives, evidence ledger view, open loops, internal background compact, and forbidden visible claims before provider generation. Background compact remains internal and must not become visible speech.
+- Current focus is Stage153 interactive agent CLI: Holo now renders each CLI turn as auditable `[goal]`, `[context]`, `[candidate]`, `[tool_call]`, `[observation]`, `[grounding]`, `[cache]`, `[stop]`, and `[final]` events, with `/trace`, `/json`, `/tools`, `/health`, `/memory`, and `/compact` inspection commands. Raw provider `reasoning_content` stays internal.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
