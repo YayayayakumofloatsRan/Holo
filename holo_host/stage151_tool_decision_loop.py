@@ -580,7 +580,8 @@ def format_stage151_live_trace(payload: dict[str, Any]) -> str:
             lines.append(f"[tool_call] {event.get('action_type', '')} query={event.get('query', '')}")
         elif kind in {"observation", "tool_observation"}:
             source_urls = list(event.get("source_urls", []) or [])
-            source = f" source={source_urls[0]}" if source_urls else ""
+            sources = ",".join(str(url) for url in source_urls[:3])
+            source = f" sources={sources}" if sources else ""
             lines.append(
                 f"[observation] {event.get('action_type', event.get('tool', ''))} "
                 f"status={event.get('status', '')} results={event.get('result_count', 0)}{source}"

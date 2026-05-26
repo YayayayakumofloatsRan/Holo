@@ -73,7 +73,7 @@ Trace lines use only auditable external decisions:
 [purpose] gather_web_evidence
 [candidate] web_search score=0.86 need=web_observation_ledger
 [tool_call] web_search query=openai codex docs
-[observation] web_search status=ok results=3 source=https://developers.openai.com/codex/cli
+[observation] web_search status=ok results=3 sources=https://developers.openai.com/codex/cli,https://github.com/openai/codex
 [grounding] status=grounded missing=-
 [final] ...
 ```

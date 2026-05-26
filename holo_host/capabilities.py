@@ -169,6 +169,22 @@ class CapabilityBroker:
             if error_text:
                 summary += f" error={error_text}"
             tool_context_lines.append(summary)
+            for result in list(observation.get("results", []) or [])[:3]:
+                if not isinstance(result, dict):
+                    continue
+                title = compact_text(result.get("title", ""), 120)
+                url = str(result.get("url", "") or "").strip()
+                snippet = compact_text(result.get("snippet", ""), 180)
+                if not (title or url or snippet):
+                    continue
+                result_line = f"{action_type} result:"
+                if title:
+                    result_line += f" title={title}"
+                if url:
+                    result_line += f" url={url}"
+                if snippet:
+                    result_line += f" snippet={snippet}"
+                tool_context_lines.append(result_line)
         tool_observation_ledger.extend(web_observations_to_tool_ledger(web_observation_ledger))
 
         if self.config.runtime.network_enabled and eager_network:
