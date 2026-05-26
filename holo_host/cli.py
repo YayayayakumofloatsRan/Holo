@@ -48,6 +48,7 @@ from .stage146_benchmark_bundle import run_biomimetic_benchmark
 from .stage146_biomimetic_replay import export_biomimetic_replay
 from .stage147_replay_calibration import evaluate_replay_calibration
 from .stage151_tool_decision_loop import format_stage151_live_trace
+from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 
@@ -67,6 +68,15 @@ STAGE2_CORRECTIONS = [
     "\u4e0d\u8981\u4e00\u76f4\u987a\u7740\u6211\u8bf4",
     "\u8981\u6709\u72ec\u7acb\u6027/\u53cd\u8eab\u6027",
 ]
+
+
+def _format_codex_like_live_trace(payload: dict[str, Any]) -> str:
+    if isinstance(payload, dict) and (
+        payload.get("stage152_live_trace")
+        or (isinstance(payload.get("stage152_deepseek_tool_loop", {}), dict) and payload["stage152_deepseek_tool_loop"].get("live_trace"))
+    ):
+        return format_stage152_live_trace(payload)
+    return format_stage151_live_trace(payload)
 
 
 def _append_live_base_url(base_urls: list[str], base_url: str) -> None:
@@ -9637,7 +9647,7 @@ def command_chat(
             last_reply_payload = payload
             print(_chat_response_text(payload))
             if show_trace:
-                print(format_stage151_live_trace(payload))
+                print(_format_codex_like_live_trace(payload))
             if show_json:
                 print(f"\n[{transport}]")
                 _print_chat_json(payload)
@@ -9665,7 +9675,7 @@ def command_chat(
             last_reply_payload = payload
             print(_chat_response_text(payload))
             if show_trace:
-                print(format_stage151_live_trace(payload))
+                print(_format_codex_like_live_trace(payload))
             if show_json:
                 print(f"\n[{transport}]")
                 _print_chat_json(payload)

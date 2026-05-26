@@ -9418,6 +9418,49 @@ class HoloReplyService:
             capability_context.get("tool_observation_ledger", []),
             tool_observation_ledger,
         )
+        stage152_deepseek_tool_loop = (
+            dict(reply_debug.get("stage152_deepseek_tool_loop", {}))
+            if isinstance(reply_debug.get("stage152_deepseek_tool_loop", {}), dict)
+            else {}
+        )
+        if stage152_deepseek_tool_loop:
+            capability_context = dict(capability_context)
+            sidecar = dict(sidecar)
+            stage152_web_rows = [
+                dict(row)
+                for row in list(stage152_deepseek_tool_loop.get("web_observation_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            if stage152_web_rows:
+                existing_web_rows = [
+                    dict(row)
+                    for row in list(capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])) or [])
+                    if isinstance(row, dict)
+                ]
+                seen_web_ids = {str(row.get("observation_id", "") or "") for row in existing_web_rows}
+                for row in stage152_web_rows:
+                    row_id = str(row.get("observation_id", "") or stable_digest(json.dumps(row, ensure_ascii=False, sort_keys=True), limit=12))
+                    if row_id not in seen_web_ids:
+                        existing_web_rows.append(row)
+                        seen_web_ids.add(row_id)
+                capability_context["web_observation_ledger"] = existing_web_rows
+                sidecar["web_observation_ledger"] = existing_web_rows
+            stage152_time = (
+                dict(stage152_deepseek_tool_loop.get("time_observation", {}))
+                if isinstance(stage152_deepseek_tool_loop.get("time_observation", {}), dict)
+                else {}
+            )
+            if stage152_time:
+                capability_context["time_observation"] = stage152_time
+                sidecar["time_observation"] = stage152_time
+            stage152_memory_rows = [
+                dict(row)
+                for row in list(stage152_deepseek_tool_loop.get("memory_observation_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            if stage152_memory_rows:
+                sidecar["stage152_memory_observation_ledger"] = stage152_memory_rows
+            sidecar["stage152_deepseek_tool_loop"] = stage152_deepseek_tool_loop
         grounding_repaired = False
         stage151_tool_decision_grounding = evaluate_tool_decision_grounding(
             repaired_text,
@@ -9666,13 +9709,26 @@ class HoloReplyService:
             grounding=stage151_tool_decision_grounding,
             final_text=final_reply,
         )
+        stage152_live_trace = (
+            dict(reply_debug.get("stage152_live_trace", {}))
+            if isinstance(reply_debug.get("stage152_live_trace", {}), dict)
+            else dict(stage152_deepseek_tool_loop.get("live_trace", {}))
+            if isinstance(stage152_deepseek_tool_loop.get("live_trace", {}), dict)
+            else {}
+        )
         reply_debug["stage151_live_tool_trace"] = stage151_live_tool_trace
         reply_debug["stage151_live_trace"] = stage151_live_trace
+        if stage152_deepseek_tool_loop:
+            reply_debug["stage152_deepseek_tool_loop"] = stage152_deepseek_tool_loop
+            reply_debug["stage152_live_trace"] = stage152_live_trace
         stage151_network_grounding_status = str(stage151_network_grounding.get("status", "") or "")
         stage151_network_grounding_claim_count = int(stage151_network_grounding.get("claim_count", 0) or 0)
         stage151_external_lookup_ledger_count = int(stage151_network_grounding.get("external_lookup_ledger_count", 0) or 0)
         stage151_tool_decision_grounding_status = str(stage151_tool_decision_grounding.get("status", "") or "")
         stage151_web_observation_count = len(list(capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])) or []))
+        stage152_tool_call_count = int(stage152_deepseek_tool_loop.get("tool_call_count", 0) or 0) if stage152_deepseek_tool_loop else 0
+        stage152_round_count = int(stage152_deepseek_tool_loop.get("round_count", 0) or 0) if stage152_deepseek_tool_loop else 0
+        stage152_stop_reason = str(stage152_deepseek_tool_loop.get("stop_reason", "") or "") if stage152_deepseek_tool_loop else ""
         turn_context.mind_packet = sidecar
         turn_context.sidecar = sidecar
         stage148_react_loop = stage148_react_state.get("react_loop", {})
@@ -9701,6 +9757,7 @@ class HoloReplyService:
                 stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
                 stage150_context_memory_fabric=stage150_context_memory_fabric,
                 stage151_tool_decision=capability_context.get("stage151_tool_decision", {}),
+                stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9779,6 +9836,11 @@ class HoloReplyService:
                 "time_observation": capability_context.get("time_observation", {}),
                 "web_observation_ledger": capability_context.get("web_observation_ledger", []),
                 "stage151_web_observation_count": stage151_web_observation_count,
+                "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
+                "stage152_live_trace": stage152_live_trace,
+                "stage152_tool_call_count": stage152_tool_call_count,
+                "stage152_round_count": stage152_round_count,
+                "stage152_stop_reason": stage152_stop_reason,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9870,6 +9932,11 @@ class HoloReplyService:
             "time_observation": capability_context.get("time_observation", {}),
             "web_observation_ledger": capability_context.get("web_observation_ledger", []),
             "stage151_web_observation_count": stage151_web_observation_count,
+            "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
+            "stage152_live_trace": stage152_live_trace,
+            "stage152_tool_call_count": stage152_tool_call_count,
+            "stage152_round_count": stage152_round_count,
+            "stage152_stop_reason": stage152_stop_reason,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -10018,6 +10085,11 @@ class HoloReplyService:
                 "time_observation": capability_context.get("time_observation", {}),
                 "web_observation_ledger": capability_context.get("web_observation_ledger", []),
                 "stage151_web_observation_count": stage151_web_observation_count,
+                "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
+                "stage152_live_trace": stage152_live_trace,
+                "stage152_tool_call_count": stage152_tool_call_count,
+                "stage152_round_count": stage152_round_count,
+                "stage152_stop_reason": stage152_stop_reason,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

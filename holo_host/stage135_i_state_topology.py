@@ -199,6 +199,7 @@ def build_stage135_i_state_topology(
     stage148_react_state: dict[str, Any] | None = None,
     stage150_context_memory_fabric: dict[str, Any] | None = None,
     stage151_tool_decision: dict[str, Any] | None = None,
+    stage152_deepseek_tool_loop: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -228,6 +229,7 @@ def build_stage135_i_state_topology(
     react_state = _dict(stage148_react_state or packet.get("stage148_react_state", {}))
     context_memory_fabric = _dict(stage150_context_memory_fabric or packet.get("stage150_context_memory_fabric", {}))
     tool_decision = _dict(stage151_tool_decision or packet.get("stage151_tool_decision", {}))
+    native_tool_loop = _dict(stage152_deepseek_tool_loop or packet.get("stage152_deepseek_tool_loop", {}))
     user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
@@ -496,6 +498,28 @@ def build_stage135_i_state_topology(
         edges.append(_edge("stage151_tool_decision_loop", context_target, relation="feeds_observation_context", weight=0.58, summary="tool decision observations enter the structured context packet"))
         edges.append(_edge("stage151_tool_decision_loop", "fast_packet", relation="frames_provider_packet", weight=0.46, summary="tool evidence state is available before provider speech"))
 
+    if native_tool_loop:
+        stop_reason = str(native_tool_loop.get("stop_reason", "") or "unknown")
+        tool_call_count = int(native_tool_loop.get("tool_call_count", 0) or 0)
+        executed_count = int(native_tool_loop.get("executed_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage152_deepseek_tool_loop",
+                "DeepSeek native tool loop",
+                channel="deepseek_native_tool_loop",
+                kind="agent_loop",
+                x=0.62,
+                y=0.12,
+                weight=0.72 if executed_count else 0.4,
+                summary=f"calls={tool_call_count}; executed={executed_count}; stop={stop_reason}",
+            )
+        )
+        if tool_decision:
+            edges.append(_edge("stage151_tool_decision_loop", "stage152_deepseek_tool_loop", relation="seeds_native_tool_policy", weight=0.52, summary="host triage and context give DeepSeek tool affordances"))
+        else:
+            edges.append(_edge("external_user_input", "stage152_deepseek_tool_loop", relation="provider_tool_intent", weight=0.44, summary="provider may request host tools after seeing the packet"))
+        edges.append(_edge("stage152_deepseek_tool_loop", "state_delta", relation="tool_observation_reentry", weight=0.62, summary="native DeepSeek tool results are appended as role=tool and re-enter the provider loop"))
+
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
         call_id = str(item.get("provider_call_id", "") or item.get("tool", "") or f"tool_{index + 1}")
@@ -687,6 +711,9 @@ def build_stage135_i_state_topology(
             "tool_decision_loop_node_count": sum(1 for node in nodes if node["channel"] == "tool_decision_loop"),
             "tool_decision_loop_selected_count": len(_list_dicts(tool_decision.get("selected_actions", []))) if tool_decision else 0,
             "tool_decision_loop_purpose": str(tool_decision.get("purpose", "") or "") if tool_decision else "",
+            "deepseek_native_tool_loop_node_count": sum(1 for node in nodes if node["channel"] == "deepseek_native_tool_loop"),
+            "deepseek_native_tool_loop_tool_call_count": int(native_tool_loop.get("tool_call_count", 0) or 0) if native_tool_loop else 0,
+            "deepseek_native_tool_loop_stop_reason": str(native_tool_loop.get("stop_reason", "") or "") if native_tool_loop else "",
             "user_directive_node_count": sum(1 for node in nodes if node["channel"] == "user_directive"),
             "user_directive_count": int(user_directives.get("hard_directive_count", 0) or 0) if user_directives else 0,
             "user_directive_status": str(user_directives.get("status", "") or "") if user_directives else "",

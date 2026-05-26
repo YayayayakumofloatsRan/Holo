@@ -20,6 +20,12 @@ from .stage106_deepseek_tool_adapter import (
     strip_provider_tool_markup,
 )
 from .stage113_agent_tool_executor import execute_stage113_agent_tools
+from .stage152_deepseek_tool_loop import (
+    build_deepseek_native_tool_payload,
+    deepseek_native_tool_names,
+    parse_deepseek_native_tool_calls,
+    run_deepseek_native_tool_loop,
+)
 from .tool_grounding import normalize_tool_observation_ledger
 
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
@@ -887,11 +893,19 @@ class DeepSeekProvider(ProcessorProvider):
             "thinking": self._thinking_payload(effort),
         }
         provider_tool_payload: dict[str, Any] = {}
+        stage152_native_enabled = bool(request.metadata.get("stage152_native_tool_loop", False))
         if bool(request.metadata.get("enable_provider_tools", False)):
-            provider_tool_payload = build_tool_payload(
-                request.metadata.get("tool_requests", []),
-                tool_choice=request.metadata.get("provider_tool_choice", "auto"),
-            )
+            if stage152_native_enabled:
+                native_names = request.metadata.get("stage152_native_tool_names") or deepseek_native_tool_names()
+                provider_tool_payload = build_deepseek_native_tool_payload(
+                    list(native_names),
+                    tool_choice=request.metadata.get("provider_tool_choice", "auto"),
+                )
+            else:
+                provider_tool_payload = build_tool_payload(
+                    request.metadata.get("tool_requests", []),
+                    tool_choice=request.metadata.get("provider_tool_choice", "auto"),
+                )
             if provider_tool_payload.get("tools"):
                 payload.update(provider_tool_payload)
         payload = {key: value for key, value in payload.items() if value is not None}
@@ -902,26 +916,102 @@ class DeepSeekProvider(ProcessorProvider):
         first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
         message = dict(first_choice.get("message", {})) if isinstance(first_choice.get("message", {}), dict) else {}
         text = strip_provider_tool_markup(message.get("content", ""))
-        initial_tool_calls = parse_provider_tool_calls(first_decoded)
+        initial_tool_calls = parse_deepseek_native_tool_calls(first_decoded) if stage152_native_enabled else parse_provider_tool_calls(first_decoded)
         initial_finish_reason = str(first_choice.get("finish_reason", "") or "")
         usage = self._usage_for_decoded(decoded, prompt_basis=request.prompt, completion_text=text)
-        decoded, usage, agent_tool_loop = self._maybe_run_agent_tool_loop(
-            runner,
-            request,
-            api_key=api_key,
-            payload=payload,
-            timeout_seconds=timeout_seconds,
-            first_decoded=decoded,
-            first_message=message,
-            first_usage=usage,
-        )
+        stage152_loop: dict[str, Any] = {}
+        agent_tool_loop: dict[str, Any] = {}
+        if stage152_native_enabled and bool(request.metadata.get("auto_execute_provider_tools", False)):
+            external_lookup_fn = request.metadata.get("external_lookup_fn")
+
+            def stage152_web_search(query: str) -> dict[str, Any]:
+                if callable(request.metadata.get("web_search_fn")):
+                    return dict(request.metadata["web_search_fn"](query))
+                if callable(external_lookup_fn):
+                    return dict(external_lookup_fn(query, 5))
+                return {}
+
+            web_search_fn = stage152_web_search if callable(request.metadata.get("web_search_fn")) or callable(external_lookup_fn) else None
+            open_page_fn = request.metadata.get("open_page_fn") if callable(request.metadata.get("open_page_fn")) else None
+            memory_recall_fn = request.metadata.get("memory_recall_fn") if callable(request.metadata.get("memory_recall_fn")) else None
+            stage152_loop = run_deepseek_native_tool_loop(
+                initial_decoded=decoded,
+                base_payload=payload,
+                call_model=lambda followup_payload: self._post_json(self._completion_url(runner), api_key, followup_payload, timeout_seconds),
+                network_enabled=bool(runner.config.runtime.network_enabled),
+                max_rounds=_bounded_int(request.metadata.get("max_provider_tool_rounds"), default=4, lower=1, upper=8),
+                max_tool_calls=_bounded_int(request.metadata.get("max_provider_tool_calls"), default=16, lower=1, upper=64),
+                web_search_fn=web_search_fn,
+                open_page_fn=open_page_fn,
+                memory_recall_fn=memory_recall_fn,
+                memory_corpus=request.metadata.get("tool_memory_corpus"),
+                memory_corpus_path=request.metadata.get("tool_memory_corpus_path"),
+                repo_root=runner.config.runtime.repo_root,
+            )
+            decoded = dict(stage152_loop.get("final_decoded", decoded))
+            usage = dict(stage152_loop.get("usage", usage))
+            agent_tool_loop = {
+                "schema": str(stage152_loop.get("schema", "")),
+                "round_count": int(stage152_loop.get("round_count", 0) or 0),
+                "rounds": list(stage152_loop.get("rounds", []) or []),
+                "executed_count": int(stage152_loop.get("executed_count", 0) or 0),
+                "skipped_count": len([row for row in list(stage152_loop.get("tool_observation_ledger", []) or []) if str(row.get("status", "") or "") == "rejected"]),
+                "tool_call_count": int(stage152_loop.get("tool_call_count", 0) or 0),
+                "max_rounds": _bounded_int(request.metadata.get("max_provider_tool_rounds"), default=4, lower=1, upper=8),
+                "max_tool_calls": _bounded_int(request.metadata.get("max_provider_tool_calls"), default=16, lower=1, upper=64),
+                "final_request_sent": bool(stage152_loop.get("final_request_sent", False)),
+                "exhausted": bool(stage152_loop.get("exhausted", False)),
+                "stop_reason": str(stage152_loop.get("stop_reason", "") or ""),
+                "tool_observation_ledger": list(stage152_loop.get("tool_observation_ledger", []) or []),
+                "web_observation_ledger": list(stage152_loop.get("web_observation_ledger", []) or []),
+                "memory_observation_ledger": list(stage152_loop.get("memory_observation_ledger", []) or []),
+                "time_observation": dict(stage152_loop.get("time_observation", {}) or {}),
+                "tool_failure_reentry": any(
+                    str(row.get("status", "") or "").lower() in {"rejected", "skipped", "denied", "error"}
+                    for row in list(stage152_loop.get("tool_observation_ledger", []) or [])
+                    if isinstance(row, dict)
+                ),
+            }
+        else:
+            decoded, usage, agent_tool_loop = self._maybe_run_agent_tool_loop(
+                runner,
+                request,
+                api_key=api_key,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+                first_decoded=decoded,
+                first_message=message,
+                first_usage=usage,
+            )
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         choices = list(decoded.get("choices", []) or [])
         first_choice = dict(choices[0]) if choices and isinstance(choices[0], dict) else {}
         message = dict(first_choice.get("message", {})) if isinstance(first_choice.get("message", {}), dict) else {}
         text = strip_provider_tool_markup(message.get("content", ""))
+        if stage152_loop and str(stage152_loop.get("final_text", "") or "").strip():
+            text = str(stage152_loop.get("final_text", "") or "").strip()
         reasoning_content = str(message.get("reasoning_content", "") or "").strip()
-        tool_calls = parse_provider_tool_calls(decoded)
+        tool_calls = parse_deepseek_native_tool_calls(decoded) if stage152_native_enabled else parse_provider_tool_calls(decoded)
+        stage152_public = {}
+        if stage152_loop:
+            stage152_public = {
+                "schema": str(stage152_loop.get("schema", "")),
+                "status": str(stage152_loop.get("status", "") or ""),
+                "tool_call_count": int(stage152_loop.get("tool_call_count", 0) or 0),
+                "executed_count": int(stage152_loop.get("executed_count", 0) or 0),
+                "round_count": int(stage152_loop.get("round_count", 0) or 0),
+                "final_request_sent": bool(stage152_loop.get("final_request_sent", False)),
+                "stop_reason": str(stage152_loop.get("stop_reason", "") or ""),
+                "exhausted": bool(stage152_loop.get("exhausted", False)),
+                "usage": dict(stage152_loop.get("usage", {}) or {}),
+                "reasoning_content_retained_count": int(stage152_loop.get("reasoning_content_retained_count", 0) or 0),
+                "tool_observation_ledger": list(stage152_loop.get("tool_observation_ledger", []) or []),
+                "web_observation_ledger": list(stage152_loop.get("web_observation_ledger", []) or []),
+                "memory_observation_ledger": list(stage152_loop.get("memory_observation_ledger", []) or []),
+                "time_observation": dict(stage152_loop.get("time_observation", {}) or {}),
+                "grounding": dict(stage152_loop.get("grounding", {}) or {}),
+                "live_trace": dict(stage152_loop.get("live_trace", {}) or {}),
+            }
         metadata = {
             "allowed_data_layers": list(request.allowed_data_layers or tuple(spec.get("allowed_data_layers", ()))),
             "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),
@@ -945,6 +1035,13 @@ class DeepSeekProvider(ProcessorProvider):
             metadata["final_tool_calls"] = tool_calls
             metadata["tool_observation_ledger"] = list(agent_tool_loop.get("tool_observation_ledger", []) or [])
             metadata["tool_failure_reentry"] = bool(agent_tool_loop.get("tool_failure_reentry", False))
+        if stage152_public:
+            metadata["stage152_deepseek_tool_loop"] = stage152_public
+            metadata["stage152_live_trace"] = dict(stage152_public.get("live_trace", {}) or {})
+            metadata["web_observation_ledger"] = list(stage152_public.get("web_observation_ledger", []) or [])
+            metadata["memory_observation_ledger"] = list(stage152_public.get("memory_observation_ledger", []) or [])
+            if stage152_public.get("time_observation"):
+                metadata["time_observation"] = dict(stage152_public.get("time_observation", {}) or {})
         return ProcessorTaskResult(
             task_type=request.task_type,
             text=text,

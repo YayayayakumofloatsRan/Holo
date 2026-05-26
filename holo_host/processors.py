@@ -38,6 +38,7 @@ from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import stage148_prompt_lines
 from .stage149_user_directives import merge_stage149_semantic_directives, stage149_prompt_lines
 from .stage150_context_memory_fabric import build_stage150_context_memory_fabric, stage150_prompt_lines
+from .stage152_deepseek_tool_loop import deepseek_native_tool_names
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1922,6 +1923,8 @@ class CodexCliProcessor:
                 "stage18_reflex": bool(reflex_micro_fast_candidate),
                 "enable_provider_tools": True,
                 "auto_execute_provider_tools": True,
+                "stage152_native_tool_loop": True,
+                "stage152_native_tool_names": list(deepseek_native_tool_names()),
                 "tool_requests": agent_tool_requests,
                 "tool_permission_grants": list(context.capability_context.get("tool_permission_grants", []) or []),
                 "approved_tool_permissions": list(context.capability_context.get("approved_tool_permissions", []) or []),
@@ -1939,6 +1942,22 @@ class CodexCliProcessor:
             raise RuntimeError(result.stderr or result.stdout or "codex processor failure")
         result_metadata = dict(getattr(result, "metadata", {}) or {})
         tool_observation_ledger = list(result_metadata.get("tool_observation_ledger", []) or [])
+        stage152_deepseek_tool_loop = (
+            dict(result_metadata.get("stage152_deepseek_tool_loop", {}))
+            if isinstance(result_metadata.get("stage152_deepseek_tool_loop", {}), dict)
+            else {}
+        )
+        if stage152_deepseek_tool_loop:
+            packet_after_tools = dict(context.mind_packet or context.sidecar)
+            if isinstance(stage152_deepseek_tool_loop.get("time_observation", {}), dict) and stage152_deepseek_tool_loop.get("time_observation"):
+                packet_after_tools["time_observation"] = dict(stage152_deepseek_tool_loop.get("time_observation", {}))
+            if isinstance(stage152_deepseek_tool_loop.get("web_observation_ledger", []), list):
+                packet_after_tools["web_observation_ledger"] = list(stage152_deepseek_tool_loop.get("web_observation_ledger", []))
+            if isinstance(stage152_deepseek_tool_loop.get("memory_observation_ledger", []), list):
+                packet_after_tools["stage152_memory_observation_ledger"] = list(stage152_deepseek_tool_loop.get("memory_observation_ledger", []))
+            packet_after_tools["stage152_deepseek_tool_loop"] = stage152_deepseek_tool_loop
+            context.mind_packet = packet_after_tools
+            context.sidecar = packet_after_tools
         memory_observation_ledger = normalize_memory_observation_ledger(
             sidecar=context.mind_packet,
             reply_debug={"recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {}))},
@@ -2028,6 +2047,7 @@ class CodexCliProcessor:
             stage144_context_economy=stage144_context_economy,
             stage145_outcome_appraisal=stage145_outcome_appraisal,
             stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
+            stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
         )
         return ReplyPlan(
             text=joined,
@@ -2053,6 +2073,10 @@ class CodexCliProcessor:
                 "reflex_micro_fast_candidate": bool(result_metadata.get("reflex_micro_fast_candidate", reflex_micro_fast_candidate)),
                 "provider_tool_names": [str(item.get("name", "") or "") for item in agent_tool_requests],
                 "agent_tool_loop": dict(result_metadata.get("agent_tool_loop", {})),
+                "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
+                "stage152_live_trace": dict(result_metadata.get("stage152_live_trace", {})) if isinstance(result_metadata.get("stage152_live_trace", {}), dict) else {},
+                "web_observation_ledger": list(result_metadata.get("web_observation_ledger", [])) if isinstance(result_metadata.get("web_observation_ledger", []), list) else [],
+                "time_observation": dict(result_metadata.get("time_observation", {})) if isinstance(result_metadata.get("time_observation", {}), dict) else {},
                 "tool_observation_ledger": tool_observation_ledger,
                 "tool_failure_reentry": bool(result_metadata.get("tool_failure_reentry", False)),
                 "memory_observation_ledger": memory_observation_ledger,

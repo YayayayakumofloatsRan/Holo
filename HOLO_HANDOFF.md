@@ -338,6 +338,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
 - Stage141 memory claim alignment is intentionally deterministic and read-only; it checks source sufficiency from existing ledger/debug metadata only and must not add provider calls, memory writes, or transport authority
 - Stage142 semantic novelty gating is intentionally deterministic and expression-only; it must not force provider continuations, add loops, execute tools, write memory, or widen transport authority
 - Stage151 live tool trace is intentionally observability and grounding only; it must not add provider calls, memory writes, tool authority, transport authority, approval/sandbox logic, WeChat starts, or hidden reasoning exposure
+- Stage152 DeepSeek native tool loop preserves provider `reasoning_content` only inside API-continuity packets; never print it in CLI trace or expose it as visible reply/archive text. Web tools still respect `runtime.network_enabled`, and all final web/current claims require web/time observation ledgers.
 
 ## Stage-9 Focus
 - goal: remove over-conservative proactive gating while preserving hard safety constraints
@@ -429,6 +430,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage142 targeted regression passed with `17 passed in 0.56s`; grounding regression passed with `18 passed in 0.57s`; reply API regression passed with `76 passed in 17.16s` on `2026-05-24`
   - `python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base` passed with `510 passed in 69.12s` after Stage142 on `2026-05-24`
   - Stage151 adds `python3 -m holo_host chat --trace` and `/trace on|off` for Codex-like purpose/candidate/tool_call/observation/grounding/final traces, plus host time observations, normalized web observations, and grounding repair for current web claims
+  - Stage152 adds DeepSeek-native `time_observe`, `web_search`, `open_page`, `find_in_page`, and `memory_recall` tool schemas for live reply packets; DeepSeek tool calls are executed by the WSL Holo host, returned as `role=tool`, and shown in CLI trace as purpose/candidate/tool/observation/evaluate/stop/final without raw reasoning leakage
 
 ## Invariants
 - Do not silently change online transport modes

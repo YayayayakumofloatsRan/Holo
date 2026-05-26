@@ -136,6 +136,12 @@ Stage151: tool decision loop and live trace
 - Network actions are now explicit `web_search`, `open_page`, and `find_in_page` operations; `runtime.network_enabled=false` records `rejected_network_disabled` without fetching.
 - CLI chat can show Codex-like `purpose`, `candidate`, `tool_call`, `observation`, `grounding`, and `final` trace lines without exposing hidden chain-of-thought, and Stage151 does not add provider calls, memory writes, tool authority, transport authority, approval/sandbox logic, WeChat starts, or a second loop.
 
+Stage152: DeepSeek native tool loop
+- Implemented DeepSeek thinking-mode native tool schemas for `time_observe`, `web_search`, `open_page`, `find_in_page`, and `memory_recall`.
+- Live DeepSeek reply packets now preserve `reasoning_content` internally for API continuity, append host-executed `role=tool` results, and continue until no tool calls or the host stop controller stops.
+- CLI trace now prefers Stage152 `purpose`, `candidate`, `tool`, `observation`, `evaluate`, `stop`, and `final` events when available; raw `reasoning_content` is never printed or archived as visible trace.
+- Stage152 preserves host authority: web tools respect `runtime.network_enabled`, observations are recorded as ledgers, final web/current claims are grounded by Stage151, and no WeChat, memory-write, transport, approval, or sandbox boundary is widened.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
