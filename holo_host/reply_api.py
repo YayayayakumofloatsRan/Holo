@@ -9309,7 +9309,10 @@ class HoloReplyService:
                 "detail": str(exc),
             })
         sidecar = dict(turn_context.mind_packet or sidecar)
-        sidecar["stage149_user_directives"] = stage149_user_directives
+        if isinstance(sidecar.get("stage149_user_directives", {}), dict):
+            stage149_user_directives = dict(sidecar.get("stage149_user_directives", {}))
+        else:
+            sidecar["stage149_user_directives"] = stage149_user_directives
         processor_ms = int(reply_plan.timing_ms.get("processor_ms", 0))
 
         self.store.update_thread_session(int(thread["id"]), reply_plan.session_id)

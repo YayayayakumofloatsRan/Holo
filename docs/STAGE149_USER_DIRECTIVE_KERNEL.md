@@ -6,7 +6,7 @@ Date: 2026-05-26
 
 Stage149 addresses a concrete runtime failure: user corrections such as "不要用 emoji" could be stored somewhere in dialogue or archive rows, but they were not reliably promoted into every provider packet as hard visible-output constraints. The result was low recall for user requirements and persona-like drift.
 
-Stage149 treats stable user directives as reusable state, not ordinary chat transcript.
+Stage149 treats stable user directives as reusable state, not ordinary chat transcript. It also consumes the Stage124 fast packet's semantic intent judgment, so Holo can recognize a user constraint from context instead of relying only on fixed trigger phrases.
 
 ## Runtime Behavior
 
@@ -28,6 +28,8 @@ It currently recognizes:
 
 - visible no-emoji directives
 - no-roleplay / subject-runtime identity directives
+- Chinese forms such as "请避免使用表情图标", "不要用 emoji", "不使用表情符号"
+- semantic `user_directives` inferred by the Stage124 fast packet
 
 The core identity line is always present:
 
@@ -36,6 +38,7 @@ visible_identity_mode=subject_runtime_not_roleplay
 ```
 
 This means Holo should speak as the local subject runtime and memory state, not as a fictional-character roleplay costume.
+User directives override persona, affect style, stock metaphors, and fictional-character imitation.
 
 ## Prompt Integration
 
@@ -56,6 +59,39 @@ This block appears before situational state, short-term working memory, reusable
 `reply_api.py` applies `apply_stage149_visible_directives()` after the processor result and again after tool/memory grounding repairs and bubble finalization.
 
 This prevents downstream repairs or A'/A'' bubble assembly from reintroducing emoji or roleplay phrases.
+
+## Semantic Intent Path
+
+Stage124 remains the first internal provider packet. Its prompt now asks the model to judge:
+
+- user intent
+- user directives
+- tool need
+- whether a deeper packet is needed
+
+The fast packet may return:
+
+```json
+{
+  "user_directives": [
+    {
+      "directive_type": "visible_no_emoji",
+      "scope": "long_lived",
+      "confidence": 0.91,
+      "hard": true,
+      "summary": "visible speech should avoid expressive icons"
+    }
+  ],
+  "tool_intent": {
+    "need": true,
+    "tool_families": ["memory_recall"],
+    "confidence": 0.84,
+    "reason": "the user is asking for remembered context"
+  }
+}
+```
+
+`processors.py` merges high-confidence fast-packet directives into Stage149 before the deep reply prompt is rendered and before final visible-output repair. This keeps the architecture provider-guided while preserving local host authority over final constraints.
 
 ## Metadata And Topology
 

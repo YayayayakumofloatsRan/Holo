@@ -83,10 +83,14 @@ def build_stage124_fast_packet_prompt(
         [
             f"{STAGE124_FAST_MARKER}:",
             "You are Holo's fast first packet. Return compact JSON only.",
-            "Judge the external user's intent, scene, and whether a deeper packet is needed.",
+            "Judge the external user's intent, scene, user directives, tool need, and whether a deeper packet is needed.",
             "You may include one optional shallow_reply that is safe as external_speech.",
             "A shallow_reply is only the first reaction, not proof that internal thought is complete.",
             "Use Short Term Working Memory as higher-priority local context than generic persona habits.",
+            "Infer semantic intent from the full context; do not rely only on fixed trigger words.",
+            "If the user states a preference or constraint, add user_directives with directive_type, scope, confidence, hard, and summary.",
+            "Known directive_type examples: visible_no_emoji, identity_not_roleplay, concise_reply, preserve_context, tool_permission, memory_preference, current_turn_only.",
+            "If the user appears to need tools or evidence, add tool_intent with need, tool_families, confidence, and reason.",
             "Set deep_packet_needed=true for memory, self-model, identity, runtime/tool/state, or unclear short follow-up turns.",
             "Do not expose raw hidden reasoning.",
             "",
@@ -97,6 +101,8 @@ def build_stage124_fast_packet_prompt(
             "- shallow_reply: string, empty if no immediate surface reply is useful",
             "- speak_now: boolean",
             "- continue_until: short stop condition",
+            "- user_directives: array, empty if none",
+            "- tool_intent: object with need boolean, tool_families array, confidence number, reason string",
             "",
             f"channel={channel}",
             f"thread_key={thread_key}",
@@ -126,6 +132,59 @@ def _json_object_fragment(text: str) -> str:
         return stripped
     match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
     return match.group(0) if match else ""
+
+
+def _clamp_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = float(default)
+    return max(0.0, min(1.0, numeric))
+
+
+def _list_dicts(value: Any, *, limit: int = 8) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value[:limit]:
+        if isinstance(item, dict):
+            rows.append(dict(item))
+    return rows
+
+
+def _normalize_user_directives(value: Any) -> list[dict[str, Any]]:
+    directives: list[dict[str, Any]] = []
+    for item in _list_dicts(value, limit=8):
+        directive_type = compact_text(str(item.get("directive_type", "") or ""), 80)
+        summary = compact_text(str(item.get("summary", "") or item.get("reason", "") or ""), 180)
+        if not directive_type or directive_type in {"none", "unknown"}:
+            continue
+        directives.append(
+            {
+                "directive_type": directive_type,
+                "summary": summary,
+                "scope": compact_text(str(item.get("scope", "") or "unclear"), 60),
+                "confidence": round(_clamp_float(item.get("confidence"), default=0.0), 4),
+                "hard": _coerce_bool(item.get("hard"), default=False),
+                "source_quote": compact_text(str(item.get("source_quote", "") or ""), 160),
+            }
+        )
+    return directives
+
+
+def _normalize_tool_intent(value: Any) -> dict[str, Any]:
+    payload = dict(value) if isinstance(value, dict) else {}
+    families = [
+        compact_text(str(item), 60)
+        for item in list(payload.get("tool_families", []) or [])[:8]
+        if str(item).strip()
+    ]
+    return {
+        "need": _coerce_bool(payload.get("need"), default=False),
+        "tool_families": families,
+        "confidence": round(_clamp_float(payload.get("confidence"), default=0.0), 4),
+        "reason": compact_text(str(payload.get("reason", "") or ""), 180),
+    }
 
 
 def parse_stage124_fast_packet(text: str) -> dict[str, Any]:
@@ -160,6 +219,8 @@ def parse_stage124_fast_packet(text: str) -> dict[str, Any]:
         "shallow_reply": shallow_reply,
         "speak_now": _coerce_bool(payload.get("speak_now"), default=bool(shallow_reply)),
         "continue_until": compact_text(str(payload.get("continue_until", "") or "external answer is sufficient"), 200),
+        "user_directives": _normalize_user_directives(payload.get("user_directives", [])),
+        "tool_intent": _normalize_tool_intent(payload.get("tool_intent", {})),
     }
 
 
@@ -194,6 +255,8 @@ def append_stage124_deep_packet_context(prompt: str, fast_packet: dict[str, Any]
         f"deep_packet_needed={bool(fast_packet.get('deep_packet_needed', False))}",
         f"shallow_reply={compact_text(str(fast_packet.get('shallow_reply', '') or ''), 300)}",
         f"continue_until={compact_text(str(fast_packet.get('continue_until', '') or ''), 200)}",
+        f"user_directives={json.dumps(fast_packet.get('user_directives', []), ensure_ascii=False, sort_keys=True)}",
+        f"tool_intent={json.dumps(fast_packet.get('tool_intent', {}), ensure_ascii=False, sort_keys=True)}",
         "Use this as triage metadata only; do not expose raw hidden reasoning.",
         "Commit external_speech when the answer is sufficient.",
     ]

@@ -8,6 +8,10 @@ Stage149 adds a deterministic user-directive kernel. Holo now promotes old and c
 
 This directly targets the observed defect where Holo ignored repeated "不要用 emoji" corrections after a few turns and drifted into roleplay-like language.
 
+Hotfix note: Chinese phrasing such as "请避免使用表情图标" is also treated as a no-emoji hard directive. The prompt now states that user directives override persona, affect style, stock metaphors, and fictional-character imitation.
+
+Semantic-intent note: Stage149 now also consumes Stage124 fast-packet `user_directives`. This makes the first internal provider packet responsible for judging whether the user's message is a durable directive, current-turn constraint, ordinary chat, memory request, or tool/evidence request. Deterministic phrase matching remains a safety net, not the primary long-term strategy.
+
 ## Files Changed
 
 - Added `holo_host/stage149_user_directives.py`
@@ -31,6 +35,8 @@ holo.stage149.user_directives.v1
 `reply_api.py` queries existing thread archive rows through the memory/RAG interface, combines them with recent history and current input, and builds `stage149_user_directives` before processor generation.
 
 `processors.render_chat_prompt()` renders the report into `User Directive State`.
+
+`stage124_fast_deep_thought_loop.py` asks the first fast packet to return `user_directives` and `tool_intent`. `processors.py` merges high-confidence fast-packet directives into `stage149_user_directives` before the deep prompt and final visible repair.
 
 `reply_api.py` applies visible repair after:
 
@@ -79,7 +85,7 @@ hard_directive: do not roleplay; do not explain yourself as a character imitatio
 Visible repair:
 
 ```text
-作为赫萝角色扮演，我记住了 😏
+作为虚构角色角色扮演，我记住了 😏
 ```
 
 becomes a non-emoji, non-roleplay visible reply.
@@ -93,6 +99,7 @@ becomes a non-emoji, non-roleplay visible reply.
 - No transport authority widening
 - No second brain loop
 - No private persona-file mutation
+- No direct provider path outside the existing Stage124 processor-fabric fast packet
 
 ## Test Results
 
@@ -108,6 +115,18 @@ Result:
 7 passed in 1.07s
 ```
 
+Executed after the Chinese "避免使用表情图标" hotfix:
+
+```powershell
+python -m pytest tests\test_stage149_user_directives.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage149-hotfix
+```
+
+Result:
+
+```text
+8 passed in 0.64s
+```
+
 Additional regression results should be appended after the broader verification run.
 
 Executed:
@@ -120,6 +139,42 @@ Result:
 
 ```text
 103 passed in 51.54s
+```
+
+Executed after the hotfix:
+
+```powershell
+python -m pytest tests\test_stage149_user_directives.py tests\test_stage148_react_agent_loop.py tests\test_stage135_i_state_topology.py tests\test_holo_host.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage149-hotfix-runtime
+```
+
+Result:
+
+```text
+104 passed in 33.97s
+```
+
+Executed after the semantic fast-packet directive path:
+
+```powershell
+python -m pytest tests\test_stage124_fast_deep_thought_loop.py tests\test_stage149_user_directives.py tests\test_stage132_progressive_conscious_stream.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage149-semantic
+```
+
+Result:
+
+```text
+22 passed in 1.35s
+```
+
+Executed:
+
+```powershell
+python -m pytest tests\test_stage149_user_directives.py tests\test_stage124_fast_deep_thought_loop.py tests\test_stage148_react_agent_loop.py tests\test_stage135_i_state_topology.py tests\test_holo_host.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage149-semantic-runtime
+```
+
+Result:
+
+```text
+111 passed in 29.95s
 ```
 
 Executed:

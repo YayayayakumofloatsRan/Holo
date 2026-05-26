@@ -10,8 +10,26 @@ STAGE149_SCHEMA = "holo.stage149.user_directives.v1"
 EMOJI_RE = re.compile(r"[\U0001F1E6-\U0001FAFF\u2600-\u27BF\ufe0f]+")
 ASCII_EMOTICON_RE = re.compile(r"(?<!\w)(?:[:;=8xX]-?[)(DPp/\\|]|[)(]-?[:;=8xX])")
 
-NO_EMOJI_OBJECT_HINTS = ("emoji", "emoticon", "表情", "表情符号")
-NO_EMOJI_NEGATION_HINTS = ("不要", "不再", "别", "别再", "少", "减少", "收住", "禁止", "avoid", "do not", "don't", "less", "fewer")
+NO_EMOJI_OBJECT_HINTS = ("emoji", "emoticon", "表情", "表情符号", "表情图标")
+NO_EMOJI_NEGATION_HINTS = (
+    "不要",
+    "不再",
+    "别",
+    "别再",
+    "少",
+    "减少",
+    "收住",
+    "禁止",
+    "避免",
+    "不用",
+    "不使用",
+    "停止使用",
+    "avoid",
+    "do not",
+    "don't",
+    "less",
+    "fewer",
+)
 ROLEPLAY_HINTS = ("role play", "roleplay", "role-play", "角色扮演", "扮演", "cosplay", "cos")
 ROLEPLAY_NEGATION_HINTS = ("不要", "不再", "别", "别再", "不是", "禁止", "avoid", "do not", "don't", "not")
 
@@ -93,6 +111,32 @@ def _directive(directive_type: str, summary: str, row: dict[str, Any], *, priori
     }
 
 
+def _semantic_directive(
+    directive_type: str,
+    summary: str,
+    *,
+    source_id: str,
+    confidence: float,
+    hard: bool,
+) -> dict[str, Any]:
+    priority = 1.0 if hard else 0.74
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+    confidence_value = max(0.0, min(1.0, confidence_value))
+    return {
+        "directive_id": f"{directive_type}:{stable_digest(summary, source_id)}",
+        "directive_type": directive_type,
+        "summary": _compact(summary, 180),
+        "source_family": "stage124_semantic_intent",
+        "source_ids": [source_id],
+        "priority": round(max(0.0, min(1.0, priority)), 4),
+        "confidence": round(confidence_value, 4),
+        "hard": bool(hard),
+    }
+
+
 def build_stage149_user_directives(
     *,
     user_text: str,
@@ -142,6 +186,62 @@ def build_stage149_user_directives(
     }
 
 
+def merge_stage149_semantic_directives(
+    report: dict[str, Any] | None,
+    fast_packet: dict[str, Any] | None,
+    *,
+    min_confidence: float = 0.68,
+) -> dict[str, Any]:
+    base = dict(report or {})
+    if not base:
+        return base
+    directives_by_type: dict[str, dict[str, Any]] = {}
+    for item in list(base.get("directives", []) or []):
+        if isinstance(item, dict) and str(item.get("directive_type", "") or "").strip():
+            directives_by_type[str(item.get("directive_type", "") or "").strip()] = dict(item)
+    packet = dict(fast_packet or {})
+    source_id = "stage124:" + stable_digest(packet.get("intent", ""), packet.get("scene", ""), packet.get("continue_until", ""))
+    for raw in list(packet.get("user_directives", []) or [])[:8]:
+        if not isinstance(raw, dict):
+            continue
+        directive_type = str(raw.get("directive_type", "") or "").strip()
+        if directive_type not in {"visible_no_emoji", "identity_not_roleplay"}:
+            continue
+        try:
+            confidence = float(raw.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence < min_confidence:
+            continue
+        hard = bool(raw.get("hard", False)) or str(raw.get("scope", "") or "").strip() in {"long_lived", "persistent", "global"}
+        if directive_type in {"visible_no_emoji", "identity_not_roleplay"}:
+            hard = True
+        summary = str(raw.get("summary", "") or "")
+        if not summary:
+            if directive_type == "visible_no_emoji":
+                summary = "visible speech must not contain emoji or emoticons unless the user explicitly reverses this preference"
+            elif directive_type == "identity_not_roleplay":
+                summary = "Holo should speak as the local subject runtime, not as roleplay or fictional-character imitation"
+        existing = directives_by_type.get(directive_type)
+        candidate = _semantic_directive(
+            directive_type,
+            summary,
+            source_id=source_id,
+            confidence=confidence,
+            hard=hard,
+        )
+        if not existing or float(candidate.get("confidence", 0.0) or 0.0) >= float(existing.get("confidence", 0.0) or 0.0):
+            directives_by_type[directive_type] = candidate
+    directives = list(directives_by_type.values())
+    base["directives"] = directives
+    base["hard_directive_count"] = sum(1 for item in directives if bool(item.get("hard", False)))
+    base["status"] = "active" if directives else str(base.get("status", "") or "base_only")
+    if packet.get("user_directives"):
+        base["semantic_intent_source"] = source_id
+        base["semantic_intent_directive_count"] = len(list(packet.get("user_directives", []) or []))
+    return base
+
+
 def has_directive(report: dict[str, Any] | None, directive_type: str) -> bool:
     if not isinstance(report, dict):
         return False
@@ -153,7 +253,8 @@ def stage149_prompt_lines(report: dict[str, Any] | None) -> list[str]:
         return []
     lines = [
         "visible_identity_mode=subject_runtime_not_roleplay",
-        "core_identity: speak as Holo's local subject runtime, not as a fictional-character roleplay.",
+        "core_identity: speak as Holo's local subject runtime, not as a fictional-character roleplay or persona costume.",
+        "core_identity: user directives override persona, affect style, stock metaphors, and fictional-character imitation.",
     ]
     for item in list(report.get("directives", []))[:6]:
         if not isinstance(item, dict):
@@ -181,8 +282,7 @@ def apply_stage149_visible_directives(text: str, report: dict[str, Any] | None) 
         repaired = re.sub(r"[ \t]{2,}", " ", repaired)
     if report:
         roleplay_patterns = (
-            r"作为\s*赫萝\s*角色扮演[，,、\s]*",
-            r"作为\s*赫萝[，,、\s]*",
+            r"作为\s*[^，,、\s]{1,12}\s*角色扮演[，,、\s]*",
             r"作为\s*一个?\s*角色扮演[，,、\s]*",
             r"我(?:会|是在)?\s*角色扮演[，,、\s]*",
             r"\brole\s*-?\s*play(?:ing)?\b[:,，、\s]*",

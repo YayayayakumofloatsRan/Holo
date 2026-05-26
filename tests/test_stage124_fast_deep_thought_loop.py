@@ -120,17 +120,24 @@ def test_stage124_fast_packet_prompt_requires_intent_scene_and_optional_shallow_
     assert "Stage124 Fast Packet" in prompt
     assert "deep_packet_needed" in prompt
     assert "shallow_reply" in prompt
+    assert "user_directives" in prompt
+    assert "tool_intent" in prompt
     assert "external_speech" in prompt
 
 
 def test_stage124_fast_packet_parser_handles_provider_json() -> None:
     parsed = parse_stage124_fast_packet(
         '{"intent":"repair","scene":"single brain","deep_packet_needed":true,'
-        '"shallow_reply":"I will check it.","speak_now":true}'
+        '"shallow_reply":"I will check it.","speak_now":true,'
+        '"user_directives":[{"directive_type":"visible_no_emoji","summary":"avoid icons","scope":"long_lived","confidence":0.91,"hard":true}],'
+        '"tool_intent":{"need":true,"tool_families":["memory_recall"],"confidence":0.84,"reason":"memory query"}}'
     )
 
     assert parsed["deep_packet_needed"] is True
     assert parsed["shallow_reply"] == "I will check it."
+    assert parsed["user_directives"][0]["directive_type"] == "visible_no_emoji"
+    assert parsed["tool_intent"]["need"] is True
+    assert parsed["tool_intent"]["tool_families"] == ["memory_recall"]
     assert parsed["intent"] == "repair"
 
 

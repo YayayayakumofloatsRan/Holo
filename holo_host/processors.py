@@ -36,7 +36,7 @@ from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
 from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import stage148_prompt_lines
-from .stage149_user_directives import stage149_prompt_lines
+from .stage149_user_directives import merge_stage149_semantic_directives, stage149_prompt_lines
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1707,6 +1707,14 @@ class CodexCliProcessor:
         )
         fast_packet_ms = int((time.perf_counter() - fast_packet_started_at) * 1000)
         fast_packet = parse_stage124_fast_packet(getattr(fast_result, "reply_text", ""))
+        packet_after_fast = dict(context.mind_packet or context.sidecar)
+        if isinstance(packet_after_fast.get("stage149_user_directives", {}), dict):
+            packet_after_fast["stage149_user_directives"] = merge_stage149_semantic_directives(
+                dict(packet_after_fast.get("stage149_user_directives", {})),
+                fast_packet,
+            )
+            context.mind_packet = packet_after_fast
+            context.sidecar = packet_after_fast
         fast_packet_metadata = dict(getattr(fast_result, "metadata", {}) or {})
         deep_session_id = str(getattr(fast_result, "session_id", "") or session_id)
         fast_packet_error = ""
