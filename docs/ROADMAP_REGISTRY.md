@@ -111,6 +111,11 @@ Stage146: unified biomimetic replay and benchmark bundle
 - Exports `.html`, `.json`, and `.jsonl` artifacts that show packet timelines, A'/A'' gating, tool/memory observations, memory alignment, context slots, prediction error, reaction-kernel deltas, and stop reasons.
 - Adds a deterministic benchmark bundle comparing single-call, simple RAG, fixed two-bubble, ungated multi-packet, and full RK-CSM stack conditions without provider calls, memory writes, tool execution, transport changes, policy mutation, or a second loop.
 
+Stage147: replay-driven calibration
+- Implemented deterministic shadow calibration over Stage146 replay rows.
+- Evaluates whether Stage144 `skip`, `memory_first`, and `tool_first` recommendations are supported by later or fixture outcomes, and whether Stage145 reaction-kernel delta candidates have replay support or counterexamples.
+- Reports shadow-only promotion candidates with support/counterexample counts and confidence while preserving the no-provider, no-tool, no-memory-write, no-policy-apply, no-WeChat, no-transport-widening boundary.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

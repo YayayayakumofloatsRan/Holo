@@ -46,6 +46,7 @@ from .stage133_core_problem_research_loop import write_stage133_research_artifac
 from .stage135_i_state_topology import write_stage135_i_state_topology_artifacts
 from .stage146_benchmark_bundle import run_biomimetic_benchmark
 from .stage146_biomimetic_replay import export_biomimetic_replay
+from .stage147_replay_calibration import evaluate_replay_calibration
 from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 
@@ -9271,6 +9272,24 @@ def command_run_biomimetic_benchmark(
     return 0
 
 
+def command_evaluate_replay_calibration(
+    config_path: str | None,
+    *,
+    replay_json: str | None,
+    output: str,
+    dry_run: bool,
+) -> int:
+    repo_root = Path.cwd() if dry_run else load_config(config_path=config_path).runtime.repo_root
+    report = evaluate_replay_calibration(
+        replay_json=replay_json,
+        output=output,
+        dry_run=dry_run,
+        repo_root=repo_root,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /status                show compact brain status
@@ -10267,6 +10286,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     biomimetic_benchmark_parser.add_argument("--output", required=True)
     biomimetic_benchmark_parser.add_argument("--dry-run", action="store_true")
+    replay_calibration_parser = subparsers.add_parser(
+        "evaluate-replay-calibration",
+        help="Write the Stage147 replay-driven shadow calibration report",
+    )
+    replay_calibration_parser.add_argument("--replay-json", default=None)
+    replay_calibration_parser.add_argument("--output", required=True)
+    replay_calibration_parser.add_argument("--dry-run", action="store_true")
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -11279,6 +11305,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run-biomimetic-benchmark":
         return command_run_biomimetic_benchmark(
             args.config,
+            output=args.output,
+            dry_run=args.dry_run,
+        )
+    if args.command == "evaluate-replay-calibration":
+        return command_evaluate_replay_calibration(
+            args.config,
+            replay_json=args.replay_json,
             output=args.output,
             dry_run=args.dry_run,
         )

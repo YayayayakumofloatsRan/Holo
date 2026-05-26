@@ -74,6 +74,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 69. `docs/ENGINEERING_HANDOFF_STAGE145.md`
 70. `docs/STAGE146_BIOMIMETIC_REPLAY_BENCHMARK.md`
 71. `docs/ENGINEERING_HANDOFF_STAGE146.md`
+72. `docs/STAGE147_REPLAY_DRIVEN_CALIBRATION.md`
+73. `docs/ENGINEERING_HANDOFF_STAGE147.md`
 
 ## What This Document Must Cover
 - current live state
@@ -88,9 +90,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage146-biomimetic-replay-benchmark`.
+- The current milestone tag is `stage147-replay-driven-calibration`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage146 unified biomimetic replay and benchmark export: after Stage139-145 produce per-turn ledgers and gates, Stage146 derives multi-turn replay rows and deterministic benchmark bundles without provider calls, tool execution, memory writes, transport changes, or policy mutation.
+- Current focus is Stage147 replay-driven calibration: after Stage146 exports multi-turn replay rows, Stage147 evaluates whether Stage144 packet-policy recommendations and Stage145 reaction-kernel delta candidates are supported by replay outcomes, without applying live policy, calling providers, executing tools, writing memory, starting WeChat, or changing transport authority.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
