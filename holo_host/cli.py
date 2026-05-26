@@ -51,6 +51,7 @@ from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
 from .engineering_action_fabric import evaluate_engineering_claim_grounding
+from .project_state_graph import ProjectStateGraph, render_project_state_cli
 from .engineering_workspace_tools import (
     apply_patch as apply_workspace_patch,
     file_read as engineering_file_read,
@@ -9473,6 +9474,38 @@ def _close_chat_service(service: HoloReplyService | None) -> None:
         service.memory.graph.close()
 
 
+def command_project_state(
+    config_path: str | None,
+    *,
+    project: str,
+    summary: bool,
+    open_loops: bool,
+    next_actions: bool,
+    json_output: bool,
+) -> int:
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    try:
+        graph = ProjectStateGraph(store)
+        graph.ensure_schema()
+        if open_loops:
+            report = graph.get_open_loops(project)
+            mode = "open_loops"
+        elif next_actions:
+            report = graph.get_next_actions(project)
+            mode = "next_actions"
+        else:
+            report = graph.get_project_state(project)
+            mode = "summary"
+        if json_output:
+            print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+        else:
+            print(render_project_state_cli(report, mode=mode))
+        return 0
+    finally:
+        store.close()
+
+
 def command_chat(
     config_path: str | None,
     *,
@@ -10464,6 +10497,12 @@ def main(argv: list[str] | None = None) -> int:
     replay_calibration_parser.add_argument("--replay-json", default=None)
     replay_calibration_parser.add_argument("--output", required=True)
     replay_calibration_parser.add_argument("--dry-run", action="store_true")
+    project_state_parser = subparsers.add_parser("project-state", help="Inspect the Stage155 project state graph")
+    project_state_parser.add_argument("--project", required=True)
+    project_state_parser.add_argument("--summary", action="store_true")
+    project_state_parser.add_argument("--open-loops", action="store_true")
+    project_state_parser.add_argument("--next-actions", action="store_true")
+    project_state_parser.add_argument("--json", action="store_true")
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -11486,6 +11525,15 @@ def main(argv: list[str] | None = None) -> int:
             replay_json=args.replay_json,
             output=args.output,
             dry_run=args.dry_run,
+        )
+    if args.command == "project-state":
+        return command_project_state(
+            args.config,
+            project=args.project,
+            summary=bool(args.summary),
+            open_loops=bool(args.open_loops),
+            next_actions=bool(args.next_actions),
+            json_output=bool(args.json),
         )
     if args.command == "reply-probe":
         return command_reply_probe(

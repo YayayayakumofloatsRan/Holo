@@ -1929,6 +1929,8 @@ class CodexCliProcessor:
                 "stage152_native_tool_names": list(deepseek_native_tool_names()),
                 "stage154_engineering_action_fabric": True,
                 "stage154_engineering_tool_names": ["workspace_search", "file_read", "apply_patch", "test_run", "git_status", "git_diff"],
+                "stage155_project_state_graph": True,
+                "project_state_graph": dict(context.mind_packet.get("project_state_graph", {})),
                 "tool_requests": agent_tool_requests,
                 "tool_permission_grants": list(context.capability_context.get("tool_permission_grants", []) or []),
                 "approved_tool_permissions": list(context.capability_context.get("approved_tool_permissions", []) or []),
@@ -2075,6 +2077,7 @@ class CodexCliProcessor:
             stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
             stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
             engineering_action_ledger=engineering_action_ledger,
+            project_state_graph=dict(context.mind_packet.get("project_state_graph", {})),
         )
         return ReplyPlan(
             text=joined,
@@ -2106,6 +2109,7 @@ class CodexCliProcessor:
                 "time_observation": dict(result_metadata.get("time_observation", {})) if isinstance(result_metadata.get("time_observation", {}), dict) else {},
                 "tool_observation_ledger": tool_observation_ledger,
                 "engineering_action_ledger": engineering_action_ledger,
+                "project_state_graph": dict(context.mind_packet.get("project_state_graph", {})),
                 "tool_failure_reentry": bool(result_metadata.get("tool_failure_reentry", False)),
                 "memory_observation_ledger": memory_observation_ledger,
                 "prompt_excerpt": compact_text(prompt, 240),

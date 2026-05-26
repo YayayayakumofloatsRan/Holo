@@ -89,6 +89,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 84. `docs/ENGINEERING_HANDOFF_STAGE153.md`
 85. `docs/STAGE154_ENGINEERING_ACTION_FABRIC.md`
 86. `docs/ENGINEERING_HANDOFF_STAGE154.md`
+87. `docs/STAGE155_PROJECT_STATE_GRAPH.md`
+88. `docs/ENGINEERING_HANDOFF_STAGE155.md`
 
 ## What This Document Must Cover
 - current live state
@@ -103,9 +105,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage154-engineering-action-fabric`.
+- The current milestone tag is `stage155-project-state-graph`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage154 engineering action fabric: Holo now records workspace-scoped search/read/patch/test/status/diff actions as auditable `engineering_action_ledger` rows, renders `[eng:*]` events in CLI, and repairs visible engineering claims that lack matching host evidence. Raw provider `reasoning_content` stays internal.
+- Current focus is Stage155 project state graph: Holo now stores typed project continuity nodes for goals, tasks, decisions, open questions, risks, artifacts, results, and next actions, feeds them into Stage150 context packets, exposes CLI inspection, and renders a Stage135 `project_state_graph` node. Stage154 engineering action ledgers remain the host evidence layer for repo work.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

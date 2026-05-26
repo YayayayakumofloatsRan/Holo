@@ -75,6 +75,7 @@ from .engineering_action_fabric import (
 from .stage135_i_state_topology import (
     attach_stage153_agent_event_stream_topology,
     attach_stage154_engineering_action_topology,
+    attach_stage155_project_state_topology,
     build_stage135_i_state_topology,
 )
 from .stage142_semantic_novelty_gate import apply_stage142_gate
@@ -84,6 +85,7 @@ from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import build_stage148_react_state
 from .stage149_user_directives import apply_stage149_visible_directives, build_stage149_user_directives
 from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
+from .project_state_graph import ProjectStateGraph, detect_project_state_updates
 from .stage151_live_tool_trace import (
     build_stage151_live_tool_trace,
     evaluate_network_grounding,
@@ -9340,6 +9342,24 @@ class HoloReplyService:
             capability_context=capability_context,
         )
         sidecar["stage148_react_state"] = stage148_react_state
+        project_name = str(
+            (turn.metadata or {}).get("project")
+            or (turn.metadata or {}).get("project_name")
+            or payload.get("project")
+            or sidecar.get("project")
+            or sidecar.get("active_project")
+            or "Holo"
+        ).strip() or "Holo"
+        try:
+            project_graph_store = ProjectStateGraph(self.store)
+            project_state_graph = project_graph_store.get_project_state(project_name)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug("stage155 project state read skipped: %s", exc)
+            project_state_graph = {}
+        if project_state_graph:
+            sidecar["project_state_graph"] = project_state_graph
+            capability_context = dict(capability_context)
+            capability_context["project_state_graph"] = project_state_graph
         stage150_context_memory_fabric = build_stage150_context_memory_fabric(
             user_text=turn.text,
             channel=turn.channel,
@@ -9639,6 +9659,37 @@ class HoloReplyService:
             " ".join(bubble.text for bubble in bubbles).strip(),
         )
         final_reply = apply_stage149_visible_directives(final_reply, stage149_user_directives) or "收到。"
+        project_state_update = detect_project_state_updates(
+            project=project_name,
+            user_text=turn.text,
+            reply_text=final_reply,
+            metadata={"channel": turn.channel, "thread_key": incoming.thread_key, "chat_name": turn.chat_name},
+            source_ref=str(incoming.message_id or turn.source_ref or ""),
+        )
+        if list(project_state_update.get("nodes", []) or []):
+            try:
+                project_state_update = ProjectStateGraph(self.store).apply_update_report(project_state_update)
+                project_state_graph = dict(project_state_update.get("project_state_graph", {}) or {})
+            except Exception as exc:  # noqa: BLE001
+                self.logger.debug("stage155 project state update skipped: %s", exc)
+                project_state_update = {
+                    **dict(project_state_update),
+                    "status": "error",
+                    "error": str(exc),
+                    "applied_count": 0,
+                }
+        else:
+            project_state_update = {
+                **dict(project_state_update),
+                "applied_count": 0,
+                "project_state_graph": project_state_graph,
+            }
+        if project_state_graph:
+            sidecar["project_state_graph"] = project_state_graph
+            capability_context = dict(capability_context)
+            capability_context["project_state_graph"] = project_state_graph
+        reply_debug["project_state_update"] = project_state_update
+        reply_debug["project_state_graph"] = project_state_graph
         engineering_claim_grounding = evaluate_engineering_claim_grounding(final_reply, engineering_action_ledger)
         reply_debug["engineering_claim_grounding"] = engineering_claim_grounding
         engineering_claim_grounding_status = str(engineering_claim_grounding.get("status", "") or "")
@@ -9812,6 +9863,8 @@ class HoloReplyService:
                 "tool_grounding": tool_grounding,
                 "engineering_action_ledger": engineering_action_ledger,
                 "engineering_claim_grounding": engineering_claim_grounding,
+                "project_state_graph": project_state_graph,
+                "project_state_update": project_state_update,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
             },
@@ -9837,6 +9890,10 @@ class HoloReplyService:
             isinstance(stage135_i_state_topology.get("metrics", {}), dict)
             and int(stage135_i_state_topology.get("metrics", {}).get("agent_event_stream_node_count", 0) or 0) > 0
         )
+        topology_has_stage155 = bool(
+            isinstance(stage135_i_state_topology.get("metrics", {}), dict)
+            and int(stage135_i_state_topology.get("metrics", {}).get("project_state_graph_node_count", 0) or 0) > 0
+        )
         if topology_present and not topology_has_stage153 and stage153_agent_event_stream:
             stage135_i_state_topology = attach_stage153_agent_event_stream_topology(
                 stage135_i_state_topology,
@@ -9847,6 +9904,11 @@ class HoloReplyService:
                 stage135_i_state_topology,
                 engineering_action_ledger,
             )
+        if topology_present and not topology_has_stage155 and project_state_graph:
+            stage135_i_state_topology = attach_stage155_project_state_topology(
+                stage135_i_state_topology,
+                project_state_graph,
+            )
         elif not topology_present and (
             memory_alignment_claim_count > 0
             or stage142_candidate_count > 1
@@ -9855,6 +9917,7 @@ class HoloReplyService:
             or stage145_outcome_appraisal
             or capability_context.get("stage151_tool_decision")
             or stage153_agent_event_stream
+            or project_state_graph
         ):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
@@ -9876,6 +9939,7 @@ class HoloReplyService:
                 stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
                 stage153_agent_event_stream=stage153_agent_event_stream,
                 engineering_action_ledger=engineering_action_ledger,
+                project_state_graph=project_state_graph,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9966,6 +10030,8 @@ class HoloReplyService:
                 "engineering_claim_grounding": engineering_claim_grounding,
                 "engineering_claim_grounding_status": engineering_claim_grounding_status,
                 "engineering_claim_unverified_count": engineering_claim_unverified_count,
+                "project_state_graph": project_state_graph,
+                "project_state_update": project_state_update,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -10067,6 +10133,8 @@ class HoloReplyService:
             "engineering_claim_grounding": engineering_claim_grounding,
             "engineering_claim_grounding_status": engineering_claim_grounding_status,
             "engineering_claim_unverified_count": engineering_claim_unverified_count,
+            "project_state_graph": project_state_graph,
+            "project_state_update": project_state_update,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -10229,6 +10297,8 @@ class HoloReplyService:
                 "engineering_claim_grounding": engineering_claim_grounding,
                 "engineering_claim_grounding_status": engineering_claim_grounding_status,
                 "engineering_claim_unverified_count": engineering_claim_unverified_count,
+                "project_state_graph": project_state_graph,
+                "project_state_update": project_state_update,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

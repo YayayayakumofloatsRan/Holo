@@ -203,6 +203,7 @@ def build_stage135_i_state_topology(
     stage152_deepseek_tool_loop: dict[str, Any] | None = None,
     stage153_agent_event_stream: dict[str, Any] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
+    project_state_graph: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -235,6 +236,7 @@ def build_stage135_i_state_topology(
     native_tool_loop = _dict(stage152_deepseek_tool_loop or packet.get("stage152_deepseek_tool_loop", {}))
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
+    project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
     user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
@@ -481,6 +483,29 @@ def build_stage135_i_state_topology(
             edges.append(_edge("user_directive_kernel", "context_memory_fabric", relation="overrides_persona_memory", weight=0.58, summary="user directives outrank persona and style memory in the context packet"))
         edges.append(_edge("context_memory_fabric", "fast_packet", relation="frames_provider_packet", weight=0.62, summary="structured context is rendered before provider speech"))
         edges.append(_edge("context_memory_fabric", "memory_delta", relation="separates_state_from_transcript", weight=0.5, summary="background compact is internal and raw chat is not treated as reusable memory"))
+
+    if project_state:
+        project_name = str(project_state.get("project", "") or _dict(project_state.get("active_project", {})).get("title", "") or "project")
+        active_tasks = _list_dicts(project_state.get("active_tasks", []))
+        open_questions = _list_dicts(project_state.get("open_questions", []))
+        next_actions = _list_dicts(project_state.get("next_actions", []))
+        blocked_items = _list_dicts(project_state.get("blocked_items", []))
+        nodes.append(
+            _node(
+                "project_state_graph",
+                "project state graph",
+                channel="project_state_graph",
+                kind="project_memory",
+                x=0.28,
+                y=0.86,
+                weight=0.7 if (active_tasks or open_questions or next_actions) else 0.38,
+                summary=f"project={project_name}; tasks={len(active_tasks)}; open={len(open_questions)}; next={len(next_actions)}; blocked={len(blocked_items)}",
+            )
+        )
+        source = "context_memory_fabric" if context_memory_fabric else "holo_self"
+        edges.append(_edge(source, "project_state_graph", relation="feeds_project_continuity", weight=0.58, summary="project goals, decisions, and open loops are kept outside raw chat history"))
+        edges.append(_edge("project_state_graph", "fast_packet", relation="frames_project_context", weight=0.46, summary="active tasks and next actions enter the provider context packet"))
+        edges.append(_edge("project_state_graph", "memory_delta", relation="separates_project_state_from_chat_log", weight=0.42, summary="durable project state is queryable independently from transcript recall"))
 
     if tool_decision:
         selected_actions = _list_dicts(tool_decision.get("selected_actions", []))
@@ -762,6 +787,10 @@ def build_stage135_i_state_topology(
             "engineering_action_fabric_node_count": sum(1 for node in nodes if node["channel"] == "engineering_action_fabric"),
             "engineering_action_count": len(engineering_ledger),
             "engineering_action_ok_count": sum(1 for row in engineering_ledger if str(row.get("status", "") or "") == "ok"),
+            "project_state_graph_node_count": sum(1 for node in nodes if node["channel"] == "project_state_graph"),
+            "project_state_graph_project": str(project_state.get("project", "") or "") if project_state else "",
+            "project_state_graph_open_loop_count": int(project_state.get("open_loop_count", 0) or len(_list_dicts(project_state.get("open_questions", []))) + len(_list_dicts(project_state.get("blocked_items", [])))) if project_state else 0,
+            "project_state_graph_next_action_count": int(project_state.get("next_action_count", 0) or len(_list_dicts(project_state.get("next_actions", [])))) if project_state else 0,
             "user_directive_node_count": sum(1 for node in nodes if node["channel"] == "user_directive"),
             "user_directive_count": int(user_directives.get("hard_directive_count", 0) or 0) if user_directives else 0,
             "user_directive_status": str(user_directives.get("status", "") or "") if user_directives else "",
@@ -854,6 +883,52 @@ def attach_stage154_engineering_action_topology(
     metrics["engineering_action_fabric_node_count"] = 1
     metrics["engineering_action_count"] = len(ledger)
     metrics["engineering_action_ok_count"] = ok_count
+    payload["metrics"] = metrics
+    return payload
+
+
+def attach_stage155_project_state_topology(
+    topology: dict[str, Any] | None,
+    project_state_graph: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    project_state = _dict(project_state_graph)
+    if not payload.get("schema") or not project_state:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if any(isinstance(node, dict) and node.get("id") == "project_state_graph" for node in nodes):
+        return payload
+    active_tasks = _list_dicts(project_state.get("active_tasks", []))
+    open_questions = _list_dicts(project_state.get("open_questions", []))
+    next_actions = _list_dicts(project_state.get("next_actions", []))
+    blocked_items = _list_dicts(project_state.get("blocked_items", []))
+    project_name = str(project_state.get("project", "") or _dict(project_state.get("active_project", {})).get("title", "") or "project")
+    nodes.append(
+        _node(
+            "project_state_graph",
+            "project state graph",
+            channel="project_state_graph",
+            kind="project_memory",
+            x=0.28,
+            y=0.86,
+            weight=0.7 if (active_tasks or open_questions or next_actions) else 0.38,
+            summary=f"project={project_name}; tasks={len(active_tasks)}; open={len(open_questions)}; next={len(next_actions)}; blocked={len(blocked_items)}",
+        )
+    )
+    node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+    source = "context_memory_fabric" if "context_memory_fabric" in node_ids else "holo_self"
+    edges.append(_edge(source, "project_state_graph", relation="feeds_project_continuity", weight=0.58, summary="project goals, decisions, and open loops are kept outside raw chat history"))
+    edges.append(_edge("project_state_graph", "fast_packet", relation="frames_project_context", weight=0.46, summary="active tasks and next actions enter the provider context packet"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["project_state_graph_node_count"] = 1
+    metrics["project_state_graph_project"] = project_name
+    metrics["project_state_graph_open_loop_count"] = int(project_state.get("open_loop_count", 0) or len(open_questions) + len(blocked_items))
+    metrics["project_state_graph_next_action_count"] = int(project_state.get("next_action_count", 0) or len(next_actions))
     payload["metrics"] = metrics
     return payload
 

@@ -152,6 +152,11 @@ Stage154: engineering action fabric
 - Every engineering action records an `engineering_action_ledger` row, and visible read/patch/test/diff claims are checked against the matching host evidence before delivery/archive.
 - CLI can render `[eng:search]`, `[eng:read]`, `[eng:patch]`, `[eng:test]`, `[eng:diff]`, and `[eng:handoff]`; Stage154 rejects destructive commands by default, does not add provider calls, does not write memory, does not start WeChat, and adds a Stage135 `engineering_action_fabric` topology node.
 
+Stage155: project state graph
+- Implemented local SQLite-backed `project_state_nodes` and `project_state_edges` for project continuity across goals, tasks, decisions, open questions, artifacts, sources, assumptions, risks, results, and next actions.
+- Stage150 working context now includes active project state, active tasks, open questions, latest decisions, next actions, and blocked items before provider generation.
+- Reply/archive metadata, CLI `project-state` inspection, and Stage135 topology expose `project_state_graph` without provider calls, memory writes, tool execution, WeChat starts, or transport authority changes.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

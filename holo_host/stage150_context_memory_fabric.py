@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .common import compact_text, stable_digest, utc_now
+from .project_state_graph import summarize_project_state_for_prompt
 
 STAGE150_SCHEMA = "holo.stage150.context_memory_fabric.v1"
 
@@ -412,6 +413,8 @@ def build_stage150_context_memory_fabric(
         tool_observation_ledger = capability.get("tool_observation_ledger")
     web_observation_ledger = capability.get("web_observation_ledger", packet.get("web_observation_ledger", debug.get("web_observation_ledger", [])))
     time_observation = capability.get("time_observation", packet.get("time_observation", debug.get("time_observation", {})))
+    project_state_graph = packet.get("project_state_graph", debug.get("project_state_graph", capability.get("project_state_graph", {})))
+    project_state = summarize_project_state_for_prompt(project_state_graph)
     stage148 = _dict(packet.get("stage148_react_state", debug.get("stage148_react_state", {})))
     stage149 = _dict(packet.get("stage149_user_directives", debug.get("stage149_user_directives", {})))
     current_request = str(user_text or "")
@@ -499,6 +502,12 @@ def build_stage150_context_memory_fabric(
             "time_observation": _dict(time_observation),
             "visual_observation": _dict(packet.get("visual_memory", packet.get("visual_ingest", {}))),
         },
+        "active_project": project_state.get("active_project", {}),
+        "active_tasks": list(project_state.get("active_tasks", []) or []),
+        "open_questions": list(project_state.get("open_questions", []) or []),
+        "latest_decisions": list(project_state.get("latest_decisions", []) or []),
+        "next_actions": list(project_state.get("next_actions", []) or []),
+        "blocked_items": list(project_state.get("blocked_items", []) or []),
         "open_loops": open_loops,
         "compact_background_summary": compact_background,
         "forbidden_visible_claims": list(discipline.get("forbidden_visible_claims", [])),
@@ -535,6 +544,12 @@ def stage150_prompt_lines(report: dict[str, Any] | None) -> list[str]:
     user_goal = _dict(packet.get("user_goal", {}))
     active_task = _dict(packet.get("active_task_state", {}))
     directive_state = _dict(packet.get("directive_state", {}))
+    active_project = _dict(packet.get("active_project", {}))
+    project_tasks = list(packet.get("active_tasks", []) or [])
+    project_questions = list(packet.get("open_questions", []) or [])
+    project_decisions = list(packet.get("latest_decisions", []) or [])
+    project_actions = list(packet.get("next_actions", []) or [])
+    blocked_items = list(packet.get("blocked_items", []) or [])
     compact = _dict(payload.get("background_compact", {}))
     evidence = list(packet.get("evidence_ledger_view", []) or [])
     open_loops = list(packet.get("open_loops", []) or [])
@@ -551,6 +566,21 @@ def stage150_prompt_lines(report: dict[str, Any] | None) -> list[str]:
     for slot in list(packet.get("reusable_state_slots", []) or [])[:6]:
         if isinstance(slot, dict):
             lines.append(f"slot:{slot.get('slot_type', 'state')}={_compact(slot.get('summary', ''), 140)}")
+    lines.extend(
+        [
+            "Project State",
+            f"active_project={_compact(active_project.get('title', ''), 120)}; active_tasks={len(project_tasks)}; open_questions={len(project_questions)}; next_actions={len(project_actions)}; blocked={len(blocked_items)}",
+        ]
+    )
+    for item in project_tasks[:3]:
+        if isinstance(item, dict):
+            lines.append(f"project_task:{item.get('status', '')}={_compact(item.get('title', ''), 140)}")
+    for item in project_decisions[:2]:
+        if isinstance(item, dict):
+            lines.append(f"project_decision={_compact(item.get('title', ''), 140)}")
+    for item in project_actions[:3]:
+        if isinstance(item, dict):
+            lines.append(f"project_next={_compact(item.get('title', ''), 140)}")
     lines.extend(["Evidence Ledger", f"evidence_count={len(evidence)}"])
     for item in evidence[:5]:
         if isinstance(item, dict):
