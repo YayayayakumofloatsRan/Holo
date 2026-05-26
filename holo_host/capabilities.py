@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from .common import compact_text
 from .config import HostConfig
 from .models import ToolRequest
+from .stage151_live_tool_trace import build_external_lookup_observation
 
 URL_RE = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
 LOOKUP_RESULT_RE = re.compile(
@@ -108,6 +109,7 @@ class CapabilityBroker:
         meta = dict(metadata or {})
         tool_requests: list[ToolRequest] = []
         tool_context_lines: list[str] = []
+        tool_observation_ledger: list[dict[str, Any]] = []
 
         if self.config.runtime.network_enabled and eager_network:
             previews = self._preview_urls(text)
@@ -133,15 +135,28 @@ class CapabilityBroker:
 
         if not previews and self._should_external_lookup(text, meta):
             query = self._normalize_lookup_query(text)
-            lookup = self._external_lookup(text) if eager_network else {"query": query, "results": [], "status": "planned"}
+            reason = f"turn requests external lookup for {query}"
+            if not self.config.runtime.network_enabled:
+                lookup = {"query": query, "results": [], "status": "rejected", "error": "network_disabled"}
+            elif eager_network:
+                lookup = self._external_lookup(text)
+            else:
+                lookup = {"query": query, "results": [], "status": "planned"}
+            tool_observation_ledger.append(
+                build_external_lookup_observation(
+                    lookup,
+                    network_enabled=bool(self.config.runtime.network_enabled),
+                    reason=reason,
+                )
+            )
             tool_requests.append(
                 ToolRequest(
                     name="external_lookup",
-                    reason=f"turn requests external lookup for {lookup.get('query', query)}",
+                    reason=reason,
                     payload=lookup,
                 )
             )
-            if eager_network:
+            if eager_network and self.config.runtime.network_enabled:
                 for item in lookup.get("results", [])[:2]:
                     line = f"external lookup: {lookup.get('query', query)}"
                     title = str(item.get("title", "") or "")
@@ -151,6 +166,8 @@ class CapabilityBroker:
                     if snippet:
                         line += f" | snippet: {snippet}"
                     tool_context_lines.append(line)
+            elif not self.config.runtime.network_enabled:
+                tool_context_lines.append(f"lookup rejected: network disabled for {query}")
             elif query:
                 tool_context_lines.append(f"lookup planned: {query}")
 
@@ -168,6 +185,7 @@ class CapabilityBroker:
         return {
             "tool_context_lines": tool_context_lines,
             "tool_requests": [request.to_dict() for request in tool_requests],
+            "tool_observation_ledger": tool_observation_ledger,
             "attachment_summaries": attachment_summaries,
             "tool_permission_grants": list(meta.get("tool_permission_grants", []) or [])
             if isinstance(meta.get("tool_permission_grants", []), list)

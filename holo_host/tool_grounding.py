@@ -59,10 +59,19 @@ def _compact(text: Any, limit: int = 240) -> str:
 
 
 def _tags_for_tool(tool: str, *, status: str) -> list[str]:
-    if str(status or "").lower() in {"rejected", "skipped", "denied"}:
+    if str(status or "").lower() in {"rejected", "skipped", "denied", "error", "failed", "unavailable", "planned", "empty"}:
         return []
     tags = TOOL_FAMILY_TAGS.get(str(tool or "").strip(), ())
     return sorted({str(tag) for tag in tags if str(tag).strip()})
+
+
+def _preserve_live_lookup_fields(row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    if str(row.get("tool", "") or "") != "external_lookup":
+        return row
+    for key in ("query", "results", "error", "source_urls", "fetched_at", "network_enabled", "reason"):
+        if key in item:
+            row[key] = item.get(key)
+    return row
 
 
 def _data_keys(data: Any) -> list[str]:
@@ -81,14 +90,17 @@ def normalize_tool_observation_ledger(tool_report: Any) -> list[dict[str, Any]]:
     if isinstance(tool_report, list):
         rows = [dict(item) for item in tool_report if isinstance(item, dict)]
         return [
-            {
-                "provider_call_id": str(item.get("provider_call_id", "") or ""),
-                "tool": str(item.get("tool", "") or ""),
-                "status": str(item.get("status", "") or ""),
-                "summary": _compact(item.get("summary", "")),
-                "data_keys": sorted(str(key) for key in list(item.get("data_keys", []) or [])),
-                "grounding_tags": sorted(str(tag) for tag in list(item.get("grounding_tags", []) or [])),
-            }
+            _preserve_live_lookup_fields(
+                {
+                    "provider_call_id": str(item.get("provider_call_id", "") or ""),
+                    "tool": str(item.get("tool", "") or ""),
+                    "status": str(item.get("status", "") or ""),
+                    "summary": _compact(item.get("summary", "")),
+                    "data_keys": sorted(str(key) for key in list(item.get("data_keys", []) or [])),
+                    "grounding_tags": sorted(str(tag) for tag in list(item.get("grounding_tags", []) or [])),
+                },
+                item,
+            )
             for item in rows
         ]
 
@@ -102,14 +114,17 @@ def normalize_tool_observation_ledger(tool_report: Any) -> list[dict[str, Any]]:
         status = str(item.get("status", "") or "ok")
         data = item.get("data", {})
         ledger.append(
-            {
-                "provider_call_id": str(item.get("provider_call_id", "") or ""),
-                "tool": tool,
-                "status": status,
-                "summary": _compact(item.get("summary", "")),
-                "data_keys": _data_keys(data),
-                "grounding_tags": _tags_for_tool(tool, status=status),
-            }
+            _preserve_live_lookup_fields(
+                {
+                    "provider_call_id": str(item.get("provider_call_id", "") or ""),
+                    "tool": tool,
+                    "status": status,
+                    "summary": _compact(item.get("summary", "")),
+                    "data_keys": _data_keys(data),
+                    "grounding_tags": _tags_for_tool(tool, status=status),
+                },
+                {**item, **(data if isinstance(data, dict) else {})},
+            )
         )
     for raw in list(report.get("skipped", []) or []):
         if not isinstance(raw, dict):

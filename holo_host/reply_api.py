@@ -74,6 +74,12 @@ from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import build_stage148_react_state
 from .stage149_user_directives import apply_stage149_visible_directives, build_stage149_user_directives
 from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
+from .stage151_live_tool_trace import (
+    build_stage151_live_tool_trace,
+    evaluate_network_grounding,
+    merge_tool_observation_ledgers,
+    repair_network_grounding,
+)
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9273,6 +9279,9 @@ class HoloReplyService:
         capability_started_at = time.perf_counter()
         capability_context = prebuilt_capability_context or self.capabilities.summarize_turn(turn.text, turn.metadata)
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
+        if isinstance(capability_context.get("tool_observation_ledger", []), list) and capability_context.get("tool_observation_ledger"):
+            sidecar = dict(sidecar)
+            sidecar["tool_observation_ledger"] = list(capability_context.get("tool_observation_ledger", []))
         stage149_archive_rows = _stage149_thread_archive_rows(
             self.memory,
             channel=turn.channel,
@@ -9388,7 +9397,19 @@ class HoloReplyService:
             tool_observation_ledger = normalize_tool_observation_ledger(
                 dict(reply_debug.get("agent_tool_loop", {})).get("tool_observation_ledger", [])
             )
+        tool_observation_ledger = merge_tool_observation_ledgers(
+            capability_context.get("tool_observation_ledger", []),
+            tool_observation_ledger,
+        )
         grounding_repaired = False
+        stage151_network_grounding = evaluate_network_grounding(repaired_text, tool_observation_ledger)
+        if bool(stage151_network_grounding.get("repair_required", False)):
+            repaired_text = normalize_external_speech_for_context(
+                turn_context,
+                repair_network_grounding(repaired_text, stage151_network_grounding, channel=turn.channel),
+            )
+            repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
+            grounding_repaired = True
         tool_grounding = evaluate_tool_grounding(repaired_text, tool_observation_ledger)
         if tool_grounding.get("missing_families") == ["memory"]:
             tool_grounding = {
@@ -9404,6 +9425,8 @@ class HoloReplyService:
             )
             repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
             grounding_repaired = True
+        stage151_network_grounding = evaluate_network_grounding(repaired_text, tool_observation_ledger)
+        reply_debug["stage151_network_grounding"] = stage151_network_grounding
         memory_observation_ledger = normalize_memory_observation_ledger(
             sidecar=sidecar,
             reply_debug=reply_debug,
@@ -9590,6 +9613,21 @@ class HoloReplyService:
         stage150_evidence_count = int(stage150_context_memory_fabric.get("evidence_count", 0) or 0)
         stage150_open_loop_count = int(stage150_context_memory_fabric.get("open_loop_count", 0) or 0)
         stage150_background_compact_internal = bool(stage150_context_memory_fabric.get("background_compact_internal_only", True))
+        stage151_live_tool_trace = build_stage151_live_tool_trace(
+            user_text=turn.text,
+            capability_context=capability_context,
+            reply_result={
+                "text": final_reply,
+                "tool_observation_ledger": tool_observation_ledger,
+                "tool_grounding": tool_grounding,
+                "stage151_network_grounding": stage151_network_grounding,
+            },
+            reply_debug=reply_debug,
+        )
+        reply_debug["stage151_live_tool_trace"] = stage151_live_tool_trace
+        stage151_network_grounding_status = str(stage151_network_grounding.get("status", "") or "")
+        stage151_network_grounding_claim_count = int(stage151_network_grounding.get("claim_count", 0) or 0)
+        stage151_external_lookup_ledger_count = int(stage151_network_grounding.get("external_lookup_ledger_count", 0) or 0)
         turn_context.mind_packet = sidecar
         turn_context.sidecar = sidecar
         stage148_react_loop = stage148_react_state.get("react_loop", {})
@@ -9683,6 +9721,11 @@ class HoloReplyService:
                 "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
                 "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
                 "stage150_background_compact_internal": stage150_background_compact_internal,
+                "stage151_network_grounding": stage151_network_grounding,
+                "stage151_network_grounding_status": stage151_network_grounding_status,
+                "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
+                "stage151_external_lookup_ledger_count": stage151_external_lookup_ledger_count,
+                "stage151_live_tool_trace": stage151_live_tool_trace,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9762,6 +9805,11 @@ class HoloReplyService:
             "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
             "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
             "stage150_background_compact_internal": stage150_background_compact_internal,
+            "stage151_network_grounding": stage151_network_grounding,
+            "stage151_network_grounding_status": stage151_network_grounding_status,
+            "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
+            "stage151_external_lookup_ledger_count": stage151_external_lookup_ledger_count,
+            "stage151_live_tool_trace": stage151_live_tool_trace,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9898,6 +9946,11 @@ class HoloReplyService:
                 "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
                 "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
                 "stage150_background_compact_internal": stage150_background_compact_internal,
+                "stage151_network_grounding": stage151_network_grounding,
+                "stage151_network_grounding_status": stage151_network_grounding_status,
+                "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
+                "stage151_external_lookup_ledger_count": stage151_external_lookup_ledger_count,
+                "stage151_live_tool_trace": stage151_live_tool_trace,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

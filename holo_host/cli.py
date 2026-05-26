@@ -47,6 +47,7 @@ from .stage135_i_state_topology import write_stage135_i_state_topology_artifacts
 from .stage146_benchmark_bundle import run_biomimetic_benchmark
 from .stage146_biomimetic_replay import export_biomimetic_replay
 from .stage147_replay_calibration import evaluate_replay_calibration
+from .stage151_live_tool_trace import format_stage151_live_trace
 from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 
@@ -9297,6 +9298,7 @@ CHAT_HELP = """Commands:
   /flow                  show live flow summary
   /ct                    show Stage131 thought-flow CT for this CLI thread
   /topology              show latest Stage135 I-state topology from the last reply
+  /trace on|off          show or hide Codex-like live tool trace after replies
   /mind <query>          inspect current mind packet for a query
   /recall <query>        trace hybrid recall for a query
   /activation            show activation state for this CLI thread
@@ -9446,11 +9448,13 @@ def command_chat(
     sender: str,
     once: str | None,
     json_output: bool,
+    trace_output: bool = False,
     no_local_fallback: bool,
     timeout: float,
 ) -> int:
     service: HoloReplyService | None = None
     show_json = bool(json_output)
+    show_trace = bool(trace_output)
     pending_tool_permission_grants: list[dict[str, Any]] = []
     last_reply_payload: dict[str, Any] = {}
 
@@ -9485,7 +9489,7 @@ def command_chat(
         return result, "local_process"
 
     def run_slash(command_line: str) -> bool:
-        nonlocal pending_tool_permission_grants, show_json, last_reply_payload
+        nonlocal pending_tool_permission_grants, show_json, show_trace, last_reply_payload
         command, _, rest = command_line.partition(" ")
         command = command.strip().lower()
         rest = rest.strip()
@@ -9503,6 +9507,16 @@ def command_chat(
                 print("json=off")
             else:
                 print("usage: /json on|off")
+            return True
+        if command == "/trace":
+            if rest.lower() in {"on", "1", "true", "yes"}:
+                show_trace = True
+                print("trace=on")
+            elif rest.lower() in {"off", "0", "false", "no"}:
+                show_trace = False
+                print("trace=off")
+            else:
+                print("usage: /trace on|off")
             return True
         if command == "/status":
             payload, transport = _brain_status_payload(config_path)
@@ -9622,6 +9636,8 @@ def command_chat(
             payload, transport = send_turn(text)
             last_reply_payload = payload
             print(_chat_response_text(payload))
+            if show_trace:
+                print(format_stage151_live_trace(payload))
             if show_json:
                 print(f"\n[{transport}]")
                 _print_chat_json(payload)
@@ -9648,6 +9664,8 @@ def command_chat(
             payload, transport = send_turn(text)
             last_reply_payload = payload
             print(_chat_response_text(payload))
+            if show_trace:
+                print(format_stage151_live_trace(payload))
             if show_json:
                 print(f"\n[{transport}]")
                 _print_chat_json(payload)
@@ -10309,6 +10327,7 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--sender", default="Operator")
     chat_parser.add_argument("--once", default=None, help="Send one message and exit")
     chat_parser.add_argument("--json", action="store_true", help="Print raw reply JSON after each turn")
+    chat_parser.add_argument("--trace", action="store_true", help="Print Codex-like live tool trace after each turn")
     chat_parser.add_argument("--no-local-fallback", action="store_true", help="Fail instead of creating an in-process fallback brain")
     chat_parser.add_argument("--timeout", type=float, default=180.0)
     experiment_parser = subparsers.add_parser("experiment-memory", help="Run a fixed three-scenario mind-packet experiment")
@@ -11336,6 +11355,7 @@ def main(argv: list[str] | None = None) -> int:
             sender=args.sender,
             once=args.once,
             json_output=args.json,
+            trace_output=args.trace,
             no_local_fallback=args.no_local_fallback,
             timeout=args.timeout,
         )

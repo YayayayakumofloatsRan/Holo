@@ -131,6 +131,11 @@ Stage150: Codex-style context memory fabric
 - Builds a structured working-context packet with instruction scope, current user goal, active task state, reusable slots, evidence ledger view, open loops, internal background compact, and forbidden visible claims.
 - Renders `Engineering Context State` into the provider prompt and exposes a Stage135 `context_memory_fabric` topology node without adding provider calls, memory writes, tool execution, approval/sandbox policy, transport authority, WeChat starts, or a second loop.
 
+Stage151: live tool trace and network grounding
+- Implemented deterministic `stage151_live_tool_trace` and `stage151_network_grounding` over existing capability and reply evidence.
+- `external_lookup` now respects `runtime.network_enabled`, records rejected observations when disabled, and records query/status/results/source URLs/errors/fetch time when enabled.
+- CLI chat can show Codex-like `plan`, `tool_call`, `tool_observation`, `grounding`, and `final` trace lines without exposing hidden chain-of-thought, and Stage151 does not add provider calls, memory writes, tool authority, transport authority, approval/sandbox logic, WeChat starts, or a second loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

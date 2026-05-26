@@ -360,6 +360,9 @@ def build_stage150_context_memory_fabric(
 ) -> dict[str, Any]:
     packet = _dict(sidecar)
     debug = _dict(reply_debug)
+    capability = _dict(capability_context)
+    if tool_observation_ledger is None and capability.get("tool_observation_ledger"):
+        tool_observation_ledger = capability.get("tool_observation_ledger")
     stage148 = _dict(packet.get("stage148_react_state", debug.get("stage148_react_state", {})))
     stage149 = _dict(packet.get("stage149_user_directives", debug.get("stage149_user_directives", {})))
     current_request = str(user_text or "")
