@@ -196,6 +196,7 @@ def build_stage135_i_state_topology(
     stage144_context_economy: dict[str, Any] | None = None,
     stage145_outcome_appraisal: dict[str, Any] | None = None,
     stage145_reaction_kernel_shadow: dict[str, Any] | None = None,
+    stage148_react_state: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -222,6 +223,7 @@ def build_stage135_i_state_topology(
     context_economy = _dict(stage144_context_economy)
     outcome_appraisal = _dict(stage145_outcome_appraisal)
     reaction_kernel = _dict(stage145_reaction_kernel_shadow)
+    react_state = _dict(stage148_react_state or packet.get("stage148_react_state", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -391,6 +393,34 @@ def build_stage135_i_state_topology(
         if alignment:
             edges.append(_edge("memory_alignment_gate", "reaction_kernel_shadow", relation="feeds_memory_outcome", weight=0.42, summary="memory sufficiency affects reaction-kernel shadow deltas"))
         edges.append(_edge("reaction_kernel_shadow", "holo_self", relation="shadow_reaction_delta", weight=0.26, summary="shadow deltas are observed but not applied to durable policy"))
+
+    if react_state:
+        react_loop = _dict(react_state.get("react_loop", {}))
+        plan = _dict(react_loop.get("plan", {}))
+        event_log = _dict(react_state.get("event_log", {}))
+        reusable = _dict(react_state.get("reusable_state_memory", {}))
+        plan_action = str(plan.get("selected_action_hint", "") or "direct_answer")
+        slot_count = int(reusable.get("slot_count", len(_list_dicts(reusable.get("slots", [])))) or 0)
+        event_count = int(event_log.get("event_count", len(_list_dicts(event_log.get("events", [])))) or 0)
+        nodes.append(
+            _node(
+                "stage148_react_loop",
+                "perception-plan-action-observe loop",
+                channel="react_loop",
+                kind="agent_loop",
+                x=0.34,
+                y=0.22,
+                weight=0.76,
+                summary=f"plan={plan_action}; reusable_slots={slot_count}; recent_events={event_count}; authority=host_gated",
+            )
+        )
+        edges.append(_edge("external_user_input", "stage148_react_loop", relation="perceives_event", weight=0.72, summary="raw event log enters reusable state memory"))
+        edges.append(_edge("stage148_react_loop", "fast_packet", relation="builds_state_packet", weight=0.68, summary="ReAct state frames the provider packet"))
+        edges.append(_edge("stage148_react_loop", "memory_delta", relation="separates_state_from_log", weight=0.58, summary="chat events are raw evidence; memory is reusable state"))
+        if packet_budget:
+            edges.append(_edge("packet_budget_gate", "stage148_react_loop", relation="observes_packet_outcome", weight=0.42, summary="packet stop reasons feed the next loop observation"))
+        if context_economy:
+            edges.append(_edge("context_economy_gate", "stage148_react_loop", relation="observes_context_policy", weight=0.4, summary="shadow context policy informs the next plan without direct enforcement"))
 
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
@@ -572,6 +602,10 @@ def build_stage135_i_state_topology(
             "reaction_kernel_prediction_error": float(outcome_appraisal.get("prediction_error", reaction_kernel.get("prediction_error", 0.0)) or 0.0) if (outcome_appraisal or reaction_kernel) else 0.0,
             "reaction_kernel_delta_count": int(reaction_kernel.get("delta_count", 0) or 0) if reaction_kernel else 0,
             "reaction_kernel_shadow_only": bool(reaction_kernel.get("shadow_only", outcome_appraisal.get("shadow_only", True))) if (outcome_appraisal or reaction_kernel) else False,
+            "react_loop_node_count": sum(1 for node in nodes if node["channel"] == "react_loop"),
+            "react_loop_plan_action": str(_dict(_dict(react_state.get("react_loop", {})).get("plan", {})).get("selected_action_hint", "") or "") if react_state else "",
+            "react_loop_event_count": int(_dict(react_state.get("event_log", {})).get("event_count", 0) or 0) if react_state else 0,
+            "reusable_state_slot_count": int(_dict(react_state.get("reusable_state_memory", {})).get("slot_count", 0) or 0) if react_state else 0,
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },
@@ -638,6 +672,7 @@ const colors = {{
   packet_budget: "#6c7a2a",
   context_economy: "#8a6f2a",
   reaction_kernel: "#a45d55",
+  react_loop: "#5268b2",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"

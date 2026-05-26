@@ -116,6 +116,11 @@ Stage147: replay-driven calibration
 - Evaluates whether Stage144 `skip`, `memory_first`, and `tool_first` recommendations are supported by later or fixture outcomes, and whether Stage145 reaction-kernel delta candidates have replay support or counterexamples.
 - Reports shadow-only promotion candidates with support/counterexample counts and confidence while preserving the no-provider, no-tool, no-memory-write, no-policy-apply, no-WeChat, no-transport-widening boundary.
 
+Stage148: reusable state memory and ReAct agent loop
+- Implemented deterministic per-turn `stage148_react_state` over current input, recent event log, sidecar action state, capability context, and Stage139-145 observations.
+- Separates raw chat/event logs from reusable state memory slots such as current user turn, recent correction, unresolved question, active task, action space, and packet-policy cue.
+- Renders `Reusable State Memory` and `ReAct State` into the provider prompt and exposes a Stage135 `react_loop` topology node without adding provider calls, memory writes, tool execution, transport authority, WeChat starts, or a second loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

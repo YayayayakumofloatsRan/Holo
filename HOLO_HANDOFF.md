@@ -76,6 +76,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 71. `docs/ENGINEERING_HANDOFF_STAGE146.md`
 72. `docs/STAGE147_REPLAY_DRIVEN_CALIBRATION.md`
 73. `docs/ENGINEERING_HANDOFF_STAGE147.md`
+74. `docs/STAGE148_REUSABLE_STATE_MEMORY_AGENT_LOOP.md`
+75. `docs/ENGINEERING_HANDOFF_STAGE148.md`
 
 ## What This Document Must Cover
 - current live state
@@ -90,9 +92,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage147-replay-driven-calibration`.
+- The current milestone tag is `stage148-reusable-state-react-loop`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage147 replay-driven calibration: after Stage146 exports multi-turn replay rows, Stage147 evaluates whether Stage144 packet-policy recommendations and Stage145 reaction-kernel delta candidates are supported by replay outcomes, without applying live policy, calling providers, executing tools, writing memory, starting WeChat, or changing transport authority.
+- Current focus is Stage148 reusable state memory and ReAct agent loop: raw dialogue remains an event log, while prompt-facing memory becomes a reusable state packet that carries current turn, recent corrections, unresolved questions, active task, action space, and host-gated observe/plan/act/observe metadata without adding provider calls, tool execution, durable memory writes, WeChat starts, transport authority, or a second brain loop.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -134,7 +136,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `windows_helper/`
 
 ## Current Runtime Truth
-- Primary provider path: `codex_cli`
+- Primary provider path: `deepseek` through processor fabric; `codex_cli` is not the default Holo subject provider on this runtime.
 - Processor fabric is active with three lanes:
   - `kernel_xhigh`
   - `subject_main`

@@ -71,6 +71,7 @@ from .stage142_semantic_novelty_gate import apply_stage142_gate
 from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
 from .stage145_reaction_kernel import build_stage145_shadow_reports
+from .stage148_react_agent_loop import build_stage148_react_state
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9220,6 +9221,18 @@ class HoloReplyService:
         capability_started_at = time.perf_counter()
         capability_context = prebuilt_capability_context or self.capabilities.summarize_turn(turn.text, turn.metadata)
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
+        stage148_react_state = build_stage148_react_state(
+            user_text=turn.text,
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            sender=turn.sender,
+            history=history,
+            sidecar=sidecar,
+            capability_context=capability_context,
+        )
+        sidecar = dict(sidecar)
+        sidecar["stage148_react_state"] = stage148_react_state
         attention_state = build_attention_state(turn.text, channel=turn.channel, metadata=turn.metadata)
         turn_context = TurnContext(
             channel=turn.channel,
@@ -9436,6 +9449,33 @@ class HoloReplyService:
         stage145_prediction_error = float(stage145_outcome_appraisal.get("prediction_error", 0.0) or 0.0)
         stage145_kernel_delta_count = int(stage145_reaction_kernel_shadow.get("delta_count", 0) or 0)
         stage145_shadow_only = bool(stage145_reaction_kernel_shadow.get("shadow_only", True))
+        stage148_react_state = build_stage148_react_state(
+            user_text=turn.text,
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            sender=turn.sender,
+            history=history,
+            sidecar=sidecar,
+            capability_context=capability_context,
+            tool_grounding=tool_grounding,
+            memory_grounding=memory_grounding,
+            memory_alignment=memory_alignment,
+            stage143_packet_budget=stage143_packet_budget,
+            stage144_context_economy=stage144_context_economy,
+            stage145_outcome_appraisal=stage145_outcome_appraisal,
+        )
+        sidecar["stage148_react_state"] = stage148_react_state
+        turn_context.mind_packet = sidecar
+        turn_context.sidecar = sidecar
+        reply_debug["stage148_react_state"] = stage148_react_state
+        stage148_react_loop = stage148_react_state.get("react_loop", {})
+        if not isinstance(stage148_react_loop, dict):
+            stage148_react_loop = {}
+        stage148_react_plan = stage148_react_loop.get("plan", {})
+        if not isinstance(stage148_react_plan, dict):
+            stage148_react_plan = {}
+        stage148_react_plan_action = str(stage148_react_plan.get("selected_action_hint", "") or "")
         topology_present = bool(stage135_i_state_topology.get("schema"))
         if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0 or stage144_context_economy or stage145_outcome_appraisal):
             stage135_i_state_topology = build_stage135_i_state_topology(
@@ -9509,6 +9549,8 @@ class HoloReplyService:
                 "stage145_prediction_error": stage145_prediction_error,
                 "stage145_kernel_delta_count": stage145_kernel_delta_count,
                 "stage145_shadow_only": stage145_shadow_only,
+                "stage148_react_state": stage148_react_state,
+                "stage148_react_plan_action": stage148_react_plan_action,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9578,6 +9620,8 @@ class HoloReplyService:
             "stage145_prediction_error": stage145_prediction_error,
             "stage145_kernel_delta_count": stage145_kernel_delta_count,
             "stage145_shadow_only": stage145_shadow_only,
+            "stage148_react_state": stage148_react_state,
+            "stage148_react_plan_action": stage148_react_plan_action,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9704,6 +9748,8 @@ class HoloReplyService:
                 "stage145_prediction_error": stage145_prediction_error,
                 "stage145_kernel_delta_count": stage145_kernel_delta_count,
                 "stage145_shadow_only": stage145_shadow_only,
+                "stage148_react_state": stage148_react_state,
+                "stage148_react_plan_action": stage148_react_plan_action,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
