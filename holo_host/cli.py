@@ -3869,9 +3869,9 @@ def _evaluate_stage5_acceptance(
     )
     checks.append(
         _stage4_check(
-            "silence_is_first_class",
-            silence_action == "silence" and bool(str(silence_trace.get("silence_reason", "")).strip()),
-            f"action={silence_action} reason={silence_trace.get('silence_reason')}",
+            "low_signal_gets_minimal_reply",
+            silence_action == "reply_once" and int(silence_trace.get("expression_budget", 0) or 0) >= 1,
+            f"action={silence_action} budget={silence_trace.get('expression_budget')}",
         )
     )
     checks.append(
@@ -3891,14 +3891,14 @@ def _evaluate_stage5_acceptance(
     checks.append(
         _stage4_check(
             "talkativeness_is_budgeted",
-            int(normal_trace.get("expression_budget", 0) or 0) <= 2 and int(silence_trace.get("expression_budget", 0) or 0) == 0,
-            f"normal_budget={normal_trace.get('expression_budget')} silence_budget={silence_trace.get('expression_budget')}",
+            int(normal_trace.get("expression_budget", 0) or 0) <= 2 and int(silence_trace.get("expression_budget", 0) or 0) == 1,
+            f"normal_budget={normal_trace.get('expression_budget')} low_signal_budget={silence_trace.get('expression_budget')}",
         )
     )
     checks.append(
         _stage4_check(
             "resistance_shares_subject_state",
-            resistance_action in {"reply_once", "reply_multi", "defer_reply", "silence"}
+            resistance_action in {"reply_once", "reply_multi", "defer_reply"}
             and bool(resistance_trace.get("affect_state"))
             and bool(resistance_trace.get("value_state"))
             and bool(resistance_trace.get("conflict_state")),
@@ -3957,7 +3957,7 @@ def _evaluate_stage5_acceptance(
         "warnings": warnings,
         "intent_state": intent_state,
         "action_market": action_market,
-        "silence_trace": silence_trace,
+        "low_signal_trace": silence_trace,
         "defer_trace": defer_trace,
         "normal_trace": normal_trace,
         "resistance_trace": resistance_trace,
@@ -3991,7 +3991,7 @@ def _evaluate_stage6_acceptance(
     reply_bubbles = list(graph_led.get("bubbles", [])) or list(reply_probe.get("bubbles", []))
     ledger_entries = list(ledger.get("entries", []))
     checks.append(_stage4_check("stage6_live_mode", str(health.get("status", "")) == "ok" and str(mode_transition.get("mode", "")) == "full_brain", f"status={health.get('status')} mode={mode_transition.get('mode')}"))
-    checks.append(_stage4_check("silence_first_class", str(dict(silence_trace.get("selected_action", {})).get("action_type", "")) == "silence" and bool(str(silence_trace.get("silence_reason", "")).strip()), f"trace={silence_trace}"))
+    checks.append(_stage4_check("low_signal_gets_minimal_reply", str(dict(silence_trace.get("selected_action", {})).get("action_type", "")) == "reply_once" and int(silence_trace.get("expression_budget", 0) or 0) >= 1, f"trace={silence_trace}"))
     checks.append(_stage4_check("defer_first_class", str(dict(defer_trace.get("selected_action", {})).get("action_type", "")) == "defer_reply" and bool(str(defer_trace.get("defer_reason", "")).strip()), f"trace={defer_trace}"))
     checks.append(_stage4_check("lookup_is_subject_action", str(dict(lookup_trace.get("selected_action", {})).get("action_type", "")) == "external_lookup" and bool(str(lookup_trace.get("lookup_reason", "")).strip()), f"trace={lookup_trace}"))
     checks.append(_stage4_check("recall_prefers_local_memory", str(dict(recall_trace.get("selected_action", {})).get("action_type", "")) in {"reply_once", "reply_multi", "history_refresh"} and not bool(str(recall_trace.get("lookup_reason", "")).strip()), f"trace={recall_trace}"))
@@ -4011,7 +4011,7 @@ def _evaluate_stage6_acceptance(
         "failures": failures,
         "blockers": blockers,
         "warnings": warnings,
-        "silence_trace": silence_trace,
+        "low_signal_trace": silence_trace,
         "defer_trace": defer_trace,
         "lookup_trace": lookup_trace,
         "recall_trace": recall_trace,
@@ -9371,6 +9371,8 @@ def _chat_response_text(payload: dict[str, Any]) -> str:
             return "\n".join(parts)
     action = str(payload.get("action", "") or "").strip()
     reason = str(payload.get("reason", "") or "").strip()
+    if action == "silence":
+        return ""
     if action:
         return f"[{action}{': ' + reason if reason else ''}]"
     return "[no reply text]"

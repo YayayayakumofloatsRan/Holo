@@ -56,7 +56,8 @@ class CliChatTests(unittest.TestCase):
     def test_chat_response_text_uses_bubbles_and_action_fallbacks(self) -> None:
         self.assertEqual(cli._chat_response_text({"bubbles": [{"text": "a"}, "b"]}), "a\nb")
         self.assertEqual(cli._chat_response_text({"text": "a b", "bubbles": [{"text": "a"}, "b"]}), "a\nb")
-        self.assertEqual(cli._chat_response_text({"action": "silence", "reason": "low_salience"}), "[silence: low_salience]")
+        self.assertEqual(cli._chat_response_text({"action": "silence", "reason": "low_salience"}), "")
+        self.assertEqual(cli._chat_response_text({"action": "ignore", "reason": "processor_failure"}), "[ignore: processor_failure]")
 
     def test_chat_response_text_replaces_lone_surrogates_before_printing(self) -> None:
         self.assertEqual(cli._chat_response_text({"text": "bad\ud800"}), "bad?")

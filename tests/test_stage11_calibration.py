@@ -228,7 +228,7 @@ class Stage11CalibrationTests(unittest.TestCase):
         self.assertIn("usage:processor_usage:7", captured["metadata"]["usage_evidence_refs"])
         self.assertEqual(captured["metadata"]["source"], "reply_api.reply_once")
 
-    def test_reply_action_appraisal_distinguishes_defer_and_silence_refs(self) -> None:
+    def test_reply_action_appraisal_distinguishes_defer_and_reply_refs(self) -> None:
         calls: list[dict[str, object]] = []
 
         class FakeStore:
@@ -283,10 +283,10 @@ class Stage11CalibrationTests(unittest.TestCase):
             incoming=incoming,
             thread={"id": 1},
             event_row_id=99,
-            selected_action={"action_type": "silence"},
-            selected_action_type="silence",
+            selected_action={"action_type": "reply_once"},
+            selected_action_type="reply_once",
             sidecar={"selected_prediction": {}},
-            result={"action": "silence"},
+            result={"action": "reply"},
         )
 
         self.assertEqual(calls[0]["action_ref"], "job-9")

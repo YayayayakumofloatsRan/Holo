@@ -189,6 +189,41 @@ Result:
 559 passed in 142.21s (0:02:22)
 ```
 
+## No-Silence Runtime Hotfix
+
+After live CLI testing, the operator disallowed both visible `[silence: ...]`
+output and `silence` as a runtime state. The follow-up hotfix makes low-signal
+turns choose `reply_once` with a minimal visible reply, and Stage22 shadow
+suppression now reports `returned_action="suppressed"` instead of
+`returned_action="silence"`.
+
+Preserved:
+
+- ignore/error diagnostics still print as action fallbacks in CLI.
+- defer remains a distinct action.
+- Stage22 still suppresses transport delivery in shadow mode, but no longer
+  encodes suppression as silence.
+- Stage149 user directive handling and Stage124 semantic intent packets are
+  unchanged.
+
+Executed:
+
+```powershell
+python -m pytest tests\test_cli_chat.py tests\test_holo_host.py -q --basetemp D:\Holo\holo\.pytest_tmp\no-silence-holo-host2
+python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base
+python scripts\check_public_release_hygiene.py
+git diff --check
+```
+
+Result:
+
+```text
+85 passed in 18.61s
+562 passed in 93.95s (0:01:33)
+Public release hygiene passed
+git diff --check passed
+```
+
 ## Next Suggested Stage
 
 Stage150 should use the Stage149 directive kernel as an input to a broader durable preference and state-promotion gate. The goal is to decide which user corrections become long-lived packet constraints, which remain recent working state, and which are only one-turn instructions.

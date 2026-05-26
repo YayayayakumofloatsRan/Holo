@@ -1106,7 +1106,7 @@ class MemoryBridge:
 
         action_market: list[dict[str, Any]] = [
             {
-                "action_type": "silence",
+                "action_type": "reply_once",
                 "score": round(
                     (0.92 if signal["low_signal"] and not signal["question_like"] and not signal["defer_requested"] else 0.0)
                     + (0.18 if signal["affirmation_like"] and not signal["question_like"] and not signal["defer_requested"] else 0.0)
@@ -1115,10 +1115,10 @@ class MemoryBridge:
                     - reply_pull * 0.16,
                     4,
                 ),
-                "why_now": "low-signal input does not demand an immediate surface reply",
-                "drive_source": "avoid_risk + low_signal",
-                "value_rationale": "stability can outrank contact for a low-signal turn",
-                "send_allowed": False,
+                "why_now": "low-signal input still receives a minimal surface reply",
+                "drive_source": "seek_contact + low_signal",
+                "value_rationale": "contact remains explicit even when the turn is low-signal",
+                "send_allowed": True,
                 "temporal_context": temporal_context,
             },
             {
@@ -1309,7 +1309,7 @@ class MemoryBridge:
             world_state=world_state,
         )
         selected = dict(action_market[0]) if action_market else {"action_type": "reply_once", "score": 0.0}
-        if bool(intent_state.get("factual_lookup", False)) and lookup_ready and selected["action_type"] not in {"silence", "defer_reply"}:
+        if bool(intent_state.get("factual_lookup", False)) and lookup_ready and selected["action_type"] not in {"defer_reply"}:
             lookup_candidate = next((dict(item) for item in action_market if item.get("action_type") == "external_lookup"), None)
             if lookup_candidate and float(lookup_candidate.get("score", 0.0) or 0.0) >= max(0.48, float(selected.get("score", 0.0) or 0.0) - 0.06):
                 selected = lookup_candidate
@@ -1324,12 +1324,10 @@ class MemoryBridge:
         if signal["defer_requested"]:
             selected = next((dict(item) for item in action_market if item.get("action_type") == "defer_reply"), selected)
         elif signal["low_signal"] and not signal["question_like"] and not contextual_reply_required:
-            selected = next((dict(item) for item in action_market if item.get("action_type") == "silence"), selected)
-        elif signal["affirmation_like"] and not signal["question_like"] and not contextual_reply_required:
-            selected = next((dict(item) for item in action_market if item.get("action_type") in {"silence", "reply_once"}), selected)
-        if contextual_reply_required and selected["action_type"] in {"silence", "defer_reply"}:
             selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
-        if selected["action_type"] == "silence" and signal["question_like"]:
+        elif signal["affirmation_like"] and not signal["question_like"] and not contextual_reply_required:
+            selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
+        if contextual_reply_required and selected["action_type"] in {"defer_reply"}:
             selected = next((dict(item) for item in action_market if item.get("action_type") == "reply_once"), selected)
         if selected["action_type"] == "history_refresh" and not history_refresh_needed:
             selected = next((dict(item) for item in action_market if str(item.get("action_type")) in {"reply_once", "reply_multi"}), selected)
@@ -1341,9 +1339,7 @@ class MemoryBridge:
         reply_budget_fit, stiffness_risk = expression_budget_summary(self, world_state=world_state)
 
         expression_budget = 1
-        if selected["action_type"] == "silence":
-            expression_budget = 0
-        elif selected["action_type"] == "defer_reply":
+        if selected["action_type"] == "defer_reply":
             expression_budget = 0
         elif selected["action_type"] == "reply_once":
             expression_budget = 1
@@ -1382,9 +1378,7 @@ class MemoryBridge:
 
         silence_reason = ""
         defer_reason = ""
-        if selected["action_type"] == "silence":
-            silence_reason = "low_signal_turn_with_low_expression_pressure"
-        elif selected["action_type"] == "defer_reply":
+        if selected["action_type"] == "defer_reply":
             defer_reason = "subject_requests_more_time_before_reply"
         action_rationale = compact_text(
             f"{selected.get('action_type', 'reply_once')} because {selected.get('why_now', '')}; sim={selected_prediction.get('simulation_rationale', '')}; expr_fit={reply_budget_fit:.2f} stiffness={stiffness_risk:.2f}",

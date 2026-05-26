@@ -252,12 +252,7 @@ class FakeMemory:
             predicted_risk = 0.28
             predicted_regret = 0.21
             recommended_bias = 0.0
-            if action_type == "silence":
-                predicted_response_quality = 0.18
-                predicted_risk = 0.12
-                predicted_regret = 0.56
-                recommended_bias = -0.08
-            elif action_type == "defer_reply":
+            if action_type == "defer_reply":
                 predicted_response_quality = 0.44
                 predicted_risk = 0.16
                 predicted_regret = 0.22
@@ -351,12 +346,12 @@ class FakeMemory:
         }
         action_market = [
             {
-                "action_type": "silence",
+                "action_type": "reply_once",
                 "score": 0.61 if low_signal and not question_like and not defer_requested else 0.04,
-                "why_now": "low-signal input does not demand immediate language",
-                "drive_source": "avoid_risk + low_signal",
-                "value_rationale": "stability can outrank contact",
-                "send_allowed": False,
+                "why_now": "low-signal input still receives a minimal visible reply",
+                "drive_source": "seek_contact + low_signal",
+                "value_rationale": "contact remains explicit",
+                "send_allowed": True,
             },
             {
                 "action_type": "defer_reply",
@@ -419,15 +414,10 @@ class FakeMemory:
         selected_action = dict(action_market[0])
         if selected_action["action_type"] == "reply_multi" and expansion_pressure < 0.48:
             selected_action = next(dict(item) for item in action_market if item["action_type"] == "reply_once")
-        if selected_action["action_type"] == "silence" and question_like:
-            selected_action = next(dict(item) for item in action_market if item["action_type"] == "reply_once")
         expression_budget = 1
         silence_reason = ""
         defer_reason = ""
-        if selected_action["action_type"] == "silence":
-            expression_budget = 0
-            silence_reason = "low_signal_turn_with_low_expression_pressure"
-        elif selected_action["action_type"] == "defer_reply":
+        if selected_action["action_type"] == "defer_reply":
             expression_budget = 0
             defer_reason = "subject_requests_more_time_before_reply"
         elif selected_action["action_type"] == "reply_multi":
@@ -3753,12 +3743,12 @@ wechat_helper_config_path = ""
             finally:
                 close_service_handles(service)
 
-    def test_reply_service_can_choose_silence_as_a_first_class_action(self) -> None:
+    def test_reply_service_replies_to_low_signal_without_silence_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = load_config(repo_root=root)
             store = QueueStore(config.runtime.db_path)
-            runner = FakeRunner("This should never be used.")
+            runner = FakeRunner("low signal acknowledged")
             memory = FakeMemory()
             service = HoloReplyService(config, store=store, runner=runner, memory=memory)
             try:
@@ -3771,17 +3761,14 @@ wechat_helper_config_path = ""
                         "message_id": "stage5-silence-1",
                     }
                 )
-                self.assertEqual(result["action"], "silence")
-                self.assertEqual(result["semantic_action"], "silence")
-                self.assertEqual(result["returned_action"], "silence")
-                self.assertEqual(result["delivery_verdict"], "not_applicable")
-                self.assertFalse(result["delivery_send_allowed"])
-                self.assertFalse(result["delivery_suppressed_by_canary"])
-                self.assertEqual(result["expression_budget"], 0)
-                self.assertEqual(result["reason"], "low_signal_turn_with_low_expression_pressure")
-                self.assertFalse(runner.calls)
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(result["semantic_action"], "reply")
+                self.assertNotEqual(result["returned_action"], "silence")
+                self.assertEqual(result["text"], "low signal acknowledged")
+                self.assertEqual(result["expression_budget"], 1)
+                self.assertTrue(runner.calls)
                 self.assertTrue(memory.action_selections)
-                self.assertEqual(memory.action_selections[-1]["selected_action"]["action_type"], "silence")
+                self.assertEqual(memory.action_selections[-1]["selected_action"]["action_type"], "reply_once")
             finally:
                 close_service_handles(service)
 
@@ -3805,7 +3792,7 @@ wechat_helper_config_path = ""
                 )
                 self.assertEqual(result["action"], "defer_reply")
                 self.assertEqual(result["semantic_action"], "defer_reply")
-                self.assertEqual(result["returned_action"], "silence")
+                self.assertEqual(result["returned_action"], "suppressed")
                 self.assertEqual(result["delivery_verdict"], "shadow_suppressed")
                 self.assertFalse(result["delivery_send_allowed"])
                 self.assertTrue(result["delivery_suppressed_by_canary"])
@@ -3874,7 +3861,7 @@ wechat_helper_config_path = ""
                 )
                 self.assertEqual(result["action"], "reply")
                 self.assertEqual(result["semantic_action"], "reply")
-                self.assertEqual(result["returned_action"], "silence")
+                self.assertEqual(result["returned_action"], "suppressed")
                 self.assertEqual(result["delivery_verdict"], "shadow_suppressed")
                 self.assertFalse(result["delivery_send_allowed"])
                 self.assertTrue(result["delivery_suppressed_by_canary"])
@@ -3883,7 +3870,7 @@ wechat_helper_config_path = ""
                 self.assertTrue(any(item["selected_action"]["action_type"] == "external_lookup" for item in memory.action_selections))
                 events = store.recent_events(channel="wechat", thread_key="wechat:TestUser", limit=5)
                 self.assertTrue(events)
-                self.assertEqual(str(events[0]["status"]), "silenced")
+                self.assertEqual(str(events[0]["status"]), "suppressed")
                 ledger = service.deliberation_ledger(thread_key="wechat:TestUser", chat_name="TestUser", channel="wechat", limit=10)
                 entry_types = [str(item.get("entry_type", "")) for item in ledger.get("entries", [])]
                 self.assertIn("ingest_event", entry_types)
@@ -4088,7 +4075,7 @@ wechat_helper_config_path = ""
             finally:
                 close_service_handles(service)
 
-    def test_reply_service_appraises_defer_and_silence_with_distinct_action_refs(self) -> None:
+    def test_reply_service_appraises_defer_and_low_signal_reply_with_distinct_action_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             config = load_config(repo_root=root)
@@ -4106,7 +4093,7 @@ wechat_helper_config_path = ""
                         "message_id": "stage12-defer-1",
                     }
                 )
-                silence_result = service.handle_reply(
+                low_signal_result = service.handle_reply(
                     {
                         "chat_name": "TestUser",
                         "sender": "TestUser",
@@ -4118,18 +4105,19 @@ wechat_helper_config_path = ""
                 )
 
                 self.assertEqual(defer_result["action"], "defer_reply")
-                self.assertEqual(silence_result["action"], "silence")
+                self.assertEqual(low_signal_result["action"], "reply")
+                self.assertNotEqual(low_signal_result["returned_action"], "silence")
                 appraisals = [
                     record
                     for record in memory.outcome_appraisals
-                    if str(record.get("metadata", {}).get("selected_action", "")).strip() in {"defer_reply", "silence"}
+                    if str(record.get("metadata", {}).get("selected_action", "")).strip() in {"defer_reply", "reply_once"}
                 ]
                 self.assertGreaterEqual(len(appraisals), 2)
                 defer_appraisal = next(item for item in appraisals if str(item.get("metadata", {}).get("selected_action", "")) == "defer_reply")
-                silence_appraisal = next(item for item in appraisals if str(item.get("metadata", {}).get("selected_action", "")) == "silence")
-                self.assertNotEqual(str(defer_appraisal["action_ref"]), str(silence_appraisal["action_ref"]))
+                low_signal_appraisal = next(item for item in appraisals if str(item.get("metadata", {}).get("selected_action", "")) == "reply_once")
+                self.assertNotEqual(str(defer_appraisal["action_ref"]), str(low_signal_appraisal["action_ref"]))
                 self.assertEqual(defer_appraisal["metadata"]["selected_action"], "defer_reply")
-                self.assertEqual(silence_appraisal["metadata"]["selected_action"], "silence")
+                self.assertEqual(low_signal_appraisal["metadata"]["selected_action"], "reply_once")
             finally:
                 close_service_handles(service)
 

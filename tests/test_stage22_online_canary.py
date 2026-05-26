@@ -74,7 +74,7 @@ class Stage22OnlineCanaryTests(unittest.TestCase):
         self.assertNotEqual(result["action"], "silence")
         self.assertEqual(result["semantic_action"], result["action"])
         self.assertEqual(result["semantic_reason"], result["reason"])
-        self.assertEqual(result["returned_action"], "silence")
+        self.assertEqual(result["returned_action"], "suppressed")
         self.assertFalse(result["delivery_send_allowed"])
         self.assertTrue(result["delivery_suppressed_by_canary"])
         self.assertEqual(result["delivery_verdict"], "shadow_suppressed")

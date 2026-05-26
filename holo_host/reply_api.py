@@ -1610,7 +1610,7 @@ class HoloReplyService:
                 resume_due += 1
                 result_meta = dict(metadata.get("result", {})) if isinstance(metadata.get("result", {}), dict) else {}
                 if (
-                    returned_action in {"reply", "defer_reply", "silence"}
+                    returned_action in {"reply", "defer_reply", "suppressed"}
                     and str(row.get("verdict", "")) not in {"not_whitelisted", "rollback_enabled", "thread_rate_limited", "global_rate_limited"}
                     and not bool(result_meta.get("delivery_suppressed_by_canary", False))
                 ):
@@ -2210,7 +2210,7 @@ class HoloReplyService:
             "query": query,
             "expected_best_action": best_action,
             "scenario_tags": ["stage22_live_artifact", str(dict(artifact.get("gate", {})).get("mode", "shadow") or "shadow")],
-            "candidate_actions": [item for item in [selected_action, best_action, "reply_once", "defer_reply", "silence"] if item],
+            "candidate_actions": [item for item in [selected_action, best_action, "reply_once", "defer_reply"] if item],
             "prior_state": {
                 "intent_state": {"reply_pull": 0.48, "continuity_pull": 0.32, "resistance_pull": 0.12},
                 "relationship_state": {"continuity_score": float(dict(trace.get("stage19", {})).get("thread_heat", 0.4) or 0.4)},
@@ -5644,7 +5644,7 @@ class HoloReplyService:
             "shadow_mode_captures_and_suppresses_send": bool(shadow_result.get("stage22_shadow", False))
             and self._stage23_is_delivery_capable_action(str(shadow_result.get("action", "")))
             and str(shadow_result.get("semantic_action", "")) == str(shadow_result.get("action", ""))
-            and str(shadow_result.get("returned_action", "")) == "silence"
+            and str(shadow_result.get("returned_action", "")) == "suppressed"
             and bool(shadow_result.get("delivery_suppressed_by_canary", False))
             and str(dict(shadow_result.get("stage22", {})).get("mode", "")) == "shadow"
             and shadow_trace_id > 0,
@@ -5752,7 +5752,7 @@ class HoloReplyService:
             "stage22_acceptance_green": str(stage22_report.get("status", "")) == "pass",
             "shadow_preserves_semantic_action": str(shadow_probe.get("action", "")) == "defer_reply"
             and str(shadow_probe.get("semantic_action", "")) == "defer_reply"
-            and str(shadow_probe.get("returned_action", "")) == "silence"
+            and str(shadow_probe.get("returned_action", "")) == "suppressed"
             and not bool(shadow_probe.get("delivery_send_allowed", True))
             and bool(shadow_probe.get("delivery_suppressed_by_canary", False))
             and not bool(shadow_probe.get("job_id")),
@@ -6617,7 +6617,7 @@ class HoloReplyService:
                 "mode": "shadow",
                 "verdict": "shadow_suppressed",
                 "selected_action": "reply_once",
-                "returned_action": "silence",
+                "returned_action": "suppressed",
                 "semantic_action": "reply_once",
                 "identity_continuity": 0.58,
                 "chapter": "early reentry",
@@ -6632,7 +6632,7 @@ class HoloReplyService:
                 "mode": "shadow",
                 "verdict": "shadow_suppressed",
                 "selected_action": "reply_once",
-                "returned_action": "silence",
+                "returned_action": "suppressed",
                 "semantic_action": "reply_once",
                 "identity_continuity": 0.72,
                 "chapter": "stable continuation",
@@ -6662,7 +6662,7 @@ class HoloReplyService:
                 "mode": "shadow",
                 "verdict": "shadow_suppressed",
                 "selected_action": "reply_once",
-                "returned_action": "silence",
+                "returned_action": "suppressed",
                 "semantic_action": "reply_once",
                 "identity_continuity": 0.73,
                 "chapter": "stable continuation",
@@ -7457,6 +7457,8 @@ class HoloReplyService:
         semantic_reason = str(result.get("semantic_reason", result.get("reason", "")) or "")
         delivery_capable = cls._stage23_is_delivery_capable_action(semantic_action)
         realized_action = str(returned_action or result.get("returned_action", semantic_action) or semantic_action)
+        if realized_action == "silence":
+            realized_action = "suppressed"
         if delivery_send_allowed is None:
             delivery_send_allowed = delivery_capable and realized_action == semantic_action
         if not delivery_verdict:
@@ -7503,7 +7505,7 @@ class HoloReplyService:
     ) -> dict[str, Any]:
         shadow_result = self._stage23_finalize_result_contract(
             dict(result),
-            returned_action="silence",
+            returned_action="suppressed",
             delivery_verdict=str(gate.get("verdict", "stage22_shadow") or "stage22_shadow"),
             delivery_send_allowed=False,
             delivery_suppressed_by_canary=self._stage23_is_delivery_capable_action(str(result.get("action", ""))),
@@ -7520,7 +7522,7 @@ class HoloReplyService:
             result=shadow_result,
             latency_ms=latency_ms,
         )
-        status = "silenced" if bool(shadow_result.get("delivery_suppressed_by_canary")) else "completed"
+        status = "suppressed" if bool(shadow_result.get("delivery_suppressed_by_canary")) else "completed"
         self.store.update_event_result(event_row_id, status=status, result=shadow_result)
         if bool(shadow_result.get("delivery_suppressed_by_canary")):
             self._record_consciousness_entry(
@@ -8253,7 +8255,6 @@ class HoloReplyService:
     @staticmethod
     def _normalize_selected_action(sidecar: dict[str, Any]) -> dict[str, Any]:
         allowed = {
-            "silence",
             "defer_reply",
             "reply_once",
             "reply_multi",
@@ -8268,6 +8269,20 @@ class HoloReplyService:
         }
         selected = dict(sidecar.get("selected_action", {})) if isinstance(sidecar.get("selected_action", {}), dict) else {}
         selected_type = str(selected.get("action_type", "reply_once") or "reply_once")
+        if selected_type == "silence":
+            replacement = dict(selected)
+            replacement["action_type"] = "reply_once"
+            replacement["send_allowed"] = True
+            replacement["expression_budget"] = max(1, int(replacement.get("expression_budget", 1) or 1))
+            replacement["why_now"] = str(replacement.get("why_now", "") or "low-signal input still receives a short visible reply")
+            replacement["value_rationale"] = str(replacement.get("value_rationale", "") or "contact remains explicit")
+            sidecar["selected_action"] = replacement
+            sidecar["expression_budget"] = max(1, int(sidecar.get("expression_budget", 1) or 1))
+            sidecar["expression_budget_v2"] = max(1, int(sidecar.get("expression_budget_v2", sidecar["expression_budget"]) or 1))
+            sidecar["expression_budget_v3"] = max(1, int(sidecar.get("expression_budget_v3", sidecar["expression_budget_v2"]) or 1))
+            sidecar["expression_budget_v4"] = max(1, int(sidecar.get("expression_budget_v4", sidecar["expression_budget_v3"]) or 1))
+            sidecar["silence_reason"] = ""
+            return replacement
         if selected_type in allowed:
             return selected
         for candidate in list(sidecar.get("action_market", [])):
@@ -8282,7 +8297,7 @@ class HoloReplyService:
 
     @staticmethod
     def _appraisable_reply_action(action_type: str) -> bool:
-        return action_type in {"silence", "defer_reply", "reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}
+        return action_type in {"defer_reply", "reply_once", "reply_multi", "push_back", "counter_offer", "continuity_defense"}
 
     def _action_local_usage_payload(
         self,
@@ -8361,7 +8376,7 @@ class HoloReplyService:
             "source": source,
             **usage_payload,
         }
-        if action_type in {"silence", "defer_reply"}:
+        if action_type in {"defer_reply"}:
             predicted_response_quality = _metric(selected_prediction.get("predicted_response_quality"), default=0.5)
             predicted_risk = _metric(selected_prediction.get("predicted_risk"), default=0.5)
             predicted_relational_delta = _metric(selected_prediction.get("predicted_relational_delta"), default=0.0)
@@ -8422,7 +8437,6 @@ class HoloReplyService:
             "push_back",
             "counter_offer",
             "continuity_defense",
-            "silence",
         }
 
     @staticmethod
@@ -8952,7 +8966,7 @@ class HoloReplyService:
             )
         self.store.update_event_result(
             event_row_id,
-            status="silenced" if bool(result.get("delivery_suppressed_by_canary", False)) else "completed",
+            status="suppressed" if bool(result.get("delivery_suppressed_by_canary", False)) else "completed",
             result=result,
         )
         self._record_consciousness_entry(
@@ -8996,7 +9010,7 @@ class HoloReplyService:
             )
             self.store.update_event_result(
                 event_row_id,
-                status="silenced" if bool(result.get("delivery_suppressed_by_canary", False)) else "completed",
+                status="suppressed" if bool(result.get("delivery_suppressed_by_canary", False)) else "completed",
                 result=result,
             )
         return result
@@ -9131,18 +9145,22 @@ class HoloReplyService:
         selected_action = dict(preselected_action or sidecar.get("selected_action", {}))
         selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
         demoted_history_refresh_report: dict[str, Any] = {}
-        if selected_action_type not in {"silence", "defer_reply", "reply_once", "reply_multi", "external_lookup", "history_refresh", "visual_recall", "push_back", "counter_offer", "continuity_defense"}:
+        if selected_action_type not in {"defer_reply", "reply_once", "reply_multi", "external_lookup", "history_refresh", "visual_recall", "push_back", "counter_offer", "continuity_defense"}:
             for candidate in list(sidecar.get("action_market", [])):
                 candidate_type = str(candidate.get("action_type", "")).strip()
-                if candidate_type in {"silence", "defer_reply", "reply_once", "reply_multi", "external_lookup", "history_refresh", "visual_recall", "push_back", "counter_offer", "continuity_defense"}:
+                if candidate_type in {"defer_reply", "reply_once", "reply_multi", "external_lookup", "history_refresh", "visual_recall", "push_back", "counter_offer", "continuity_defense"}:
                     selected_action = dict(candidate)
                     selected_action_type = candidate_type
                     break
+        if selected_action_type == "silence":
+            sidecar["selected_action"] = selected_action
+            selected_action = self._normalize_selected_action(sidecar)
+            selected_action_type = str(selected_action.get("action_type", "reply_once") or "reply_once")
         if selected_action_type == "history_refresh" and not self._should_refresh_wechat_history(turn, sidecar):
             selected_action, selected_action_type, demoted_history_refresh_report = self._demote_nonblocking_history_refresh(sidecar)
         last_action_selection = dict(sidecar.get("last_action_selection", {})) if isinstance(sidecar.get("last_action_selection", {}), dict) else {}
         if record.get("duplicate") and record.get("awaiting_reply"):
-            if str(last_action_selection.get("message_id", "") or "") == incoming.message_id and selected_action_type in {"silence", "defer_reply"}:
+            if str(last_action_selection.get("message_id", "") or "") == incoming.message_id and selected_action_type in {"defer_reply"}:
                 return self._stage23_finalize_result_contract({
                     "action": "ignore",
                     "reason": "already_decided",
@@ -9232,7 +9250,7 @@ class HoloReplyService:
                 "active_memory_refresh": active_history_report or demoted_history_refresh_report or {},
                 "visual_ingest": visual_report or {},
                 },
-                returned_action="defer_reply" if delivery_send_allowed else "silence",
+                returned_action="defer_reply" if delivery_send_allowed else "suppressed",
                 delivery_verdict="allowed" if delivery_send_allowed else str(payload.get("_stage23_delivery_verdict", "") or "shadow_suppressed"),
                 delivery_send_allowed=delivery_send_allowed,
                 delivery_suppressed_by_canary=not delivery_send_allowed,
@@ -9853,7 +9871,7 @@ class HoloReplyService:
                 "expression_budget": int(sidecar.get("expression_budget", 0) or 0),
                 "action_rationale": str(sidecar.get("action_rationale", "") or ""),
             },
-            returned_action="reply" if delivery_send_allowed else "silence",
+            returned_action="reply" if delivery_send_allowed else "suppressed",
             delivery_verdict="allowed" if delivery_send_allowed else str(payload.get("_stage23_delivery_verdict", "") or "shadow_suppressed"),
             delivery_send_allowed=delivery_send_allowed,
             delivery_suppressed_by_canary=not delivery_send_allowed,
