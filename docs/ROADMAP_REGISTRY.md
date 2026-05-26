@@ -157,6 +157,21 @@ Stage155: project state graph
 - Stage150 working context now includes active project state, active tasks, open questions, latest decisions, next actions, and blocked items before provider generation.
 - Reply/archive metadata, CLI `project-state` inspection, and Stage135 topology expose `project_state_graph` without provider calls, memory writes, tool execution, WeChat starts, or transport authority changes.
 
+Stage156: context compiler and cache discipline
+- Implemented a deterministic `context_compiler` surface that separates stable prefix, project instructions, tool schema, directives, dynamic turn state, observations, and final constraints.
+- Records estimated token budget and DeepSeek-style cache hit/miss counters when usage metadata is available.
+- Keeps background compact internal and does not add provider calls, tool execution, memory writes, transport authority, WeChat starts, or live policy changes.
+
+Stage157: Holo core bench
+- Implemented a deterministic dry-run `holo.stage157.core_bench.v1` availability bench over interactive CLI, tool loop, engineering actions, project state, context compiler, and domain scaffold surfaces.
+- The bench is local readiness evidence, not a model-quality benchmark.
+- It does not call providers, execute tools, write memory, start WeChat, widen transport authority, or apply policy.
+
+Stage158: Agent Kernel v1
+- Implemented scaffold-only domain modules for math research, physics research, market research, and ProjectH ops.
+- Added `agent-kernel-readiness` to report whether the stable Agent Kernel v1 surfaces are available.
+- Defines the boundary between stable core infrastructure and future domain expert modules without adding live domain work, provider calls, memory writes, tool execution, WeChat starts, or transport authority changes.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

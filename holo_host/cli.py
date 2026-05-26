@@ -52,6 +52,7 @@ from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
 from .engineering_action_fabric import evaluate_engineering_claim_grounding
 from .project_state_graph import ProjectStateGraph, render_project_state_cli
+from .agent_kernel_readiness import build_agent_kernel_readiness_report, render_agent_kernel_readiness
 from .engineering_workspace_tools import (
     apply_patch as apply_workspace_patch,
     file_read as engineering_file_read,
@@ -9506,6 +9507,16 @@ def command_project_state(
         store.close()
 
 
+def command_agent_kernel_readiness(config_path: str | None, *, json_output: bool = True) -> int:
+    _ = config_path
+    report = build_agent_kernel_readiness_report()
+    if json_output:
+        print(_json_dumps_utf8_safe(report, ensure_ascii=False, indent=2))
+    else:
+        print(render_agent_kernel_readiness(report))
+    return 0 if report.get("status") == "passed" else 1
+
+
 def command_chat(
     config_path: str | None,
     *,
@@ -10503,6 +10514,11 @@ def main(argv: list[str] | None = None) -> int:
     project_state_parser.add_argument("--open-loops", action="store_true")
     project_state_parser.add_argument("--next-actions", action="store_true")
     project_state_parser.add_argument("--json", action="store_true")
+    agent_kernel_parser = subparsers.add_parser(
+        "agent-kernel-readiness",
+        help="Print the Stage158 Agent Kernel v1 readiness report",
+    )
+    agent_kernel_parser.add_argument("--text", action="store_true", help="Print a compact text report instead of JSON")
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -11534,6 +11550,11 @@ def main(argv: list[str] | None = None) -> int:
             open_loops=bool(args.open_loops),
             next_actions=bool(args.next_actions),
             json_output=bool(args.json),
+        )
+    if args.command == "agent-kernel-readiness":
+        return command_agent_kernel_readiness(
+            args.config,
+            json_output=not bool(args.text),
         )
     if args.command == "reply-probe":
         return command_reply_probe(

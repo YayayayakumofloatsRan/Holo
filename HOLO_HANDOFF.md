@@ -91,6 +91,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 86. `docs/ENGINEERING_HANDOFF_STAGE154.md`
 87. `docs/STAGE155_PROJECT_STATE_GRAPH.md`
 88. `docs/ENGINEERING_HANDOFF_STAGE155.md`
+89. `docs/STAGE156_CONTEXT_COMPILER_CACHE_DISCIPLINE.md`
+90. `docs/STAGE157_HOLO_CORE_BENCH.md`
+91. `docs/STAGE158_AGENT_KERNEL_V1.md`
+92. `docs/ENGINEERING_HANDOFF_STAGE158.md`
 
 ## What This Document Must Cover
 - current live state
@@ -105,9 +109,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage155-project-state-graph`.
+- The current milestone tag is `stage158-agent-kernel-v1`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage155 project state graph: Holo now stores typed project continuity nodes for goals, tasks, decisions, open questions, risks, artifacts, results, and next actions, feeds them into Stage150 context packets, exposes CLI inspection, and renders a Stage135 `project_state_graph` node. Stage154 engineering action ledgers remain the host evidence layer for repo work.
+- Current focus is Stage158 Agent Kernel v1: Holo now has scaffold-only domain modules, deterministic kernel readiness, a local core bench surface, and a context compiler availability layer around the Stage153-155 CLI, engineering action, and project-state foundations. Stage154 engineering action ledgers remain the host evidence layer for repo work, and Stage155 project state remains the reusable continuity layer.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -216,6 +220,8 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python3 -m holo_host show-provider-status`
 - Usage ledger:
   - `python3 -m holo_host show-usage-ledger --limit 50`
+- Agent Kernel readiness:
+  - `python3 -m holo_host agent-kernel-readiness`
 - Replay calibration fixture:
   - `python3 -m holo_host replay-calibration-fixture --fixture-path tests/fixtures/stage14`
 - Replay policy regret:
