@@ -198,6 +198,7 @@ def build_stage135_i_state_topology(
     stage145_reaction_kernel_shadow: dict[str, Any] | None = None,
     stage148_react_state: dict[str, Any] | None = None,
     stage150_context_memory_fabric: dict[str, Any] | None = None,
+    stage151_tool_decision: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -226,6 +227,7 @@ def build_stage135_i_state_topology(
     reaction_kernel = _dict(stage145_reaction_kernel_shadow)
     react_state = _dict(stage148_react_state or packet.get("stage148_react_state", {}))
     context_memory_fabric = _dict(stage150_context_memory_fabric or packet.get("stage150_context_memory_fabric", {}))
+    tool_decision = _dict(stage151_tool_decision or packet.get("stage151_tool_decision", {}))
     user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
@@ -473,6 +475,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge("context_memory_fabric", "fast_packet", relation="frames_provider_packet", weight=0.62, summary="structured context is rendered before provider speech"))
         edges.append(_edge("context_memory_fabric", "memory_delta", relation="separates_state_from_transcript", weight=0.5, summary="background compact is internal and raw chat is not treated as reusable memory"))
 
+    if tool_decision:
+        selected_actions = _list_dicts(tool_decision.get("selected_actions", []))
+        action_candidates = _list_dicts(tool_decision.get("action_candidates", []))
+        purpose = str(tool_decision.get("purpose", "") or "answer_direct")
+        nodes.append(
+            _node(
+                "stage151_tool_decision_loop",
+                "tool decision loop",
+                channel="tool_decision_loop",
+                kind="agent_loop",
+                x=0.52,
+                y=0.18,
+                weight=0.72 if selected_actions else 0.42,
+                summary=f"purpose={purpose}; candidates={len(action_candidates)}; selected={len(selected_actions)}",
+            )
+        )
+        edges.append(_edge("external_user_input", "stage151_tool_decision_loop", relation="triages_tool_need", weight=0.64, summary="current turn is triaged for web, time, memory, and tool evidence"))
+        context_target = "context_memory_fabric" if context_memory_fabric else "holo_self"
+        edges.append(_edge("stage151_tool_decision_loop", context_target, relation="feeds_observation_context", weight=0.58, summary="tool decision observations enter the structured context packet"))
+        edges.append(_edge("stage151_tool_decision_loop", "fast_packet", relation="frames_provider_packet", weight=0.46, summary="tool evidence state is available before provider speech"))
+
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
         call_id = str(item.get("provider_call_id", "") or item.get("tool", "") or f"tool_{index + 1}")
@@ -661,6 +684,9 @@ def build_stage135_i_state_topology(
             "context_memory_fabric_slot_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("reusable_state_slots", []))) if context_memory_fabric else 0,
             "context_memory_fabric_open_loop_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("open_loops", []))) if context_memory_fabric else 0,
             "context_memory_fabric_evidence_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("evidence_ledger_view", []))) if context_memory_fabric else 0,
+            "tool_decision_loop_node_count": sum(1 for node in nodes if node["channel"] == "tool_decision_loop"),
+            "tool_decision_loop_selected_count": len(_list_dicts(tool_decision.get("selected_actions", []))) if tool_decision else 0,
+            "tool_decision_loop_purpose": str(tool_decision.get("purpose", "") or "") if tool_decision else "",
             "user_directive_node_count": sum(1 for node in nodes if node["channel"] == "user_directive"),
             "user_directive_count": int(user_directives.get("hard_directive_count", 0) or 0) if user_directives else 0,
             "user_directive_status": str(user_directives.get("status", "") or "") if user_directives else "",

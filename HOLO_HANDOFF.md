@@ -428,7 +428,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base` passed with `498 passed in 70.70s` after Stage141 on `2026-05-24`
   - Stage142 targeted regression passed with `17 passed in 0.56s`; grounding regression passed with `18 passed in 0.57s`; reply API regression passed with `76 passed in 17.16s` on `2026-05-24`
   - `python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base` passed with `510 passed in 69.12s` after Stage142 on `2026-05-24`
-  - Stage151 adds `python3 -m holo_host chat --trace` and `/trace on|off` for compact plan/tool_call/tool_observation/grounding/final traces, plus network grounding for `external_lookup`
+  - Stage151 adds `python3 -m holo_host chat --trace` and `/trace on|off` for Codex-like purpose/candidate/tool_call/observation/grounding/final traces, plus host time observations, normalized web observations, and grounding repair for current web claims
 
 ## Invariants
 - Do not silently change online transport modes

@@ -47,7 +47,7 @@ from .stage135_i_state_topology import write_stage135_i_state_topology_artifacts
 from .stage146_benchmark_bundle import run_biomimetic_benchmark
 from .stage146_biomimetic_replay import export_biomimetic_replay
 from .stage147_replay_calibration import evaluate_replay_calibration
-from .stage151_live_tool_trace import format_stage151_live_trace
+from .stage151_tool_decision_loop import format_stage151_live_trace
 from .tool_benchmark import run_tool_benchmark
 from .store import QueueStore
 

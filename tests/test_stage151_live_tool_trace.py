@@ -24,9 +24,10 @@ def test_network_disabled_blocks_external_lookup_and_records_rejection() -> None
         payload = broker.summarize_turn("search latest Holo agent paper", {})
 
     assert not lookup.called
-    assert payload["tool_requests"][0]["name"] == "external_lookup"
+    assert payload["tool_requests"][0]["name"] == "web_search"
+    assert payload["web_observation_ledger"][0]["status"] == "rejected_network_disabled"
     row = payload["tool_observation_ledger"][0]
-    assert row["tool"] == "external_lookup"
+    assert row["tool"] == "web_search"
     assert row["status"] == "rejected"
     assert row["error"] == "network_disabled"
     assert row["grounding_tags"] == []

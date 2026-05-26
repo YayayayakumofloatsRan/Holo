@@ -13,6 +13,12 @@ from .common import compact_text
 from .config import HostConfig
 from .models import ToolRequest
 from .stage151_live_tool_trace import build_external_lookup_observation
+from .stage151_tool_decision_loop import (
+    build_time_observation,
+    build_tool_decision_report,
+    execute_tool_decision,
+    web_observations_to_tool_ledger,
+)
 
 URL_RE = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
 LOOKUP_RESULT_RE = re.compile(
@@ -43,6 +49,17 @@ SEARCH_HINTS = (
     "latest",
     "news",
     "official",
+    "联网",
+    "上网",
+    "搜索",
+    "查一下",
+    "查找",
+    "最新",
+    "新闻",
+    "官方",
+    "官网",
+    "主页",
+    "文档",
 )
 MEMORY_LOCAL_HINTS = (
     "记得",
@@ -56,6 +73,10 @@ MEMORY_LOCAL_HINTS = (
     "线程",
     "session",
     "memory",
+    "记得",
+    "回忆",
+    "之前",
+    "以前",
 )
 
 
@@ -110,6 +131,45 @@ class CapabilityBroker:
         tool_requests: list[ToolRequest] = []
         tool_context_lines: list[str] = []
         tool_observation_ledger: list[dict[str, Any]] = []
+        time_observation = build_time_observation()
+        stage151_tool_decision = build_tool_decision_report(text, metadata=meta, time_observation=time_observation)
+        web_observation_ledger = (
+            execute_tool_decision(
+                stage151_tool_decision,
+                network_enabled=bool(self.config.runtime.network_enabled),
+                web_search_fn=self._external_lookup,
+            )
+            if eager_network
+            else []
+        )
+        for observation in web_observation_ledger:
+            action_type = str(observation.get("action_type", "") or "web_search")
+            payload = {
+                "query": observation.get("query", ""),
+                "url": observation.get("url", ""),
+                "pattern": observation.get("pattern", ""),
+                "status": observation.get("status", ""),
+                "source_urls": list(observation.get("source_urls", []) or []),
+            }
+            tool_requests.append(
+                ToolRequest(
+                    name=action_type,
+                    reason=f"stage151 selected {action_type}",
+                    payload=payload,
+                )
+            )
+            summary = f"{action_type}: status={observation.get('status', '')}"
+            query = str(observation.get("query", "") or observation.get("url", "") or "").strip()
+            if query:
+                summary += f" query={query}"
+            sources = list(observation.get("source_urls", []) or [])
+            if sources:
+                summary += f" source={sources[0]}"
+            error_text = str(observation.get("error", "") or "").strip()
+            if error_text:
+                summary += f" error={error_text}"
+            tool_context_lines.append(summary)
+        tool_observation_ledger.extend(web_observations_to_tool_ledger(web_observation_ledger))
 
         if self.config.runtime.network_enabled and eager_network:
             previews = self._preview_urls(text)
@@ -133,7 +193,7 @@ class CapabilityBroker:
         else:
             previews = []
 
-        if not previews and self._should_external_lookup(text, meta):
+        if not web_observation_ledger and not previews and self._should_external_lookup(text, meta):
             query = self._normalize_lookup_query(text)
             reason = f"turn requests external lookup for {query}"
             if not self.config.runtime.network_enabled:
@@ -186,6 +246,9 @@ class CapabilityBroker:
             "tool_context_lines": tool_context_lines,
             "tool_requests": [request.to_dict() for request in tool_requests],
             "tool_observation_ledger": tool_observation_ledger,
+            "time_observation": time_observation,
+            "stage151_tool_decision": stage151_tool_decision,
+            "web_observation_ledger": web_observation_ledger,
             "attachment_summaries": attachment_summaries,
             "tool_permission_grants": list(meta.get("tool_permission_grants", []) or [])
             if isinstance(meta.get("tool_permission_grants", []), list)

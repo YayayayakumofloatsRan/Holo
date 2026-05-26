@@ -26,8 +26,8 @@ class CapabilityBrokerTests(unittest.TestCase):
         ) as lookup:
             payload = broker.summarize_turn("帮我查一下 transcendence 这部电影", {})
         self.assertTrue(lookup.called)
-        self.assertEqual(payload["tool_requests"][0]["name"], "external_lookup")
-        self.assertIn("external lookup", payload["tool_context_lines"][0])
+        self.assertEqual(payload["tool_requests"][0]["name"], "web_search")
+        self.assertIn("web_search", payload["tool_context_lines"][0])
 
     def test_memory_question_does_not_force_external_lookup(self) -> None:
         config = load_config(repo_root="D:/Holo/holo")

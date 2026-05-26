@@ -252,10 +252,14 @@ def _evidence_items(
     reply_debug: dict[str, Any] | None,
     tool_observation_ledger: Any = None,
     memory_observation_ledger: Any = None,
+    web_observation_ledger: Any = None,
+    time_observation: Any = None,
 ) -> list[dict[str, Any]]:
     debug = _dict(reply_debug)
     tools = _list_dicts(tool_observation_ledger if tool_observation_ledger is not None else debug.get("tool_observation_ledger", sidecar.get("tool_observation_ledger", [])))
     memories = _list_dicts(memory_observation_ledger if memory_observation_ledger is not None else debug.get("memory_observation_ledger", sidecar.get("memory_observation_ledger", [])))
+    web_rows = _list_dicts(web_observation_ledger if web_observation_ledger is not None else debug.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])))
+    time_row = _dict(time_observation if time_observation is not None else debug.get("time_observation", sidecar.get("time_observation", {})))
     items: list[dict[str, Any]] = []
     for index, row in enumerate(tools[:10]):
         tool = str(row.get("tool", row.get("name", "")) or "tool")
@@ -278,6 +282,29 @@ def _evidence_items(
                 "status": str(row.get("status", "") or "unknown"),
                 "summary": _compact(row.get("summary", ""), 220),
                 "confidence": _clamp(row.get("confidence", 0.5), 0.5),
+            }
+        )
+    for index, row in enumerate(web_rows[:8]):
+        query = str(row.get("query", "") or row.get("url", "") or "").strip()
+        items.append(
+            {
+                "evidence_id": str(row.get("observation_id", "") or f"web:{index}"),
+                "family": "web",
+                "source_family": str(row.get("action_type", "") or "web"),
+                "status": str(row.get("status", "") or "unknown"),
+                "summary": _compact(f"{row.get('action_type', 'web')} {row.get('status', '')}: {query}; sources={len(list(row.get('source_urls', []) or []))}", 220),
+                "confidence": _clamp(row.get("confidence", 0.5), 0.5),
+            }
+        )
+    if time_row:
+        items.append(
+            {
+                "evidence_id": str(time_row.get("observation_id", "") or "time:current"),
+                "family": "time",
+                "source_family": "host_clock",
+                "status": "grounded",
+                "summary": _compact(f"local_time={time_row.get('local_time', '')}; utc_time={time_row.get('utc_time', '')}; timezone={time_row.get('timezone', '')}", 220),
+                "confidence": _clamp(time_row.get("confidence", 1.0), 1.0),
             }
         )
     for key, family in (
@@ -363,6 +390,8 @@ def build_stage150_context_memory_fabric(
     capability = _dict(capability_context)
     if tool_observation_ledger is None and capability.get("tool_observation_ledger"):
         tool_observation_ledger = capability.get("tool_observation_ledger")
+    web_observation_ledger = capability.get("web_observation_ledger", packet.get("web_observation_ledger", debug.get("web_observation_ledger", [])))
+    time_observation = capability.get("time_observation", packet.get("time_observation", debug.get("time_observation", {})))
     stage148 = _dict(packet.get("stage148_react_state", debug.get("stage148_react_state", {})))
     stage149 = _dict(packet.get("stage149_user_directives", debug.get("stage149_user_directives", {})))
     current_request = str(user_text or "")
@@ -373,6 +402,8 @@ def build_stage150_context_memory_fabric(
         reply_debug=debug,
         tool_observation_ledger=tool_observation_ledger,
         memory_observation_ledger=memory_observation_ledger,
+        web_observation_ledger=web_observation_ledger,
+        time_observation=time_observation,
     )
     discipline = _evidence_discipline(candidate_visible_text, evidence)
     active_slots = [item for item in slots if item.get("slot_type") in {"active_task", "unresolved_question", "recent_correction"}]
@@ -443,6 +474,8 @@ def build_stage150_context_memory_fabric(
         "tool_memory_visual_observations": {
             "tool_observations": [item for item in evidence if item.get("family") == "tool"],
             "memory_observations": [item for item in evidence if item.get("family") == "memory"],
+            "web_observations": [item for item in evidence if item.get("family") == "web"],
+            "time_observation": _dict(time_observation),
             "visual_observation": _dict(packet.get("visual_memory", packet.get("visual_ingest", {}))),
         },
         "open_loops": open_loops,

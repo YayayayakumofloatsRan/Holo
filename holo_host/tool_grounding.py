@@ -9,6 +9,10 @@ TOOL_FAMILY_TAGS: dict[str, tuple[str, ...]] = {
     "memory_recall": ("memory",),
     "memory_warehouse_search": ("memory",),
     "external_lookup": ("external_lookup", "current_fact"),
+    "web_search": ("external_lookup", "current_fact"),
+    "open_page": ("external_lookup", "current_fact"),
+    "find_in_page": ("external_lookup", "current_fact"),
+    "web_preview": ("external_lookup", "current_fact"),
     "workspace_inspect": ("workspace",),
     "file_read": ("workspace",),
     "file_list": ("workspace",),
@@ -153,6 +157,21 @@ def _claimed_families(text: str) -> list[str]:
     return sorted(set(families))
 
 
+def _filter_generic_capability_mentions(text: str, families: list[str]) -> list[str]:
+    """Avoid treating generic tool capability descriptions as executed-tool claims."""
+
+    lowered = str(text or "").lower()
+    execution_claim = bool(
+        re.search(r"\b(i|we)\s+(checked|read|inspected|opened|ran|executed|called|used)\b", lowered)
+        or re.search(r"\b(tool|command|pytest|git|workspace|runtime|config).{0,32}\b(returned|showed|reported|passed|failed)\b", lowered)
+        or any(marker in str(text or "") for marker in ("我检查", "我读取", "我执行", "我运行", "我调用", "已经执行", "已经运行", "测试通过"))
+    )
+    if execution_claim:
+        return families
+    generic_only = {"workspace", "git", "tests", "runtime", "command"}
+    return [family for family in families if family not in generic_only]
+
+
 def evaluate_tool_grounding(text: str, ledger: Any) -> dict[str, Any]:
     normalized = normalize_tool_observation_ledger(ledger)
     observed: set[str] = set()
@@ -160,7 +179,7 @@ def evaluate_tool_grounding(text: str, ledger: Any) -> dict[str, Any]:
         if str(item.get("status", "") or "").lower() in {"rejected", "skipped", "denied"}:
             continue
         observed.update(str(tag) for tag in list(item.get("grounding_tags", []) or []) if str(tag).strip())
-    claimed = _claimed_families(text)
+    claimed = _filter_generic_capability_mentions(text, _claimed_families(text))
     missing = [family for family in claimed if family not in observed]
     return {
         "schema": TOOL_GROUNDING_SCHEMA,

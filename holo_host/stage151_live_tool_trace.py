@@ -131,7 +131,11 @@ def _has_current_lookup_claim(text: str) -> bool:
 
 def evaluate_network_grounding(text: str, tool_observation_ledger: Any) -> dict[str, Any]:
     ledger = normalize_tool_observation_ledger(tool_observation_ledger)
-    lookup_rows = [row for row in ledger if str(row.get("tool", "") or "") == "external_lookup"]
+    lookup_rows = [
+        row
+        for row in ledger
+        if str(row.get("tool", "") or "") in {"external_lookup", "web_search", "open_page", "find_in_page", "web_preview"}
+    ]
     successful = [
         row
         for row in lookup_rows

@@ -80,6 +80,11 @@ from .stage151_live_tool_trace import (
     merge_tool_observation_ledgers,
     repair_network_grounding,
 )
+from .stage151_tool_decision_loop import (
+    build_stage151_live_trace,
+    evaluate_tool_decision_grounding,
+    repair_tool_decision_grounding,
+)
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9277,11 +9282,23 @@ class HoloReplyService:
             return result
 
         capability_started_at = time.perf_counter()
-        capability_context = prebuilt_capability_context or self.capabilities.summarize_turn(turn.text, turn.metadata)
+        if prebuilt_capability_context:
+            capability_context = prebuilt_capability_context
+            stage151_decision = dict(capability_context.get("stage151_tool_decision", {})) if isinstance(capability_context.get("stage151_tool_decision", {}), dict) else {}
+            needs_stage151_web = bool(stage151_decision.get("network_required", False) or stage151_decision.get("selected_actions"))
+            has_stage151_web_observation = bool(list(capability_context.get("web_observation_ledger", []) or []))
+            if needs_stage151_web and not has_stage151_web_observation:
+                capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata, eager_network=True)
+        else:
+            capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata)
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
         if isinstance(capability_context.get("tool_observation_ledger", []), list) and capability_context.get("tool_observation_ledger"):
             sidecar = dict(sidecar)
             sidecar["tool_observation_ledger"] = list(capability_context.get("tool_observation_ledger", []))
+        for key in ("time_observation", "stage151_tool_decision", "web_observation_ledger"):
+            if capability_context.get(key):
+                sidecar = dict(sidecar)
+                sidecar[key] = capability_context.get(key)
         stage149_archive_rows = _stage149_thread_archive_rows(
             self.memory,
             channel=turn.channel,
@@ -9402,6 +9419,18 @@ class HoloReplyService:
             tool_observation_ledger,
         )
         grounding_repaired = False
+        stage151_tool_decision_grounding = evaluate_tool_decision_grounding(
+            repaired_text,
+            web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+            time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
+        )
+        if bool(stage151_tool_decision_grounding.get("repair_required", False)):
+            repaired_text = normalize_external_speech_for_context(
+                turn_context,
+                repair_tool_decision_grounding(repaired_text, stage151_tool_decision_grounding, channel=turn.channel),
+            )
+            repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
+            grounding_repaired = True
         stage151_network_grounding = evaluate_network_grounding(repaired_text, tool_observation_ledger)
         if bool(stage151_network_grounding.get("repair_required", False)):
             repaired_text = normalize_external_speech_for_context(
@@ -9426,7 +9455,13 @@ class HoloReplyService:
             repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
             grounding_repaired = True
         stage151_network_grounding = evaluate_network_grounding(repaired_text, tool_observation_ledger)
+        stage151_tool_decision_grounding = evaluate_tool_decision_grounding(
+            repaired_text,
+            web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+            time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
+        )
         reply_debug["stage151_network_grounding"] = stage151_network_grounding
+        reply_debug["stage151_tool_decision_grounding"] = stage151_tool_decision_grounding
         memory_observation_ledger = normalize_memory_observation_ledger(
             sidecar=sidecar,
             reply_debug=reply_debug,
@@ -9624,10 +9659,20 @@ class HoloReplyService:
             },
             reply_debug=reply_debug,
         )
+        stage151_live_trace = build_stage151_live_trace(
+            user_text=turn.text,
+            tool_decision=capability_context.get("stage151_tool_decision", sidecar.get("stage151_tool_decision", {})),
+            web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+            grounding=stage151_tool_decision_grounding,
+            final_text=final_reply,
+        )
         reply_debug["stage151_live_tool_trace"] = stage151_live_tool_trace
+        reply_debug["stage151_live_trace"] = stage151_live_trace
         stage151_network_grounding_status = str(stage151_network_grounding.get("status", "") or "")
         stage151_network_grounding_claim_count = int(stage151_network_grounding.get("claim_count", 0) or 0)
         stage151_external_lookup_ledger_count = int(stage151_network_grounding.get("external_lookup_ledger_count", 0) or 0)
+        stage151_tool_decision_grounding_status = str(stage151_tool_decision_grounding.get("status", "") or "")
+        stage151_web_observation_count = len(list(capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])) or []))
         turn_context.mind_packet = sidecar
         turn_context.sidecar = sidecar
         stage148_react_loop = stage148_react_state.get("react_loop", {})
@@ -9638,7 +9683,7 @@ class HoloReplyService:
             stage148_react_plan = {}
         stage148_react_plan_action = str(stage148_react_plan.get("selected_action_hint", "") or "")
         topology_present = bool(stage135_i_state_topology.get("schema"))
-        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0 or stage144_context_economy or stage145_outcome_appraisal):
+        if not topology_present and (memory_alignment_claim_count > 0 or stage142_candidate_count > 1 or stage143_packet_count > 0 or stage144_context_economy or stage145_outcome_appraisal or capability_context.get("stage151_tool_decision")):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
                 fast_packet=dict(stage124_thought_loop.get("fast_packet", {})) if isinstance(stage124_thought_loop.get("fast_packet", {}), dict) else {},
@@ -9655,6 +9700,7 @@ class HoloReplyService:
                 stage145_outcome_appraisal=stage145_outcome_appraisal,
                 stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
                 stage150_context_memory_fabric=stage150_context_memory_fabric,
+                stage151_tool_decision=capability_context.get("stage151_tool_decision", {}),
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9726,6 +9772,13 @@ class HoloReplyService:
                 "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
                 "stage151_external_lookup_ledger_count": stage151_external_lookup_ledger_count,
                 "stage151_live_tool_trace": stage151_live_tool_trace,
+                "stage151_tool_decision": capability_context.get("stage151_tool_decision", {}),
+                "stage151_tool_decision_grounding": stage151_tool_decision_grounding,
+                "stage151_tool_decision_grounding_status": stage151_tool_decision_grounding_status,
+                "stage151_live_trace": stage151_live_trace,
+                "time_observation": capability_context.get("time_observation", {}),
+                "web_observation_ledger": capability_context.get("web_observation_ledger", []),
+                "stage151_web_observation_count": stage151_web_observation_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9810,6 +9863,13 @@ class HoloReplyService:
             "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
             "stage151_external_lookup_ledger_count": stage151_external_lookup_ledger_count,
             "stage151_live_tool_trace": stage151_live_tool_trace,
+            "stage151_tool_decision": capability_context.get("stage151_tool_decision", {}),
+            "stage151_tool_decision_grounding": stage151_tool_decision_grounding,
+            "stage151_tool_decision_grounding_status": stage151_tool_decision_grounding_status,
+            "stage151_live_trace": stage151_live_trace,
+            "time_observation": capability_context.get("time_observation", {}),
+            "web_observation_ledger": capability_context.get("web_observation_ledger", []),
+            "stage151_web_observation_count": stage151_web_observation_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9951,6 +10011,13 @@ class HoloReplyService:
                 "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
                 "stage151_external_lookup_ledger_count": stage151_external_lookup_ledger_count,
                 "stage151_live_tool_trace": stage151_live_tool_trace,
+                "stage151_tool_decision": capability_context.get("stage151_tool_decision", {}),
+                "stage151_tool_decision_grounding": stage151_tool_decision_grounding,
+                "stage151_tool_decision_grounding_status": stage151_tool_decision_grounding_status,
+                "stage151_live_trace": stage151_live_trace,
+                "time_observation": capability_context.get("time_observation", {}),
+                "web_observation_ledger": capability_context.get("web_observation_ledger", []),
+                "stage151_web_observation_count": stage151_web_observation_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
