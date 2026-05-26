@@ -148,6 +148,7 @@ def test_cli_trace_shows_purpose_tool_call_observation_grounding_final() -> None
     assert "[candidate]" in rendered
     assert "[tool_call] web_search" in rendered
     assert "[observation] web_search status=ok results=1" in rendered
+    assert "source=https://developers.openai.com/codex/cli" in rendered
     assert "[grounding] status=grounded" in rendered
     assert "[final]" in rendered
 

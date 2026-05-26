@@ -93,23 +93,26 @@ Stage139: repairs the workspace tool claim unless a workspace/tool observation e
 Verified so far:
 
 ```text
-python -m pytest tests\test_stage151_tool_decision_loop.py tests\test_stage151_live_tool_trace.py tests\test_tool_grounding.py tests\test_stage150_context_memory_fabric.py tests\test_capabilities.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage151-targeted3
-29 passed in 4.62s
+python -m pytest tests\test_stage151_tool_decision_loop.py tests\test_stage151_live_tool_trace.py tests\test_tool_grounding.py tests\test_stage150_context_memory_fabric.py tests\test_capabilities.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage151-targeted4
+29 passed in 3.95s
 
 python -m pytest tests\test_holo_host.py tests\test_stage135_i_state_topology.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage151-runtime2
 91 passed in 32.76s
 
 python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base
-588 passed in 99.32s
+588 passed in 101.30s
 
 python scripts\check_public_release_hygiene.py
 Public release hygiene passed
 
 git diff --check
 passed
+
+wsl.exe -d HoloUbuntu -- bash -lc "cd /mnt/d/Holo/holo && printf '联网搜索 OpenAI Codex CLI 官方文档，给出来源\n/quit\n' | python3 -m holo_host chat --trace --no-local-fallback"
+live reply succeeded with [tool_call] web_search, [observation] web_search status=ok results=3, and [grounding] status=grounded
 ```
 
-Live CLI smoke, commit, and push are completed after this handoff is updated by the final verification pass.
+The WSL live repo was aligned to the pushed Stage151 commit and restarted with only `reply_api` and `daemon`; WeChat transport remained stopped.
 
 ## Constraints Preserved
 

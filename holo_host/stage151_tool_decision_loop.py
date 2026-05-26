@@ -579,7 +579,12 @@ def format_stage151_live_trace(payload: dict[str, Any]) -> str:
         elif kind == "tool_call":
             lines.append(f"[tool_call] {event.get('action_type', '')} query={event.get('query', '')}")
         elif kind in {"observation", "tool_observation"}:
-            lines.append(f"[observation] {event.get('action_type', event.get('tool', ''))} status={event.get('status', '')} results={event.get('result_count', 0)}")
+            source_urls = list(event.get("source_urls", []) or [])
+            source = f" source={source_urls[0]}" if source_urls else ""
+            lines.append(
+                f"[observation] {event.get('action_type', event.get('tool', ''))} "
+                f"status={event.get('status', '')} results={event.get('result_count', 0)}{source}"
+            )
         elif kind == "grounding":
             missing = ",".join(str(item) for item in list(event.get("missing_observations", []) or [])) or "-"
             lines.append(f"[grounding] status={event.get('status', '') or '-'} missing={missing}")
