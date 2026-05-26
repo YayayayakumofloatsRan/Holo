@@ -71,9 +71,10 @@ STAGE2_CORRECTIONS = [
 
 
 def _format_codex_like_live_trace(payload: dict[str, Any]) -> str:
+    stage152_loop = payload.get("stage152_deepseek_tool_loop") if isinstance(payload, dict) else None
     if isinstance(payload, dict) and (
         payload.get("stage152_live_trace")
-        or (isinstance(payload.get("stage152_deepseek_tool_loop", {}), dict) and payload["stage152_deepseek_tool_loop"].get("live_trace"))
+        or (isinstance(stage152_loop, dict) and stage152_loop.get("live_trace"))
     ):
         return format_stage152_live_trace(payload)
     return format_stage151_live_trace(payload)

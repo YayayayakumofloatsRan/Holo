@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from holo_host.codex_runner import CodexRunner, DeepSeekProvider
+from holo_host.cli import _format_codex_like_live_trace
 from holo_host.config import load_config
 from holo_host.models import ProcessorTaskRequest
 from holo_host.stage151_tool_decision_loop import build_time_observation, evaluate_tool_decision_grounding
@@ -272,3 +273,20 @@ def test_deepseek_provider_uses_stage152_native_tools_and_redacts_trace_reasonin
     trace = format_stage152_live_trace({"stage152_live_trace": result.metadata["stage152_live_trace"]})
     assert "[tool] web_search" in trace
     assert "private reasoning" not in trace
+
+
+def test_cli_trace_formatter_falls_back_when_stage152_loop_key_is_absent() -> None:
+    trace = _format_codex_like_live_trace(
+        {
+            "stage151_live_trace": {
+                "events": [
+                    {"event": "purpose", "summary": "answer_direct"},
+                    {"event": "grounding", "status": "grounded"},
+                    {"event": "final", "summary": "direct answer"},
+                ]
+            }
+        }
+    )
+
+    assert "[purpose] answer_direct" in trace
+    assert "[final] direct answer" in trace
