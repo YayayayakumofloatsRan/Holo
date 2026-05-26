@@ -197,6 +197,7 @@ def build_stage135_i_state_topology(
     stage145_outcome_appraisal: dict[str, Any] | None = None,
     stage145_reaction_kernel_shadow: dict[str, Any] | None = None,
     stage148_react_state: dict[str, Any] | None = None,
+    stage150_context_memory_fabric: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -224,6 +225,7 @@ def build_stage135_i_state_topology(
     outcome_appraisal = _dict(stage145_outcome_appraisal)
     reaction_kernel = _dict(stage145_reaction_kernel_shadow)
     react_state = _dict(stage148_react_state or packet.get("stage148_react_state", {}))
+    context_memory_fabric = _dict(stage150_context_memory_fabric or packet.get("stage150_context_memory_fabric", {}))
     user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
@@ -443,6 +445,34 @@ def build_stage135_i_state_topology(
         if context_economy:
             edges.append(_edge("context_economy_gate", "stage148_react_loop", relation="observes_context_policy", weight=0.4, summary="shadow context policy informs the next plan without direct enforcement"))
 
+    if context_memory_fabric:
+        working_packet = _dict(context_memory_fabric.get("working_context_packet", {}))
+        slots = _list_dicts(working_packet.get("reusable_state_slots", []))
+        open_loops = _list_dicts(working_packet.get("open_loops", []))
+        evidence_view = _list_dicts(working_packet.get("evidence_ledger_view", []))
+        compact = _dict(context_memory_fabric.get("background_compact", {}))
+        internal_only = bool(context_memory_fabric.get("background_compact_internal_only", compact.get("user_visible") is False))
+        nodes.append(
+            _node(
+                "context_memory_fabric",
+                "context memory fabric",
+                channel="context_memory_fabric",
+                kind="context_packet",
+                x=0.39,
+                y=0.36,
+                weight=0.72,
+                summary=f"slots={len(slots)}; evidence={len(evidence_view)}; open_loops={len(open_loops)}; compact_internal={internal_only}",
+            )
+        )
+        if react_state:
+            edges.append(_edge("stage148_react_loop", "context_memory_fabric", relation="feeds_structured_context", weight=0.58, summary="reusable state is organized into a working context packet"))
+        else:
+            edges.append(_edge("holo_self", "context_memory_fabric", relation="builds_structured_context", weight=0.46, summary="Holo state is organized before provider generation"))
+        if user_directives:
+            edges.append(_edge("user_directive_kernel", "context_memory_fabric", relation="overrides_persona_memory", weight=0.58, summary="user directives outrank persona and style memory in the context packet"))
+        edges.append(_edge("context_memory_fabric", "fast_packet", relation="frames_provider_packet", weight=0.62, summary="structured context is rendered before provider speech"))
+        edges.append(_edge("context_memory_fabric", "memory_delta", relation="separates_state_from_transcript", weight=0.5, summary="background compact is internal and raw chat is not treated as reusable memory"))
+
     ledger_nodes: set[str] = set()
     for index, item in enumerate(_list_dicts(loop.get("tool_observation_ledger", []))[:10]):
         call_id = str(item.get("provider_call_id", "") or item.get("tool", "") or f"tool_{index + 1}")
@@ -627,6 +657,10 @@ def build_stage135_i_state_topology(
             "react_loop_plan_action": str(_dict(_dict(react_state.get("react_loop", {})).get("plan", {})).get("selected_action_hint", "") or "") if react_state else "",
             "react_loop_event_count": int(_dict(react_state.get("event_log", {})).get("event_count", 0) or 0) if react_state else 0,
             "reusable_state_slot_count": int(_dict(react_state.get("reusable_state_memory", {})).get("slot_count", 0) or 0) if react_state else 0,
+            "context_memory_fabric_node_count": sum(1 for node in nodes if node["channel"] == "context_memory_fabric"),
+            "context_memory_fabric_slot_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("reusable_state_slots", []))) if context_memory_fabric else 0,
+            "context_memory_fabric_open_loop_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("open_loops", []))) if context_memory_fabric else 0,
+            "context_memory_fabric_evidence_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("evidence_ledger_view", []))) if context_memory_fabric else 0,
             "user_directive_node_count": sum(1 for node in nodes if node["channel"] == "user_directive"),
             "user_directive_count": int(user_directives.get("hard_directive_count", 0) or 0) if user_directives else 0,
             "user_directive_status": str(user_directives.get("status", "") or "") if user_directives else "",
@@ -697,6 +731,7 @@ const colors = {{
   context_economy: "#8a6f2a",
   reaction_kernel: "#a45d55",
   react_loop: "#5268b2",
+  context_memory_fabric: "#596d5a",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"

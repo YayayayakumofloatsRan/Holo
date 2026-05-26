@@ -37,6 +37,7 @@ from .stage144_context_economy import build_stage144_context_economy
 from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import stage148_prompt_lines
 from .stage149_user_directives import merge_stage149_semantic_directives, stage149_prompt_lines
+from .stage150_context_memory_fabric import build_stage150_context_memory_fabric, stage150_prompt_lines
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1497,6 +1498,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     short_term_block = _render_section("Short Term Working Memory:", short_term_lines)
     stage149_lines = stage149_prompt_lines(packet.get("stage149_user_directives", {}))
     user_directive_block = _render_section("User Directive State:", stage149_lines)
+    stage150_lines = stage150_prompt_lines(packet.get("stage150_context_memory_fabric", {}))
+    engineering_context_block = _render_section("Engineering Context State:", stage150_lines)
     stage148_lines = stage148_prompt_lines(packet.get("stage148_react_state", {}))
     reusable_state_block = _render_section("Reusable State Memory:", stage148_lines)
     react_state_block = _render_section(
@@ -1543,6 +1546,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         intent_block,
         selected_action_block,
         user_directive_block,
+        engineering_context_block,
         situational_block,
         short_term_block,
         reusable_state_block,
@@ -1674,10 +1678,11 @@ class CodexCliProcessor:
         timeout_seconds = _reply_processor_timeout_seconds(context, lane)
         agent_tool_requests = _agent_tool_requests(context)
         short_term_lines = build_short_term_working_memory_lines(context)
+        stage150_lines = stage150_prompt_lines(context.mind_packet.get("stage150_context_memory_fabric", {}))
         stage135_i_state_prompt_frame = build_stage135_i_state_prompt_frame(context)
         stage132_fast_context_frame = build_stage132_fast_context_frame(
             context,
-            short_term_lines=list(stage135_i_state_prompt_frame.get("lines", [])) + short_term_lines,
+            short_term_lines=stage150_lines[:12] + list(stage135_i_state_prompt_frame.get("lines", [])) + short_term_lines,
         )
         fast_packet_started_at = time.perf_counter()
         fast_result = self._run_runner(
@@ -1712,6 +1717,15 @@ class CodexCliProcessor:
             packet_after_fast["stage149_user_directives"] = merge_stage149_semantic_directives(
                 dict(packet_after_fast.get("stage149_user_directives", {})),
                 fast_packet,
+            )
+            packet_after_fast["stage150_context_memory_fabric"] = build_stage150_context_memory_fabric(
+                user_text=str(context.user_text or ""),
+                channel=context.channel,
+                thread_key=context.thread_key,
+                chat_name=context.chat_name,
+                history=context.history,
+                sidecar=packet_after_fast,
+                capability_context=context.capability_context,
             )
             context.mind_packet = packet_after_fast
             context.sidecar = packet_after_fast
@@ -1845,6 +1859,7 @@ class CodexCliProcessor:
                     "stage144_context_economy": stage144_context_economy,
                     "stage145_outcome_appraisal": stage145_outcome_appraisal,
                     "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
+                    "stage150_context_memory_fabric": dict(context.mind_packet.get("stage150_context_memory_fabric", {})),
                     "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                     "stage135_i_state_topology": stage135_topology,
                     "memory_observation_ledger": memory_observation_ledger,
@@ -2053,6 +2068,7 @@ class CodexCliProcessor:
                 "stage144_context_economy": stage144_context_economy,
                 "stage145_outcome_appraisal": stage145_outcome_appraisal,
                 "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
+                "stage150_context_memory_fabric": dict(context.mind_packet.get("stage150_context_memory_fabric", {})),
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_topology,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),

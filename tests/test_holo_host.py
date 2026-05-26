@@ -3392,6 +3392,60 @@ class ReplyServiceTests(unittest.TestCase):
             finally:
                 close_service_handles(service)
 
+    def test_reply_service_propagates_stage150_context_memory_fabric_metadata(self) -> None:
+        class Stage150MetadataProcessor:
+            name = "stage150_metadata_processor"
+
+            def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
+                self.seen_context = context
+                return ReplyPlan(
+                    text="I will keep the context structured.",
+                    bubbles=[ReplyBubble("I will keep the context structured.")],
+                    attention_state=context.attention_state,
+                    turn_plan=TurnPlan(route="main", bubble_target=1),
+                    emotion_state=dict(context.emotion_state),
+                    route="main",
+                    processor=self.name,
+                    session_id=session_id or "stage150-session",
+                    raw_text="I will keep the context structured.",
+                    timing_ms={"processor_ms": 5, "recall_reconstruct_ms": 0},
+                    debug={},
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            processor = Stage150MetadataProcessor()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            service.processor = processor
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "text": "Build Stage150 context memory fabric.",
+                        "channel": "holo_cli",
+                        "message_id": "stage150-runtime-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(
+                    processor.seen_context.mind_packet["stage150_context_memory_fabric"]["schema"],
+                    "holo.stage150.context_memory_fabric.v1",
+                )
+                self.assertEqual(result["stage150_context_memory_fabric"]["schema"], "holo.stage150.context_memory_fabric.v1")
+                self.assertTrue(result["stage150_background_compact_internal"])
+                self.assertIn("stage150_context_memory_fabric", memory.observed_records[-1]["metadata"])
+                self.assertGreaterEqual(
+                    result["stage135_i_state_topology"]["metrics"]["context_memory_fabric_node_count"],
+                    1,
+                )
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

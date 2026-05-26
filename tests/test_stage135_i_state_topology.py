@@ -444,6 +444,30 @@ def test_stage135_topology_includes_reaction_kernel_shadow_node() -> None:
     assert any(edge["source"] == "reaction_kernel_shadow" and edge["target"] == "holo_self" for edge in payload["edges"])
 
 
+def test_stage135_topology_includes_context_memory_fabric_node() -> None:
+    fabric = {
+        "schema": "holo.stage150.context_memory_fabric.v1",
+        "working_context_packet": {
+            "reusable_state_slots": [
+                {"slot_id": "current", "slot_type": "current_user_constraint", "summary": "no emoji"},
+                {"slot_id": "task", "slot_type": "active_task", "summary": "build structured context"},
+            ],
+            "open_loops": [{"summary": "finish Stage150 verification"}],
+        },
+        "background_compact": {"user_visible": False},
+        "evidence_discipline": {"unverified_claim_families": ["test"]},
+    }
+    payload = build_stage135_i_state_topology(
+        context=_context("show context memory fabric"),
+        stage150_context_memory_fabric=fabric,
+    )
+
+    assert _node(payload, "context_memory_fabric")["channel"] == "context_memory_fabric"
+    assert payload["metrics"]["context_memory_fabric_node_count"] == 1
+    assert payload["metrics"]["context_memory_fabric_slot_count"] == 2
+    assert payload["metrics"]["context_memory_fabric_open_loop_count"] == 1
+
+
 def test_stage135_processor_debug_carries_i_state_topology_for_deep_and_fast_only_paths(tmp_path: Path) -> None:
     config = _config(tmp_path)
     deep_runner = _Stage135Runner(deep_needed=True)

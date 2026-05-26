@@ -80,6 +80,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 75. `docs/ENGINEERING_HANDOFF_STAGE148.md`
 76. `docs/STAGE149_USER_DIRECTIVE_KERNEL.md`
 77. `docs/ENGINEERING_HANDOFF_STAGE149.md`
+78. `docs/STAGE150_CODEX_STYLE_CONTEXT_MEMORY.md`
+79. `docs/ENGINEERING_HANDOFF_STAGE150.md`
 
 ## What This Document Must Cover
 - current live state
@@ -94,9 +96,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage149-user-directive-kernel`.
+- The current milestone tag is `stage150-codex-style-context-memory`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage149 user directive kernel: repeated or current user corrections such as "不要用 emoji" and "不要 role play" are promoted from raw archive/history evidence into packet-visible hard directives and final visible-output repair, while Holo's visible identity is constrained as a local subject runtime rather than a fictional-character roleplay.
+- Current focus is Stage150 Codex-style context memory fabric: Holo now builds a structured working-context packet with instruction scope, current user goal, active task state, reusable state slots, Stage149 directives, evidence ledger view, open loops, internal background compact, and forbidden visible claims before provider generation. Background compact remains internal and must not become visible speech.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

@@ -73,6 +73,7 @@ from .stage144_context_economy import build_stage144_context_economy
 from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import build_stage148_react_state
 from .stage149_user_directives import apply_stage149_visible_directives, build_stage149_user_directives
+from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9300,6 +9301,16 @@ class HoloReplyService:
             capability_context=capability_context,
         )
         sidecar["stage148_react_state"] = stage148_react_state
+        stage150_context_memory_fabric = build_stage150_context_memory_fabric(
+            user_text=turn.text,
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            history=history,
+            sidecar=sidecar,
+            capability_context=capability_context,
+        )
+        sidecar["stage150_context_memory_fabric"] = stage150_context_memory_fabric
         attention_state = build_attention_state(turn.text, channel=turn.channel, metadata=turn.metadata)
         turn_context = TurnContext(
             channel=turn.channel,
@@ -9331,6 +9342,10 @@ class HoloReplyService:
             stage149_user_directives = dict(sidecar.get("stage149_user_directives", {}))
         else:
             sidecar["stage149_user_directives"] = stage149_user_directives
+        if isinstance(sidecar.get("stage150_context_memory_fabric", {}), dict):
+            stage150_context_memory_fabric = dict(sidecar.get("stage150_context_memory_fabric", {}))
+        else:
+            sidecar["stage150_context_memory_fabric"] = stage150_context_memory_fabric
         processor_ms = int(reply_plan.timing_ms.get("processor_ms", 0))
 
         self.store.update_thread_session(int(thread["id"]), reply_plan.session_id)
@@ -9345,6 +9360,7 @@ class HoloReplyService:
         repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
         reply_debug = reply_plan.debug if isinstance(reply_plan.debug, dict) else {}
         reply_debug["stage149_user_directives"] = stage149_user_directives
+        reply_debug["stage150_context_memory_fabric"] = stage150_context_memory_fabric
         stage149_user_directive_count = int(stage149_user_directives.get("hard_directive_count", 0) or 0)
         stage149_user_directive_status = str(stage149_user_directives.get("status", "") or "")
         stage132_progressive_stream = (
@@ -9554,9 +9570,28 @@ class HoloReplyService:
             stage145_outcome_appraisal=stage145_outcome_appraisal,
         )
         sidecar["stage148_react_state"] = stage148_react_state
+        reply_debug["stage148_react_state"] = stage148_react_state
+        stage150_context_memory_fabric = build_stage150_context_memory_fabric(
+            user_text=turn.text,
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            history=history,
+            sidecar=sidecar,
+            capability_context=capability_context,
+            reply_debug=reply_debug,
+            tool_observation_ledger=tool_observation_ledger,
+            memory_observation_ledger=memory_observation_ledger,
+            candidate_visible_text=final_reply,
+        )
+        sidecar["stage150_context_memory_fabric"] = stage150_context_memory_fabric
+        reply_debug["stage150_context_memory_fabric"] = stage150_context_memory_fabric
+        stage150_slot_count = int(stage150_context_memory_fabric.get("slot_count", 0) or 0)
+        stage150_evidence_count = int(stage150_context_memory_fabric.get("evidence_count", 0) or 0)
+        stage150_open_loop_count = int(stage150_context_memory_fabric.get("open_loop_count", 0) or 0)
+        stage150_background_compact_internal = bool(stage150_context_memory_fabric.get("background_compact_internal_only", True))
         turn_context.mind_packet = sidecar
         turn_context.sidecar = sidecar
-        reply_debug["stage148_react_state"] = stage148_react_state
         stage148_react_loop = stage148_react_state.get("react_loop", {})
         if not isinstance(stage148_react_loop, dict):
             stage148_react_loop = {}
@@ -9581,6 +9616,7 @@ class HoloReplyService:
                 stage144_context_economy=stage144_context_economy,
                 stage145_outcome_appraisal=stage145_outcome_appraisal,
                 stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
+                stage150_context_memory_fabric=stage150_context_memory_fabric,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -9642,6 +9678,11 @@ class HoloReplyService:
                 "stage149_user_directives": stage149_user_directives,
                 "stage149_user_directive_status": stage149_user_directive_status,
                 "stage149_user_directive_count": stage149_user_directive_count,
+                "stage150_context_memory_fabric": stage150_context_memory_fabric,
+                "stage150_context_memory_fabric_slot_count": stage150_slot_count,
+                "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
+                "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
+                "stage150_background_compact_internal": stage150_background_compact_internal,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9716,6 +9757,11 @@ class HoloReplyService:
             "stage149_user_directives": stage149_user_directives,
             "stage149_user_directive_status": stage149_user_directive_status,
             "stage149_user_directive_count": stage149_user_directive_count,
+            "stage150_context_memory_fabric": stage150_context_memory_fabric,
+            "stage150_context_memory_fabric_slot_count": stage150_slot_count,
+            "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
+            "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
+            "stage150_background_compact_internal": stage150_background_compact_internal,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9847,6 +9893,11 @@ class HoloReplyService:
                 "stage149_user_directives": stage149_user_directives,
                 "stage149_user_directive_status": stage149_user_directive_status,
                 "stage149_user_directive_count": stage149_user_directive_count,
+                "stage150_context_memory_fabric": stage150_context_memory_fabric,
+                "stage150_context_memory_fabric_slot_count": stage150_slot_count,
+                "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
+                "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
+                "stage150_background_compact_internal": stage150_background_compact_internal,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

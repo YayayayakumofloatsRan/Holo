@@ -126,6 +126,11 @@ Stage149: user directive kernel
 - Promotes user corrections such as "不要用 emoji" and "不要 role play" into packet-visible hard directives, applies final visible-output repair, and constrains Holo as a local subject runtime rather than a roleplay costume.
 - Renders `User Directive State` into the provider prompt and exposes a Stage135 `user_directive_kernel` topology node without adding provider calls, memory writes, tool execution, transport authority, WeChat starts, private persona mutation, or a second loop.
 
+Stage150: Codex-style context memory fabric
+- Implemented deterministic `stage150_context_memory_fabric` over current input, Stage148 reusable state, Stage149 directives, recent dialogue, sidecar/debug evidence, and existing tool/memory/packet/context reports.
+- Builds a structured working-context packet with instruction scope, current user goal, active task state, reusable slots, evidence ledger view, open loops, internal background compact, and forbidden visible claims.
+- Renders `Engineering Context State` into the provider prompt and exposes a Stage135 `context_memory_fabric` topology node without adding provider calls, memory writes, tool execution, approval/sandbox policy, transport authority, WeChat starts, or a second loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
