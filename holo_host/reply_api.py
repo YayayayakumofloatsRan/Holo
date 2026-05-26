@@ -72,6 +72,7 @@ from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
 from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import build_stage148_react_state
+from .stage149_user_directives import apply_stage149_visible_directives, build_stage149_user_directives
 
 
 SYSTEM_EVENT_HINTS = (
@@ -122,6 +123,38 @@ ORIGIN_RECALL_HINTS = (
     "initially",
     "first thing",
 )
+
+
+def _stage149_thread_archive_rows(
+    memory: Any,
+    *,
+    channel: str,
+    thread_key: str,
+    chat_name: str,
+    limit: int = 80,
+) -> list[dict[str, Any]]:
+    rag = getattr(memory, "rag", None)
+    if rag is None:
+        rag = memory if hasattr(memory, "thread_archive_rows") else None
+    if rag is None or not hasattr(rag, "thread_archive_rows"):
+        return []
+    try:
+        rows = rag.thread_archive_rows(
+            {"channel": channel, "thread_key": thread_key, "chat_name": chat_name},
+            limit=max(1, int(limit)),
+            include_synthetic=False,
+        )
+    except TypeError:
+        try:
+            rows = rag.thread_archive_rows(
+                {"channel": channel, "thread_key": thread_key, "chat_name": chat_name},
+                limit=max(1, int(limit)),
+            )
+        except Exception:
+            return []
+    except Exception:
+        return []
+    return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
 
 
 def _optional_payload_str(payload: dict[str, Any], key: str) -> str | None:
@@ -9221,6 +9254,23 @@ class HoloReplyService:
         capability_started_at = time.perf_counter()
         capability_context = prebuilt_capability_context or self.capabilities.summarize_turn(turn.text, turn.metadata)
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
+        stage149_archive_rows = _stage149_thread_archive_rows(
+            self.memory,
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+        )
+        sidecar = dict(sidecar)
+        stage149_user_directives = build_stage149_user_directives(
+            user_text=turn.text,
+            channel=turn.channel,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            history=history,
+            archive_rows=stage149_archive_rows,
+            sidecar=sidecar,
+        )
+        sidecar["stage149_user_directives"] = stage149_user_directives
         stage148_react_state = build_stage148_react_state(
             user_text=turn.text,
             channel=turn.channel,
@@ -9231,7 +9281,6 @@ class HoloReplyService:
             sidecar=sidecar,
             capability_context=capability_context,
         )
-        sidecar = dict(sidecar)
         sidecar["stage148_react_state"] = stage148_react_state
         attention_state = build_attention_state(turn.text, channel=turn.channel, metadata=turn.metadata)
         turn_context = TurnContext(
@@ -9260,6 +9309,7 @@ class HoloReplyService:
                 "detail": str(exc),
             })
         sidecar = dict(turn_context.mind_packet or sidecar)
+        sidecar["stage149_user_directives"] = stage149_user_directives
         processor_ms = int(reply_plan.timing_ms.get("processor_ms", 0))
 
         self.store.update_thread_session(int(thread["id"]), reply_plan.session_id)
@@ -9271,7 +9321,11 @@ class HoloReplyService:
             turn_context,
             str(repaired.get("final_draft", reply_plan.text)).strip(),
         )
+        repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
         reply_debug = reply_plan.debug if isinstance(reply_plan.debug, dict) else {}
+        reply_debug["stage149_user_directives"] = stage149_user_directives
+        stage149_user_directive_count = int(stage149_user_directives.get("hard_directive_count", 0) or 0)
+        stage149_user_directive_status = str(stage149_user_directives.get("status", "") or "")
         stage132_progressive_stream = (
             dict(reply_debug.get("stage132_progressive_stream", {}))
             if isinstance(reply_debug.get("stage132_progressive_stream", {}), dict)
@@ -9311,6 +9365,7 @@ class HoloReplyService:
                 turn_context,
                 repair_ungrounded_tool_claims(repaired_text, tool_grounding, channel=turn.channel),
             )
+            repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
             grounding_repaired = True
         memory_observation_ledger = normalize_memory_observation_ledger(
             sidecar=sidecar,
@@ -9330,6 +9385,7 @@ class HoloReplyService:
                 turn_context,
                 repair_memory_claims(repaired_text, memory_grounding, channel=turn.channel),
             )
+            repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
             grounding_repaired = True
         memory_alignment = evaluate_memory_alignment(
             repaired_text,
@@ -9345,6 +9401,7 @@ class HoloReplyService:
                 turn_context,
                 repair_memory_alignment(repaired_text, memory_alignment, channel=turn.channel),
             )
+            repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
             grounding_repaired = True
         reply_debug["memory_alignment"] = memory_alignment
         memory_alignment_status = str(memory_alignment.get("status", "") or "")
@@ -9379,10 +9436,20 @@ class HoloReplyService:
             strict_target=bool(sidecar.get("selected_action", {})),
             planned_bubbles=planned_bubbles,
         )
+        cleaned_bubbles: list[ReplyBubble] = []
+        for bubble in bubbles:
+            bubble_text = apply_stage149_visible_directives(bubble.text, stage149_user_directives).strip()
+            if not bubble_text:
+                continue
+            if cleaned_bubbles and cleaned_bubbles[-1].text == bubble_text:
+                continue
+            cleaned_bubbles.append(ReplyBubble(text=bubble_text, delay_ms=bubble.delay_ms, purpose=bubble.purpose))
+        bubbles = cleaned_bubbles or [ReplyBubble(text="收到。", delay_ms=0, purpose="fallback")]
         final_reply = normalize_external_speech_for_context(
             turn_context,
             " ".join(bubble.text for bubble in bubbles).strip(),
         )
+        final_reply = apply_stage149_visible_directives(final_reply, stage149_user_directives) or "收到。"
         stage142_candidate_count = int(stage142_semantic_novelty.get("candidate_count", 0) or 0)
         stage142_suppressed_count = int(stage142_semantic_novelty.get("suppressed_count", 0) or 0)
         stage142_status = str(stage142_semantic_novelty.get("status", "") or "")
@@ -9551,6 +9618,9 @@ class HoloReplyService:
                 "stage145_shadow_only": stage145_shadow_only,
                 "stage148_react_state": stage148_react_state,
                 "stage148_react_plan_action": stage148_react_plan_action,
+                "stage149_user_directives": stage149_user_directives,
+                "stage149_user_directive_status": stage149_user_directive_status,
+                "stage149_user_directive_count": stage149_user_directive_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -9622,6 +9692,9 @@ class HoloReplyService:
             "stage145_shadow_only": stage145_shadow_only,
             "stage148_react_state": stage148_react_state,
             "stage148_react_plan_action": stage148_react_plan_action,
+            "stage149_user_directives": stage149_user_directives,
+            "stage149_user_directive_status": stage149_user_directive_status,
+            "stage149_user_directive_count": stage149_user_directive_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -9750,6 +9823,9 @@ class HoloReplyService:
                 "stage145_shadow_only": stage145_shadow_only,
                 "stage148_react_state": stage148_react_state,
                 "stage148_react_plan_action": stage148_react_plan_action,
+                "stage149_user_directives": stage149_user_directives,
+                "stage149_user_directive_status": stage149_user_directive_status,
+                "stage149_user_directive_count": stage149_user_directive_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,

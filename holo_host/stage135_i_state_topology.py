@@ -224,6 +224,7 @@ def build_stage135_i_state_topology(
     outcome_appraisal = _dict(stage145_outcome_appraisal)
     reaction_kernel = _dict(stage145_reaction_kernel_shadow)
     react_state = _dict(stage148_react_state or packet.get("stage148_react_state", {}))
+    user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
 
@@ -279,6 +280,26 @@ def build_stage135_i_state_topology(
     if visual_summary:
         nodes.append(_node("visual_delta", "visual / world delta", channel="visual_delta", kind="sensor_state", x=0.45, y=0.9, weight=0.46, summary=visual_summary))
         edges.append(_edge("visual_delta", "holo_self", relation="grounds_state", weight=0.42, summary="sensor-derived world state feeds the same subject"))
+
+    if user_directives:
+        directive_count = int(user_directives.get("hard_directive_count", 0) or 0)
+        directive_status = str(user_directives.get("status", "") or "base_only")
+        identity = _dict(user_directives.get("core_identity", {}))
+        nodes.append(
+            _node(
+                "user_directive_kernel",
+                "user directive kernel",
+                channel="user_directive",
+                kind="constraint",
+                x=0.31,
+                y=0.08,
+                weight=0.78 if directive_count else 0.44,
+                summary=f"status={directive_status}; hard_directives={directive_count}; identity={str(identity.get('mode', '') or 'subject_runtime_not_roleplay')}",
+            )
+        )
+        edges.append(_edge("holo_self", "user_directive_kernel", relation="maintains_visible_constraints", weight=0.62, summary="durable user corrections constrain visible expression"))
+        edges.append(_edge("user_directive_kernel", "fast_packet", relation="constrains_provider_packet", weight=0.68, summary="user directives are included before persona and reply style"))
+        edges.append(_edge("user_directive_kernel", "memory_delta", relation="separates_preference_from_log", weight=0.44, summary="user correction becomes reusable state rather than raw chat text only"))
 
     if deep_needed:
         nodes.append(
@@ -606,6 +627,9 @@ def build_stage135_i_state_topology(
             "react_loop_plan_action": str(_dict(_dict(react_state.get("react_loop", {})).get("plan", {})).get("selected_action_hint", "") or "") if react_state else "",
             "react_loop_event_count": int(_dict(react_state.get("event_log", {})).get("event_count", 0) or 0) if react_state else 0,
             "reusable_state_slot_count": int(_dict(react_state.get("reusable_state_memory", {})).get("slot_count", 0) or 0) if react_state else 0,
+            "user_directive_node_count": sum(1 for node in nodes if node["channel"] == "user_directive"),
+            "user_directive_count": int(user_directives.get("hard_directive_count", 0) or 0) if user_directives else 0,
+            "user_directive_status": str(user_directives.get("status", "") or "") if user_directives else "",
             "visible_node_count": sum(1 for node in nodes if node["channel"] == "holo_visible"),
             "topology_digest": "stage135:" + stable_digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True), json.dumps(edges, ensure_ascii=False, sort_keys=True), limit=12),
         },

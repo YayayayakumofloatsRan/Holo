@@ -78,6 +78,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 73. `docs/ENGINEERING_HANDOFF_STAGE147.md`
 74. `docs/STAGE148_REUSABLE_STATE_MEMORY_AGENT_LOOP.md`
 75. `docs/ENGINEERING_HANDOFF_STAGE148.md`
+76. `docs/STAGE149_USER_DIRECTIVE_KERNEL.md`
+77. `docs/ENGINEERING_HANDOFF_STAGE149.md`
 
 ## What This Document Must Cover
 - current live state
@@ -92,9 +94,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage148-reusable-state-react-loop`.
+- The current milestone tag is `stage149-user-directive-kernel`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage148 reusable state memory and ReAct agent loop: raw dialogue remains an event log, while prompt-facing memory becomes a reusable state packet that carries current turn, recent corrections, unresolved questions, active task, action space, and host-gated observe/plan/act/observe metadata without adding provider calls, tool execution, durable memory writes, WeChat starts, transport authority, or a second brain loop.
+- Current focus is Stage149 user directive kernel: repeated or current user corrections such as "不要用 emoji" and "不要 role play" are promoted from raw archive/history evidence into packet-visible hard directives and final visible-output repair, while Holo's visible identity is constrained as a local subject runtime rather than a fictional-character roleplay.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -125,6 +127,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - `holo_memory_library/voice_profile.md`
 - Runtime kernel:
   - `holo_host/`
+- Tracked core defaults:
+  - `holo_host/policies.py`
+- Prompt assembly and packet-facing subject state:
+  - `holo_host/processors.py`
 - Long-term and working memory tooling:
   - `holo_memory_library/`
 - Private live memory stores, ignored by Git:

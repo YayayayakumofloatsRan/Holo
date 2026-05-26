@@ -1,0 +1,139 @@
+# Engineering Handoff Stage149
+
+Date: 2026-05-26
+
+## Summary
+
+Stage149 adds a deterministic user-directive kernel. Holo now promotes old and current user corrections, especially "no emoji" and "do not roleplay", into packet-visible hard constraints and final visible-output repair.
+
+This directly targets the observed defect where Holo ignored repeated "不要用 emoji" corrections after a few turns and drifted into roleplay-like language.
+
+## Files Changed
+
+- Added `holo_host/stage149_user_directives.py`
+- Added `tests/test_stage149_user_directives.py`
+- Added `docs/STAGE149_USER_DIRECTIVE_KERNEL.md`
+- Added `docs/ENGINEERING_HANDOFF_STAGE149.md`
+- Modified `holo_host/reply_api.py`
+- Modified `holo_host/processors.py`
+- Modified `holo_host/stage135_i_state_topology.py`
+- Modified `HOLO_HANDOFF.md`
+- Modified `docs/ROADMAP_REGISTRY.md`
+
+## New Schema
+
+```text
+holo.stage149.user_directives.v1
+```
+
+## Runtime Propagation
+
+`reply_api.py` queries existing thread archive rows through the memory/RAG interface, combines them with recent history and current input, and builds `stage149_user_directives` before processor generation.
+
+`processors.render_chat_prompt()` renders the report into `User Directive State`.
+
+`reply_api.py` applies visible repair after:
+
+- memory repair
+- Stage139 tool grounding repair
+- Stage140 memory grounding repair
+- Stage141 memory-alignment repair
+- bubble finalization
+
+The following metadata is propagated into final reply JSON, outgoing metadata, archive/observe metadata, and `ReplyPlan.debug`:
+
+- `stage149_user_directives`
+- `stage149_user_directive_status`
+- `stage149_user_directive_count`
+
+Stage135 topology shows `user_directive_kernel`.
+
+## Examples
+
+Archived or current user correction:
+
+```text
+我跟你反复说过了，不要用emoji
+```
+
+Stage149 directive:
+
+```text
+directive_type=visible_no_emoji
+hard_directive: no emoji or emoticons in visible speech.
+```
+
+Current identity correction:
+
+```text
+不要再让它role play了
+```
+
+Stage149 directive:
+
+```text
+directive_type=identity_not_roleplay
+hard_directive: do not roleplay; do not explain yourself as a character imitation.
+```
+
+Visible repair:
+
+```text
+作为赫萝角色扮演，我记住了 😏
+```
+
+becomes a non-emoji, non-roleplay visible reply.
+
+## Constraints Preserved
+
+- No provider calls added
+- No durable memory writes added
+- No tool execution added
+- No WeChat start
+- No transport authority widening
+- No second brain loop
+- No private persona-file mutation
+
+## Test Results
+
+Executed:
+
+```powershell
+python -m pytest tests\test_stage149_user_directives.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage149-targeted
+```
+
+Result:
+
+```text
+7 passed in 1.07s
+```
+
+Additional regression results should be appended after the broader verification run.
+
+Executed:
+
+```powershell
+python -m pytest tests\test_stage149_user_directives.py tests\test_stage148_react_agent_loop.py tests\test_stage135_i_state_topology.py tests\test_holo_host.py -q --basetemp D:\Holo\holo\.pytest_tmp\stage149-runtime
+```
+
+Result:
+
+```text
+103 passed in 51.54s
+```
+
+Executed:
+
+```powershell
+python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base
+```
+
+Result:
+
+```text
+559 passed in 142.21s (0:02:22)
+```
+
+## Next Suggested Stage
+
+Stage150 should use the Stage149 directive kernel as an input to a broader durable preference and state-promotion gate. The goal is to decide which user corrections become long-lived packet constraints, which remain recent working state, and which are only one-turn instructions.

@@ -36,6 +36,7 @@ from .stage143_packet_budget import build_stage143_packet_budget
 from .stage144_context_economy import build_stage144_context_economy
 from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import stage148_prompt_lines
+from .stage149_user_directives import stage149_prompt_lines
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .tool_need import classify_tool_need
 from .memory_grounding import normalize_memory_observation_ledger
@@ -1494,6 +1495,8 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     situational_block = _render_section("Situational Field:", _situational_field_lines_for_prompt(packet))
     short_term_lines = build_short_term_working_memory_lines(context)
     short_term_block = _render_section("Short Term Working Memory:", short_term_lines)
+    stage149_lines = stage149_prompt_lines(packet.get("stage149_user_directives", {}))
+    user_directive_block = _render_section("User Directive State:", stage149_lines)
     stage148_lines = stage148_prompt_lines(packet.get("stage148_react_state", {}))
     reusable_state_block = _render_section("Reusable State Memory:", stage148_lines)
     react_state_block = _render_section(
@@ -1539,6 +1542,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         resistance_block,
         intent_block,
         selected_action_block,
+        user_directive_block,
         situational_block,
         short_term_block,
         reusable_state_block,

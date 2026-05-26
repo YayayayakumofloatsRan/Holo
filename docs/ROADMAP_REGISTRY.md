@@ -121,6 +121,11 @@ Stage148: reusable state memory and ReAct agent loop
 - Separates raw chat/event logs from reusable state memory slots such as current user turn, recent correction, unresolved question, active task, action space, and packet-policy cue.
 - Renders `Reusable State Memory` and `ReAct State` into the provider prompt and exposes a Stage135 `react_loop` topology node without adding provider calls, memory writes, tool execution, transport authority, WeChat starts, or a second loop.
 
+Stage149: user directive kernel
+- Implemented deterministic `stage149_user_directives` over current input, recent dialogue, existing sidecar evidence, and thread archive rows.
+- Promotes user corrections such as "不要用 emoji" and "不要 role play" into packet-visible hard directives, applies final visible-output repair, and constrains Holo as a local subject runtime rather than a roleplay costume.
+- Renders `User Directive State` into the provider prompt and exposes a Stage135 `user_directive_kernel` topology node without adding provider calls, memory writes, tool execution, transport authority, WeChat starts, private persona mutation, or a second loop.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
