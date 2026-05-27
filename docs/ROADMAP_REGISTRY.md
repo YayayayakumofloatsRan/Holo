@@ -394,6 +394,12 @@ Stage197: market research report assembly
 - Stage153 renders `[report_assembly]` lines, Stage191 public thoughts include report-assembly self-feedback, and Stage135 topology exposes `market_research_report_assembly`.
 - Verification on `2026-05-28`: Stage197 targeted `5 passed`; neighbor market stack `43 passed`; runtime `92 passed`; full suite `973 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage198: market research finalization gate
+- Added `holo.stage198.market_research_finalization_gate.v1` to convert Stage197 report-readiness into the actual visible final answer boundary.
+- `assembled` reports now produce deterministic citation-backed market research output; `citation_mismatch` and `insufficient_evidence` replace unsupported visible text with bounded failure language.
+- Stage153 renders `[report_final]` lines, Stage191 public thoughts include finalization cards, and Stage135 topology exposes `market_research_finalization`.
+- Verification on `2026-05-28`: Stage198 targeted `5 passed`; Stage170 regression fix `6 passed`; neighbor market stack `38 passed`; runtime `92 passed`; full suite `978 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

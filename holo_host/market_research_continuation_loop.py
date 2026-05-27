@@ -92,6 +92,37 @@ def _web_authority_sufficient(question: str, web_rows: list[dict[str, Any]]) -> 
     return str(report.get("status", "") or "") == "sufficient"
 
 
+def _web_rows_from_pack_source_authority(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    authority = _dict(pack.get("source_authority", {}))
+    source_rows = _list_dicts(authority.get("source_authority_rows", [])) or _list_dicts(authority.get("best_sources", []))
+    rows: list[dict[str, Any]] = []
+    for source in source_rows:
+        url = str(source.get("url", "") or "").strip()
+        if not url:
+            continue
+        rows.append(
+            {
+                "schema": "holo.web_observation.v1",
+                "observation_id": "web:stage169_source:" + stable_digest(pack.get("pack_id", ""), url, limit=12),
+                "action_type": "stage169_pack_source_authority",
+                "query": _compact(pack.get("query", authority.get("query", "")), 220),
+                "status": "ok",
+                "provider": "stage169_market_research_pack",
+                "results": [
+                    {
+                        "title": str(source.get("title", "") or ""),
+                        "url": url,
+                        "snippet": str(source.get("snippet", "") or ""),
+                    }
+                ],
+                "source_urls": [url],
+                "fetched_at": str(pack.get("created_at", "") or utc_now()),
+                "confidence": float(source.get("confidence", authority.get("confidence", 0.0)) or 0.0),
+            }
+        )
+    return rows
+
+
 def _pack_plan_from_web(question: str, remaining_action_budget: int) -> dict[str, Any]:
     candidate = _candidate(
         action_type="market_research_pack",
@@ -243,6 +274,8 @@ def run_market_research_continuation_loop(
     report_rows = _list_dicts(market_research_report_ledger)
     pack = _dict(market_research_pack) or _first_pack(pack_rows)
     report = _dict(market_research_report) or _first_report(report_rows)
+    if pack:
+        _extend_unique_rows(web_rows, _web_rows_from_pack_source_authority(pack))
     remaining = max(0, int(max_rounds or 0))
     feedback = _dict(initial_stage192_feedback_loop)
     plan = _dict(initial_stage193_action_plan)

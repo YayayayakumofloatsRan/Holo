@@ -368,6 +368,23 @@ def _stage197_market_report_assembly_events(payload: dict[str, Any]) -> list[dic
     ]
 
 
+def _stage198_market_report_finalization_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    gate = payload.get("stage198_market_research_finalization_gate", {})
+    if not isinstance(gate, dict):
+        return []
+    return [
+        {
+            "event": "report_final",
+            "status": str(gate.get("status", "") or ""),
+            "ready": bool(gate.get("final_visible_text_ready", False)),
+            "replace": bool(gate.get("should_replace_visible_text", False)),
+            "citation_quality_status": str(gate.get("citation_quality_status", "") or ""),
+            "primary_source_url": str(gate.get("primary_source_url", "") or ""),
+            "stop_reason": str(gate.get("canonical_stop_reason", "") or ""),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -609,6 +626,7 @@ def build_agent_event_stream(
         events.extend(_stage195_market_continuation_events(source))
         events.extend(_stage196_market_source_promotion_events(source))
         events.extend(_stage197_market_report_assembly_events(source))
+        events.extend(_stage198_market_report_finalization_events(source))
         events.append(
             {
                 "event": "stop",
@@ -661,6 +679,7 @@ def build_agent_event_stream(
     events.extend(_stage195_market_continuation_events(source))
     events.extend(_stage196_market_source_promotion_events(source))
     events.extend(_stage197_market_report_assembly_events(source))
+    events.extend(_stage198_market_report_finalization_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -863,6 +882,15 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"ready={str(bool(item.get('ready', False))).lower()} "
                 f"citation={item.get('citation_quality_status', '')} "
                 f"sources={item.get('source_count', 0)} stop={item.get('stop_reason', '')}{url_suffix}"
+            )
+        elif event == "report_final":
+            url = str(item.get("primary_source_url", "") or "")
+            url_suffix = f" url={url}" if url else ""
+            lines.append(
+                f"[report_final] status={item.get('status', '')} "
+                f"ready={str(bool(item.get('ready', False))).lower()} "
+                f"replace={str(bool(item.get('replace', False))).lower()} "
+                f"citation={item.get('citation_quality_status', '')} stop={item.get('stop_reason', '')}{url_suffix}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))

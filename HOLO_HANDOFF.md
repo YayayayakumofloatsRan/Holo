@@ -175,6 +175,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 170. `docs/ENGINEERING_HANDOFF_STAGE196.md`
 171. `docs/STAGE197_MARKET_RESEARCH_REPORT_ASSEMBLY.md`
 172. `docs/ENGINEERING_HANDOFF_STAGE197.md`
+173. `docs/STAGE198_MARKET_RESEARCH_FINALIZATION_GATE.md`
+174. `docs/ENGINEERING_HANDOFF_STAGE198.md`
 
 ## What This Document Must Cover
 - current live state
@@ -189,9 +191,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage197-market-research-report-assembly`.
+- The current milestone tag is `stage198-market-research-finalization-gate`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage197 Market Research Report Assembly: Holo now checks whether a market-research report actually consumes the Stage196 promoted source in its citations before treating the report as ready. The next pressure is making this report-ready boundary drive live finalization and user-facing insufficient-evidence repairs.
+- Current focus is Stage198 Market Research Finalization Gate: Holo now converts Stage197 report-readiness into visible final output. Assembled reports replace generic model text with a deterministic citation-backed report, while citation mismatch or insufficient evidence becomes a bounded failure message instead of an unsupported market claim.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
