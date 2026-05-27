@@ -208,6 +208,7 @@ def build_stage135_i_state_topology(
     stage170_market_research_gate: dict[str, Any] | None = None,
     market_research_pack_ledger: list[dict[str, Any]] | None = None,
     filing_text_retrieval: dict[str, Any] | None = None,
+    stage173_market_research_report: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -250,6 +251,7 @@ def build_stage135_i_state_topology(
     market_research_gate = _dict(stage170_market_research_gate or packet.get("stage170_market_research_gate", {}))
     market_research_ledger = _list_dicts(market_research_pack_ledger or packet.get("market_research_pack_ledger", []))
     filing_retrieval = _dict(filing_text_retrieval or packet.get("filing_text_retrieval", {}))
+    market_research_report = _dict(stage173_market_research_report or packet.get("stage173_market_research_report", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -813,6 +815,28 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage170_market_research_gate", relation="requires_filing_pack_before_financial_claims", weight=0.58, summary="market research claims require a source-authority-sufficient filing pack"))
         edges.append(_edge("stage170_market_research_gate", "state_delta", relation="gates_market_research_answer", weight=0.52, summary="unsupported financial claims are bounded before visible reply"))
 
+    if market_research_report:
+        report_status = str(market_research_report.get("status", "") or "unknown")
+        section_count = int(market_research_report.get("section_count", 0) or 0)
+        metric_count = int(market_research_report.get("metric_count", 0) or 0)
+        citation_count = int(market_research_report.get("citation_count", 0) or 0)
+        weight = 0.76 if report_status == "evidence_ready" else 0.34
+        nodes.append(
+            _node(
+                "stage173_market_research_report",
+                "market research report",
+                channel="market_research_report",
+                kind="observability_gate",
+                x=0.9,
+                y=0.36,
+                weight=weight,
+                summary=f"status={report_status}; sections={section_count}; metrics={metric_count}; citations={citation_count}",
+            )
+        )
+        source = "stage170_market_research_gate" if market_research_gate else "stage171_market_research_pack_action" if market_research_ledger else "external_user_input"
+        edges.append(_edge(source, "stage173_market_research_report", relation="synthesizes_market_research_report", weight=0.56, summary="filing pack evidence is converted into a bounded analyst report"))
+        edges.append(_edge("stage173_market_research_report", "state_delta", relation="reports_market_research_evidence", weight=0.45, summary="report exposes citations, limitations, and unsupported-claim accounting"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1092,6 +1116,11 @@ def build_stage135_i_state_topology(
             "market_research_gate_status": str(market_research_gate.get("status", "") or "") if market_research_gate else "",
             "market_research_gate_claim_count": int(market_research_gate.get("claim_count", 0) or 0) if market_research_gate else 0,
             "market_research_gate_unsupported_count": int(market_research_gate.get("unsupported_claim_count", 0) or 0) if market_research_gate else 0,
+            "market_research_report_node_count": sum(1 for node in nodes if node["channel"] == "market_research_report"),
+            "market_research_report_status": str(market_research_report.get("status", "") or "") if market_research_report else "",
+            "market_research_report_section_count": int(market_research_report.get("section_count", 0) or 0) if market_research_report else 0,
+            "market_research_report_metric_count": int(market_research_report.get("metric_count", 0) or 0) if market_research_report else 0,
+            "market_research_report_citation_count": int(market_research_report.get("citation_count", 0) or 0) if market_research_report else 0,
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,
@@ -1373,6 +1402,51 @@ def attach_stage172_filing_text_retrieval_topology(
     metrics["filing_text_retrieval_status"] = str(retrieval.get("status", "") or "")
     metrics["filing_text_retrieval_source"] = str(retrieval.get("retrieval_source", "") or "")
     metrics["filing_text_retrieval_char_count"] = int(retrieval.get("filing_text_char_count", 0) or 0)
+    payload["metrics"] = metrics
+    return payload
+
+
+def attach_stage173_market_research_report_topology(
+    topology: dict[str, Any] | None,
+    stage173_market_research_report: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    report = _dict(stage173_market_research_report)
+    if not payload.get("schema") or not report:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if not any(isinstance(node, dict) and node.get("id") == "stage173_market_research_report" for node in nodes):
+        report_status = str(report.get("status", "") or "unknown")
+        section_count = int(report.get("section_count", 0) or 0)
+        metric_count = int(report.get("metric_count", 0) or 0)
+        citation_count = int(report.get("citation_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage173_market_research_report",
+                "market research report",
+                channel="market_research_report",
+                kind="observability_gate",
+                x=0.9,
+                y=0.36,
+                weight=0.76 if report_status == "evidence_ready" else 0.34,
+                summary=f"status={report_status}; sections={section_count}; metrics={metric_count}; citations={citation_count}",
+            )
+        )
+        node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+        source = "stage170_market_research_gate" if "stage170_market_research_gate" in node_ids else "stage171_market_research_pack_action" if "stage171_market_research_pack_action" in node_ids else "external_user_input"
+        edges.append(_edge(source, "stage173_market_research_report", relation="synthesizes_market_research_report", weight=0.56, summary="filing pack evidence is converted into a bounded analyst report"))
+        edges.append(_edge("stage173_market_research_report", "state_delta", relation="reports_market_research_evidence", weight=0.45, summary="report exposes citations, limitations, and unsupported-claim accounting"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["market_research_report_node_count"] = sum(1 for node in nodes if isinstance(node, dict) and node.get("channel") == "market_research_report")
+    metrics["market_research_report_status"] = str(report.get("status", "") or "")
+    metrics["market_research_report_section_count"] = int(report.get("section_count", 0) or 0)
+    metrics["market_research_report_metric_count"] = int(report.get("metric_count", 0) or 0)
+    metrics["market_research_report_citation_count"] = int(report.get("citation_count", 0) or 0)
     payload["metrics"] = metrics
     return payload
 

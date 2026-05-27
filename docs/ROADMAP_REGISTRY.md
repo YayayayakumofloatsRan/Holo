@@ -246,6 +246,12 @@ Stage172: filing text retrieval
 - Stage152, Stage153, reply metadata, archive metadata, and Stage135 topology expose `filing_text_retrieval` without provider model paths, memory writes, WeChat starts, or transport widening.
 - Verification on `2026-05-27`: targeted `15 passed`, market stack `62 passed`, runtime `110 passed`, full regression `809 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage173: market research report
+- Added deterministic filing-grounded analyst report generation over Stage169-172 evidence packs.
+- Reports include source authority, filing coverage, section summaries, financial metrics, citations, limitations, unsupported-claim accounting, and weak web-only baseline comparison.
+- Added `run-market-research-report` CLI artifacts and Stage135 `market_research_report` topology metrics without provider model paths, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted `8 passed`, market stack `54 passed`, runtime `92 passed`, full regression `817 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
