@@ -311,6 +311,12 @@ Stage183: agent capability gauntlet
 - Added `run-agent-capability-gauntlet` artifacts and Stage135 `agent_capability_gauntlet` metrics without provider calls, memory writes, WeChat starts, transport widening, or live-network test requirements.
 - Verification on `2026-05-27`: targeted Stage183 `8 passed`, integrated stack `33 passed`, runtime `92 passed`, full regression `904 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage184: real-use agent drill
+- Added real-use drills that execute actual host actions in bounded temp workspaces and compare full-loop behavior against claim-only baselines.
+- The engineering drill performs workspace search, file read, patch, pytest, git status, and git diff. The search drill drives Stage151 web observation/grounding with deterministic web providers, including network-disabled boundary handling. The market drill runs the Stage174 market-research report action and requires citations/report ledgers.
+- Added `run-agent-real-use-drill` artifacts and Stage135 `real_use_drill` metrics without provider calls, memory writes, WeChat starts, transport widening, hidden reasoning exposure, or live-network test requirements.
+- Verification on `2026-05-27`: targeted Stage184 `8 passed`, stack `53 passed`, runtime `92 passed`, full regression `912 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

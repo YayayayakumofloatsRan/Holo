@@ -217,6 +217,7 @@ def build_stage135_i_state_topology(
     stage181_live_remediation_stress: dict[str, Any] | None = None,
     stage182_remediation_continuation: dict[str, Any] | None = None,
     stage183_agent_capability_gauntlet: dict[str, Any] | None = None,
+    stage184_real_use_drill: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -268,6 +269,7 @@ def build_stage135_i_state_topology(
     live_remediation_stress = _dict(stage181_live_remediation_stress or packet.get("stage181_live_remediation_stress", {}))
     remediation_continuation = _dict(stage182_remediation_continuation or packet.get("stage182_remediation_continuation", {}))
     agent_capability_gauntlet = _dict(stage183_agent_capability_gauntlet or packet.get("stage183_agent_capability_gauntlet", {}))
+    real_use_drill = _dict(stage184_real_use_drill or packet.get("stage184_real_use_drill", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -1041,6 +1043,37 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage183_agent_capability_gauntlet", relation="benchmarks_agent_kernel_capability", weight=0.57, summary="engineering, market research, and remediation surfaces are tested as one agent capability bundle"))
         edges.append(_edge("stage183_agent_capability_gauntlet", "state_delta", relation="records_capability_pressure", weight=0.5, summary="gauntlet score becomes topology evidence for practical agent readiness"))
 
+    if real_use_drill:
+        drill_summary = _dict(real_use_drill.get("summary", {}))
+        drill_status = str(real_use_drill.get("status", "") or "unknown")
+        drill_cases = int(drill_summary.get("case_count", real_use_drill.get("case_count", 0)) or 0)
+        drill_passed = int(drill_summary.get("passed_case_count", 0) or 0)
+        full_score = float(drill_summary.get("full_loop_score", 0.0) or 0.0)
+        baseline_score = float(drill_summary.get("claim_only_baseline_score", 0.0) or 0.0)
+        nodes.append(
+            _node(
+                "stage184_real_use_drill",
+                "real use agent drill",
+                channel="real_use_drill",
+                kind="agent_real_use_gate",
+                x=1.0,
+                y=0.91,
+                weight=0.82 if drill_status == "passed" else 0.42,
+                summary=f"status={drill_status}; cases={drill_cases}; passed={drill_passed}; full={full_score}; baseline={baseline_score}",
+            )
+        )
+        source = (
+            "stage183_agent_capability_gauntlet"
+            if agent_capability_gauntlet
+            else "stage154_engineering_action_fabric"
+            if engineering_ledger
+            else "stage151_tool_decision_loop"
+            if tool_decision
+            else "external_user_input"
+        )
+        edges.append(_edge(source, "stage184_real_use_drill", relation="executes_real_agent_drills", weight=0.58, summary="temporary-workspace engineering actions and web evidence drills are executed instead of assumed"))
+        edges.append(_edge("stage184_real_use_drill", "state_delta", relation="records_real_use_capability_pressure", weight=0.52, summary="real-use drill deltas compare full loop behavior against claim-only baseline"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1354,6 +1387,12 @@ def build_stage135_i_state_topology(
             "agent_capability_gauntlet_case_count": int(_dict(agent_capability_gauntlet.get("summary", {})).get("case_count", agent_capability_gauntlet.get("case_count", 0)) or 0) if agent_capability_gauntlet else 0,
             "agent_capability_gauntlet_passed_count": int(_dict(agent_capability_gauntlet.get("summary", {})).get("passed_case_count", 0) or 0) if agent_capability_gauntlet else 0,
             "agent_capability_gauntlet_status": str(agent_capability_gauntlet.get("status", "") or "") if agent_capability_gauntlet else "",
+            "real_use_drill_node_count": sum(1 for node in nodes if node["channel"] == "real_use_drill"),
+            "real_use_drill_case_count": int(_dict(real_use_drill.get("summary", {})).get("case_count", real_use_drill.get("case_count", 0)) or 0) if real_use_drill else 0,
+            "real_use_drill_passed_count": int(_dict(real_use_drill.get("summary", {})).get("passed_case_count", 0) or 0) if real_use_drill else 0,
+            "real_use_drill_full_loop_score": float(_dict(real_use_drill.get("summary", {})).get("full_loop_score", 0.0) or 0.0) if real_use_drill else 0.0,
+            "real_use_drill_claim_only_baseline_score": float(_dict(real_use_drill.get("summary", {})).get("claim_only_baseline_score", 0.0) or 0.0) if real_use_drill else 0.0,
+            "real_use_drill_status": str(real_use_drill.get("status", "") or "") if real_use_drill else "",
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,

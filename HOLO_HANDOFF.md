@@ -147,6 +147,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 142. `docs/ENGINEERING_HANDOFF_STAGE182.md`
 143. `docs/STAGE183_AGENT_CAPABILITY_GAUNTLET.md`
 144. `docs/ENGINEERING_HANDOFF_STAGE183.md`
+145. `docs/STAGE184_REAL_USE_AGENT_DRILL.md`
+146. `docs/ENGINEERING_HANDOFF_STAGE184.md`
 
 ## What This Document Must Cover
 - current live state
@@ -161,9 +163,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage183-agent-capability-gauntlet`.
+- The current milestone tag is `stage184-real-use-agent-drill`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage183 Agent Capability Gauntlet: Holo's engineering/research kernel is now tested as an integrated agent surface across engineering execution, filing-grounded market research, remediation continuation, adversarial unsupported-claim detection, event trace quality, and topology-visible capability metrics.
+- Current focus is Stage184 Real-Use Agent Drill: Holo's engineering/search/market-research kernel is now exercised through temporary-workspace real actions, deterministic web observation drills, network-disabled boundary handling, market report ledgers, claim-only baseline comparison, and topology-visible real-use metrics. The next pressure is live crawler/search maturity for market research and current-source retrieval.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
