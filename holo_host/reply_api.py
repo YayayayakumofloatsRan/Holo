@@ -111,6 +111,10 @@ from .market_research_report_assembly import assemble_market_research_report
 from .market_research_finalization_gate import apply_market_research_finalization_gate, build_market_research_finalization_gate
 from .market_research_task_dossier import build_market_research_task_dossier
 from .market_research_dossier_resume import resume_market_research_from_dossier
+from .market_research_dossier_registry import (
+    load_latest_market_research_dossier,
+    record_market_research_dossier,
+)
 from .market_research_plan_executor import execute_market_research_action_plan
 from .stage151_live_tool_trace import (
     build_stage151_live_tool_trace,
@@ -10125,6 +10129,7 @@ class HoloReplyService:
         stage198_market_research_finalization_gate = {}
         stage199_market_research_task_dossier = {}
         stage200_market_research_dossier_resume = {}
+        stage201_market_research_dossier_registry = {}
         if stage192_market_research_feedback_loop and (stage193_market_research_action_plan or stage194_market_research_plan_execution):
             stage195_market_research_continuation_loop = run_market_research_continuation_loop(
                 question=turn.text,
@@ -10277,6 +10282,35 @@ class HoloReplyService:
                     sidecar["stage199_market_research_task_dossier"] = stage199_market_research_task_dossier
                     reply_debug["stage199_market_research_task_dossier"] = stage199_market_research_task_dossier
                     capability_context["stage199_market_research_task_dossier"] = stage199_market_research_task_dossier
+            stage201_record = record_market_research_dossier(
+                state_dir=self.config.runtime.state_dir,
+                thread_key=incoming.thread_key,
+                project_key="",
+                dossier=stage199_market_research_task_dossier,
+                resume_report=stage200_market_research_dossier_resume,
+                source_metadata={"source": "reply_api"},
+            )
+            stage201_lookup = load_latest_market_research_dossier(
+                state_dir=self.config.runtime.state_dir,
+                thread_key=incoming.thread_key,
+                project_key="",
+                question=turn.text,
+            )
+            stage201_market_research_dossier_registry = {
+                "schema": "holo.stage201.market_research_dossier_registry.v1",
+                "status": "recorded",
+                "thread_key": incoming.thread_key,
+                "project_key": "",
+                "lookup": stage201_lookup,
+                "record": stage201_record,
+                "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
+                "canonical_stop_reason": "final_answer_ready",
+                "public_summary": "latest market research dossier recorded for this thread",
+                "hidden_reasoning_exposed": False,
+            }
+            sidecar["stage201_market_research_dossier_registry"] = stage201_market_research_dossier_registry
+            reply_debug["stage201_market_research_dossier_registry"] = stage201_market_research_dossier_registry
+            capability_context["stage201_market_research_dossier_registry"] = stage201_market_research_dossier_registry
         stage171_market_research_pack_action_status = (
             str(market_research_pack_ledger[0].get("status", "") or "") if market_research_pack_ledger else ""
         )
@@ -10646,6 +10680,7 @@ class HoloReplyService:
                 "stage198_market_research_finalization_gate": stage198_market_research_finalization_gate,
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
+                "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
@@ -10672,6 +10707,7 @@ class HoloReplyService:
                 "stage198_market_research_finalization_gate": stage198_market_research_finalization_gate,
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
+                "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
                 "canonical_stop_reason": canonical_stop_reason,
@@ -10710,6 +10746,7 @@ class HoloReplyService:
                 "stage198_market_research_finalization_gate": stage198_market_research_finalization_gate,
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
+                "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
             },
             user_text=turn.text,
             event_stream=stage153_agent_event_stream,
@@ -10808,6 +10845,7 @@ class HoloReplyService:
             or stage198_market_research_finalization_gate
             or stage199_market_research_task_dossier
             or stage200_market_research_dossier_resume
+            or stage201_market_research_dossier_registry
         ):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
@@ -10849,6 +10887,7 @@ class HoloReplyService:
                 stage198_market_research_finalization_gate=stage198_market_research_finalization_gate,
                 stage199_market_research_task_dossier=stage199_market_research_task_dossier,
                 stage200_market_research_dossier_resume=stage200_market_research_dossier_resume,
+                stage201_market_research_dossier_registry=stage201_market_research_dossier_registry,
                 stage186_live_crawler_search=stage186_live_crawler_search,
                 web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 engineering_action_ledger=engineering_action_ledger,
@@ -10985,6 +11024,7 @@ class HoloReplyService:
                 "stage198_market_research_finalization_gate": stage198_market_research_finalization_gate,
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
+                "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
                 "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
@@ -11131,6 +11171,7 @@ class HoloReplyService:
             "stage198_market_research_finalization_gate": stage198_market_research_finalization_gate,
             "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
             "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
+            "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
             "stage170_market_research_claim_count": stage170_market_research_claim_count,
             "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
@@ -11340,6 +11381,7 @@ class HoloReplyService:
                 "stage198_market_research_finalization_gate": stage198_market_research_finalization_gate,
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
+                "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
                 "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,

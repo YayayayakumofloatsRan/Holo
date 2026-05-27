@@ -58,6 +58,10 @@ from .stage176_market_research_domain_benchmark import run_market_research_domai
 from .stage177_market_research_remediation import run_market_research_remediation
 from .market_research_task_dossier import run_market_research_dossier_bundle
 from .market_research_dossier_resume import run_market_research_dossier_resume_bundle
+from .market_research_dossier_registry import (
+    load_latest_market_research_dossier,
+    run_market_research_dossier_registry_bundle,
+)
 from .evidence_action_remediation import run_evidence_action_remediation
 from .live_remediation_loop import run_live_remediation_simulation
 from .live_remediation_executor import run_live_remediation_execution_simulation
@@ -9479,6 +9483,32 @@ def command_run_market_research_dossier_resume(
     return 0
 
 
+def command_market_research_dossier_state(
+    *,
+    state_dir: str,
+    thread_key: str,
+    project_key: str,
+    output: str,
+    dry_run: bool,
+) -> int:
+    if output:
+        report = run_market_research_dossier_registry_bundle(
+            state_dir=state_dir,
+            thread_key=thread_key,
+            project_key=project_key,
+            output=output,
+            dry_run=dry_run,
+        )
+    else:
+        report = load_latest_market_research_dossier(
+            state_dir=state_dir,
+            thread_key=thread_key,
+            project_key=project_key,
+        )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_run_evidence_action_remediation(
     *,
     output: str,
@@ -10873,6 +10903,15 @@ def main(argv: list[str] | None = None) -> int:
     market_research_dossier_resume_parser.add_argument("--output", required=True)
     market_research_dossier_resume_parser.add_argument("--dry-run", action="store_true")
     market_research_dossier_resume_parser.add_argument("--fail-under", type=float, default=None)
+    market_research_dossier_state_parser = subparsers.add_parser(
+        "market-research-dossier-state",
+        help="Show or export the Stage201 persisted market research dossier state",
+    )
+    market_research_dossier_state_parser.add_argument("--state-dir", default=".holo_runtime")
+    market_research_dossier_state_parser.add_argument("--thread-key", default="")
+    market_research_dossier_state_parser.add_argument("--project-key", default="")
+    market_research_dossier_state_parser.add_argument("--output", default="")
+    market_research_dossier_state_parser.add_argument("--dry-run", action="store_true")
     evidence_action_remediation_parser = subparsers.add_parser(
         "run-evidence-action-remediation",
         help="Write the Stage178 generic evidence-action remediation artifacts",
@@ -12032,6 +12071,14 @@ def main(argv: list[str] | None = None) -> int:
             output=args.output,
             dry_run=args.dry_run,
             fail_under=args.fail_under,
+        )
+    if args.command == "market-research-dossier-state":
+        return command_market_research_dossier_state(
+            state_dir=args.state_dir,
+            thread_key=args.thread_key,
+            project_key=args.project_key,
+            output=args.output,
+            dry_run=args.dry_run,
         )
     if args.command == "run-evidence-action-remediation":
         return command_run_evidence_action_remediation(

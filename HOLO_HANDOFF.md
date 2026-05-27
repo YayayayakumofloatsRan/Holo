@@ -181,6 +181,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 176. `docs/ENGINEERING_HANDOFF_STAGE199.md`
 177. `docs/STAGE200_MARKET_RESEARCH_DOSSIER_RESUME.md`
 178. `docs/ENGINEERING_HANDOFF_STAGE200.md`
+179. `docs/STAGE201_MARKET_RESEARCH_DOSSIER_REGISTRY.md`
+180. `docs/ENGINEERING_HANDOFF_STAGE201.md`
 
 ## What This Document Must Cover
 - current live state
@@ -195,9 +197,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage200-market-research-dossier-resume`.
+- The current milestone tag is `stage201-market-research-dossier-registry`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage200 Market Research Dossier Resume: Holo now consumes Stage199 dossiers, selects recorded next actions, routes them through the existing Stage193/194 host action path, and returns updated dossier state so long-running financial research can continue across turns.
+- Current focus is Stage201 Market Research Dossier Registry: Holo now records latest market-research dossiers under runtime state by thread/project, can load the latest dossier without transcript reconstruction, and can resume it through the Stage200 host action path.
+- Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

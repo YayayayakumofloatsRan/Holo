@@ -128,6 +128,12 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             f"failed={event.get('failed', 0)}; stop={event.get('stop_reason', '')}"
         )
         return _card("action", summary, source_event=kind, confidence=0.84)
+    if kind == "market_registry":
+        summary = (
+            f"status={event.get('status', '')}; lookup={event.get('lookup', '')}; "
+            f"action={event.get('action', '')}; stop={event.get('stop_reason', '')}"
+        )
+        return _card("working_memory", summary, source_event=kind, confidence=0.84)
     if kind == "evaluate":
         unresolved = ",".join(str(x) for x in list(event.get("unresolved_items", []) or [])) or "none"
         return _card("stop_evaluation", f"status={event.get('status', '')}; unresolved={unresolved}", source_event=kind, confidence=0.78)

@@ -413,6 +413,13 @@ Stage200: market research dossier resume
 - Stage153 renders `[market_resume]` lines, Stage191 public thoughts include resume action cards, and Stage135 topology exposes `market_research_dossier_resume`.
 - Verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `45 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `990 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage201: market research dossier registry
+- Added `holo.stage201.market_research_dossier_registry.v1`, record, lookup, and bundle schemas to persist latest market-research dossiers under `.holo_runtime/market_research_dossiers`.
+- Stage201 can load the latest thread/project dossier and resume it through the Stage200 host path without reconstructing chat transcript state.
+- Added `market-research-dossier-state` to show or export persisted dossier state.
+- Stage153 renders `[market_registry]` lines, Stage191 public thoughts include registry working-memory cards, and Stage135 topology exposes `market_research_dossier_registry`.
+- Verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

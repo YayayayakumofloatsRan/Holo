@@ -424,6 +424,27 @@ def _stage200_market_research_resume_events(payload: dict[str, Any]) -> list[dic
     ]
 
 
+def _stage201_market_research_registry_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    registry = payload.get("stage201_market_research_dossier_registry", {})
+    if not isinstance(registry, dict):
+        return []
+    lookup = registry.get("lookup", {})
+    if not isinstance(lookup, dict):
+        lookup = {}
+    resume = registry.get("stage200_market_research_dossier_resume", {})
+    if not isinstance(resume, dict):
+        resume = {}
+    return [
+        {
+            "event": "market_registry",
+            "status": str(registry.get("status", "") or ""),
+            "lookup": str(lookup.get("status", "") or ""),
+            "action": str(resume.get("selected_action", "") or ""),
+            "stop_reason": str(registry.get("canonical_stop_reason", "") or ""),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -668,6 +689,7 @@ def build_agent_event_stream(
         events.extend(_stage198_market_report_finalization_events(source))
         events.extend(_stage199_market_research_dossier_events(source))
         events.extend(_stage200_market_research_resume_events(source))
+        events.extend(_stage201_market_research_registry_events(source))
         events.append(
             {
                 "event": "stop",
@@ -723,6 +745,7 @@ def build_agent_event_stream(
     events.extend(_stage198_market_report_finalization_events(source))
     events.extend(_stage199_market_research_dossier_events(source))
     events.extend(_stage200_market_research_resume_events(source))
+    events.extend(_stage201_market_research_registry_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -946,6 +969,11 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[market_resume] status={item.get('status', '')} action={item.get('action', '') or 'none'} "
                 f"executed={item.get('executed', 0)} rejected={item.get('rejected', 0)} "
                 f"failed={item.get('failed', 0)} stop={item.get('stop_reason', '')}"
+            )
+        elif event == "market_registry":
+            lines.append(
+                f"[market_registry] status={item.get('status', '')} lookup={item.get('lookup', '')} "
+                f"action={item.get('action', '') or 'none'} stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
