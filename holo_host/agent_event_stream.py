@@ -434,12 +434,25 @@ def _stage201_market_research_registry_events(payload: dict[str, Any]) -> list[d
     resume = registry.get("stage200_market_research_dossier_resume", {})
     if not isinstance(resume, dict):
         resume = {}
+    resume_rows = [
+        dict(item)
+        for item in list(payload.get("market_research_dossier_resume_ledger", []) or [])
+        if isinstance(item, dict)
+    ]
+    fsm = payload.get("stage160r_agent_loop_fsm", {})
+    if not isinstance(fsm, dict):
+        fsm = {}
+    resume_tool = str(fsm.get("selected_action", "") or "")
+    if resume_tool != "market_research_dossier_resume" and resume_rows:
+        resume_tool = "market_research_dossier_resume"
     return [
         {
             "event": "market_registry",
             "status": str(registry.get("status", "") or ""),
             "lookup": str(lookup.get("status", "") or ""),
             "action": str(resume.get("selected_action", "") or ""),
+            "resume_tool": resume_tool,
+            "resume_ledger_count": len(resume_rows),
             "stop_reason": str(registry.get("canonical_stop_reason", "") or ""),
         }
     ]
@@ -971,9 +984,13 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"failed={item.get('failed', 0)} stop={item.get('stop_reason', '')}"
             )
         elif event == "market_registry":
+            resume = str(item.get("resume_tool", "") or "")
+            resume_suffix = f" resume={resume}" if resume else ""
+            ledger_count = int(item.get("resume_ledger_count", 0) or 0)
+            ledger_suffix = f" ledger={ledger_count}" if ledger_count else ""
             lines.append(
                 f"[market_registry] status={item.get('status', '')} lookup={item.get('lookup', '')} "
-                f"action={item.get('action', '') or 'none'} stop={item.get('stop_reason', '')}"
+                f"action={item.get('action', '') or 'none'}{resume_suffix}{ledger_suffix} stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))

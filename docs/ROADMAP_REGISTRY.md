@@ -426,6 +426,11 @@ Stage202: market research dossier resume action
 - Stage160R evaluates dossier-resume observations as part of the agent loop, so continuation requests can be grounded in persisted research state instead of transcript reconstruction.
 - Verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage203: dossier resume live trace
+- Added explicit live trace fields for `market_research_dossier_resume` so CLI output shows model decision, host action, observation, registry lookup, resume ledger count, and canonical stop reason.
+- Stage135 topology now counts dossier-resume trace events through `dossier_resume_trace_event_count`.
+- Verification on `2026-05-28`: targeted `5 passed`.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

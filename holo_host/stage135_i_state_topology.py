@@ -1573,6 +1573,16 @@ def build_stage135_i_state_topology(
             "deepseek_native_tool_loop_stop_reason": str(native_tool_loop.get("stop_reason", "") or "") if native_tool_loop else "",
             "agent_event_stream_node_count": sum(1 for node in nodes if node["channel"] == "agent_event_stream"),
             "agent_event_stream_event_count": int(agent_event_stream.get("event_count", 0) or len(_list_dicts(agent_event_stream.get("events", [])))) if agent_event_stream else 0,
+            "dossier_resume_trace_event_count": (
+                sum(
+                    1
+                    for event in _list_dicts(agent_event_stream.get("events", []))
+                    if str(event.get("event", "") or "") == "market_registry"
+                    and str(event.get("resume_tool", "") or "") == "market_research_dossier_resume"
+                )
+                if agent_event_stream
+                else 0
+            ),
             "agent_loop_fsm_node_count": sum(1 for node in nodes if node["channel"] == "agent_loop_fsm"),
             "agent_loop_fsm_step_count": int(agent_loop_fsm.get("step_count", 0) or len(_list_dicts(agent_loop_fsm.get("steps", [])))) if agent_loop_fsm else 0,
             "agent_loop_fsm_stop_reason": str(agent_loop_fsm.get("canonical_stop_reason", "") or agent_loop_fsm.get("stop_reason", "") or "") if agent_loop_fsm else "",
