@@ -217,6 +217,11 @@ Stage167: live search canary
 - Reports best provider, failed-provider count, source freshness markers, clean supporting quotes, ambiguity failures, and public artifact safety.
 - Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-live-search-canary --output artifacts\stage167\stage167_live_search_canary.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
 
+Stage168: source authority
+- Added deterministic source-authority classification for financial filings, company IR, official docs, API docs, code repositories, package registries, news, and unclassified third-party summaries.
+- `web_search` observations now carry `source_authority` after search evidence, page evidence, and source synthesis, so market-research and engineering tasks can reject the wrong kind of cited source.
+- Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-source-authority-audit --output artifacts\stage168\stage168_source_authority.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

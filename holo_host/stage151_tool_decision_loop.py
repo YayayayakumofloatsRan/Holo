@@ -11,6 +11,7 @@ from .common import compact_text, stable_digest, utc_now
 from .stage163_page_evidence_verifier import attach_page_evidence_to_web_observation
 from .stage164_search_fallback_synthesis import attach_source_synthesis_to_observations, run_search_fallback_controller
 from .stage165_answer_citation_formatter import maybe_format_cited_web_answer
+from .stage168_source_authority import attach_source_authority_to_observations
 
 STAGE151_TOOL_DECISION_SCHEMA = "holo.stage151.tool_decision.v1"
 STAGE151_LIVE_TRACE_SCHEMA = "holo.stage151.live_trace.v1"
@@ -420,9 +421,13 @@ def execute_tool_decision(
                         max_pages=2,
                     )
                 )
+            synthesized_rows = attach_source_synthesis_to_observations(
+                search_rows,
+                query=str(action.get("query", "") or ""),
+            )
             observations.extend(
-                attach_source_synthesis_to_observations(
-                    search_rows,
+                attach_source_authority_to_observations(
+                    synthesized_rows,
                     query=str(action.get("query", "") or ""),
                 )
             )
