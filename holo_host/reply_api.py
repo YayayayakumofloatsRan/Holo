@@ -10145,6 +10145,7 @@ class HoloReplyService:
                 stage153_agent_event_stream=stage153_agent_event_stream,
                 stage160r_agent_loop_fsm=stage160r_agent_loop_fsm,
                 stage161_model_tool_arbitration=stage161_model_tool_arbitration,
+                web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 engineering_action_ledger=engineering_action_ledger,
                 project_state_graph=project_state_graph,
                 network_health=network_health,

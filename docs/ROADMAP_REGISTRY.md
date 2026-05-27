@@ -187,6 +187,11 @@ Stage161: model-first tool arbitration
 - Deterministic Stage151 routing now feeds weak `deterministic_hints`; the model proposes the next action, the host validates/executes/rejects, ledgers prove observations, and Stage160R FSM records `model_decide`.
 - CLI event streams render `[action_space]` and `[model_decide]`, Stage135 topology exposes `model_tool_arbitration`, and final claims still require web/time, memory, or engineering ledgers without adding provider paths, memory writes, WeChat starts, or transport widening.
 
+Stage162: search evidence controller
+- Added bounded search-evidence planning and scoring so `web_search` evaluates official/docs/current source sufficiency instead of accepting any single result as enough.
+- Stage151 web search now retries query variants through `run_search_evidence_controller`; Stage152 native web calls inherit the same controller because they execute through Stage151 host tools.
+- Web observation rows carry `search_evidence`, Stage153 traces render evidence status/score, and Stage135 topology exposes search sufficiency metrics without adding provider paths, memory writes, WeChat starts, or transport widening.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

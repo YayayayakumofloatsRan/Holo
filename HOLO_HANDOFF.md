@@ -103,6 +103,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 98. `docs/ENGINEERING_HANDOFF_STAGE160R.md`
 99. `docs/STAGE161_MODEL_FIRST_TOOL_ARBITRATION.md`
 100. `docs/ENGINEERING_HANDOFF_STAGE161.md`
+101. `docs/STAGE162_SEARCH_EVIDENCE_CONTROLLER.md`
+102. `docs/ENGINEERING_HANDOFF_STAGE162.md`
 
 ## What This Document Must Cover
 - current live state
@@ -117,9 +119,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage161-model-first-tool-arbitration`.
+- The current milestone tag is `stage162-search-evidence-controller`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage161 Model-First Tool Arbitration: Holo now exposes a structured tool action space to the model, treats deterministic Stage151 routing as weak hints, normalizes DeepSeek native tool calls as model-proposed actions, validates host execution through ledgers, shows `[model_decide]` in CLI traces, and keeps `holo_cli` depersonalized without adding runtime provider paths, memory writes, WeChat starts, or transport authority widening.
+- Current focus is Stage162 Search Evidence Controller: Holo now scores web observations for source sufficiency, expands official/docs/current queries, retries weak search attempts within a bounded budget, records `search_evidence` on web ledgers, renders evidence status in CLI traces, and exposes search sufficiency in Stage135 topology without adding provider paths, memory writes, WeChat starts, or transport authority widening.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

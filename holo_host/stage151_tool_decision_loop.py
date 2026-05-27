@@ -8,6 +8,7 @@ from urllib import error, parse, request
 from urllib.parse import parse_qs, urlparse
 
 from .common import compact_text, stable_digest, utc_now
+from .stage162_search_evidence_controller import run_search_evidence_controller
 
 STAGE151_TOOL_DECISION_SCHEMA = "holo.stage151.tool_decision.v1"
 STAGE151_LIVE_TRACE_SCHEMA = "holo.stage151.live_trace.v1"
@@ -264,6 +265,7 @@ def build_tool_decision_report(
         purpose = "ask_clarification"
     return {
         "schema": STAGE151_TOOL_DECISION_SCHEMA,
+        "user_text": _compact(text, 240),
         "purpose": purpose,
         "action_candidates": candidates,
         "selected_actions": selected[:3],
@@ -309,7 +311,7 @@ def default_web_search(query: str) -> dict[str, Any]:
     if not current:
         return {"query": "", "status": "empty", "results": []}
     url = f"https://html.duckduckgo.com/html/?q={parse.quote_plus(current)}"
-    opener = request.build_opener(request.ProxyHandler({}))
+    opener = request.build_opener()
     opener.addheaders = [("User-Agent", "Mozilla/5.0")]
     try:
         with opener.open(url, timeout=6) as response:  # noqa: S310
@@ -332,7 +334,7 @@ def default_open_page(url: str) -> dict[str, Any]:
     target = str(url or "").strip()
     if not target:
         return {"url": "", "status": "empty", "results": []}
-    opener = request.build_opener(request.ProxyHandler({}))
+    opener = request.build_opener()
     opener.addheaders = [("User-Agent", "Mozilla/5.0")]
     try:
         with opener.open(target, timeout=6) as response:  # noqa: S310
@@ -394,7 +396,14 @@ def execute_tool_decision(
             )
             continue
         if action_type == "web_search":
-            observations.append(_web_response_to_observation(action, web_search(str(action.get("query", "") or ""))))
+            controller = run_search_evidence_controller(
+                str(action.get("query", "") or ""),
+                user_text=str(decision.get("user_text", "") or action.get("query", "") or ""),
+                network_enabled=network_enabled,
+                web_search_fn=web_search,
+                max_attempts=3,
+            )
+            observations.extend([dict(row) for row in list(controller.get("observations", []) or []) if isinstance(row, dict)])
         elif action_type == "open_page":
             observations.append(_web_response_to_observation(action, open_page(str(action.get("url", "") or ""))))
         elif action_type == "find_in_page":
@@ -656,6 +665,8 @@ def build_stage151_live_trace(
                     "source_urls": list(row.get("source_urls", []) or [])[:3],
                     "result_count": len(list(row.get("results", []) or [])),
                     "error": _compact(row.get("error", ""), 120),
+                    "search_evidence_status": str(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("status", "") or ""),
+                    "evidence_score": float(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("evidence_score", 0.0) or 0.0),
                 }
             )
     report = dict(grounding or {})

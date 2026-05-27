@@ -108,6 +108,8 @@ def _observation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_count": len(list(row.get("source_urls", []) or [])),
                 "source_urls": [str(url) for url in list(row.get("source_urls", []) or [])[:3]],
                 "result_count": len(list(row.get("results", []) or [])),
+                "search_evidence_status": str(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("status", "") or ""),
+                "evidence_score": float(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("evidence_score", 0.0) or 0.0),
             }
         )
     for row in list(payload.get("tool_observation_ledger", []) or [])[:8]:
@@ -359,9 +361,13 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 lines.append(f"[tool_call] {item.get('action_type', '')} status={item.get('status', '')}{detail}")
         elif event == "observation":
             sources = int(item.get("source_count", 0) or 0)
+            evidence = str(item.get("search_evidence_status", "") or "")
+            evidence_suffix = ""
+            if evidence:
+                evidence_suffix = f" evidence={evidence} score={item.get('evidence_score', 0)}"
             lines.append(
                 f"[observation] {item.get('action_type', '')} status={item.get('status', '')} "
-                f"sources={sources} results={item.get('result_count', 0)}"
+                f"sources={sources} results={item.get('result_count', 0)}{evidence_suffix}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))

@@ -2157,6 +2157,7 @@ class CodexCliProcessor:
             stage156_context_compiler=stage156_context_compiler,
             stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
             stage161_model_tool_arbitration=stage161_model_tool_arbitration,
+            web_observation_ledger=visible_web_rows,
             engineering_action_ledger=engineering_action_ledger,
             project_state_graph=dict(context.mind_packet.get("project_state_graph", {})),
             canonical_stop=canonical_stop,

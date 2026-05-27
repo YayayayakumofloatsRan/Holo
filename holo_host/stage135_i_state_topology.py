@@ -205,6 +205,7 @@ def build_stage135_i_state_topology(
     stage153_agent_event_stream: dict[str, Any] | None = None,
     stage160r_agent_loop_fsm: dict[str, Any] | None = None,
     stage161_model_tool_arbitration: dict[str, Any] | None = None,
+    web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
     network_health: dict[str, Any] | None = None,
@@ -243,6 +244,7 @@ def build_stage135_i_state_topology(
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
     agent_loop_fsm = _dict(stage160r_agent_loop_fsm or packet.get("stage160r_agent_loop_fsm", {}))
     model_arbitration = _dict(stage161_model_tool_arbitration or packet.get("stage161_model_tool_arbitration", {}))
+    web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
     network_state = _dict(network_health or packet.get("network_health", {}))
@@ -647,6 +649,30 @@ def build_stage135_i_state_topology(
         elif native_tool_loop:
             edges.append(_edge("stage161_model_tool_arbitration", "stage152_deepseek_tool_loop", relation="maps_native_tool_calls_to_proposals", weight=0.5, summary="DeepSeek native tool calls are normalized as model-proposed actions"))
 
+    search_scores = [
+        _dict(row.get("search_evidence", {}))
+        for row in web_ledger
+        if isinstance(row, dict) and isinstance(row.get("search_evidence", {}), dict)
+    ]
+    if search_scores:
+        best = max(search_scores, key=lambda item: float(item.get("evidence_score", 0.0) or 0.0))
+        nodes.append(
+            _node(
+                "stage162_search_evidence_controller",
+                "search evidence controller",
+                channel="search_evidence_controller",
+                kind="observability_gate",
+                x=0.66,
+                y=0.06,
+                weight=max(0.32, min(0.86, float(best.get("evidence_score", 0.0) or 0.0))),
+                summary=f"best_status={best.get('status', '')}; score={best.get('evidence_score', 0)}; observations={len(web_ledger)}",
+            )
+        )
+        source = "stage161_model_tool_arbitration" if model_arbitration else "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage162_search_evidence_controller", relation="evaluates_search_sufficiency", weight=0.62, summary="web results are scored for source sufficiency before final grounding"))
+        if agent_loop_fsm:
+            edges.append(_edge("stage162_search_evidence_controller", "stage160r_agent_loop_fsm", relation="feeds_stop_reason", weight=0.5, summary="search sufficiency informs host stop and failure reporting"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -894,6 +920,10 @@ def build_stage135_i_state_topology(
             "model_tool_arbitration_node_count": sum(1 for node in nodes if node["channel"] == "model_tool_arbitration"),
             "model_tool_arbitration_selected_action": str(model_arbitration.get("selected_action", "") or "") if model_arbitration else "",
             "model_tool_arbitration_source": str(model_arbitration.get("source", "") or "") if model_arbitration else "",
+            "search_evidence_controller_node_count": sum(1 for node in nodes if node["channel"] == "search_evidence_controller"),
+            "search_evidence_observation_count": len(web_ledger),
+            "search_evidence_best_status": str(max(search_scores, key=lambda item: float(item.get("evidence_score", 0.0) or 0.0)).get("status", "") or "") if search_scores else "",
+            "search_evidence_best_score": float(max(search_scores, key=lambda item: float(item.get("evidence_score", 0.0) or 0.0)).get("evidence_score", 0.0) or 0.0) if search_scores else 0.0,
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",

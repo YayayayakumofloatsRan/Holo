@@ -320,7 +320,7 @@ class CapabilityBroker:
         if not query:
             return {"query": "", "results": [], "status": "skipped"}
         url = f"https://html.duckduckgo.com/html/?q={parse.quote_plus(query)}"
-        opener = request.build_opener(request.ProxyHandler({}))
+        opener = request.build_opener()
         opener.addheaders = [("User-Agent", "Mozilla/5.0")]
         try:
             with opener.open(url, timeout=5) as response:  # noqa: S310
@@ -355,7 +355,7 @@ class CapabilityBroker:
             if len(urls) >= 2:
                 break
         previews: list[dict[str, Any]] = []
-        opener = request.build_opener(request.ProxyHandler({}))
+        opener = request.build_opener()
         for url in urls:
             preview: dict[str, Any] = {"url": url}
             try:
