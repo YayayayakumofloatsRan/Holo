@@ -133,6 +133,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 128. `docs/ENGINEERING_HANDOFF_STAGE175.md`
 129. `docs/STAGE176_MARKET_RESEARCH_DOMAIN_BENCHMARK.md`
 130. `docs/ENGINEERING_HANDOFF_STAGE176.md`
+131. `docs/STAGE177_MARKET_RESEARCH_REMEDIATION.md`
+132. `docs/ENGINEERING_HANDOFF_STAGE177.md`
 
 ## What This Document Must Cover
 - current live state
@@ -147,9 +149,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage176-market-research-domain-benchmark`.
+- The current milestone tag is `stage177-market-research-remediation`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage176 Market Research Domain Benchmark: Holo now evaluates the Stage175 market-research agent path against adversarial evidence cases for primary-source authority, filing coverage, metric conflicts, period mismatch, missing filing text, naive web-overclaim, and report readiness without live provider or network requirements.
+- Current focus is Stage177 Market Research Remediation: Holo now converts Stage176 domain benchmark failures into operator-facing next actions, including primary-source retry, complete filing-text retrieval, metric-conflict reporting, period clarification/refetch, and explicit refusal to finalize unsupported market-research reports.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

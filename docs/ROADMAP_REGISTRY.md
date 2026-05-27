@@ -270,6 +270,12 @@ Stage176: market research domain benchmark
 - Adds explicit domain gates for source authority, filing text presence, filing coverage, metric consistency, period alignment, unsupported claims, and agent trace validity, plus a naive web-overclaim baseline.
 - Verification on `2026-05-27`: targeted Stage176 `10 passed`, market stack `44 passed`, runtime `92 passed`, full regression `843 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage177: market research remediation
+- Added deterministic remediation planning over Stage176 domain failures.
+- Failed market-research gates now map to concrete next actions: primary-source retry, filing text retrieval, metric-conflict report, period clarification/refetch, and explicit no-finalize messages for insufficient evidence.
+- Added `run-market-research-remediation` CLI artifacts and Stage135 `market_research_remediation` topology metrics without provider calls, memory writes, WeChat starts, network requirements, or transport widening.
+- Verification on `2026-05-27`: targeted Stage177 `10 passed`, market stack `28 passed`, runtime `92 passed`, full regression `853 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
