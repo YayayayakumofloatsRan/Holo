@@ -326,6 +326,17 @@ def build_agent_event_stream(
                         "observation_count": int(row.get("observation_count", 0) or 0),
                     }
                 )
+        continuation = source.get("stage182_remediation_continuation", fsm.get("stage182_remediation_continuation", {}))
+        if isinstance(continuation, dict) and continuation.get("schema") == "holo.stage182.remediation_continuation.v1":
+            events.append(
+                {
+                    "event": "remediation_continue",
+                    "status": str(continuation.get("status", "") or ""),
+                    "round_count": int(continuation.get("round_count", 0) or 0),
+                    "executed_count": int(continuation.get("executed_count", 0) or 0),
+                    "stop_reason": str(continuation.get("canonical_stop_reason", "") or ""),
+                }
+            )
         events.append(
             {
                 "event": "stop",
@@ -380,6 +391,17 @@ def build_agent_event_stream(
                     "observation_count": int(row.get("observation_count", 0) or 0),
                 }
             )
+    continuation = source.get("stage182_remediation_continuation", {})
+    if isinstance(continuation, dict) and continuation.get("schema") == "holo.stage182.remediation_continuation.v1":
+        events.append(
+            {
+                "event": "remediation_continue",
+                "status": str(continuation.get("status", "") or ""),
+                "round_count": int(continuation.get("round_count", 0) or 0),
+                "executed_count": int(continuation.get("executed_count", 0) or 0),
+                "stop_reason": str(continuation.get("canonical_stop_reason", "") or ""),
+            }
+        )
     events.append(
         {
             "event": "grounding",
@@ -458,6 +480,11 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
         elif event == "remediation_exec":
             lines.append(
                 f"[remediation_exec] {item.get('action_type', '')} status={item.get('status', '')} observations={int(item.get('observation_count', 0) or 0)}"
+            )
+        elif event == "remediation_continue":
+            lines.append(
+                f"[remediation_continue] status={item.get('status', '')} rounds={int(item.get('round_count', 0) or 0)} "
+                f"executed={int(item.get('executed_count', 0) or 0)} stop={item.get('stop_reason', '')}"
             )
         elif event == "tool_call":
             if item.get("status") == "no_tool_calls" or item.get("action_type") == "none":

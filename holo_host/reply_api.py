@@ -93,7 +93,7 @@ from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
 from .agent_goal_state import coerce_goal_state, update_goal_state
 from .agent_intent_frame import build_intent_frame
 from .agent_loop_fsm import build_host_memory_recall_ledger, repair_final_with_fsm, run_agent_loop_fsm
-from .live_remediation_executor import execute_live_remediation_actions
+from .live_remediation_continuation import run_live_remediation_continuation
 from .context_compiler import compile_context_memory, repair_visible_compact_leak
 from .project_state_graph import ProjectStateGraph, detect_project_state_updates
 from .model_tool_arbitration import derive_arbitration_from_stage152, deterministic_hints_from_stage151
@@ -9827,6 +9827,7 @@ class HoloReplyService:
             final_text=repaired_text,
         )
         stage180_live_remediation_execution: dict[str, Any] = {}
+        stage182_remediation_continuation: dict[str, Any] = {}
         stage179_candidate_loop = (
             dict(stage160r_agent_loop_fsm.get("stage179_live_remediation_loop", {}))
             if isinstance(stage160r_agent_loop_fsm.get("stage179_live_remediation_loop", {}), dict)
@@ -9852,13 +9853,19 @@ class HoloReplyService:
                     "confidence": 0.0,
                 }
 
-            stage180_live_remediation_execution = execute_live_remediation_actions(
+            stage182_remediation_continuation = run_live_remediation_continuation(
                 stage179_candidate_loop,
                 stage178_evidence_action_remediation=stage178_evidence_action_remediation,
                 repo_root=Path.cwd(),
                 network_enabled=bool(getattr(self.config.runtime, "network_enabled", False)),
                 memory_recall_fn=_stage180_memory_recall,
-                max_actions=1,
+                max_rounds=2,
+                actions_per_round=1,
+            )
+            stage180_live_remediation_execution = (
+                dict(stage182_remediation_continuation.get("stage180_live_remediation_execution", {}))
+                if isinstance(stage182_remediation_continuation.get("stage180_live_remediation_execution", {}), dict)
+                else {}
             )
             stage180_web_rows = [
                 dict(row)
@@ -10020,6 +10027,10 @@ class HoloReplyService:
             sidecar["stage180_live_remediation_execution"] = stage180_live_remediation_execution
             reply_debug["stage180_live_remediation_execution"] = stage180_live_remediation_execution
             capability_context["stage180_live_remediation_execution"] = stage180_live_remediation_execution
+        if stage182_remediation_continuation:
+            sidecar["stage182_remediation_continuation"] = stage182_remediation_continuation
+            reply_debug["stage182_remediation_continuation"] = stage182_remediation_continuation
+            capability_context["stage182_remediation_continuation"] = stage182_remediation_continuation
         reply_debug["memory_alignment"] = memory_alignment
         memory_alignment_status = str(memory_alignment.get("status", "") or "")
         memory_alignment_claim_count = int(memory_alignment.get("claim_count", 0) or 0)
@@ -10336,6 +10347,7 @@ class HoloReplyService:
                 "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
                 "stage179_live_remediation_loop": stage179_live_remediation_loop,
                 "stage180_live_remediation_execution": stage180_live_remediation_execution,
+                "stage182_remediation_continuation": stage182_remediation_continuation,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
@@ -10439,6 +10451,7 @@ class HoloReplyService:
             or stage153_agent_event_stream
             or stage160r_agent_loop_fsm
             or stage180_live_remediation_execution
+            or stage182_remediation_continuation
             or project_state_graph
             or stage156_context_compiler
             or filing_text_retrieval
@@ -10471,6 +10484,7 @@ class HoloReplyService:
                 stage178_evidence_action_remediation=stage178_evidence_action_remediation,
                 stage179_live_remediation_loop=stage179_live_remediation_loop,
                 stage180_live_remediation_execution=stage180_live_remediation_execution,
+                stage182_remediation_continuation=stage182_remediation_continuation,
                 stage161_model_tool_arbitration=stage161_model_tool_arbitration,
                 filing_text_retrieval=filing_text_retrieval,
                 market_research_pack_ledger=market_research_pack_ledger,
@@ -10719,6 +10733,7 @@ class HoloReplyService:
             "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
             "stage179_live_remediation_loop": stage179_live_remediation_loop,
             "stage180_live_remediation_execution": stage180_live_remediation_execution,
+            "stage182_remediation_continuation": stage182_remediation_continuation,
             "stage160r_goal_state": stage160r_goal_state,
             "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
             "stage161_tool_decision_validation": stage161_tool_decision_validation,
@@ -10915,6 +10930,7 @@ class HoloReplyService:
                 "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
                 "stage179_live_remediation_loop": stage179_live_remediation_loop,
                 "stage180_live_remediation_execution": stage180_live_remediation_execution,
+                "stage182_remediation_continuation": stage182_remediation_continuation,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
@@ -10981,6 +10997,7 @@ class HoloReplyService:
                 "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
                 "stage179_live_remediation_loop": stage179_live_remediation_loop,
                 "stage180_live_remediation_execution": stage180_live_remediation_execution,
+                "stage182_remediation_continuation": stage182_remediation_continuation,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
             },
