@@ -72,6 +72,12 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             f"delta={event.get('marginal_utility', 0)}; next={event.get('next_action', '')}; stop={event.get('stop_reason', '')}"
         )
         return _card("self_feedback", summary, source_event=kind, confidence=0.82)
+    if kind == "market_plan":
+        summary = (
+            f"status={event.get('status', '')}; next={event.get('next_action', '')}; "
+            f"first={event.get('first_action', '')}; candidates={event.get('candidate_count', 0)}; stop={event.get('stop_reason', '')}"
+        )
+        return _card("action_plan", summary, source_event=kind, confidence=0.82)
     if kind == "evaluate":
         unresolved = ",".join(str(x) for x in list(event.get("unresolved_items", []) or [])) or "none"
         return _card("stop_evaluation", f"status={event.get('status', '')}; unresolved={unresolved}", source_event=kind, confidence=0.78)

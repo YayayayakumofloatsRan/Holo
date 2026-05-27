@@ -105,6 +105,7 @@ from .stage170_market_research_gate import (
     repair_market_research_answer,
 )
 from .market_research_feedback_loop import build_market_research_feedback_loop
+from .market_research_action_planner import build_market_research_action_plan
 from .stage151_live_tool_trace import (
     build_stage151_live_tool_trace,
     evaluate_network_grounding,
@@ -10033,6 +10034,20 @@ class HoloReplyService:
             )
             sidecar["stage192_market_research_feedback_loop"] = stage192_market_research_feedback_loop
             reply_debug["stage192_market_research_feedback_loop"] = stage192_market_research_feedback_loop
+        stage193_market_research_action_plan = {}
+        if stage192_market_research_feedback_loop:
+            stage193_market_research_action_plan = build_market_research_action_plan(
+                question=turn.text,
+                stage192_market_research_feedback_loop=stage192_market_research_feedback_loop,
+                market_research_pack=stage169_market_research_pack,
+                market_research_report=stage173_market_research_report,
+                market_research_pack_ledger=market_research_pack_ledger,
+                market_research_report_ledger=market_research_report_ledger,
+                remaining_action_budget=1,
+                network_enabled=bool(getattr(self.config.runtime, "network_enabled", False)),
+            )
+            sidecar["stage193_market_research_action_plan"] = stage193_market_research_action_plan
+            reply_debug["stage193_market_research_action_plan"] = stage193_market_research_action_plan
         sidecar["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
         reply_debug["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
         reply_debug["stage160r_intent_frame"] = stage160r_intent_frame
@@ -10399,6 +10414,7 @@ class HoloReplyService:
                 "stage170_market_research_gate": stage170_market_research_gate,
                 "stage170_market_research_gate_status": stage170_market_research_gate_status,
                 "stage192_market_research_feedback_loop": stage192_market_research_feedback_loop,
+                "stage193_market_research_action_plan": stage193_market_research_action_plan,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
                 "canonical_stop_reason": canonical_stop_reason,
@@ -10429,6 +10445,7 @@ class HoloReplyService:
                 "tool_observation_ledger": tool_observation_ledger,
                 "engineering_action_ledger": engineering_action_ledger,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
+                "stage193_market_research_action_plan": stage193_market_research_action_plan,
             },
             user_text=turn.text,
             event_stream=stage153_agent_event_stream,
@@ -10553,6 +10570,7 @@ class HoloReplyService:
                 stage173_market_research_report=stage173_market_research_report,
                 stage170_market_research_gate=stage170_market_research_gate,
                 stage192_market_research_feedback_loop=stage192_market_research_feedback_loop,
+                stage193_market_research_action_plan=stage193_market_research_action_plan,
                 stage186_live_crawler_search=stage186_live_crawler_search,
                 web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 engineering_action_ledger=engineering_action_ledger,
@@ -10681,6 +10699,7 @@ class HoloReplyService:
                 "stage170_market_research_gate": stage170_market_research_gate,
                 "stage170_market_research_gate_status": stage170_market_research_gate_status,
                 "stage192_market_research_feedback_loop": stage192_market_research_feedback_loop,
+                "stage193_market_research_action_plan": stage193_market_research_action_plan,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
                 "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
@@ -10819,6 +10838,7 @@ class HoloReplyService:
             "stage170_market_research_gate": stage170_market_research_gate,
             "stage170_market_research_gate_status": stage170_market_research_gate_status,
             "stage192_market_research_feedback_loop": stage192_market_research_feedback_loop,
+            "stage193_market_research_action_plan": stage193_market_research_action_plan,
             "stage170_market_research_claim_count": stage170_market_research_claim_count,
             "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
@@ -11020,6 +11040,7 @@ class HoloReplyService:
                 "stage170_market_research_gate": stage170_market_research_gate,
                 "stage170_market_research_gate_status": stage170_market_research_gate_status,
                 "stage192_market_research_feedback_loop": stage192_market_research_feedback_loop,
+                "stage193_market_research_action_plan": stage193_market_research_action_plan,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
                 "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,

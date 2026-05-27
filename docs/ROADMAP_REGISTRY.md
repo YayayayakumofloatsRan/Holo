@@ -364,6 +364,12 @@ Stage192: market research feedback loop
 - Stage153 renders report-readiness `[feedback]` lines, Stage191 public thoughts include them as `self_feedback`, and Stage135 topology exposes a compact `market_research_feedback` node.
 - Verification on `2026-05-28`: targeted Stage192 `4 passed`; neighbor `27 passed`; runtime `92 passed`; full suite `945 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
 
+Stage193: market research action planner
+- Added `holo.stage193.market_research_action_plan.v1` and per-candidate action plans derived from Stage192 report-readiness feedback.
+- Weak financial-filing source authority now becomes concrete SEC/IR `web_search` plans; ready packs can trigger `market_research_report`; ready reports finalize; disabled network and exhausted budget are explicitly blocked/exhausted.
+- Stage153 renders `[market_plan]` lines, Stage191 public thoughts include `action_plan` cards, and Stage135 topology exposes a compact `market_research_action_plan` node.
+- Verification on `2026-05-28`: targeted Stage193 `6 passed`; neighbor `33 passed`; runtime `92 passed`; full suite `951 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

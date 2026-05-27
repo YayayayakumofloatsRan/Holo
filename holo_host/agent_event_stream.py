@@ -273,6 +273,26 @@ def _stage192_market_feedback_events(payload: dict[str, Any]) -> list[dict[str, 
     return events
 
 
+def _stage193_market_action_plan_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = payload.get("stage193_market_research_action_plan", {})
+    if not isinstance(plan, dict):
+        return []
+    candidates = [dict(row) for row in list(plan.get("action_candidates", []) or []) if isinstance(row, dict)]
+    first = candidates[0] if candidates else {}
+    return [
+        {
+            "event": "market_plan",
+            "status": str(plan.get("status", "") or ""),
+            "next_action": str(plan.get("next_action", "") or ""),
+            "candidate_count": int(plan.get("candidate_count", len(candidates)) or 0),
+            "first_action": str(first.get("action_type", "") or ""),
+            "first_query": str(first.get("query", "") or ""),
+            "blocked_reason": str(first.get("blocked_reason", "") or ""),
+            "stop_reason": str(plan.get("stop_reason", "") or ""),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -509,6 +529,7 @@ def build_agent_event_stream(
             )
         events.extend(_stage190_feedback_events(source))
         events.extend(_stage192_market_feedback_events(source))
+        events.extend(_stage193_market_action_plan_events(source))
         events.append(
             {
                 "event": "stop",
@@ -556,6 +577,7 @@ def build_agent_event_stream(
     events.extend(_stage186_crawler_events(source))
     events.extend(_stage190_feedback_events(source))
     events.extend(_stage192_market_feedback_events(source))
+    events.extend(_stage193_market_action_plan_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -718,6 +740,16 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[feedback] {item.get('action', '')} score={item.get('evidence_score', 0)} "
                 f"delta={item.get('marginal_utility', 0)} next={item.get('next_action', '')} "
                 f"stop={item.get('stop_reason', '')}{authority_suffix}"
+            )
+        elif event == "market_plan":
+            query = str(item.get("first_query", "") or "")
+            query_suffix = f" query={query}" if query else ""
+            blocked = str(item.get("blocked_reason", "") or "")
+            blocked_suffix = f" blocked={blocked}" if blocked else ""
+            lines.append(
+                f"[market_plan] status={item.get('status', '')} next={item.get('next_action', '')} "
+                f"candidates={item.get('candidate_count', 0)} first={item.get('first_action', '')} "
+                f"stop={item.get('stop_reason', '')}{blocked_suffix}{query_suffix}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
