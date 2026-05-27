@@ -222,6 +222,12 @@ Stage168: source authority
 - `web_search` observations now carry `source_authority` after search evidence, page evidence, and source synthesis, so market-research and engineering tasks can reject the wrong kind of cited source.
 - Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-source-authority-audit --output artifacts\stage168\stage168_source_authority.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
 
+Stage169: market research pack
+- Added deterministic filing-driven market-research packs with entity normalization, filing section extraction, 10-K checklist coverage, financial metric extraction, and metric consistency checks.
+- Pack readiness is gated by Stage168 source authority, so financial/filing research cannot be treated as ready when only a third-party summary is available.
+- Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-market-research-pack --output artifacts\stage169\stage169_market_research_pack.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted `10 passed`, research stack `78 passed`, runtime `91 passed`, full regression `782 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
