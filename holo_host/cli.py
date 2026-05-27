@@ -75,6 +75,7 @@ from .agent_console_search_loop_smoke import run_agent_console_search_loop_smoke
 from .live_crawler_search import write_live_crawler_search_artifacts
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
+from .stage210_last_action_recall import maybe_build_last_action_recall_reply
 from .interactive_cli import InteractiveCliSession
 from .engineering_action_fabric import evaluate_engineering_claim_grounding
 from .project_state_graph import ProjectStateGraph, render_project_state_cli
@@ -10238,6 +10239,24 @@ def command_chat(
             if text.startswith("/"):
                 if not run_slash(text):
                     break
+                continue
+            last_action_payload = maybe_build_last_action_recall_reply(
+                text,
+                previous_payload=cli_session.last_payload,
+                thread_key=thread_key,
+                chat_name=chat_name,
+                channel=channel,
+            )
+            if last_action_payload:
+                last_reply_payload = last_action_payload
+                cli_session.record_turn(last_action_payload, user_text=text, transport="local_last_action_recall")
+                if auto_event_stream:
+                    print(cli_session.render_console_turn(use_ansi=_chat_trace_use_ansi()))
+                else:
+                    print(_chat_response_text(last_action_payload))
+                if show_json:
+                    print("\n[local_last_action_recall]")
+                    print(cli_session.render_json())
                 continue
             payload, transport = send_turn(text)
             last_reply_payload = payload

@@ -251,6 +251,23 @@ def _stage190_feedback_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _stage210_last_action_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    report = payload.get("stage210_last_action_recall", {})
+    if not isinstance(report, dict) or report.get("schema") != "holo.stage210.last_action_recall.v1":
+        return []
+    return [
+        {
+            "event": "last_action",
+            "action_type": str(report.get("action_type", "") or ""),
+            "status": str(report.get("status", "") or ""),
+            "query_count": int(report.get("query_count", 0) or 0),
+            "promoted_source_count": len(list(report.get("promoted_source_urls", []) or [])),
+            "weak_source_count": len(list(report.get("observed_weak_source_urls", []) or [])),
+            "stop_reason": str(report.get("stop_reason", "") or ""),
+        }
+    ]
+
+
 def _stage192_market_feedback_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     report = payload.get("stage192_market_research_feedback_loop", {})
     if not isinstance(report, dict):
@@ -732,6 +749,7 @@ def build_agent_event_stream(
             )
         events.extend(_stage190_feedback_events(source))
         events.extend(_stage186_crawler_events(source))
+        events.extend(_stage210_last_action_events(source))
         events.extend(_stage192_market_feedback_events(source))
         events.extend(_stage193_market_action_plan_events(source))
         events.extend(_stage194_market_action_execution_events(source))
@@ -789,6 +807,7 @@ def build_agent_event_stream(
     events.extend(_observation_events(source))
     events.extend(_stage186_crawler_events(source))
     events.extend(_stage190_feedback_events(source))
+    events.extend(_stage210_last_action_events(source))
     events.extend(_stage192_market_feedback_events(source))
     events.extend(_stage193_market_action_plan_events(source))
     events.extend(_stage194_market_action_execution_events(source))
@@ -962,6 +981,12 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[feedback] {item.get('action', '')} score={item.get('evidence_score', 0)} "
                 f"delta={item.get('marginal_utility', 0)} next={item.get('next_action', '')} "
                 f"stop={item.get('stop_reason', '')}{authority_suffix}"
+            )
+        elif event == "last_action":
+            lines.append(
+                f"[last_action] action={item.get('action_type', '')} status={item.get('status', '')} "
+                f"queries={item.get('query_count', 0)} promoted={item.get('promoted_source_count', 0)} "
+                f"weak={item.get('weak_source_count', 0)} stop={item.get('stop_reason', '')}"
             )
         elif event == "market_plan":
             query = str(item.get("first_query", "") or "")

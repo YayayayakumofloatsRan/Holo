@@ -467,6 +467,12 @@ Stage209: agent console search loop smoke
 - Stage153 event rendering now corrects public `model_decide` display when crawler/web observations prove the turn actually executed `web_search` rather than direct answering.
 - Verification on `2026-05-28`: targeted multi-step search-loop/console/crawler stack `16 passed`; runtime `92 passed`; web-grounding neighbor stack `32 passed`; CLI artifact smoke passed; full suite `1030 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage210: last action ledger recall
+- Added `holo.stage210.last_action_recall.v1` so ordinary CLI follow-ups about what Holo just searched or did are answered from the previous turn's public crawler/web ledgers.
+- The CLI preflight now handles last-action recall locally and avoids a second provider call when the prior payload has sufficient ledger evidence.
+- Stage153 event rendering includes `[last_action]` rows showing action type, query count, promoted source count, weak source count, and stop reason.
+- Verification on `2026-05-28`: targeted last-action recall/Stage209/Stage153 suite `13 passed`; runtime `92 passed`; full suite `1032 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
