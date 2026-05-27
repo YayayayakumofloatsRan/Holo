@@ -15,6 +15,7 @@ from .stage151_tool_decision_loop import (
     repair_tool_decision_grounding,
     web_observations_to_tool_ledger,
 )
+from .stage171_market_research_action import execute_market_research_pack_action
 
 STAGE152_TOOL_LOOP_SCHEMA = "holo.stage152.deepseek_tool_loop.v1"
 STAGE152_LIVE_TRACE_SCHEMA = "holo.stage152.live_trace.v1"
@@ -82,6 +83,22 @@ DEEPSEEK_NATIVE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
                 "chat_name": {"type": "string"},
                 "channel": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 12},
+            },
+            "required": ["query"],
+        },
+    },
+    "market_research_pack": {
+        "description": "Build a read-only filing evidence pack before market or financial analysis claims.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "query": {"type": "string", "description": "Company, ticker, period, and filing analysis request.", "minLength": 1},
+                "entity": {"type": "string"},
+                "filing_type": {"type": "string", "description": "SEC filing type, usually 10-K or 10-Q."},
+                "filing_text": {"type": "string", "description": "Bounded filing text already retrieved by host evidence."},
+                "source_url": {"type": "string"},
+                "web_observation_ledger": {"type": "array", "items": {"type": "object"}},
             },
             "required": ["query"],
         },
@@ -427,6 +444,41 @@ def execute_deepseek_native_tool_call(
             "tool_message": _tool_result_message(call_id, {"tool": name, "status": str(payload.get("status", "") or ""), "memory_observation": payload}),
             "tool_observation_ledger": [ledger],
         }
+    if name == "market_research_pack":
+        result = execute_market_research_pack_action(
+            arguments,
+            network_enabled=network_enabled,
+            web_observation_ledger=arguments.get("web_observation_ledger", []),
+        )
+        ledger = [dict(row) for row in list(result.get("market_research_pack_ledger", []) or []) if isinstance(row, dict)]
+        tool_ledger = [dict(row) for row in list(result.get("tool_observation_ledger", []) or []) if isinstance(row, dict)]
+        for row in tool_ledger:
+            row["provider_call_id"] = call_id
+            row["tool"] = name
+        primary = ledger[0] if ledger else {"status": "missing", "failure_reasons": ["market_research_pack_no_ledger"]}
+        return {
+            "call_id": call_id,
+            "tool": name,
+            "status": str(primary.get("status", "") or "missing"),
+            "summary": _compact(
+                f"{name}: {primary.get('status', '')} pack={primary.get('pack_status', '')} "
+                f"failures={','.join(str(x) for x in list(primary.get('failure_reasons', []) or []))}",
+                420,
+            ),
+            "stage169_market_research_pack": dict(result.get("stage169_market_research_pack", {}))
+            if isinstance(result.get("stage169_market_research_pack", {}), dict)
+            else {},
+            "market_research_pack_ledger": ledger,
+            "tool_message": _tool_result_message(
+                call_id,
+                {
+                    "tool": name,
+                    "status": str(primary.get("status", "") or ""),
+                    "market_research_pack_ledger": ledger,
+                },
+            ),
+            "tool_observation_ledger": tool_ledger,
+        }
     return {
         "call_id": call_id,
         "tool": name,
@@ -516,6 +568,8 @@ def run_deepseek_native_tool_loop(
     tool_observation_ledger: list[dict[str, Any]] = []
     web_observation_ledger: list[dict[str, Any]] = []
     memory_observation_ledger: list[dict[str, Any]] = []
+    market_research_pack_ledger: list[dict[str, Any]] = []
+    stage169_market_research_pack: dict[str, Any] = {}
     time_observation: dict[str, Any] = {}
     stop_reason = "no_tool_calls"
     final_request_sent = False
@@ -556,6 +610,11 @@ def run_deepseek_native_tool_loop(
             tool_observation_ledger.extend([dict(row) for row in list(result.get("tool_observation_ledger", []) or []) if isinstance(row, dict)])
             web_observation_ledger.extend([dict(row) for row in list(result.get("web_observation_ledger", []) or []) if isinstance(row, dict)])
             memory_observation_ledger.extend([dict(row) for row in list(result.get("memory_observation_ledger", []) or []) if isinstance(row, dict)])
+            market_research_pack_ledger.extend(
+                [dict(row) for row in list(result.get("market_research_pack_ledger", []) or []) if isinstance(row, dict)]
+            )
+            if isinstance(result.get("stage169_market_research_pack", {}), dict) and result.get("stage169_market_research_pack"):
+                stage169_market_research_pack = dict(result.get("stage169_market_research_pack", {}))
             if isinstance(result.get("time_observation", {}), dict) and result.get("time_observation"):
                 time_observation = dict(result.get("time_observation", {}))
         tool_messages.extend(round_tool_messages)
@@ -620,6 +679,8 @@ def run_deepseek_native_tool_loop(
         "tool_observation_ledger": tool_observation_ledger,
         "web_observation_ledger": web_observation_ledger,
         "memory_observation_ledger": memory_observation_ledger,
+        "market_research_pack_ledger": market_research_pack_ledger,
+        "stage169_market_research_pack": stage169_market_research_pack,
         "time_observation": time_observation,
         "grounding": grounding,
         "live_trace": live_trace,
@@ -661,4 +722,3 @@ def format_stage152_live_trace(payload: dict[str, Any]) -> str:
         elif kind == "final":
             lines.append(f"[final] {event.get('summary', '')}")
     return "\n".join(lines)
-

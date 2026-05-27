@@ -121,6 +121,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 116. `docs/ENGINEERING_HANDOFF_STAGE169.md`
 117. `docs/STAGE170_MARKET_RESEARCH_ANSWER_GATE.md`
 118. `docs/ENGINEERING_HANDOFF_STAGE170.md`
+119. `docs/STAGE171_MARKET_RESEARCH_PACK_ACTION.md`
+120. `docs/ENGINEERING_HANDOFF_STAGE171.md`
 
 ## What This Document Must Cover
 - current live state
@@ -135,9 +137,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage170-market-research-answer-gate`.
+- The current milestone tag is `stage171-market-research-pack-action`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage170 Market Research Answer Gate: Holo now requires source-authority-sufficient filing packs before settled financial/market-research claims and exposes the gate in reply metadata and Stage135 topology.
+- Current focus is Stage171 Market Research Pack Action: Holo can now execute a model-selected `market_research_pack` host action, record a filing-pack ledger, feed Stage170 market-research answer gating, and expose the action in CLI/topology metadata.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -482,6 +484,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage168 adds source-authority classification: `web_search` observations now carry `source_authority` after search evidence, page evidence, and source synthesis, distinguishing SEC filings, company IR, official docs, API docs, source repositories, package registries, news, and low-authority third-party summaries. Verification on `2026-05-27`: Stage168 targeted `10 passed`, search stack `68 passed`, runtime `91 passed`, full regression `772 passed`; source-authority audit dry-run passed with `audit_count=4`, `pass_rate=1.0`, `sufficient_authority_rate=0.75`, `primary_source_total=2`, and `first_party_source_total=3`; Stage167 live-smoke compatibility passed with `provider_support_score=1.0`, `freshness_score=1.0`, and `quote_quality_score=1.0`.
   - Stage169 adds deterministic market-research evidence packs for filing-driven analysis: entity normalization, 10-K section extraction, checklist coverage, financial metric extraction, metric consistency checks, and Stage168 source-authority readiness gating. Verification on `2026-05-27`: Stage169 targeted `10 passed`, research stack `78 passed`, runtime `91 passed`, full regression `782 passed`; market-research pack dry-run passed with `pack_count=2` and wrote `artifacts\stage169\stage169_market_research_pack.html`, `.json`, and `.jsonl`; public hygiene passed and `git diff --check` passed with CRLF normalization warnings only.
   - Stage170 adds the market-research answer gate: visible financial and filing-analysis claims require a ready Stage169 pack, source-authority sufficiency, complete filing checklist coverage, no metric conflicts, and claim-level support before being stated as settled facts. Verification on `2026-05-27`: Stage170 targeted `11 passed`, market stack `47 passed`, runtime `92 passed`, full regression `794 passed`; public hygiene passed and `git diff --check` passed with CRLF normalization warnings only.
+  - Stage171 adds host execution for the `market_research_pack` action: DeepSeek/model-first tool loops can request a filing evidence pack, the WSL host records `market_research_pack_ledger`, the Stage169 pack feeds Stage170 answer gating, and Stage135 exposes `stage171_market_research_pack_action`. Verification on `2026-05-27`: Stage171 targeted `8 passed`, market stack `55 passed`, runtime `110 passed`, full regression `802 passed`; public hygiene passed and `git diff --check` passed with CRLF normalization warnings only.
 
 ## Invariants
 - Do not silently change online transport modes

@@ -206,6 +206,7 @@ def build_stage135_i_state_topology(
     stage160r_agent_loop_fsm: dict[str, Any] | None = None,
     stage161_model_tool_arbitration: dict[str, Any] | None = None,
     stage170_market_research_gate: dict[str, Any] | None = None,
+    market_research_pack_ledger: list[dict[str, Any]] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -246,6 +247,7 @@ def build_stage135_i_state_topology(
     agent_loop_fsm = _dict(stage160r_agent_loop_fsm or packet.get("stage160r_agent_loop_fsm", {}))
     model_arbitration = _dict(stage161_model_tool_arbitration or packet.get("stage161_model_tool_arbitration", {}))
     market_research_gate = _dict(stage170_market_research_gate or packet.get("stage170_market_research_gate", {}))
+    market_research_ledger = _list_dicts(market_research_pack_ledger or packet.get("market_research_pack_ledger", []))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -744,6 +746,28 @@ def build_stage135_i_state_topology(
         edges.append(_edge("stage164_source_synthesis", "stage165_answer_citation_formatter", relation="formats_cited_answer", weight=0.54, summary="source synthesis is converted into a visible cited answer"))
         edges.append(_edge("stage165_answer_citation_formatter", "state_delta", relation="reports_cited_evidence", weight=0.38, summary="final answer can expose source URLs and bounded support status"))
 
+    if market_research_ledger:
+        first_market = dict(market_research_ledger[0])
+        action_status = str(first_market.get("status", "") or "unknown")
+        pack_status = str(first_market.get("pack_status", "") or "")
+        evidence_count = int(first_market.get("evidence_item_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage171_market_research_pack_action",
+                "market research pack action",
+                channel="market_research_pack_action",
+                kind="tool_observation",
+                x=0.78,
+                y=0.34,
+                weight=0.74 if action_status == "ok" else 0.28,
+                summary=f"status={action_status}; pack={pack_status}; evidence={evidence_count}",
+            )
+        )
+        source = "stage161_model_tool_arbitration" if model_arbitration else "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage171_market_research_pack_action", relation="executes_market_research_pack", weight=0.55, summary="host action builds filing evidence pack"))
+        target = "stage170_market_research_gate" if market_research_gate else "state_delta"
+        edges.append(_edge("stage171_market_research_pack_action", target, relation="feeds_market_research_gate", weight=0.53, summary="pack ledger can support market research answer gate"))
+
     if market_research_gate:
         gate_status = str(market_research_gate.get("status", "") or "unknown")
         claim_count = int(market_research_gate.get("claim_count", 0) or 0)
@@ -1033,6 +1057,10 @@ def build_stage135_i_state_topology(
                 ]
             ),
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
+            "market_research_pack_action_node_count": sum(1 for node in nodes if node["channel"] == "market_research_pack_action"),
+            "market_research_pack_action_status": str(market_research_ledger[0].get("status", "") or "") if market_research_ledger else "",
+            "market_research_pack_action_pack_status": str(market_research_ledger[0].get("pack_status", "") or "") if market_research_ledger else "",
+            "market_research_pack_action_evidence_count": int(market_research_ledger[0].get("evidence_item_count", 0) or 0) if market_research_ledger else 0,
             "market_research_gate_node_count": sum(1 for node in nodes if node["channel"] == "market_research_gate"),
             "market_research_gate_status": str(market_research_gate.get("status", "") or "") if market_research_gate else "",
             "market_research_gate_claim_count": int(market_research_gate.get("claim_count", 0) or 0) if market_research_gate else 0,
@@ -1231,6 +1259,50 @@ def attach_stage170_market_research_topology(
     metrics["market_research_gate_status"] = gate_status
     metrics["market_research_gate_claim_count"] = claim_count
     metrics["market_research_gate_unsupported_count"] = unsupported_count
+    payload["metrics"] = metrics
+    return payload
+
+
+def attach_stage171_market_research_action_topology(
+    topology: dict[str, Any] | None,
+    market_research_pack_ledger: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    ledger = _list_dicts(market_research_pack_ledger)
+    if not payload.get("schema") or not ledger:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if not any(isinstance(node, dict) and node.get("id") == "stage171_market_research_pack_action" for node in nodes):
+        first = ledger[0]
+        action_status = str(first.get("status", "") or "unknown")
+        pack_status = str(first.get("pack_status", "") or "")
+        evidence_count = int(first.get("evidence_item_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage171_market_research_pack_action",
+                "market research pack action",
+                channel="market_research_pack_action",
+                kind="tool_observation",
+                x=0.78,
+                y=0.34,
+                weight=0.74 if action_status == "ok" else 0.28,
+                summary=f"status={action_status}; pack={pack_status}; evidence={evidence_count}",
+            )
+        )
+        node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+        target = "stage170_market_research_gate" if "stage170_market_research_gate" in node_ids else "state_delta"
+        edges.append(_edge("external_user_input", "stage171_market_research_pack_action", relation="executes_market_research_pack", weight=0.5, summary="host action builds filing evidence pack"))
+        edges.append(_edge("stage171_market_research_pack_action", target, relation="feeds_market_research_gate", weight=0.53, summary="pack ledger can support market research answer gate"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["market_research_pack_action_node_count"] = sum(1 for node in nodes if isinstance(node, dict) and node.get("channel") == "market_research_pack_action")
+    metrics["market_research_pack_action_status"] = str(ledger[0].get("status", "") or "")
+    metrics["market_research_pack_action_pack_status"] = str(ledger[0].get("pack_status", "") or "")
+    metrics["market_research_pack_action_evidence_count"] = int(ledger[0].get("evidence_item_count", 0) or 0)
     payload["metrics"] = metrics
     return payload
 

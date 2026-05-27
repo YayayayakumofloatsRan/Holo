@@ -234,6 +234,12 @@ Stage170: market research answer gate
 - Added `market_research_pack` to the model-first tool action space and exposed the `stage170_market_research_gate` in reply metadata and Stage135 topology.
 - Verification on `2026-05-27`: targeted `11 passed`, market stack `47 passed`, runtime `92 passed`, full regression `794 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage171: market research pack action
+- Added host execution for the `market_research_pack` action exposed by Stage170.
+- DeepSeek-native tool calls can now request a read-only filing pack; the host records `market_research_pack_ledger`, attaches the Stage169 pack when built, and feeds Stage170 answer gating.
+- Stage153 event streams and Stage135 topology expose the market-research pack action without provider model paths, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted `8 passed`, market stack `55 passed`, runtime `110 passed`, full regression `802 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

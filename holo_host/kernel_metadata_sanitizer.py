@@ -29,6 +29,8 @@ STAGE152_PUBLIC_KEYS = {
     "tool_observation_ledger",
     "web_observation_ledger",
     "memory_observation_ledger",
+    "market_research_pack_ledger",
+    "stage169_market_research_pack",
     "time_observation",
     "grounding",
     "live_trace",

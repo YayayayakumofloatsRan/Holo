@@ -98,6 +98,12 @@ def normalize_market_research_pack(
     ):
         if isinstance(candidate, dict) and str(candidate.get("schema", "") or "").startswith("holo.stage169."):
             return dict(candidate)
+    for container in (_dict(reply_debug), _dict(sidecar), _dict(metadata)):
+        for ledger_key in ("market_research_pack_ledger", "stage171_market_research_pack_ledger"):
+            for row in _list_dicts(container.get(ledger_key, [])):
+                pack = row.get("stage169_market_research_pack", {})
+                if isinstance(pack, dict) and str(pack.get("schema", "") or "").startswith("holo.stage169."):
+                    return dict(pack)
     return {}
 
 
