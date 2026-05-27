@@ -137,6 +137,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 132. `docs/ENGINEERING_HANDOFF_STAGE177.md`
 133. `docs/STAGE178_EVIDENCE_ACTION_REMEDIATION.md`
 134. `docs/ENGINEERING_HANDOFF_STAGE178.md`
+135. `docs/STAGE179_LIVE_REMEDIATION_LOOP.md`
+136. `docs/ENGINEERING_HANDOFF_STAGE179.md`
 
 ## What This Document Must Cover
 - current live state
@@ -151,9 +153,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage178-evidence-action-remediation`.
+- The current milestone tag is `stage179-live-remediation-loop`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage178 Evidence Action Remediation: Holo now generalizes the evidence-gap to action-plan pattern across market research, literature review, mathematical derivation, GPU experiments, memory grounding, and tool-backed engineering claims.
+- Current focus is Stage179 Live Remediation Loop: Stage178 evidence-action plans now feed back into the live FSM as next-action candidates, remediation steps, CLI trace events, and Stage135 topology evidence.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

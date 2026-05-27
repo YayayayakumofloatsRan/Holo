@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .common import compact_text, stable_digest, utc_now
+from .live_remediation_loop import build_live_remediation_loop
 from .memory_grounding import normalize_memory_observation_ledger
 
 AGENT_LOOP_FSM_SCHEMA = "holo.stage160r.agent_loop_fsm.v1"
@@ -195,6 +196,7 @@ def run_agent_loop_fsm(
     memory_observation_ledger: Any = None,
     market_research_pack_ledger: Any = None,
     market_research_report_ledger: Any = None,
+    stage178_evidence_action_remediation: dict[str, Any] | None = None,
     time_observation: dict[str, Any] | None = None,
     final_text: str = "",
 ) -> dict[str, Any]:
@@ -250,6 +252,8 @@ def run_agent_loop_fsm(
     memory_rows = _list_dicts(memory_observation_ledger)
     market_rows = _list_dicts(market_research_pack_ledger)
     market_report_rows = _list_dicts(market_research_report_ledger)
+    remediation_report = dict(stage178_evidence_action_remediation or {})
+    live_remediation = build_live_remediation_loop(remediation_report, goal_id=goal_id, current_stop_reason=stop_reason) if remediation_report else {}
     index = 2
     for action in mandatory:
         if action == "memory_recall":
@@ -304,6 +308,45 @@ def run_agent_loop_fsm(
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status="skipped", skip_reason="host_action_not_implemented", required_observations=required_observations, unresolved_items=[action], canonical_stop_reason="needs_user_clarification"))
             index += 1
             stop_reason = "needs_user_clarification"
+    if live_remediation and bool(live_remediation.get("blocked", False)):
+        next_actions = _list_dicts(live_remediation.get("next_action_candidates", []))
+        selected_next = dict(next_actions[0]) if next_actions else {}
+        selected_type = str(selected_next.get("action_type", "") or live_remediation.get("selected_action_type", "") or "remediation")
+        selected_tool = str(selected_next.get("required_tool", "") or live_remediation.get("selected_required_tool", "") or "")
+        remediation_stop = str(live_remediation.get("canonical_stop_reason", "") or "evidence_exhausted")
+        stop_reason = remediation_stop if remediation_stop in ALLOWED_NEW_STOP_REASONS else "evidence_exhausted"
+        final_override_text = str(live_remediation.get("operator_message", "") or remediation_report.get("operator_message", "") or final_override_text)
+        unresolved.extend(str(action.get("action_type", "") or action.get("issue_type", "") or "remediation") for action in next_actions)
+        steps.append(
+            _step(
+                index=index,
+                phase="remediation_decide",
+                goal_id=goal_id,
+                selected_action=selected_type,
+                action_status="planned",
+                required_observations=[selected_tool] if selected_tool else [],
+                observation_ids=[str(selected_next.get("action_id", "") or "")] if selected_next else [],
+                new_information_score=0.62,
+                unresolved_items=[str(action.get("action_type", "") or "") for action in next_actions],
+                canonical_stop_reason=stop_reason,
+            )
+        )
+        index += 1
+        steps.append(
+            _step(
+                index=index,
+                phase="remediation_plan",
+                goal_id=goal_id,
+                selected_action=selected_type,
+                action_status="planned",
+                required_observations=[str(action.get("required_tool", "") or "") for action in next_actions if str(action.get("required_tool", "") or "")],
+                observation_ids=[str(action.get("action_id", "") or "") for action in next_actions if str(action.get("action_id", "") or "")],
+                new_information_score=0.68,
+                unresolved_items=[str(action.get("action_type", "") or "") for action in next_actions],
+                canonical_stop_reason=stop_reason,
+            )
+        )
+        index += 1
     if stop_reason == "unknown":
         stop_reason = "final_answer_ready"
     if stop_reason not in ALLOWED_NEW_STOP_REASONS:
@@ -346,6 +389,9 @@ def run_agent_loop_fsm(
         "selected_action": selected_action,
         "stage161_model_tool_arbitration": arbitration,
         "stage161_tool_decision_validation": dict(tool_decision_validation or {}),
+        "stage178_evidence_action_remediation": remediation_report,
+        "stage179_live_remediation_loop": live_remediation,
+        "next_action_candidates": _list_dicts(live_remediation.get("next_action_candidates", [])) if live_remediation else [],
         "mandatory_actions": mandatory,
         "required_observations": required_observations,
         "step_count": len(steps),

@@ -9384,6 +9384,27 @@ class HoloReplyService:
         if stage160r_memory_observation_ledger:
             sidecar["stage160r_memory_observation_ledger"] = stage160r_memory_observation_ledger
             sidecar["memory_observation_ledger"] = stage160r_memory_observation_ledger
+        stage178_evidence_action_remediation = (
+            dict((turn.metadata or {}).get("stage178_evidence_action_remediation", {}))
+            if isinstance((turn.metadata or {}).get("stage178_evidence_action_remediation", {}), dict)
+            else {}
+        )
+        if not stage178_evidence_action_remediation:
+            stage178_evidence_action_remediation = (
+                dict(sidecar.get("stage178_evidence_action_remediation", {}))
+                if isinstance(sidecar.get("stage178_evidence_action_remediation", {}), dict)
+                else {}
+            )
+        if not stage178_evidence_action_remediation:
+            stage178_evidence_action_remediation = (
+                dict(capability_context.get("stage178_evidence_action_remediation", {}))
+                if isinstance(capability_context.get("stage178_evidence_action_remediation", {}), dict)
+                else {}
+            )
+        if stage178_evidence_action_remediation:
+            sidecar["stage178_evidence_action_remediation"] = stage178_evidence_action_remediation
+            capability_context = dict(capability_context)
+            capability_context["stage178_evidence_action_remediation"] = stage178_evidence_action_remediation
         stage160r_agent_loop_fsm = run_agent_loop_fsm(
             intent_frame=stage160r_intent_frame,
             previous_goal_state=previous_goal_state,
@@ -9391,6 +9412,7 @@ class HoloReplyService:
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             memory_observation_ledger=stage160r_memory_observation_ledger,
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+            stage178_evidence_action_remediation=stage178_evidence_action_remediation,
             time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
         )
         sidecar["stage160r_previous_goal_state"] = previous_goal_state
@@ -9799,6 +9821,7 @@ class HoloReplyService:
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             memory_observation_ledger=memory_observation_ledger,
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+            stage178_evidence_action_remediation=stage178_evidence_action_remediation,
             time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
             final_text=repaired_text,
         )
@@ -9898,6 +9921,19 @@ class HoloReplyService:
         reply_debug["stage160r_intent_frame"] = stage160r_intent_frame
         capability_context = dict(capability_context)
         capability_context["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
+        stage179_live_remediation_loop = (
+            dict(stage160r_agent_loop_fsm.get("stage179_live_remediation_loop", {}))
+            if isinstance(stage160r_agent_loop_fsm.get("stage179_live_remediation_loop", {}), dict)
+            else {}
+        )
+        if stage178_evidence_action_remediation:
+            sidecar["stage178_evidence_action_remediation"] = stage178_evidence_action_remediation
+            reply_debug["stage178_evidence_action_remediation"] = stage178_evidence_action_remediation
+            capability_context["stage178_evidence_action_remediation"] = stage178_evidence_action_remediation
+        if stage179_live_remediation_loop:
+            sidecar["stage179_live_remediation_loop"] = stage179_live_remediation_loop
+            reply_debug["stage179_live_remediation_loop"] = stage179_live_remediation_loop
+            capability_context["stage179_live_remediation_loop"] = stage179_live_remediation_loop
         reply_debug["memory_alignment"] = memory_alignment
         memory_alignment_status = str(memory_alignment.get("status", "") or "")
         memory_alignment_claim_count = int(memory_alignment.get("claim_count", 0) or 0)
@@ -10211,6 +10247,8 @@ class HoloReplyService:
                 "project_state_update": project_state_update,
                 "stage160r_intent_frame": stage160r_intent_frame,
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
+                "stage179_live_remediation_loop": stage179_live_remediation_loop,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
@@ -10342,6 +10380,8 @@ class HoloReplyService:
                 stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
                 stage153_agent_event_stream=stage153_agent_event_stream,
                 stage160r_agent_loop_fsm=stage160r_agent_loop_fsm,
+                stage178_evidence_action_remediation=stage178_evidence_action_remediation,
+                stage179_live_remediation_loop=stage179_live_remediation_loop,
                 stage161_model_tool_arbitration=stage161_model_tool_arbitration,
                 filing_text_retrieval=filing_text_retrieval,
                 market_research_pack_ledger=market_research_pack_ledger,
@@ -10587,6 +10627,8 @@ class HoloReplyService:
             "project_state_update": project_state_update,
             "stage160r_intent_frame": stage160r_intent_frame,
             "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+            "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
+            "stage179_live_remediation_loop": stage179_live_remediation_loop,
             "stage160r_goal_state": stage160r_goal_state,
             "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
             "stage161_tool_decision_validation": stage161_tool_decision_validation,
@@ -10780,6 +10822,8 @@ class HoloReplyService:
                 "project_state_update": project_state_update,
                 "stage160r_intent_frame": stage160r_intent_frame,
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
+                "stage179_live_remediation_loop": stage179_live_remediation_loop,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
@@ -10843,6 +10887,8 @@ class HoloReplyService:
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage160r_intent_frame": stage160r_intent_frame,
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
+                "stage179_live_remediation_loop": stage179_live_remediation_loop,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
             },

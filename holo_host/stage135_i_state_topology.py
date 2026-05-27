@@ -212,6 +212,7 @@ def build_stage135_i_state_topology(
     market_research_report_ledger: list[dict[str, Any]] | None = None,
     stage177_market_research_remediation: dict[str, Any] | None = None,
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
+    stage179_live_remediation_loop: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -258,6 +259,7 @@ def build_stage135_i_state_topology(
     market_research_report_ledger_rows = _list_dicts(market_research_report_ledger or packet.get("market_research_report_ledger", []))
     market_research_remediation = _dict(stage177_market_research_remediation or packet.get("stage177_market_research_remediation", {}))
     evidence_action_remediation = _dict(stage178_evidence_action_remediation or packet.get("stage178_evidence_action_remediation", {}))
+    live_remediation_loop = _dict(stage179_live_remediation_loop or packet.get("stage179_live_remediation_loop", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -907,6 +909,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage178_evidence_action_remediation", relation="generalizes_evidence_gap_to_action", weight=0.57, summary="cross-domain evidence gaps are converted into bounded next actions"))
         edges.append(_edge("stage178_evidence_action_remediation", "state_delta", relation="blocks_or_allows_finalization", weight=0.47, summary="answers finalize only when evidence-action remediation is clean"))
 
+    if live_remediation_loop:
+        loop_status = str(live_remediation_loop.get("status", "") or "unknown")
+        next_count = len(list(live_remediation_loop.get("next_action_candidates", []) or []))
+        selected_action = str(live_remediation_loop.get("selected_action_type", "") or "")
+        blocked = bool(live_remediation_loop.get("blocked", False))
+        nodes.append(
+            _node(
+                "stage179_live_remediation_loop",
+                "live remediation loop",
+                channel="live_remediation_loop",
+                kind="agent_loop_bridge",
+                x=0.96,
+                y=0.54,
+                weight=0.7 if blocked else 0.42,
+                summary=f"status={loop_status}; selected={selected_action}; next_actions={next_count}; blocked={blocked}",
+            )
+        )
+        source = "stage178_evidence_action_remediation" if evidence_action_remediation else "stage160r_agent_loop_fsm" if agent_loop_fsm else "external_user_input"
+        edges.append(_edge(source, "stage179_live_remediation_loop", relation="feeds_remediation_back_to_fsm", weight=0.58, summary="evidence remediation actions become live agent-loop next actions"))
+        edges.append(_edge("stage179_live_remediation_loop", "state_delta", relation="updates_next_action_state", weight=0.48, summary="the live loop exposes the next action candidate and stop reason"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1201,6 +1224,10 @@ def build_stage135_i_state_topology(
             "evidence_action_remediation_issue_count": int(evidence_action_remediation.get("issue_count", 0) or 0) if evidence_action_remediation else 0,
             "evidence_action_remediation_action_count": int(evidence_action_remediation.get("action_count", 0) or len(list(evidence_action_remediation.get("actions", []) or []))) if evidence_action_remediation else 0,
             "evidence_action_remediation_status": str(evidence_action_remediation.get("status", "") or "") if evidence_action_remediation else "",
+            "live_remediation_loop_node_count": sum(1 for node in nodes if node["channel"] == "live_remediation_loop"),
+            "live_remediation_next_action_count": len(list(live_remediation_loop.get("next_action_candidates", []) or [])) if live_remediation_loop else 0,
+            "live_remediation_loop_status": str(live_remediation_loop.get("status", "") or "") if live_remediation_loop else "",
+            "live_remediation_selected_action": str(live_remediation_loop.get("selected_action_type", "") or "") if live_remediation_loop else "",
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,

@@ -287,6 +287,17 @@ def build_agent_event_stream(
                         "unresolved_items": list(step.get("unresolved_items", []) or []),
                     }
                 )
+            elif phase in {"remediation_decide", "remediation_plan"}:
+                events.append(
+                    {
+                        "event": "remediation",
+                        "phase": phase,
+                        "action_type": str(step.get("selected_action", "") or ""),
+                        "required_tools": list(step.get("required_observations", []) or []),
+                        "unresolved_items": list(step.get("unresolved_items", []) or []),
+                        "status": str(step.get("action_status", "") or "planned"),
+                    }
+                )
         events.append(
             {
                 "event": "stop",
@@ -397,6 +408,12 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
         elif event == "evaluate":
             unresolved = ",".join(str(x) for x in list(item.get("unresolved_items", []) or [])) or "-"
             lines.append(f"[evaluate] status={item.get('status', '') or '-'} unresolved={unresolved}")
+        elif event == "remediation":
+            tools = ",".join(str(x) for x in list(item.get("required_tools", []) or [])) or "-"
+            unresolved = ",".join(str(x) for x in list(item.get("unresolved_items", []) or [])) or "-"
+            lines.append(
+                f"[remediation] {item.get('action_type', '')} status={item.get('status', '')} tools={tools} unresolved={unresolved}"
+            )
         elif event == "tool_call":
             if item.get("status") == "no_tool_calls" or item.get("action_type") == "none":
                 lines.append("[tool_call] no tool calls")

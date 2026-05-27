@@ -282,6 +282,12 @@ Stage178: evidence action remediation
 - Added `run-evidence-action-remediation` CLI artifacts and Stage135 `evidence_action_remediation` topology metrics without provider calls, network fetches, tool execution, memory writes, WeChat starts, or transport widening.
 - Verification on `2026-05-27`: targeted Stage178 `9 passed`, remediation stack `29 passed`, runtime `92 passed`, full regression `862 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage179: live remediation loop
+- Connected Stage178 evidence-action remediation to the live agent-loop FSM.
+- Remediation-required reports now produce `next_action_candidates`, `remediation_decide` / `remediation_plan` FSM steps, `[remediation]` event stream lines, bounded operator final text, and Stage135 `live_remediation_loop` topology metrics.
+- Added `run-live-remediation-simulation` CLI artifacts without provider calls, network fetches, tool execution, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted Stage179 `7 passed`, remediation stack `26 passed`, runtime `92 passed`, full regression `869 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only. The final verification run included the `reply_api` live-path wiring.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
