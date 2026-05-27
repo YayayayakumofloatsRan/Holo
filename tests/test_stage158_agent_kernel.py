@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from unittest import mock
 
 from holo_host import cli
@@ -101,3 +102,21 @@ def test_public_hygiene_references_remain_safe() -> None:
     assert hygiene["passed"] is True
     assert "scripts/check_public_release_hygiene.py" in hygiene["details"]
     assert ".holo_runtime" not in hygiene["details"]
+
+
+def test_stage158_handoff_describes_real_stage156_and_stage157_surfaces() -> None:
+    handoff = Path("docs/ENGINEERING_HANDOFF_STAGE158.md").read_text(encoding="utf-8")
+
+    assert "checkout did not contain Stage156 or Stage157" not in handoff
+    assert "real Stage156 context compiler" in handoff
+    assert "real Stage157 HoloCoreBench" in handoff
+
+
+def test_stage158_release_doc_exposes_cli_and_boundaries() -> None:
+    release_doc = Path("docs/STAGE158_AGENT_KERNEL_V1.md").read_text(encoding="utf-8")
+
+    assert "python -m holo_host chat --thread-key holo_cli:default" in release_doc
+    assert "python -m holo_host run-core-bench --output artifacts\\stage157\\holo_core_bench.html --dry-run" in release_doc
+    assert "python -m holo_host agent-kernel-readiness" in release_doc
+    assert "raw DeepSeek `reasoning_content`" in release_doc
+    assert "Stage158 does not add provider calls" in release_doc

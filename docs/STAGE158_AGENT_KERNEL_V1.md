@@ -52,14 +52,11 @@ python -m holo_host project-state --project Holo --next-actions
 
 ## Core Bench
 
-```python
-from holo_host.holo_core_bench import run_holo_core_bench, render_holo_core_bench
-
-report = run_holo_core_bench(dry_run=True)
-print(render_holo_core_bench(report))
+```powershell
+python -m holo_host run-core-bench --output artifacts\stage157\holo_core_bench.html --dry-run
 ```
 
-The bench is local and deterministic. It checks kernel infrastructure availability; it is not a model-quality score.
+The bench writes `.html`, `.json`, and `.jsonl` artifacts. It is local and deterministic. It checks base agent reliability surfaces such as recent recall, directive adherence, project continuity, grounding, context compaction, CLI trace visibility, and stop-reason correctness. It is not a model-quality score.
 
 ## Domain Modules
 

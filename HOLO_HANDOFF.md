@@ -111,9 +111,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage157-holo-core-bench`.
+- The current milestone tag is `stage158-agent-kernel-v1`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage157 HoloCoreBench Reliability Suite: Holo now has a deterministic dry-run reliability benchmark over recent recall, directive adherence, project continuity, web/time grounding, tool grounding, engineering claim grounding, context compaction, CLI trace visibility, and packet stop reasons. Stage154 engineering action ledgers remain the host evidence layer for repo work, Stage155 project state remains the reusable continuity layer, and Stage156 context compiler is the prompt/cache discipline layer.
+- Current focus is Stage158 Agent Kernel v1: Holo now packages the stable infrastructure arc across Stage153 interactive CLI, Stage154 engineering action ledgers, Stage155 project state graph, Stage156 context compiler/cache discipline, and Stage157 HoloCoreBench. Stage158 adds scaffold-only domain modules for math research, physics research, market research, and ProjectH ops plus `agent-kernel-readiness`, without adding live domain work, provider calls, memory writes, tool execution, WeChat starts, or transport authority changes.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
