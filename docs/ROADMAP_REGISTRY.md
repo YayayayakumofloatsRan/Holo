@@ -400,6 +400,12 @@ Stage198: market research finalization gate
 - Stage153 renders `[report_final]` lines, Stage191 public thoughts include finalization cards, and Stage135 topology exposes `market_research_finalization`.
 - Verification on `2026-05-28`: Stage198 targeted `5 passed`; Stage170 regression fix `6 passed`; neighbor market stack `38 passed`; runtime `92 passed`; full suite `978 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage199: market research task dossier
+- Added `holo.stage199.market_research_task_dossier.v1` and `holo.stage199.market_research_dossier_bundle.v1` to consolidate market research sources, metrics, report/finalization state, open items, and next actions into a resumable dossier.
+- Added `run-market-research-dossier` to write HTML/JSON/JSONL artifacts for deterministic dry-run market research continuity.
+- Stage153 renders `[market_dossier]` lines, Stage191 public thoughts include dossier working-memory cards, and Stage135 topology exposes `market_research_dossier`.
+- Verification on `2026-05-28`: targeted `5 passed`; neighbor market stack `43 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `983 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

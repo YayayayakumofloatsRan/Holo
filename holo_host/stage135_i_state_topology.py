@@ -217,6 +217,7 @@ def build_stage135_i_state_topology(
     stage196_market_research_source_promotion: dict[str, Any] | None = None,
     stage197_market_research_report_assembly: dict[str, Any] | None = None,
     stage198_market_research_finalization_gate: dict[str, Any] | None = None,
+    stage199_market_research_task_dossier: dict[str, Any] | None = None,
     stage177_market_research_remediation: dict[str, Any] | None = None,
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
     stage179_live_remediation_loop: dict[str, Any] | None = None,
@@ -281,6 +282,7 @@ def build_stage135_i_state_topology(
     )
     market_research_report_assembly = _dict(stage197_market_research_report_assembly or packet.get("stage197_market_research_report_assembly", {}))
     market_research_finalization = _dict(stage198_market_research_finalization_gate or packet.get("stage198_market_research_finalization_gate", {}))
+    market_research_dossier = _dict(stage199_market_research_task_dossier or packet.get("stage199_market_research_task_dossier", {}))
     market_research_remediation = _dict(stage177_market_research_remediation or packet.get("stage177_market_research_remediation", {}))
     evidence_action_remediation = _dict(stage178_evidence_action_remediation or packet.get("stage178_evidence_action_remediation", {}))
     live_remediation_loop = _dict(stage179_live_remediation_loop or packet.get("stage179_live_remediation_loop", {}))
@@ -1046,6 +1048,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage198_market_research_finalization_gate", relation="converts_report_readiness_to_visible_final", weight=0.73, summary="report-readiness state becomes a visible final report or an evidence-bound failure"))
         edges.append(_edge("stage198_market_research_finalization_gate", "state_delta", relation="gates_market_research_final_reply", weight=0.55, summary="market research finalization replaces unsupported visible text with a grounded report boundary"))
 
+    if market_research_dossier:
+        dossier_status = str(market_research_dossier.get("status", "") or "unknown")
+        source_count = int(market_research_dossier.get("source_count", 0) or 0)
+        metric_count = int(market_research_dossier.get("metric_count", 0) or 0)
+        next_count = len(list(market_research_dossier.get("next_actions", []) or []))
+        nodes.append(
+            _node(
+                "stage199_market_research_task_dossier",
+                "market research task dossier",
+                channel="market_research_dossier",
+                kind="working_memory",
+                x=0.999,
+                y=0.62,
+                weight=0.86 if dossier_status == "report_ready" else 0.48,
+                summary=f"status={dossier_status}; sources={source_count}; metrics={metric_count}; next={next_count}",
+            )
+        )
+        source = "stage198_market_research_finalization_gate" if market_research_finalization else "stage197_market_research_report_assembly" if market_research_report_assembly else "state_delta"
+        edges.append(_edge(source, "stage199_market_research_task_dossier", relation="persists_market_research_resume_state", weight=0.7, summary="final report state becomes a resumable research dossier"))
+        edges.append(_edge("stage199_market_research_task_dossier", "state_delta", relation="exposes_research_continuity", weight=0.52, summary="dossier exposes sources, metrics, open items, and next actions for continuation"))
+
     if market_research_remediation:
         remediation_status = str(market_research_remediation.get("status", "") or "unknown")
         action_count = len(list(market_research_remediation.get("remediation_actions", []) or []))
@@ -1577,6 +1600,9 @@ def build_stage135_i_state_topology(
             "market_research_finalization_node_count": sum(1 for node in nodes if node["channel"] == "market_research_finalization"),
             "market_research_finalization_status": str(market_research_finalization.get("status", "") or "") if market_research_finalization else "",
             "market_research_finalization_ready": bool(market_research_finalization.get("final_visible_text_ready", False)) if market_research_finalization else False,
+            "market_research_dossier_node_count": sum(1 for node in nodes if node["channel"] == "market_research_dossier"),
+            "market_research_dossier_status": str(market_research_dossier.get("status", "") or "") if market_research_dossier else "",
+            "market_research_dossier_next_action_count": len(list(market_research_dossier.get("next_actions", []) or [])) if market_research_dossier else 0,
             "market_research_remediation_node_count": sum(1 for node in nodes if node["channel"] == "market_research_remediation"),
             "market_research_remediation_required_count": 1 if market_research_remediation and not bool(market_research_remediation.get("can_finalize", False)) else 0,
             "market_research_remediation_action_count": len(list(market_research_remediation.get("remediation_actions", []) or [])) if market_research_remediation else 0,

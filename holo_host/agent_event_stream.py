@@ -385,6 +385,25 @@ def _stage198_market_report_finalization_events(payload: dict[str, Any]) -> list
     ]
 
 
+def _stage199_market_research_dossier_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    dossier = payload.get("stage199_market_research_task_dossier", {})
+    if not isinstance(dossier, dict):
+        return []
+    resume = dossier.get("resume_state", {})
+    if not isinstance(resume, dict):
+        resume = {}
+    return [
+        {
+            "event": "market_dossier",
+            "status": str(dossier.get("status", "") or ""),
+            "source_count": int(dossier.get("source_count", 0) or 0),
+            "metric_count": int(dossier.get("metric_count", 0) or 0),
+            "next_action_count": len(list(dossier.get("next_actions", []) or [])),
+            "can_resume": bool(resume.get("can_resume", False)),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -627,6 +646,7 @@ def build_agent_event_stream(
         events.extend(_stage196_market_source_promotion_events(source))
         events.extend(_stage197_market_report_assembly_events(source))
         events.extend(_stage198_market_report_finalization_events(source))
+        events.extend(_stage199_market_research_dossier_events(source))
         events.append(
             {
                 "event": "stop",
@@ -680,6 +700,7 @@ def build_agent_event_stream(
     events.extend(_stage196_market_source_promotion_events(source))
     events.extend(_stage197_market_report_assembly_events(source))
     events.extend(_stage198_market_report_finalization_events(source))
+    events.extend(_stage199_market_research_dossier_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -891,6 +912,12 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"ready={str(bool(item.get('ready', False))).lower()} "
                 f"replace={str(bool(item.get('replace', False))).lower()} "
                 f"citation={item.get('citation_quality_status', '')} stop={item.get('stop_reason', '')}{url_suffix}"
+            )
+        elif event == "market_dossier":
+            lines.append(
+                f"[market_dossier] status={item.get('status', '')} "
+                f"sources={item.get('source_count', 0)} metrics={item.get('metric_count', 0)} "
+                f"next={item.get('next_action_count', 0)} resume={str(bool(item.get('can_resume', False))).lower()}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
