@@ -251,6 +251,28 @@ def _stage190_feedback_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _stage192_market_feedback_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    report = payload.get("stage192_market_research_feedback_loop", {})
+    if not isinstance(report, dict):
+        return []
+    events: list[dict[str, Any]] = []
+    for row in list(report.get("steps", []) or [])[:8]:
+        if not isinstance(row, dict):
+            continue
+        events.append(
+            {
+                "event": "feedback",
+                "action": str(row.get("action", "market_research_report") or "market_research_report"),
+                "evidence_score": float(row.get("combined_sufficiency_score", 0.0) or 0.0),
+                "marginal_utility": float(row.get("marginal_utility", 0.0) or 0.0),
+                "authority_status": str(row.get("authority_status", "") or ""),
+                "next_action": str(row.get("next_action", "") or ""),
+                "stop_reason": str(row.get("stop_reason", "") or ""),
+            }
+        )
+    return events
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -485,6 +507,8 @@ def build_agent_event_stream(
                     "stop_reason": str(continuation.get("canonical_stop_reason", "") or ""),
                 }
             )
+        events.extend(_stage190_feedback_events(source))
+        events.extend(_stage192_market_feedback_events(source))
         events.append(
             {
                 "event": "stop",
@@ -531,6 +555,7 @@ def build_agent_event_stream(
     events.extend(_observation_events(source))
     events.extend(_stage186_crawler_events(source))
     events.extend(_stage190_feedback_events(source))
+    events.extend(_stage192_market_feedback_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":

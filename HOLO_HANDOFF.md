@@ -163,6 +163,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 158. `docs/ENGINEERING_HANDOFF_STAGE190.md`
 159. `docs/STAGE191_PUBLIC_THOUGHT_STREAM.md`
 160. `docs/ENGINEERING_HANDOFF_STAGE191.md`
+161. `docs/STAGE192_MARKET_RESEARCH_FEEDBACK_LOOP.md`
+162. `docs/ENGINEERING_HANDOFF_STAGE192.md`
 
 ## What This Document Must Cover
 - current live state
@@ -177,9 +179,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage191-public-thought-stream`.
+- The current milestone tag is `stage192-market-research-feedback-loop`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage191 Public Thought Stream: Holo now renders a CLI-friendly public thought stream derived from event, action, observation, self-feedback, and stop ledgers while keeping raw provider/private chain-of-thought hidden. The next pressure is expanding the feedback controller into engineering and market-research report readiness workflows.
+- Current focus is Stage192 Market Research Feedback Loop: Holo now appraises filing-grounded report readiness, missing source authority, evidence sufficiency, next action, and stop reason before market-research delivery. The next pressure is live multi-source market-research action planning that intentionally requests missing source families until the readiness gate passes or budget is exhausted.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

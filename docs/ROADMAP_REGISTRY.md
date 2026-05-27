@@ -358,6 +358,12 @@ Stage191: public thought stream
 - Reply API propagates `stage191_public_thought_stream` into debug, outgoing metadata, reply JSON, and archive metadata while keeping raw hidden reasoning private.
 - Verification on `2026-05-27`: targeted Stage191 `3 passed`; neighbor `29 passed`; runtime `92 passed`; full suite `941 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
 
+Stage192: market research feedback loop
+- Added `holo.stage192.market_research_feedback_loop.v1` and per-step report-readiness feedback for filing-grounded market research.
+- Report feedback now decides whether to finalize, rebuild the market-research pack, regenerate the report, or stop with insufficient evidence.
+- Stage153 renders report-readiness `[feedback]` lines, Stage191 public thoughts include them as `self_feedback`, and Stage135 topology exposes a compact `market_research_feedback` node.
+- Verification on `2026-05-28`: targeted Stage192 `4 passed`; neighbor `27 passed`; runtime `92 passed`; full suite `945 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
