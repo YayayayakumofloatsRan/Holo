@@ -329,6 +329,12 @@ Stage186: live crawler search
 - Stage135 topology now exposes `live_crawler_search` node and metrics.
 - Verification on `2026-05-27`: targeted Stage186 `8 passed`; neighbor `38 passed`; runtime `92 passed`; full suite `926 passed`; public hygiene and `git diff --check` passed.
 
+Stage187: live chat crawler integration
+- Wired Stage186 crawler search into `CapabilityBroker` eager web execution for agent channels.
+- `holo_cli`, `engineering`, `research`, and `project` web-search turns now rebuild capability context with eager crawler execution when Stage151 selects `web_search`.
+- Stage153 event stream renders `[crawl:query]`, `[crawl:search]`, `[crawl:open]`, `[crawl:evaluate]`, and `[crawl:stop]` from live crawler ledgers.
+- Verification on `2026-05-27`: targeted Stage187 `2 passed`; neighbor `37 passed`; runtime `92 passed`; full suite `928 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

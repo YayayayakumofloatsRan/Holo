@@ -153,6 +153,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 148. `docs/ENGINEERING_HANDOFF_STAGE185.md`
 149. `docs/STAGE186_LIVE_CRAWLER_SEARCH.md`
 150. `docs/ENGINEERING_HANDOFF_STAGE186.md`
+151. `docs/STAGE187_LIVE_CHAT_CRAWLER_INTEGRATION.md`
+152. `docs/ENGINEERING_HANDOFF_STAGE187.md`
 
 ## What This Document Must Cover
 - current live state
@@ -167,9 +169,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage186-live-crawler-search`.
+- The current milestone tag is `stage187-live-chat-crawler-integration`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage186 Live Crawler Search: explicit search intent now has a bounded query/open/evaluate crawler drill with auditable `crawler_ledger`, page evidence, source URLs, CLI artifacts, and clear stop reasons. The next pressure is wiring this crawler directly into live `holo_cli --trace` turns.
+- Current focus is Stage187 Live Chat Crawler Integration: explicit search turns in `holo_cli` and adjacent agent channels now run the Stage186 bounded crawler inside capability context and render crawl events in the Stage153 trace. The next pressure is live provider quality under actual network conditions.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

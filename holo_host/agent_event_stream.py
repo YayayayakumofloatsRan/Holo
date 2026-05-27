@@ -188,6 +188,42 @@ def _observation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _stage186_crawler_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    report = payload.get("stage186_live_crawler_search", {})
+    if not isinstance(report, dict):
+        return []
+    events: list[dict[str, Any]] = []
+    for row in list(report.get("crawler_ledger", []) or [])[:16]:
+        if not isinstance(row, dict):
+            continue
+        phase = str(row.get("phase", "") or "")
+        if phase == "query":
+            events.append({"event": "crawl:query", "query": _compact(row.get("query", ""), 180), "query_index": row.get("query_index", "")})
+        elif phase == "observe_search":
+            events.append(
+                {
+                    "event": "crawl:search",
+                    "status": str(row.get("status", "") or ""),
+                    "result_count": int(row.get("result_count", 0) or 0),
+                    "source_count": int(row.get("source_count", 0) or 0),
+                }
+            )
+        elif phase == "open_page":
+            events.append({"event": "crawl:open", "status": str(row.get("status", "") or ""), "url": _compact(row.get("url", ""), 180)})
+        elif phase == "evaluate":
+            events.append(
+                {
+                    "event": "crawl:evaluate",
+                    "status": str(row.get("status", "") or ""),
+                    "score": float(row.get("score", 0.0) or 0.0),
+                    "stop_reason": str(row.get("stop_reason", "") or ""),
+                }
+            )
+        elif phase == "stop":
+            events.append({"event": "crawl:stop", "status": str(row.get("status", "") or ""), "stop_reason": str(row.get("stop_reason", "") or "")})
+    return events
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -466,6 +502,7 @@ def build_agent_event_stream(
     events.extend(_stage151_candidates(source))
     events.extend(_tool_call_events(source))
     events.extend(_observation_events(source))
+    events.extend(_stage186_crawler_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -604,6 +641,18 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[observation] {item.get('action_type', '')} status={item.get('status', '')} "
                 f"sources={sources} results={item.get('result_count', 0)}{evidence_suffix}{page_suffix}{synthesis_suffix}"
             )
+        elif event == "crawl:query":
+            lines.append(f"[crawl:query] q{item.get('query_index', '')} {item.get('query', '')}")
+        elif event == "crawl:search":
+            lines.append(
+                f"[crawl:search] status={item.get('status', '')} results={item.get('result_count', 0)} sources={item.get('source_count', 0)}"
+            )
+        elif event == "crawl:open":
+            lines.append(f"[crawl:open] status={item.get('status', '')} url={item.get('url', '')}")
+        elif event == "crawl:evaluate":
+            lines.append(f"[crawl:evaluate] status={item.get('status', '')} score={item.get('score', 0)} stop={item.get('stop_reason', '')}")
+        elif event == "crawl:stop":
+            lines.append(f"[crawl:stop] status={item.get('status', '')} reason={item.get('stop_reason', '')}")
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
             files_changed = len(list(item.get("files_changed", []) or []))

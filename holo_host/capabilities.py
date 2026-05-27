@@ -16,9 +16,11 @@ from .stage151_live_tool_trace import build_external_lookup_observation
 from .stage151_tool_decision_loop import (
     build_time_observation,
     build_tool_decision_report,
+    default_open_page,
     execute_tool_decision,
     web_observations_to_tool_ledger,
 )
+from .live_crawler_search import run_live_crawler_search
 
 URL_RE = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
 LOOKUP_RESULT_RE = re.compile(
@@ -163,27 +165,78 @@ def _decode_duckduckgo_href(raw_url: str) -> str:
 class CapabilityBroker:
     config: HostConfig
 
-    def summarize_turn(self, text: str, metadata: dict[str, Any] | None = None, *, eager_network: bool = True) -> dict[str, Any]:
+    def summarize_turn(
+        self,
+        text: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        eager_network: bool = True,
+        use_live_crawler: bool = False,
+    ) -> dict[str, Any]:
         meta = dict(metadata or {})
         tool_requests: list[ToolRequest] = []
         tool_context_lines: list[str] = []
         tool_observation_ledger: list[dict[str, Any]] = []
         time_observation = build_time_observation()
         stage151_tool_decision = build_tool_decision_report(text, metadata=meta, time_observation=time_observation)
-        web_observation_ledger = (
-            execute_tool_decision(
-                stage151_tool_decision,
-                network_enabled=bool(self.config.runtime.network_enabled),
-                web_search_fn=self._external_lookup,
-            )
-            if eager_network
-            else []
-        )
         planned_web_actions = [
             dict(action)
             for action in list(stage151_tool_decision.get("selected_actions", []) or [])
             if isinstance(action, dict) and str(action.get("action_type", "") or "") in {"web_search", "open_page", "find_in_page"}
         ]
+        stage186_live_crawler_search: dict[str, Any] = {}
+        if (
+            eager_network
+            and use_live_crawler
+            and any(str(action.get("action_type", "") or "") == "web_search" for action in planned_web_actions)
+        ):
+            stage186_live_crawler_search = run_live_crawler_search(
+                user_text=text,
+                web_search_fn=self._external_lookup,
+                open_page_fn=self._open_page_for_crawler,
+                network_enabled=bool(self.config.runtime.network_enabled),
+            )
+            web_observation_ledger = [
+                dict(row)
+                for row in list(stage186_live_crawler_search.get("web_observation_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            tool_requests.append(
+                ToolRequest(
+                    name="live_crawler_search",
+                    reason="stage186 bounded query/open/evaluate crawler loop",
+                    payload={
+                        "status": stage186_live_crawler_search.get("status", ""),
+                        "query_count": stage186_live_crawler_search.get("query_count", 0),
+                        "opened_page_count": stage186_live_crawler_search.get("opened_page_count", 0),
+                        "source_urls": list(stage186_live_crawler_search.get("source_urls", []) or []),
+                    },
+                )
+            )
+            for row in list(stage186_live_crawler_search.get("crawler_ledger", []) or []):
+                if not isinstance(row, dict):
+                    continue
+                phase = str(row.get("phase", "") or "")
+                if phase == "query":
+                    tool_context_lines.append(f"crawler query: {row.get('query', '')}")
+                elif phase == "open_page":
+                    tool_context_lines.append(f"crawler open: status={row.get('status', '')} url={row.get('url', '')}")
+                elif phase == "evaluate":
+                    tool_context_lines.append(
+                        f"crawler evaluate: status={row.get('status', '')} score={row.get('score', 0)} stop={row.get('stop_reason', '')}"
+                    )
+                elif phase == "stop":
+                    tool_context_lines.append(f"crawler stop: status={row.get('status', '')} reason={row.get('stop_reason', '')}")
+        else:
+            web_observation_ledger = (
+                execute_tool_decision(
+                    stage151_tool_decision,
+                    network_enabled=bool(self.config.runtime.network_enabled),
+                    web_search_fn=self._external_lookup,
+                )
+                if eager_network
+                else []
+            )
         if planned_web_actions and not eager_network:
             for action in planned_web_actions[:3]:
                 action_type = str(action.get("action_type", "") or "web_search")
@@ -325,6 +378,7 @@ class CapabilityBroker:
             "time_observation": time_observation,
             "stage151_tool_decision": stage151_tool_decision,
             "web_observation_ledger": web_observation_ledger,
+            "stage186_live_crawler_search": stage186_live_crawler_search,
             "attachment_summaries": attachment_summaries,
             "tool_permission_grants": list(meta.get("tool_permission_grants", []) or [])
             if isinstance(meta.get("tool_permission_grants", []), list)
@@ -336,6 +390,9 @@ class CapabilityBroker:
 
     def execute_external_lookup(self, text: str) -> dict[str, Any]:
         return self._external_lookup(text)
+
+    def _open_page_for_crawler(self, url: str) -> dict[str, Any]:
+        return default_open_page(url)
 
     @staticmethod
     def _normalize_lookup_query(text: str) -> str:

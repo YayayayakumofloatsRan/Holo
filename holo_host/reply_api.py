@@ -9322,6 +9322,20 @@ class HoloReplyService:
             capability_context = prebuilt_capability_context
         else:
             capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata, eager_network=False)
+            selected_stage151_actions = [
+                dict(action)
+                for action in list(dict(capability_context.get("stage151_tool_decision", {})).get("selected_actions", []) or [])
+                if isinstance(action, dict)
+            ]
+            if turn.channel in {"holo_cli", "engineering", "research", "project"} and any(
+                str(action.get("action_type", "") or "") == "web_search" for action in selected_stage151_actions
+            ):
+                capability_context = self.capabilities.summarize_turn(
+                    turn.text,
+                    turn.metadata,
+                    eager_network=True,
+                    use_live_crawler=True,
+                )
         capability_context = dict(capability_context)
         stage161_tool_action_space = build_tool_action_space()
         capability_context["stage161_tool_action_space"] = stage161_tool_action_space
@@ -9333,7 +9347,7 @@ class HoloReplyService:
         if isinstance(capability_context.get("tool_observation_ledger", []), list) and capability_context.get("tool_observation_ledger"):
             sidecar = dict(sidecar)
             sidecar["tool_observation_ledger"] = list(capability_context.get("tool_observation_ledger", []))
-        for key in ("time_observation", "stage151_tool_decision", "web_observation_ledger"):
+        for key in ("time_observation", "stage151_tool_decision", "web_observation_ledger", "stage186_live_crawler_search"):
             if capability_context.get(key):
                 sidecar = dict(sidecar)
                 sidecar[key] = capability_context.get(key)
@@ -10280,6 +10294,11 @@ class HoloReplyService:
         stage151_external_lookup_ledger_count = int(stage151_network_grounding.get("external_lookup_ledger_count", 0) or 0)
         stage151_tool_decision_grounding_status = str(stage151_tool_decision_grounding.get("status", "") or "")
         stage151_web_observation_count = len(list(capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])) or []))
+        stage186_live_crawler_search = (
+            dict(capability_context.get("stage186_live_crawler_search", {}))
+            if isinstance(capability_context.get("stage186_live_crawler_search", {}), dict)
+            else {}
+        )
         stage152_tool_call_count = int(stage152_deepseek_tool_loop.get("tool_call_count", 0) or 0) if stage152_deepseek_tool_loop else 0
         stage152_round_count = int(stage152_deepseek_tool_loop.get("round_count", 0) or 0) if stage152_deepseek_tool_loop else 0
         stage152_stop_reason = str(stage152_deepseek_tool_loop.get("stop_reason", "") or "") if stage152_deepseek_tool_loop else ""
@@ -10459,6 +10478,7 @@ class HoloReplyService:
             or market_research_report_ledger
             or stage173_market_research_report
             or stage170_market_research_gate
+            or stage186_live_crawler_search
         ):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
@@ -10491,6 +10511,7 @@ class HoloReplyService:
                 market_research_report_ledger=market_research_report_ledger,
                 stage173_market_research_report=stage173_market_research_report,
                 stage170_market_research_gate=stage170_market_research_gate,
+                stage186_live_crawler_search=stage186_live_crawler_search,
                 web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 engineering_action_ledger=engineering_action_ledger,
                 project_state_graph=project_state_graph,
@@ -10579,6 +10600,7 @@ class HoloReplyService:
                 "time_observation": capability_context.get("time_observation", {}),
                 "web_observation_ledger": capability_context.get("web_observation_ledger", []),
                 "stage151_web_observation_count": stage151_web_observation_count,
+                "stage186_live_crawler_search": stage186_live_crawler_search,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_live_trace": stage152_live_trace,
                 "stage152_tool_call_count": stage152_tool_call_count,
@@ -10713,6 +10735,7 @@ class HoloReplyService:
             "time_observation": capability_context.get("time_observation", {}),
             "web_observation_ledger": capability_context.get("web_observation_ledger", []),
             "stage151_web_observation_count": stage151_web_observation_count,
+            "stage186_live_crawler_search": stage186_live_crawler_search,
             "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
             "stage152_live_trace": stage152_live_trace,
             "stage152_tool_call_count": stage152_tool_call_count,
@@ -10908,6 +10931,7 @@ class HoloReplyService:
                 "time_observation": capability_context.get("time_observation", {}),
                 "web_observation_ledger": capability_context.get("web_observation_ledger", []),
                 "stage151_web_observation_count": stage151_web_observation_count,
+                "stage186_live_crawler_search": stage186_live_crawler_search,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_live_trace": stage152_live_trace,
                 "stage152_tool_call_count": stage152_tool_call_count,
