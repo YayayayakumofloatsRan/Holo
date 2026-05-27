@@ -258,6 +258,12 @@ Stage174: market research report action
 - This connects market-research report generation to the actual agent loop without provider model paths outside processor fabric, memory writes, WeChat starts, or transport widening.
 - Verification on `2026-05-27`: targeted integration `40 passed`, runtime `92 passed`, full regression `825 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage175: market research live smoke
+- Added a deterministic live-smoke harness that runs a model-proposed `market_research_report` tool call through Stage152, Stage174, Stage160R, Stage153, and Stage135.
+- The scorecard requires model-decision trace visibility, report ledgers, evidence-ready SEC-like citations, low unsupported-claim rate, known stop reasons, topology visibility, privacy, and persona-free output.
+- Includes a weak third-party-source fixture that must fail rather than being promoted as a ready market-research report.
+- Verification on `2026-05-27`: targeted Stage175 `8 passed`, market stack `24 passed`, runtime `92 passed`, full regression `833 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
