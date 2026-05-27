@@ -455,6 +455,12 @@ Stage207: agent console public thought
 - Stage191 now emits public `model_decision` cards for candidate events and avoids printing the phrase `raw hidden reasoning`.
 - Verification on `2026-05-28`: targeted agent-console suite `3 passed`; neighbor CLI/thought/crawler stack `17 passed`; runtime `92 passed`; full suite `1025 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage208: agent console live smoke
+- Added `holo.stage208.agent_console_live_smoke.v1` to verify that Stage207 console output is connected to the real `HoloReplyService` reply path.
+- The dry-run smoke uses a deterministic runner and crawler broker to prove a search request triggers Stage186 crawler execution, source-grounded final repair, Stage153 crawl events, and Stage207 console rendering.
+- Failed search fixtures report attempted failure instead of future intent, and public artifacts remain free of private reasoning/provider internal messages.
+- Verification on `2026-05-28`: targeted agent-console live-smoke suite `3 passed`; neighbor console/crawler stack `10 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1028 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

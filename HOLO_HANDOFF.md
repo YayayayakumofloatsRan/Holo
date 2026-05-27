@@ -195,6 +195,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 190. `docs/ENGINEERING_HANDOFF_STAGE206.md`
 191. `docs/STAGE207_AGENT_CONSOLE_PUBLIC_THOUGHT.md`
 192. `docs/ENGINEERING_HANDOFF_STAGE207.md`
+193. `docs/STAGE208_AGENT_CONSOLE_LIVE_SMOKE.md`
+194. `docs/ENGINEERING_HANDOFF_STAGE208.md`
 
 ## What This Document Must Cover
 - current live state
@@ -209,9 +211,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage207-agent-console-public-thought`.
+- The current milestone tag is `stage208-agent-console-live-smoke`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage207 Agent Console Public Thought: Holo now renders `holo_host chat --trace` turns as a CLI-friendly agent console with ordinary user/final text, visually separated public action/thought rows, crawler trace visibility, and no raw hidden reasoning exposure.
+- Current focus is Stage208 Agent Console Live Smoke: Holo now has an artifact-producing smoke that runs a real `HoloReplyService` search turn through Stage186 crawler execution and Stage207 console rendering, proving source-grounded final text and attempted-failure reporting through the actual reply path.
 - Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage202 verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage203 verification on `2026-05-28`: targeted live-trace suite `5 passed`.
@@ -219,6 +221,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Stage205 verification on `2026-05-28`: targeted trajectory live-smoke suite `5 passed`; neighbor stack `27 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1020 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage206 verification on `2026-05-28`: targeted reply-loop crawler suite `2 passed`; neighbor crawler/tool/CLI stack `33 passed`; runtime `92 passed`; full suite `1022 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage207 verification on `2026-05-28`: targeted agent-console suite `3 passed`; neighbor CLI/thought/crawler stack `17 passed`; runtime `92 passed`; full suite `1025 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+- Stage208 verification on `2026-05-28`: targeted agent-console live-smoke suite `3 passed`; neighbor console/crawler stack `10 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1028 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
