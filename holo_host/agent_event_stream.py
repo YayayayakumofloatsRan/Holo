@@ -716,6 +716,7 @@ def build_agent_event_stream(
                 }
             )
         events.extend(_stage190_feedback_events(source))
+        events.extend(_stage186_crawler_events(source))
         events.extend(_stage192_market_feedback_events(source))
         events.extend(_stage193_market_action_plan_events(source))
         events.extend(_stage194_market_action_execution_events(source))

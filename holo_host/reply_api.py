@@ -125,6 +125,7 @@ from .stage151_live_tool_trace import (
 from .stage151_tool_decision_loop import (
     build_network_health_report,
     build_stage151_live_trace,
+    build_grounded_web_observation_answer,
     evaluate_tool_decision_grounding,
     maybe_ground_visible_web_reply,
     repair_tool_decision_grounding,
@@ -132,8 +133,44 @@ from .stage151_tool_decision_loop import (
 from .agent_event_stream import build_agent_event_stream
 from .public_thought_stream import build_public_thought_stream
 from .interactive_cli import INTERACTIVE_CLI_SESSION_SCHEMA
-from .canonical_stop_reason import map_canonical_stop_reason
+from .canonical_stop_reason import canonicalize_stop_reason, map_canonical_stop_reason
 from .kernel_metadata_sanitizer import build_public_stage152_report, sanitize_public_metadata
+
+
+def _stage206_grounded_crawler_visible_text(
+    *,
+    user_text: str,
+    current_text: str,
+    capability_context: dict[str, Any],
+    sidecar: dict[str, Any],
+) -> tuple[str, bool]:
+    crawler = (
+        dict(capability_context.get("stage186_live_crawler_search", {}))
+        if isinstance(capability_context.get("stage186_live_crawler_search", {}), dict)
+        else {}
+    )
+    if not crawler:
+        return str(current_text or ""), False
+    status = str(crawler.get("status", "") or "")
+    summary = str(crawler.get("final_summary", "") or "").strip()
+    if status in {"failed", "rejected_network_disabled", "error"} and summary:
+        return summary, True
+    if status != "sufficient":
+        return str(current_text or ""), False
+    grounded = build_grounded_web_observation_answer(
+        user_text=user_text,
+        web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+        time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
+    )
+    if not grounded:
+        return str(current_text or ""), False
+    lowered = str(current_text or "").lower()
+    user_lowered = str(user_text or "").lower()
+    source_requested = any(marker in user_lowered for marker in ("source", "sources", "url", "official", "cite"))
+    future_intent_only = any(marker in lowered for marker in ("will search", "i'll search", "let me search", "need to complete web_search"))
+    if future_intent_only or (source_requested and "http" not in lowered):
+        return grounded, True
+    return str(current_text or ""), False
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9335,20 +9372,29 @@ class HoloReplyService:
             capability_context = prebuilt_capability_context
         else:
             capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata, eager_network=False)
-            selected_stage151_actions = [
-                dict(action)
-                for action in list(dict(capability_context.get("stage151_tool_decision", {})).get("selected_actions", []) or [])
-                if isinstance(action, dict)
-            ]
-            if turn.channel in {"holo_cli", "engineering", "research", "project"} and any(
-                str(action.get("action_type", "") or "") == "web_search" for action in selected_stage151_actions
-            ):
-                capability_context = self.capabilities.summarize_turn(
-                    turn.text,
-                    turn.metadata,
-                    eager_network=True,
-                    use_live_crawler=True,
-                )
+        selected_stage151_actions = [
+            dict(action)
+            for action in list(dict(capability_context.get("stage151_tool_decision", {})).get("selected_actions", []) or [])
+            if isinstance(action, dict)
+        ]
+        needs_live_crawler = (
+            turn.channel in {"holo_cli", "engineering", "research", "project"}
+            and any(str(action.get("action_type", "") or "") == "web_search" for action in selected_stage151_actions)
+            and not dict(capability_context.get("stage186_live_crawler_search", {}) if isinstance(capability_context.get("stage186_live_crawler_search", {}), dict) else {}).get("status")
+        )
+        if needs_live_crawler:
+            permission_grants = list(capability_context.get("tool_permission_grants", []) or [])
+            approved_permissions = list(capability_context.get("approved_tool_permissions", []) or [])
+            capability_context = self.capabilities.summarize_turn(
+                turn.text,
+                turn.metadata,
+                eager_network=True,
+                use_live_crawler=True,
+            )
+            if permission_grants and not capability_context.get("tool_permission_grants"):
+                capability_context["tool_permission_grants"] = permission_grants
+            if approved_permissions and not capability_context.get("approved_tool_permissions"):
+                capability_context["approved_tool_permissions"] = approved_permissions
         capability_context = dict(capability_context)
         stage161_tool_action_space = build_tool_action_space()
         capability_context["stage161_tool_action_space"] = stage161_tool_action_space
@@ -9763,15 +9809,27 @@ class HoloReplyService:
         capability_context["stage161_tool_decision_validation"] = stage161_tool_decision_validation
         reply_debug["stage161_model_tool_arbitration"] = stage161_model_tool_arbitration
         reply_debug["stage161_tool_decision_validation"] = stage161_tool_decision_validation
+        grounding_repaired = False
         repaired_text = maybe_ground_visible_web_reply(
             user_text=turn.text,
             text=repaired_text,
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
         )
+        stage186_visible_crawler = (
+            dict(capability_context.get("stage186_live_crawler_search", {}))
+            if isinstance(capability_context.get("stage186_live_crawler_search", {}), dict)
+            else {}
+        )
+        repaired_text, stage206_crawler_repaired = _stage206_grounded_crawler_visible_text(
+            user_text=turn.text,
+            current_text=repaired_text,
+            capability_context=capability_context,
+            sidecar=sidecar,
+        )
+        grounding_repaired = grounding_repaired or stage206_crawler_repaired
         repaired_text = normalize_external_speech_for_context(turn_context, repaired_text)
         repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
-        grounding_repaired = False
         stage151_tool_decision_grounding = evaluate_tool_decision_grounding(
             repaired_text,
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
@@ -10384,11 +10442,18 @@ class HoloReplyService:
         memory_alignment_claim_count = int(memory_alignment.get("claim_count", 0) or 0)
         memory_alignment_unsupported_count = int(memory_alignment.get("unsupported_claim_count", 0) or 0)
         memory_alignment_contradicted_count = int(memory_alignment.get("contradicted_claim_count", 0) or 0)
+        repaired_text, stage206_crawler_repaired = _stage206_grounded_crawler_visible_text(
+            user_text=turn.text,
+            current_text=repaired_text,
+            capability_context=capability_context,
+            sidecar=sidecar,
+        )
+        grounding_repaired = grounding_repaired or stage206_crawler_repaired
         repaired_text = repair_visible_compact_leak(repaired_text)
         repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
         planned_bubbles = (
             reply_plan.bubbles
-            if bool(stage132_progressive_stream.get("preserve_bubbles", False)) and not grounding_repaired
+            if bool(stage132_progressive_stream.get("preserve_bubbles", False)) and not grounding_repaired and not stage186_visible_crawler
             else None
         )
         if planned_bubbles and not int(stage142_semantic_novelty.get("candidate_count", 0) or 0):
@@ -10656,6 +10721,26 @@ class HoloReplyService:
         )
         canonical_stop_reason = str(canonical_stop.get("canonical_stop_reason", "") or "unknown")
         canonical_stop_source = str(canonical_stop.get("canonical_stop_source", "") or "none")
+        if canonical_stop_reason == "unknown" and stage186_live_crawler_search:
+            crawler_status_for_stop = str(stage186_live_crawler_search.get("status", "") or "")
+            crawler_stop_reason = str(stage186_live_crawler_search.get("stop_reason", "") or "")
+            if crawler_status_for_stop == "sufficient":
+                canonical_stop_reason = "final_answer_ready"
+            elif crawler_status_for_stop in {"failed", "error"}:
+                canonical_stop_reason = "tool_failure_report"
+            elif crawler_status_for_stop == "rejected_network_disabled":
+                canonical_stop_reason = "boundary_or_permission"
+            elif crawler_stop_reason:
+                canonical_stop_reason = canonicalize_stop_reason(crawler_stop_reason)
+            if canonical_stop_reason == "unknown":
+                canonical_stop_reason = "evidence_exhausted"
+            canonical_stop_source = "stage186_live_crawler_search"
+            canonical_stop = {
+                "schema": "holo.stage159.canonical_stop_reason.v1",
+                "canonical_stop_reason": canonical_stop_reason,
+                "canonical_stop_source": canonical_stop_source,
+                "source_reason": crawler_stop_reason or crawler_status_for_stop,
+            }
         stage160r_stop_reason = str(stage160r_agent_loop_fsm.get("canonical_stop_reason", "") or "")
         if stage160r_stop_reason and stage160r_stop_reason != "unknown":
             canonical_stop_reason = stage160r_stop_reason
@@ -10689,6 +10774,7 @@ class HoloReplyService:
                 "stage151_tool_decision": capability_context.get("stage151_tool_decision", {}),
                 "stage151_tool_decision_grounding": stage151_tool_decision_grounding,
                 "web_observation_ledger": capability_context.get("web_observation_ledger", []),
+                "stage186_live_crawler_search": stage186_live_crawler_search,
                 "tool_observation_ledger": tool_observation_ledger,
                 "tool_grounding": tool_grounding,
                 "engineering_action_ledger": engineering_action_ledger,

@@ -443,6 +443,12 @@ Stage205: market research trajectory live smoke
 - Network-disabled and failing-search paths record attempted failures and avoid claiming current web evidence.
 - Verification on `2026-05-28`: targeted `5 passed`; neighbor stack `27 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1020 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage206: live crawler reply loop
+- Connected Stage186 bounded live crawler execution to the real reply API/chat path when Stage151 selects `web_search` in agent channels.
+- Successful crawler runs now replace future-intent web text with ledger-backed source output; failed runs report attempted failure instead of saying the search still needs to happen.
+- Stage153 FSM event stream now renders `[crawl:query]`, `[crawl:search]`, `[crawl:open]`, `[crawl:evaluate]`, and `[crawl:stop]` rows for actual reply turns.
+- Verification on `2026-05-28`: targeted reply-loop crawler suite `2 passed`; neighbor crawler/tool/CLI stack `33 passed`; runtime `92 passed`; full suite `1022 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

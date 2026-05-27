@@ -129,6 +129,13 @@ def _has_current_lookup_claim(text: str) -> bool:
     return False
 
 
+def _is_lookup_failure_report(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(marker in lowered for marker in ("attempted web_search", "attempted web search", "web_search but", "web search but")) and any(
+        marker in lowered for marker in ("failed", "did not obtain", "cannot treat this as current web evidence", "network_disabled")
+    )
+
+
 def evaluate_network_grounding(text: str, tool_observation_ledger: Any) -> dict[str, Any]:
     ledger = normalize_tool_observation_ledger(tool_observation_ledger)
     lookup_rows = [
@@ -154,6 +161,10 @@ def evaluate_network_grounding(text: str, tool_observation_ledger: Any) -> dict[
         reason = ""
     elif successful:
         status = "grounded"
+        repair_required = False
+        reason = ""
+    elif rejected and _is_lookup_failure_report(text):
+        status = "grounded_lookup_failure_report"
         repair_required = False
         reason = ""
     elif lookup_rows:
