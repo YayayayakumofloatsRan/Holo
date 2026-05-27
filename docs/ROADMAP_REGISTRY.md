@@ -340,6 +340,12 @@ Stage188: crawler evidence quality
 - Stage151 web grounding and Stage186/187 crawler flows now receive cleaner readable page text and supporting snippets.
 - Verification on `2026-05-27`: targeted Stage188 `2 passed`; neighbor `32 passed`; runtime `92 passed`; full suite `930 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
 
+Stage189: crawler source authority stop
+- Integrated Stage168 source authority into the Stage186 crawler evaluation path.
+- Financial/market-research crawler turns now continue past third-party pages when a primary filing or first-party disclosure is required, even if page text itself matches the query.
+- Stage153 renders authority status in `[crawl:evaluate]` trace lines.
+- Verification on `2026-05-27`: targeted Stage189 `4 passed`; neighbor `26 passed`; runtime `92 passed`; full suite `934 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .common import compact_text, stable_digest, utc_now
 from .kernel_metadata_sanitizer import PRIVATE_KEYS, sanitize_public_metadata
+from .stage168_source_authority import evaluate_source_authority
 from .stage151_tool_decision_loop import default_open_page, default_web_search
 from .stage163_page_evidence_verifier import verify_page_evidence_for_search
 
@@ -22,6 +23,7 @@ _SEARCH_PREFIX_RE = re.compile(
 )
 _SOURCE_SUFFIX_RE = re.compile(r"(并(告诉我|给出)?来源|并给出来源|and cite sources|with sources)\s*$", re.IGNORECASE)
 _NOISE_RE = re.compile(r"\s+")
+_FINANCIAL_TASK_RE = re.compile(r"\b(10-k|10-q|8-k|annual report|quarterly report|sec|filing|financial|investor|earnings|fundamental)\b|财报|年报|基本面|证监|监管披露", re.IGNORECASE)
 
 
 def _compact(value: Any, limit: int = 260) -> str:
@@ -39,6 +41,18 @@ def _source_urls(results: list[dict[str, Any]]) -> list[str]:
         if url and url not in urls:
             urls.append(url)
     return urls
+
+
+def _task_type_for_query(user_text: str) -> str:
+    return "market_research" if _FINANCIAL_TASK_RE.search(str(user_text or "")) else ""
+
+
+def _authority_gate_required(authority_report: dict[str, Any]) -> bool:
+    return bool(str(authority_report.get("required_source_family", "") or "").strip())
+
+
+def _authority_sufficient(authority_report: dict[str, Any]) -> bool:
+    return str(authority_report.get("status", "") or "") == "sufficient"
 
 
 def _strip_query(user_text: str) -> str:
@@ -182,6 +196,11 @@ def run_live_crawler_search(
             "query_index": 1,
         }
         web_observations.append(row)
+        source_authority_report = evaluate_source_authority(
+            user_text,
+            web_observations,
+            task_type=_task_type_for_query(user_text),
+        )
         crawler_ledger.append(_ledger_row("query", query=query, status="rejected_network_disabled", provider="network_gate"))
         status = "rejected_network_disabled"
         stop_reason = "boundary_or_permission"
@@ -196,6 +215,7 @@ def run_live_crawler_search(
                 "web_observation_ledger": web_observations,
                 "page_observation_ledger": page_observations,
                 "crawler_ledger": crawler_ledger,
+                "source_authority_report": source_authority_report,
                 "source_urls": source_urls,
                 "stop_reason": stop_reason,
                 "final_summary": _final_summary(status=status, stop_reason=stop_reason, query_count=1, opened_count=0, urls=[], errors=["network_disabled"], user_text=user_text),
@@ -214,6 +234,12 @@ def run_live_crawler_search(
         except Exception as exc:  # noqa: BLE001
             response = {"query": query, "status": "error", "provider": "host_search", "results": [], "error": str(exc)}
         web_row = _web_observation_from_response(response, query=query, query_index=query_index)
+        authority_report = evaluate_source_authority(
+            query,
+            [web_row],
+            task_type=_task_type_for_query(user_text),
+        )
+        web_row["source_authority"] = authority_report
         web_observations.append(web_row)
         crawler_ledger.append(
             _ledger_row(
@@ -257,7 +283,10 @@ def run_live_crawler_search(
                 errors.append(str(page.get("error", "")))
         web_row["page_evidence"] = page_evidence
         selected_url = str(page_evidence.get("selected_url", "") or "")
-        if _supported_page(page_evidence) and selected_url and selected_url not in source_urls:
+        authority_required = _authority_gate_required(authority_report)
+        authority_status = str(authority_report.get("status", "") or "")
+        authority_stop_reason = "authority_sufficient" if _authority_sufficient(authority_report) else "authority_insufficient"
+        if _supported_page(page_evidence) and (not authority_required or _authority_sufficient(authority_report)) and selected_url and selected_url not in source_urls:
             source_urls.append(selected_url)
         crawler_ledger.append(
             _ledger_row(
@@ -266,10 +295,12 @@ def run_live_crawler_search(
                 status=page_evidence.get("status", ""),
                 selected_url=selected_url,
                 score=float(page_evidence.get("best_evidence_score", 0.0) or 0.0),
-                stop_reason=page_evidence.get("stop_reason", ""),
+                stop_reason=page_evidence.get("stop_reason", "") if not authority_required or _authority_sufficient(authority_report) else authority_stop_reason,
+                authority_status=authority_status,
+                authority_required_family=authority_report.get("required_source_family", ""),
             )
         )
-        if _supported_page(page_evidence):
+        if _supported_page(page_evidence) and (not authority_required or _authority_sufficient(authority_report)):
             status = "sufficient"
             stop_reason = "sufficient_evidence"
             break
@@ -285,7 +316,21 @@ def run_live_crawler_search(
             stop_reason = "tool_failure_report"
             status = "failed"
 
-    crawler_ledger.append(_ledger_row("stop", status=status, stop_reason=stop_reason, query_count=len(web_observations), opened_page_count=len(page_observations)))
+    source_authority_report = evaluate_source_authority(
+        user_text,
+        web_observations,
+        task_type=_task_type_for_query(user_text),
+    )
+    crawler_ledger.append(
+        _ledger_row(
+            "stop",
+            status=status,
+            stop_reason=stop_reason,
+            query_count=len(web_observations),
+            opened_page_count=len(page_observations),
+            authority_status=source_authority_report.get("status", ""),
+        )
+    )
     report = {
         "schema": STAGE186_LIVE_CRAWLER_SEARCH_SCHEMA,
         "status": status,
@@ -296,6 +341,7 @@ def run_live_crawler_search(
         "web_observation_ledger": web_observations,
         "page_observation_ledger": page_observations,
         "crawler_ledger": crawler_ledger,
+        "source_authority_report": source_authority_report,
         "source_urls": source_urls,
         "stop_reason": stop_reason,
         "final_summary": _final_summary(

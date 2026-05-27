@@ -217,6 +217,7 @@ def _stage186_crawler_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                     "status": str(row.get("status", "") or ""),
                     "score": float(row.get("score", 0.0) or 0.0),
                     "stop_reason": str(row.get("stop_reason", "") or ""),
+                    "authority_status": str(row.get("authority_status", "") or ""),
                 }
             )
         elif phase == "stop":
@@ -650,7 +651,12 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
         elif event == "crawl:open":
             lines.append(f"[crawl:open] status={item.get('status', '')} url={item.get('url', '')}")
         elif event == "crawl:evaluate":
-            lines.append(f"[crawl:evaluate] status={item.get('status', '')} score={item.get('score', 0)} stop={item.get('stop_reason', '')}")
+            authority = str(item.get("authority_status", "") or "")
+            authority_suffix = f" authority={authority}" if authority else ""
+            lines.append(
+                f"[crawl:evaluate] status={item.get('status', '')} score={item.get('score', 0)} "
+                f"stop={item.get('stop_reason', '')}{authority_suffix}"
+            )
         elif event == "crawl:stop":
             lines.append(f"[crawl:stop] status={item.get('status', '')} reason={item.get('stop_reason', '')}")
         elif event.startswith("eng:"):

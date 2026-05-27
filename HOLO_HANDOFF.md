@@ -157,6 +157,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 152. `docs/ENGINEERING_HANDOFF_STAGE187.md`
 153. `docs/STAGE188_CRAWLER_EVIDENCE_QUALITY.md`
 154. `docs/ENGINEERING_HANDOFF_STAGE188.md`
+155. `docs/STAGE189_CRAWLER_SOURCE_AUTHORITY_STOP.md`
+156. `docs/ENGINEERING_HANDOFF_STAGE189.md`
 
 ## What This Document Must Cover
 - current live state
@@ -171,9 +173,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage188-crawler-evidence-quality`.
+- The current milestone tag is `stage189-crawler-source-authority-stop`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage188 Crawler Evidence Quality: opened-page evidence now strips CSS-heavy documentation-page noise before scoring and snippet selection, so live crawler search produces readable source evidence instead of CSS utility text. The next pressure is multi-source authority and coverage scoring for research workflows.
+- Current focus is Stage189 Crawler Source Authority Stop: live crawler evaluation now uses Stage168 source authority so financial/market-research searches do not stop on third-party summaries when primary filings or first-party disclosures are required. The next pressure is multi-source coverage planning and report-readiness gates for research workflows.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
