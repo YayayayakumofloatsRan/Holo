@@ -177,6 +177,11 @@ Stage159: Agent Kernel hardening
 - Replaced Stage154 shell-based `test_run` execution with a strict argv allowlist, added canonical stop reason mapping, active readiness probes, offline live-smoke HoloCoreBench fixtures, and network health metadata.
 - Keeps Stage159 safety/reliability-only: no provider calls, memory writes, WeChat starts, transport authority widening, live domain work, approval UI, or durable policy mutation.
 
+Stage160R: depersonalized agent-loop FSM
+- Added a host-owned `observe -> decide -> act_or_skip -> observe_result -> evaluate_stop -> final` FSM so mandatory actions must execute, fail, or be rejected before final speech.
+- Added first-class intent frames and per-thread goal state so memory recall requests run host recall, follow-up turns inherit open goals, and `?` after a failed answer becomes a repair/follow-up path instead of social speculation.
+- Depersonalized `holo_cli`/engineering/research/project prompt policy, rendered Stage153 CLI events from FSM steps, and exposed Stage160R in Stage150/156 context, reply/archive metadata, active thread state, and Stage135 topology without provider calls, memory writes, WeChat starts, or transport widening.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

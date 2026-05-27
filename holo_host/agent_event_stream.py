@@ -181,6 +181,67 @@ def build_agent_event_stream(
     transport: str = "",
 ) -> dict[str, Any]:
     source = sanitize_event_payload(dict(payload or {}))
+    fsm = source.get("stage160r_agent_loop_fsm", {})
+    if isinstance(fsm, dict) and fsm.get("schema") == "holo.stage160r.agent_loop_fsm.v1":
+        events: list[dict[str, Any]] = [
+            {"event": "goal", "summary": _compact(user_text or source.get("input_summary", ""), 220)}
+        ]
+        for step in list(fsm.get("steps", []) or []):
+            if not isinstance(step, dict):
+                continue
+            phase = str(step.get("phase", "") or "")
+            if phase == "observe":
+                continue
+            if phase == "decide":
+                events.append(
+                    {
+                        "event": "decide",
+                        "action_type": str(step.get("selected_action", "") or ""),
+                        "required_observations": list(step.get("required_observations", []) or []),
+                    }
+                )
+            elif phase == "act_or_skip":
+                events.append(
+                    {
+                        "event": "act",
+                        "action_type": str(step.get("selected_action", "") or ""),
+                        "status": str(step.get("action_status", "") or ""),
+                        "skip_reason": str(step.get("skip_reason", "") or ""),
+                    }
+                )
+            elif phase == "observe_result":
+                events.append(
+                    {
+                        "event": "observe",
+                        "action_type": str(step.get("selected_action", "") or ""),
+                        "status": str(step.get("action_status", "") or ""),
+                        "observation_count": len(list(step.get("observation_ids", []) or [])),
+                        "unresolved_items": list(step.get("unresolved_items", []) or []),
+                    }
+                )
+            elif phase == "evaluate_stop":
+                events.append(
+                    {
+                        "event": "evaluate",
+                        "status": str(step.get("canonical_stop_reason", "") or fsm.get("canonical_stop_reason", "")),
+                        "unresolved_items": list(step.get("unresolved_items", []) or []),
+                    }
+                )
+        events.append(
+            {
+                "event": "stop",
+                "reason": str(fsm.get("canonical_stop_reason", "") or "final_answer_ready"),
+                "source": "stage160r_agent_loop_fsm",
+                "raw_reason": str(fsm.get("stop_reason", "") or ""),
+            }
+        )
+        events.append({"event": "final", "summary": _final_text(source)})
+        return {
+            "schema": AGENT_EVENT_STREAM_SCHEMA,
+            "status": "recorded",
+            "event_count": len(events),
+            "events": events,
+        }
     final_text = _final_text(source)
     grounding = source.get("engineering_claim_grounding", source.get("stage151_tool_decision_grounding", source.get("tool_grounding", {})))
     if not isinstance(grounding, dict):
@@ -255,6 +316,22 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
         elif event == "candidate":
             need = ",".join(str(x) for x in list(item.get("required_observations", []) or [])) or "-"
             lines.append(f"[candidate] {item.get('action_type', '')} score={item.get('score', 0)} need={need}")
+        elif event == "decide":
+            need = ",".join(str(x) for x in list(item.get("required_observations", []) or [])) or "-"
+            lines.append(f"[decide] {item.get('action_type', '')} need={need}")
+        elif event == "act":
+            reason = str(item.get("skip_reason", "") or "")
+            suffix = f" reason={reason}" if reason else ""
+            lines.append(f"[act] {item.get('action_type', '')} status={item.get('status', '')}{suffix}")
+        elif event == "observe":
+            unresolved = ",".join(str(x) for x in list(item.get("unresolved_items", []) or [])) or "-"
+            lines.append(
+                f"[observe] {item.get('action_type', '')} status={item.get('status', '')} "
+                f"observations={item.get('observation_count', 0)} unresolved={unresolved}"
+            )
+        elif event == "evaluate":
+            unresolved = ",".join(str(x) for x in list(item.get("unresolved_items", []) or [])) or "-"
+            lines.append(f"[evaluate] status={item.get('status', '') or '-'} unresolved={unresolved}")
         elif event == "tool_call":
             if item.get("status") == "no_tool_calls" or item.get("action_type") == "none":
                 lines.append("[tool_call] no tool calls")

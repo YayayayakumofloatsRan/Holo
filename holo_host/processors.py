@@ -43,6 +43,7 @@ from .stage152_deepseek_tool_loop import deepseek_native_tool_names
 from .stage151_tool_decision_loop import maybe_ground_visible_web_reply
 from .canonical_stop_reason import map_canonical_stop_reason
 from .kernel_metadata_sanitizer import build_public_stage152_report
+from .agent_kernel_prompt_policy import strip_persona_prompt_text
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .engineering_action_fabric import normalize_engineering_action_ledger
 from .tool_need import classify_tool_need
@@ -1588,7 +1589,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         fact_grounded_block,
     ]
     memory_context = "\n\n".join(section for section in sections if section.strip())
-    return (
+    prompt = (
         "你正在替 Holo 回复一条即时聊天消息。\n"
         f"{output_contract}"
         f"聊天名：{context.chat_name}\n"
@@ -1613,6 +1614,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         "若当前并非高压安抚场景，就别默认成长辈、说教者或心理咨询口气。"
         "允许有一点活气、狡黠和余温，但不要演，不要用固定套话开头。"
     )
+    return strip_persona_prompt_text(prompt, channel=context.channel)
 
 
 class CodexCliProcessor:
@@ -1922,6 +1924,7 @@ class CodexCliProcessor:
         prompt = append_stage123_internal_tool_contract(prompt)
         prompt = append_stage124_deep_packet_context(prompt, fast_packet)
         prompt = append_stage135_i_state_contract(prompt, stage135_i_state_prompt_frame)
+        prompt = strip_persona_prompt_text(prompt, channel=context.channel)
         lane_config = self.config.processor_fabric.provider_backends.get(lane)
         lane_max_output_tokens = int(getattr(lane_config, "max_output_tokens", 0) or 0)
         packet_policy = build_stage121_packet_policy(
@@ -2216,6 +2219,7 @@ class ResponsesProcessor:
         turn_plan = build_turn_plan(context, self.config)
         route = turn_plan.route
         prompt = render_chat_prompt(context, turn_plan=turn_plan)
+        prompt = strip_persona_prompt_text(prompt, channel=context.channel)
         model = self.config.runtime.responses_fast_model if turn_plan.fast_path else self.config.runtime.responses_model
         client = self._client_instance()
         started_at = time.perf_counter()

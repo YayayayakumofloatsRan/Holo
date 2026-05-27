@@ -86,6 +86,9 @@ from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import build_stage148_react_state
 from .stage149_user_directives import apply_stage149_visible_directives, build_stage149_user_directives
 from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
+from .agent_goal_state import coerce_goal_state, update_goal_state
+from .agent_intent_frame import build_intent_frame
+from .agent_loop_fsm import build_host_memory_recall_ledger, repair_final_with_fsm, run_agent_loop_fsm
 from .context_compiler import compile_context_memory, repair_visible_compact_leak
 from .project_state_graph import ProjectStateGraph, detect_project_state_updates
 from .stage151_live_tool_trace import (
@@ -9347,6 +9350,40 @@ class HoloReplyService:
             capability_context=capability_context,
         )
         sidecar["stage148_react_state"] = stage148_react_state
+        sidecar["active_thread_state"] = active_thread_state
+        previous_goal_state = coerce_goal_state(
+            (turn.metadata or {}).get("stage160r_goal_state")
+            or sidecar.get("stage160r_goal_state")
+            or active_thread_state
+        )
+        stage160r_intent_frame = build_intent_frame(
+            turn.text,
+            previous_goal_state=previous_goal_state,
+            channel=turn.channel,
+        )
+        stage160r_memory_observation_ledger = build_host_memory_recall_ledger(
+            stage160r_intent_frame,
+            sidecar=sidecar,
+            tool_observation_ledger=capability_context.get("tool_observation_ledger", []),
+            active_memory_refresh=active_history_report or demoted_history_refresh_report or {},
+        )
+        if stage160r_memory_observation_ledger:
+            sidecar["stage160r_memory_observation_ledger"] = stage160r_memory_observation_ledger
+            sidecar["memory_observation_ledger"] = stage160r_memory_observation_ledger
+        stage160r_agent_loop_fsm = run_agent_loop_fsm(
+            intent_frame=stage160r_intent_frame,
+            previous_goal_state=previous_goal_state,
+            tool_decision=capability_context.get("stage151_tool_decision", {}),
+            web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+            memory_observation_ledger=stage160r_memory_observation_ledger,
+            time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
+        )
+        sidecar["stage160r_previous_goal_state"] = previous_goal_state
+        sidecar["stage160r_intent_frame"] = stage160r_intent_frame
+        sidecar["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
+        capability_context = dict(capability_context)
+        capability_context["stage160r_intent_frame"] = stage160r_intent_frame
+        capability_context["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
         project_name = str(
             (turn.metadata or {}).get("project")
             or (turn.metadata or {}).get("project_name")
@@ -9420,6 +9457,26 @@ class HoloReplyService:
             stage156_context_compiler = dict(sidecar.get("stage156_context_compiler", {}))
         else:
             sidecar["stage156_context_compiler"] = stage156_context_compiler
+        stage160r_intent_frame = (
+            dict(sidecar.get("stage160r_intent_frame", stage160r_intent_frame))
+            if isinstance(sidecar.get("stage160r_intent_frame", stage160r_intent_frame), dict)
+            else stage160r_intent_frame
+        )
+        previous_goal_state = (
+            dict(sidecar.get("stage160r_previous_goal_state", previous_goal_state))
+            if isinstance(sidecar.get("stage160r_previous_goal_state", previous_goal_state), dict)
+            else previous_goal_state
+        )
+        stage160r_agent_loop_fsm = (
+            dict(sidecar.get("stage160r_agent_loop_fsm", stage160r_agent_loop_fsm))
+            if isinstance(sidecar.get("stage160r_agent_loop_fsm", stage160r_agent_loop_fsm), dict)
+            else stage160r_agent_loop_fsm
+        )
+        stage160r_memory_observation_ledger = [
+            dict(row)
+            for row in list(sidecar.get("stage160r_memory_observation_ledger", stage160r_memory_observation_ledger) or [])
+            if isinstance(row, dict)
+        ]
         processor_ms = int(reply_plan.timing_ms.get("processor_ms", 0))
 
         self.store.update_thread_session(int(thread["id"]), reply_plan.session_id)
@@ -9436,6 +9493,14 @@ class HoloReplyService:
         reply_debug["stage149_user_directives"] = stage149_user_directives
         reply_debug["stage150_context_memory_fabric"] = stage150_context_memory_fabric
         reply_debug["stage156_context_compiler"] = stage156_context_compiler
+        reply_debug["stage160r_intent_frame"] = stage160r_intent_frame
+        reply_debug["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
+        reply_debug["stage160r_previous_goal_state"] = previous_goal_state
+        if stage160r_memory_observation_ledger and not isinstance(reply_debug.get("memory_observation_ledger"), list):
+            reply_debug["memory_observation_ledger"] = stage160r_memory_observation_ledger
+            reply_debug["stage160r_memory_observation_ledger"] = stage160r_memory_observation_ledger
+        elif stage160r_memory_observation_ledger:
+            reply_debug["stage160r_memory_observation_ledger"] = stage160r_memory_observation_ledger
         stage149_user_directive_count = int(stage149_user_directives.get("hard_directive_count", 0) or 0)
         stage149_user_directive_status = str(stage149_user_directives.get("status", "") or "")
         stage132_progressive_stream = (
@@ -9628,6 +9693,25 @@ class HoloReplyService:
             )
             repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
             grounding_repaired = True
+        stage160r_agent_loop_fsm = run_agent_loop_fsm(
+            intent_frame=stage160r_intent_frame,
+            previous_goal_state=previous_goal_state,
+            tool_decision=capability_context.get("stage151_tool_decision", sidecar.get("stage151_tool_decision", {})),
+            web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+            memory_observation_ledger=memory_observation_ledger,
+            time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
+            final_text=repaired_text,
+        )
+        repaired_text = normalize_external_speech_for_context(
+            turn_context,
+            repair_final_with_fsm(repaired_text, stage160r_agent_loop_fsm, channel=turn.channel),
+        )
+        repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
+        sidecar["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
+        reply_debug["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
+        reply_debug["stage160r_intent_frame"] = stage160r_intent_frame
+        capability_context = dict(capability_context)
+        capability_context["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
         reply_debug["memory_alignment"] = memory_alignment
         memory_alignment_status = str(memory_alignment.get("status", "") or "")
         memory_alignment_claim_count = int(memory_alignment.get("claim_count", 0) or 0)
@@ -9712,6 +9796,16 @@ class HoloReplyService:
             capability_context["project_state_graph"] = project_state_graph
         reply_debug["project_state_update"] = project_state_update
         reply_debug["project_state_graph"] = project_state_graph
+        stage160r_goal_state = update_goal_state(
+            previous_goal_state,
+            stage160r_intent_frame,
+            stage160r_agent_loop_fsm,
+            final_text=final_reply,
+        )
+        sidecar["stage160r_goal_state"] = stage160r_goal_state
+        reply_debug["stage160r_goal_state"] = stage160r_goal_state
+        capability_context = dict(capability_context)
+        capability_context["stage160r_goal_state"] = stage160r_goal_state
         engineering_claim_grounding = evaluate_engineering_claim_grounding(final_reply, engineering_action_ledger)
         reply_debug["engineering_claim_grounding"] = engineering_claim_grounding
         engineering_claim_grounding_status = str(engineering_claim_grounding.get("status", "") or "")
@@ -9890,6 +9984,16 @@ class HoloReplyService:
         )
         canonical_stop_reason = str(canonical_stop.get("canonical_stop_reason", "") or "unknown")
         canonical_stop_source = str(canonical_stop.get("canonical_stop_source", "") or "none")
+        stage160r_stop_reason = str(stage160r_agent_loop_fsm.get("canonical_stop_reason", "") or "")
+        if stage160r_stop_reason and stage160r_stop_reason != "unknown":
+            canonical_stop_reason = stage160r_stop_reason
+            canonical_stop_source = "stage160r_agent_loop_fsm"
+            canonical_stop = {
+                "schema": "holo.stage159.canonical_stop_reason.v1",
+                "canonical_stop_reason": canonical_stop_reason,
+                "canonical_stop_source": canonical_stop_source,
+                "source_reason": stage160r_stop_reason,
+            }
         stage153_interactive_cli_session = {
             "schema": INTERACTIVE_CLI_SESSION_SCHEMA,
             "thread_key": incoming.thread_key,
@@ -9919,6 +10023,9 @@ class HoloReplyService:
                 "engineering_claim_grounding": engineering_claim_grounding,
                 "project_state_graph": project_state_graph,
                 "project_state_update": project_state_update,
+                "stage160r_intent_frame": stage160r_intent_frame,
+                "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage160r_goal_state": stage160r_goal_state,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
                 "canonical_stop_reason": canonical_stop_reason,
@@ -9983,6 +10090,7 @@ class HoloReplyService:
             or stage145_outcome_appraisal
             or capability_context.get("stage151_tool_decision")
             or stage153_agent_event_stream
+            or stage160r_agent_loop_fsm
             or project_state_graph
             or stage156_context_compiler
         ):
@@ -10006,6 +10114,7 @@ class HoloReplyService:
                 stage151_tool_decision=capability_context.get("stage151_tool_decision", {}),
                 stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
                 stage153_agent_event_stream=stage153_agent_event_stream,
+                stage160r_agent_loop_fsm=stage160r_agent_loop_fsm,
                 engineering_action_ledger=engineering_action_ledger,
                 project_state_graph=project_state_graph,
                 network_health=network_health,
@@ -10110,6 +10219,9 @@ class HoloReplyService:
                 "engineering_claim_unverified_count": engineering_claim_unverified_count,
                 "project_state_graph": project_state_graph,
                 "project_state_update": project_state_update,
+                "stage160r_intent_frame": stage160r_intent_frame,
+                "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage160r_goal_state": stage160r_goal_state,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -10221,6 +10333,9 @@ class HoloReplyService:
             "engineering_claim_unverified_count": engineering_claim_unverified_count,
             "project_state_graph": project_state_graph,
             "project_state_update": project_state_update,
+            "stage160r_intent_frame": stage160r_intent_frame,
+            "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+            "stage160r_goal_state": stage160r_goal_state,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -10393,6 +10508,9 @@ class HoloReplyService:
                 "engineering_claim_unverified_count": engineering_claim_unverified_count,
                 "project_state_graph": project_state_graph,
                 "project_state_update": project_state_update,
+                "stage160r_intent_frame": stage160r_intent_frame,
+                "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage160r_goal_state": stage160r_goal_state,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -10434,6 +10552,9 @@ class HoloReplyService:
             metadata={
                 "source": f"reply_api.stage5_{selected_action_type}",
                 "_stage17_history_lines_in_prompt": int(turn_context.metadata.get("history_lines_in_prompt", 0) or 0),
+                "stage160r_goal_state": stage160r_goal_state,
+                "stage160r_intent_frame": stage160r_intent_frame,
+                "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
             },
         )
         return result

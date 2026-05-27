@@ -203,6 +203,7 @@ def build_stage135_i_state_topology(
     stage151_tool_decision: dict[str, Any] | None = None,
     stage152_deepseek_tool_loop: dict[str, Any] | None = None,
     stage153_agent_event_stream: dict[str, Any] | None = None,
+    stage160r_agent_loop_fsm: dict[str, Any] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
     network_health: dict[str, Any] | None = None,
@@ -239,6 +240,7 @@ def build_stage135_i_state_topology(
     tool_decision = _dict(stage151_tool_decision or packet.get("stage151_tool_decision", {}))
     native_tool_loop = _dict(stage152_deepseek_tool_loop or packet.get("stage152_deepseek_tool_loop", {}))
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
+    agent_loop_fsm = _dict(stage160r_agent_loop_fsm or packet.get("stage160r_agent_loop_fsm", {}))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
     network_state = _dict(network_health or packet.get("network_health", {}))
@@ -602,6 +604,26 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage153_agent_event_stream", relation="renders_auditable_cli_events", weight=0.54, summary="grounded tool and packet evidence is rendered as CLI events without hidden reasoning"))
         edges.append(_edge("stage153_agent_event_stream", "visible_fast_reaction" if visible else "state_delta", relation="frames_interactive_console", weight=0.42, summary="the console shows external events before or with final speech"))
 
+    if agent_loop_fsm:
+        step_count = int(agent_loop_fsm.get("step_count", 0) or len(_list_dicts(agent_loop_fsm.get("steps", []))))
+        stop_reason = str(agent_loop_fsm.get("canonical_stop_reason", "") or agent_loop_fsm.get("stop_reason", "") or "")
+        mandatory_count = len(list(agent_loop_fsm.get("mandatory_actions", []) or []))
+        nodes.append(
+            _node(
+                "stage160r_agent_loop_fsm",
+                "depersonalized agent loop FSM",
+                channel="agent_loop_fsm",
+                kind="agent_loop",
+                x=0.7,
+                y=0.1,
+                weight=0.76 if mandatory_count else 0.5,
+                summary=f"steps={step_count}; mandatory={mandatory_count}; stop={stop_reason}",
+            )
+        )
+        source = "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage160r_agent_loop_fsm", relation="host_controls_mandatory_actions", weight=0.68, summary="mandatory actions must execute, reject, or fail before final speech"))
+        edges.append(_edge("stage160r_agent_loop_fsm", "stage153_agent_event_stream" if agent_event_stream else "visible_fast_reaction", relation="drives_auditable_events", weight=0.62, summary="CLI events are rendered from FSM steps, not hidden reasoning"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -843,6 +865,9 @@ def build_stage135_i_state_topology(
             "deepseek_native_tool_loop_stop_reason": str(native_tool_loop.get("stop_reason", "") or "") if native_tool_loop else "",
             "agent_event_stream_node_count": sum(1 for node in nodes if node["channel"] == "agent_event_stream"),
             "agent_event_stream_event_count": int(agent_event_stream.get("event_count", 0) or len(_list_dicts(agent_event_stream.get("events", [])))) if agent_event_stream else 0,
+            "agent_loop_fsm_node_count": sum(1 for node in nodes if node["channel"] == "agent_loop_fsm"),
+            "agent_loop_fsm_step_count": int(agent_loop_fsm.get("step_count", 0) or len(_list_dicts(agent_loop_fsm.get("steps", [])))) if agent_loop_fsm else 0,
+            "agent_loop_fsm_stop_reason": str(agent_loop_fsm.get("canonical_stop_reason", "") or agent_loop_fsm.get("stop_reason", "") or "") if agent_loop_fsm else "",
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",

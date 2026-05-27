@@ -521,7 +521,7 @@ def repair_tool_decision_grounding(text: str, grounding_report: dict[str, Any], 
     if "web_observation" in list(grounding_report.get("missing_observations", []) or []):
         if str(channel or "").startswith("wechat"):
             return "我没有可核验的联网观察，不能把这当作已经查到的当前信息。"
-        return "我没有可核验的联网观察，不能把这当作已经查到的当前信息。需要先完成 web_search 或 open_page。"
+        return "web_search did not produce a verified web observation, so I cannot treat this as current web evidence."
     return "我有本机时间观测不足，不能确认这个时间相关说法。"
 
 

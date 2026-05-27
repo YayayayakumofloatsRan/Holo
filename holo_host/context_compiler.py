@@ -79,6 +79,9 @@ def _observation_lines(value: Any, *, limit: int = 16) -> list[str]:
                 "web_observations",
                 "visual_observation",
                 "time_observation",
+                "stage160r_intent_frame",
+                "stage160r_agent_loop_fsm",
+                "stage160r_goal_state",
                 "results",
                 "lines",
             ):
@@ -168,6 +171,7 @@ def compile_context_memory(
     directives = _extract_directives(packet)
     observations = _observation_lines(
         [
+            packet.get("active_task_state"),
             packet.get("evidence_ledger_view"),
             packet.get("tool_memory_visual_observations"),
             packet.get("relevant_recent_events"),
@@ -182,7 +186,7 @@ def compile_context_memory(
     stable_prefix = _section(
         "Stable Prefix",
         [
-            "Holo is a single local subject runtime; WSL host authority owns tools and memory.",
+            "Holo is a single local agent runtime; WSL host authority owns tools and memory.",
             "Visible claims require matching evidence ledgers.",
             "Never expose hidden provider reasoning.",
         ],
@@ -218,6 +222,7 @@ def compile_context_memory(
             "Answer from evidence; say when evidence is missing.",
             "Do not mention background compaction as visible speech.",
             "Do not claim tool, test, patch, read, web, or memory success without ledgers.",
+            "All mandatory tool decisions must pass the Stage160R FSM before final speech.",
         ],
     )
 
