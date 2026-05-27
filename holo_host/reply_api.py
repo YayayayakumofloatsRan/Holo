@@ -95,6 +95,7 @@ from .stage151_live_tool_trace import (
     repair_network_grounding,
 )
 from .stage151_tool_decision_loop import (
+    build_network_health_report,
     build_stage151_live_trace,
     evaluate_tool_decision_grounding,
     maybe_ground_visible_web_reply,
@@ -102,6 +103,8 @@ from .stage151_tool_decision_loop import (
 )
 from .agent_event_stream import build_agent_event_stream
 from .interactive_cli import INTERACTIVE_CLI_SESSION_SCHEMA
+from .canonical_stop_reason import map_canonical_stop_reason
+from .kernel_metadata_sanitizer import build_public_stage152_report, sanitize_public_metadata
 
 
 SYSTEM_EVENT_HINTS = (
@@ -9486,7 +9489,7 @@ class HoloReplyService:
             )
         reply_debug["engineering_action_ledger"] = engineering_action_ledger
         stage152_deepseek_tool_loop = (
-            dict(reply_debug.get("stage152_deepseek_tool_loop", {}))
+            build_public_stage152_report(dict(reply_debug.get("stage152_deepseek_tool_loop", {})))
             if isinstance(reply_debug.get("stage152_deepseek_tool_loop", {}), dict)
             else {}
         )
@@ -9867,6 +9870,26 @@ class HoloReplyService:
         stage152_tool_call_count = int(stage152_deepseek_tool_loop.get("tool_call_count", 0) or 0) if stage152_deepseek_tool_loop else 0
         stage152_round_count = int(stage152_deepseek_tool_loop.get("round_count", 0) or 0) if stage152_deepseek_tool_loop else 0
         stage152_stop_reason = str(stage152_deepseek_tool_loop.get("stop_reason", "") or "") if stage152_deepseek_tool_loop else ""
+        web_rows_for_health = [
+            dict(row)
+            for row in list(capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])) or [])
+            if isinstance(row, dict)
+        ]
+        last_web_row = web_rows_for_health[-1] if web_rows_for_health else {}
+        network_health = build_network_health_report(
+            network_enabled=bool(getattr(self.config.runtime, "network_enabled", False)),
+            provider=str(last_web_row.get("provider", "host") or "host"),
+            last_web_status=str(last_web_row.get("status", "") or ""),
+            last_error=str(last_web_row.get("error", "") or ""),
+        )
+        canonical_stop = map_canonical_stop_reason(
+            stage143=stage143_packet_budget,
+            stage151={**dict(capability_context.get("stage151_tool_decision", {}) if isinstance(capability_context.get("stage151_tool_decision", {}), dict) else {}), "web_observation_ledger": web_rows_for_health},
+            stage152=stage152_deepseek_tool_loop,
+            stage153={},
+        )
+        canonical_stop_reason = str(canonical_stop.get("canonical_stop_reason", "") or "unknown")
+        canonical_stop_source = str(canonical_stop.get("canonical_stop_source", "") or "none")
         stage153_interactive_cli_session = {
             "schema": INTERACTIVE_CLI_SESSION_SCHEMA,
             "thread_key": incoming.thread_key,
@@ -9898,6 +9921,8 @@ class HoloReplyService:
                 "project_state_update": project_state_update,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
+                "canonical_stop_reason": canonical_stop_reason,
+                "canonical_stop_source": canonical_stop_source,
             },
             user_text=turn.text,
             thread_key=incoming.thread_key,
@@ -9905,8 +9930,13 @@ class HoloReplyService:
             channel=turn.channel,
             transport="reply_api",
         )
+        stage153_agent_event_stream["canonical_stop_reason"] = canonical_stop_reason
+        stage153_agent_event_stream["canonical_stop_source"] = canonical_stop_source
         reply_debug["stage153_agent_event_stream"] = stage153_agent_event_stream
         reply_debug["stage153_interactive_cli_session"] = stage153_interactive_cli_session
+        reply_debug["network_health"] = network_health
+        reply_debug["canonical_stop_reason"] = canonical_stop_reason
+        reply_debug["canonical_stop_source"] = canonical_stop_source
         turn_context.mind_packet = sidecar
         turn_context.sidecar = sidecar
         stage148_react_loop = stage148_react_state.get("react_loop", {})
@@ -9978,6 +10008,8 @@ class HoloReplyService:
                 stage153_agent_event_stream=stage153_agent_event_stream,
                 engineering_action_ledger=engineering_action_ledger,
                 project_state_graph=project_state_graph,
+                network_health=network_health,
+                canonical_stop=canonical_stop,
             )
         outbound = self.policy.outbound_decision(
             incoming_text=turn.text,
@@ -10066,6 +10098,9 @@ class HoloReplyService:
                 "stage152_tool_call_count": stage152_tool_call_count,
                 "stage152_round_count": stage152_round_count,
                 "stage152_stop_reason": stage152_stop_reason,
+                "canonical_stop_reason": canonical_stop_reason,
+                "canonical_stop_source": canonical_stop_source,
+                "network_health": network_health,
                 "stage153_agent_event_stream": stage153_agent_event_stream,
                 "stage153_interactive_cli_session": stage153_interactive_cli_session,
                 "engineering_action_ledger": engineering_action_ledger,
@@ -10176,6 +10211,9 @@ class HoloReplyService:
             "stage152_tool_call_count": stage152_tool_call_count,
             "stage152_round_count": stage152_round_count,
             "stage152_stop_reason": stage152_stop_reason,
+            "canonical_stop_reason": canonical_stop_reason,
+            "canonical_stop_source": canonical_stop_source,
+            "network_health": network_health,
             "engineering_action_ledger": engineering_action_ledger,
             "engineering_action_count": engineering_action_count,
             "engineering_claim_grounding": engineering_claim_grounding,
@@ -10343,6 +10381,9 @@ class HoloReplyService:
                 "stage152_tool_call_count": stage152_tool_call_count,
                 "stage152_round_count": stage152_round_count,
                 "stage152_stop_reason": stage152_stop_reason,
+                "canonical_stop_reason": canonical_stop_reason,
+                "canonical_stop_source": canonical_stop_source,
+                "network_health": network_health,
                 "stage153_agent_event_stream": stage153_agent_event_stream,
                 "stage153_interactive_cli_session": stage153_interactive_cli_session,
                 "engineering_action_ledger": engineering_action_ledger,

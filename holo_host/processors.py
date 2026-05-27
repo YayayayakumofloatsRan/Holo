@@ -41,6 +41,8 @@ from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
 from .context_compiler import compile_context_memory, render_context_compiler_prompt_lines
 from .stage152_deepseek_tool_loop import deepseek_native_tool_names
 from .stage151_tool_decision_loop import maybe_ground_visible_web_reply
+from .canonical_stop_reason import map_canonical_stop_reason
+from .kernel_metadata_sanitizer import build_public_stage152_report
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .engineering_action_fabric import normalize_engineering_action_ledger
 from .tool_need import classify_tool_need
@@ -1852,6 +1854,7 @@ class CodexCliProcessor:
                 stage144_context_economy=stage144_context_economy,
                 reply_metadata={"processor": self.name, "route": route},
             )
+            canonical_stop = map_canonical_stop_reason(stage143=stage143_packet_budget)
             stage135_topology = build_stage135_i_state_topology(
                 context=context,
                 fast_packet=fast_packet,
@@ -1865,6 +1868,7 @@ class CodexCliProcessor:
                 stage145_outcome_appraisal=stage145_outcome_appraisal,
                 stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
                 stage156_context_compiler=dict(context.mind_packet.get("stage156_context_compiler", {})),
+                canonical_stop=canonical_stop,
             )
             return ReplyPlan(
                 text=joined,
@@ -2001,7 +2005,7 @@ class CodexCliProcessor:
             context.mind_packet = packet_after_engineering
             context.sidecar = packet_after_engineering
         stage152_deepseek_tool_loop = (
-            dict(result_metadata.get("stage152_deepseek_tool_loop", {}))
+            build_public_stage152_report(dict(result_metadata.get("stage152_deepseek_tool_loop", {})))
             if isinstance(result_metadata.get("stage152_deepseek_tool_loop", {}), dict)
             else {}
         )
@@ -2104,6 +2108,10 @@ class CodexCliProcessor:
             stage144_context_economy=stage144_context_economy,
             reply_metadata={"processor": self.name, "route": route, "lane": result_metadata.get("lane", lane)},
         )
+        canonical_stop = map_canonical_stop_reason(
+            stage143=stage143_packet_budget,
+            stage152=stage152_deepseek_tool_loop,
+        )
         stage135_topology = build_stage135_i_state_topology(
             context=context,
             fast_packet=fast_packet,
@@ -2123,6 +2131,7 @@ class CodexCliProcessor:
             stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
             engineering_action_ledger=engineering_action_ledger,
             project_state_graph=dict(context.mind_packet.get("project_state_graph", {})),
+            canonical_stop=canonical_stop,
         )
         return ReplyPlan(
             text=joined,
@@ -2150,6 +2159,8 @@ class CodexCliProcessor:
                 "agent_tool_loop": dict(result_metadata.get("agent_tool_loop", {})),
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_live_trace": dict(result_metadata.get("stage152_live_trace", {})) if isinstance(result_metadata.get("stage152_live_trace", {}), dict) else {},
+                "canonical_stop_reason": canonical_stop["canonical_stop_reason"],
+                "canonical_stop_source": canonical_stop["canonical_stop_source"],
                 "web_observation_ledger": list(result_metadata.get("web_observation_ledger", [])) if isinstance(result_metadata.get("web_observation_ledger", []), list) else [],
                 "time_observation": dict(result_metadata.get("time_observation", {})) if isinstance(result_metadata.get("time_observation", {}), dict) else {},
                 "tool_observation_ledger": tool_observation_ledger,

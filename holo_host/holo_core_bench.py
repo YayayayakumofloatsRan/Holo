@@ -3,12 +3,20 @@ from __future__ import annotations
 import html
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
+from .agent_event_stream import build_agent_event_stream
+from .context_compiler import compile_context_memory
 from .common import stable_digest, utc_now
+from .kernel_metadata_sanitizer import assert_no_private_reasoning, sanitize_public_metadata
+from .project_state_graph import ProjectStateGraph
+from .safe_command_policy import parse_allowed_command
+from .stage151_tool_decision_loop import build_network_health_report, build_tool_decision_report, execute_tool_decision
 
 HOLO_CORE_BENCH_SCHEMA = "holo.stage157.core_bench.v1"
+LIVE_SMOKE_CATEGORY_IDS = ("kernel_hardening_live_smoke",)
 
 BENCHMARK_CATEGORY_IDS = (
     "recent_recall",
@@ -338,6 +346,79 @@ def default_holo_core_bench_fixtures() -> list[dict[str, Any]]:
     ]
 
 
+def live_smoke_holo_core_bench_fixtures() -> list[dict[str, Any]]:
+    """Build local live-smoke rows over actual kernel surfaces without providers/network."""
+
+    request = "Stage159 live-smoke exact request."
+    event_stream = build_agent_event_stream(
+        {
+            "text": "Ready.",
+            "stage152_deepseek_tool_loop": {
+                "messages": [{"role": "assistant", "reasoning_content": "secret"}],
+                "stop_reason": "tool_call_budget_exceeded",
+            },
+        },
+        user_text=request,
+        thread_key="holo_cli:stage159-live-smoke",
+        chat_name="HoloCLI",
+        channel="holo_cli",
+    )
+    context_report = compile_context_memory(
+        {
+            "working_context_packet": {
+                "user_goal": {"current_user_request_exact": request},
+                "directive_state": {"hard_directives": ["do not use emoji"]},
+            }
+        },
+        current_user_request=request,
+    )
+    decision = build_tool_decision_report("search latest Holo docs")
+    web_rejections = execute_tool_decision(decision, network_enabled=False)
+    network_health = build_network_health_report(
+        network_enabled=False,
+        provider="host",
+        last_web_status=str(web_rejections[0].get("status", "") if web_rejections else ""),
+        last_error=str(web_rejections[0].get("error", "") if web_rejections else ""),
+    )
+    allowed_argv, allowed_reason = parse_allowed_command("python -m pytest tests/test_stage158_agent_kernel.py -q", repo_root=Path.cwd())
+    rejected_argv, rejected_reason = parse_allowed_command("python -m pip install requests", repo_root=Path.cwd())
+    with tempfile.TemporaryDirectory() as tmpdir:
+        graph = ProjectStateGraph(Path(tmpdir) / "project_state.sqlite3")
+        try:
+            graph.upsert_node("Holo", "Project", "Holo")
+            graph.upsert_node("Holo", "NextAction", "Keep Stage159 hardening local", status="open")
+            project_state = graph.get_project_state("Holo")
+        finally:
+            graph.close()
+    sanitized = sanitize_public_metadata(
+        {
+            "messages": [{"role": "assistant", "reasoning_content": "secret"}],
+            "visible": "ok",
+        }
+    )
+    no_private, private_paths = assert_no_private_reasoning(sanitized)
+    return [
+        {
+            "fixture_id": "stage159-live-smoke",
+            "category_id": "kernel_hardening_live_smoke",
+            "input": request,
+            "visible_text": "The kernel hardening live-smoke used local observations only.",
+            "metadata": {
+                "stage153_agent_event_stream": event_stream,
+                "stage156_context_compiler": context_report,
+                "web_observation_ledger": web_rejections,
+                "network_health": network_health,
+                "safe_command_policy": {
+                    "allowed_ok": bool(allowed_argv and not allowed_reason),
+                    "rejected_ok": not rejected_argv and rejected_reason == "command_not_allowlisted",
+                },
+                "project_state_graph": project_state,
+                "kernel_metadata_sanitizer": {"no_private": no_private, "private_paths": private_paths},
+            },
+        }
+    ]
+
+
 def _mean(rows: list[float]) -> float:
     return round(sum(rows) / max(1, len(rows)), 4)
 
@@ -413,17 +494,28 @@ def run_holo_core_bench(
     *,
     output: str | Path | None = None,
     dry_run: bool = True,
+    mode: str = "dry-run",
     fixtures: list[dict[str, Any]] | None = None,
     dependency_overrides: dict[str, bool] | None = None,
     fail_under: float | None = None,
 ) -> dict[str, Any]:
     del dependency_overrides
-    fixture_rows = list(fixtures if fixtures is not None else default_holo_core_bench_fixtures())
+    current_mode = str(mode or ("dry-run" if dry_run else "dry-run")).strip() or "dry-run"
+    if current_mode not in {"dry-run", "live-smoke"}:
+        current_mode = "dry-run"
+    fixture_rows = list(
+        fixtures
+        if fixtures is not None
+        else live_smoke_holo_core_bench_fixtures()
+        if current_mode == "live-smoke"
+        else default_holo_core_bench_fixtures()
+    )
     evaluations = [evaluate_holo_core_fixture(row) for row in fixture_rows]
-    grouped: dict[str, list[dict[str, Any]]] = {category_id: [] for category_id in BENCHMARK_CATEGORY_IDS}
+    category_ids = LIVE_SMOKE_CATEGORY_IDS if current_mode == "live-smoke" else BENCHMARK_CATEGORY_IDS
+    grouped: dict[str, list[dict[str, Any]]] = {category_id: [] for category_id in category_ids}
     for evaluation in evaluations:
         grouped.setdefault(evaluation["category_id"], []).append(evaluation)
-    categories = [_category_report(category_id, grouped.get(category_id) or []) for category_id in BENCHMARK_CATEGORY_IDS]
+    categories = [_category_report(category_id, grouped.get(category_id) or []) for category_id in category_ids]
     for category in categories:
         if category["fixture_count"] == 0:
             category["status"] = "failed"
@@ -444,6 +536,7 @@ def run_holo_core_bench(
         "schema": HOLO_CORE_BENCH_SCHEMA,
         "generated_at": utc_now(),
         "dry_run": bool(dry_run),
+        "mode": current_mode,
         "status": "failed" if failed_categories else "passed",
         "categories": categories,
         "categories_by_id": {item["category_id"]: item for item in categories},

@@ -172,6 +172,11 @@ Stage158: Agent Kernel v1
 - Added `agent-kernel-readiness` to report whether the stable Agent Kernel v1 surfaces are available.
 - Defines the boundary between stable core infrastructure and future domain expert modules without adding live domain work, provider calls, memory writes, tool execution, WeChat starts, or transport authority changes.
 
+Stage159: Agent Kernel hardening
+- Implemented public/private metadata splitting for Stage152 so raw DeepSeek `reasoning_content`, internal messages, raw decoded payloads, and hidden tool-loop packets do not reach public JSON, archive metadata, CLI `/json`, or event streams.
+- Replaced Stage154 shell-based `test_run` execution with a strict argv allowlist, added canonical stop reason mapping, active readiness probes, offline live-smoke HoloCoreBench fixtures, and network health metadata.
+- Keeps Stage159 safety/reliability-only: no provider calls, memory writes, WeChat starts, transport authority widening, live domain work, approval UI, or durable policy mutation.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

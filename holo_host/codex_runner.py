@@ -26,6 +26,7 @@ from .stage152_deepseek_tool_loop import (
     parse_deepseek_native_tool_calls,
     run_deepseek_native_tool_loop,
 )
+from .kernel_metadata_sanitizer import build_public_stage152_report
 from .tool_grounding import normalize_tool_observation_ledger
 
 PROCESSOR_TASK_SPECS: dict[str, dict[str, Any]] = {
@@ -994,24 +995,7 @@ class DeepSeekProvider(ProcessorProvider):
         tool_calls = parse_deepseek_native_tool_calls(decoded) if stage152_native_enabled else parse_provider_tool_calls(decoded)
         stage152_public = {}
         if stage152_loop:
-            stage152_public = {
-                "schema": str(stage152_loop.get("schema", "")),
-                "status": str(stage152_loop.get("status", "") or ""),
-                "tool_call_count": int(stage152_loop.get("tool_call_count", 0) or 0),
-                "executed_count": int(stage152_loop.get("executed_count", 0) or 0),
-                "round_count": int(stage152_loop.get("round_count", 0) or 0),
-                "final_request_sent": bool(stage152_loop.get("final_request_sent", False)),
-                "stop_reason": str(stage152_loop.get("stop_reason", "") or ""),
-                "exhausted": bool(stage152_loop.get("exhausted", False)),
-                "usage": dict(stage152_loop.get("usage", {}) or {}),
-                "reasoning_content_retained_count": int(stage152_loop.get("reasoning_content_retained_count", 0) or 0),
-                "tool_observation_ledger": list(stage152_loop.get("tool_observation_ledger", []) or []),
-                "web_observation_ledger": list(stage152_loop.get("web_observation_ledger", []) or []),
-                "memory_observation_ledger": list(stage152_loop.get("memory_observation_ledger", []) or []),
-                "time_observation": dict(stage152_loop.get("time_observation", {}) or {}),
-                "grounding": dict(stage152_loop.get("grounding", {}) or {}),
-                "live_trace": dict(stage152_loop.get("live_trace", {}) or {}),
-            }
+            stage152_public = build_public_stage152_report(stage152_loop)
         metadata = {
             "allowed_data_layers": list(request.allowed_data_layers or tuple(spec.get("allowed_data_layers", ()))),
             "allow_memory_writeback": bool(request.allow_memory_writeback or spec.get("allow_memory_writeback", False)),

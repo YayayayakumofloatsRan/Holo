@@ -205,6 +205,8 @@ def build_stage135_i_state_topology(
     stage153_agent_event_stream: dict[str, Any] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
+    network_health: dict[str, Any] | None = None,
+    canonical_stop: dict[str, Any] | None = None,
     visual_delta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a redacted topology of Holo's current I-state flow.
@@ -239,6 +241,16 @@ def build_stage135_i_state_topology(
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
+    network_state = _dict(network_health or packet.get("network_health", {}))
+    canonical_state = _dict(canonical_stop)
+    if not canonical_state:
+        raw_canonical_reason = str(packet.get("canonical_stop_reason", "") or agent_event_stream.get("canonical_stop_reason", "") or "")
+        raw_canonical_source = str(packet.get("canonical_stop_source", "") or agent_event_stream.get("canonical_stop_source", "") or "")
+        if raw_canonical_reason or raw_canonical_source:
+            canonical_state = {
+                "canonical_stop_reason": raw_canonical_reason,
+                "canonical_stop_source": raw_canonical_source,
+            }
     user_directives = _dict(packet.get("stage149_user_directives", {}))
     visual = _dict(visual_delta)
     visible = _list_dicts(visible_segments)
@@ -590,6 +602,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage153_agent_event_stream", relation="renders_auditable_cli_events", weight=0.54, summary="grounded tool and packet evidence is rendered as CLI events without hidden reasoning"))
         edges.append(_edge("stage153_agent_event_stream", "visible_fast_reaction" if visible else "state_delta", relation="frames_interactive_console", weight=0.42, summary="the console shows external events before or with final speech"))
 
+    if canonical_state or network_state:
+        canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
+        canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
+        network_enabled = network_state.get("network_enabled", "")
+        last_web_status = str(network_state.get("last_web_status", "") or "")
+        nodes.append(
+            _node(
+                "stage159_kernel_hardening",
+                "kernel hardening",
+                channel="kernel_hardening",
+                kind="observability_gate",
+                x=0.82,
+                y=0.16,
+                weight=0.6,
+                summary=f"stop={canonical_reason}; source={canonical_source}; network_enabled={network_enabled}; last_web={last_web_status}; public metadata sanitized",
+            )
+        )
+        source = "stage153_agent_event_stream" if agent_event_stream else "stage152_deepseek_tool_loop" if native_tool_loop else "stage151_tool_decision_loop" if tool_decision else "state_delta"
+        edges.append(_edge(source, "stage159_kernel_hardening", relation="hardens_public_surfaces", weight=0.5, summary="public metadata is sanitized and stop reasons are canonicalized"))
+        edges.append(_edge("stage159_kernel_hardening", "state_delta", relation="reports_kernel_health", weight=0.42, summary="network health and canonical stop reason remain observability-only"))
+
     if engineering_ledger:
         ok_count = sum(1 for row in engineering_ledger if str(row.get("status", "") or "") == "ok")
         changed_count = sum(len(list(row.get("files_changed", []) or [])) for row in engineering_ledger)
@@ -810,6 +843,11 @@ def build_stage135_i_state_topology(
             "deepseek_native_tool_loop_stop_reason": str(native_tool_loop.get("stop_reason", "") or "") if native_tool_loop else "",
             "agent_event_stream_node_count": sum(1 for node in nodes if node["channel"] == "agent_event_stream"),
             "agent_event_stream_event_count": int(agent_event_stream.get("event_count", 0) or len(_list_dicts(agent_event_stream.get("events", [])))) if agent_event_stream else 0,
+            "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
+            "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
+            "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
+            "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,
+            "last_web_status": str(network_state.get("last_web_status", "") or "") if network_state else "",
             "engineering_action_fabric_node_count": sum(1 for node in nodes if node["channel"] == "engineering_action_fabric"),
             "engineering_action_count": len(engineering_ledger),
             "engineering_action_ok_count": sum(1 for row in engineering_ledger if str(row.get("status", "") or "") == "ok"),

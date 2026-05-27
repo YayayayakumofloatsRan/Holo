@@ -62,7 +62,7 @@ def test_event_stream_renders_goal_candidate_tool_observation_stop_final() -> No
     assert "[observation] web_search status=ok sources=1" in rendered
     assert "[grounding] status=grounded" in rendered
     assert "[cache] hit=12 miss=3" in rendered
-    assert "[stop] no_tool_calls" in rendered
+    assert "[stop] model_final_no_tool_calls" in rendered
     assert "[final]" in rendered
 
 

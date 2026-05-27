@@ -97,6 +97,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 92. `docs/ENGINEERING_HANDOFF_STAGE157.md`
 93. `docs/STAGE158_AGENT_KERNEL_V1.md`
 94. `docs/ENGINEERING_HANDOFF_STAGE158.md`
+95. `docs/STAGE159_AGENT_KERNEL_HARDENING.md`
+96. `docs/ENGINEERING_HANDOFF_STAGE159.md`
 
 ## What This Document Must Cover
 - current live state
@@ -111,9 +113,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage158-agent-kernel-v1`.
+- The current milestone tag is `stage159-agent-kernel-hardening`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage158 Agent Kernel v1: Holo now packages the stable infrastructure arc across Stage153 interactive CLI, Stage154 engineering action ledgers, Stage155 project state graph, Stage156 context compiler/cache discipline, and Stage157 HoloCoreBench. Stage158 adds scaffold-only domain modules for math research, physics research, market research, and ProjectH ops plus `agent-kernel-readiness`, without adding live domain work, provider calls, memory writes, tool execution, WeChat starts, or transport authority changes.
+- Current focus is Stage159 Agent Kernel hardening: Holo now sanitizes public Stage152 metadata, canonicalizes stop reasons, enforces allowlisted engineering test commands, runs active readiness probes, exposes offline live-smoke core bench fixtures, and records network health metadata without adding live domain work, provider calls, memory writes, WeChat starts, transport authority changes, or approval UI.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -448,6 +450,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - `python -m pytest -q --basetemp D:\Holo\holo\.pytest_tmp\base` passed with `510 passed in 69.12s` after Stage142 on `2026-05-24`
   - Stage151 adds `python3 -m holo_host chat --trace` and `/trace on|off` for Codex-like purpose/candidate/tool_call/observation/grounding/final traces, plus host time observations, normalized web observations, and grounding repair for current web claims
   - Stage152 adds DeepSeek-native `time_observe`, `web_search`, `open_page`, `find_in_page`, and `memory_recall` tool schemas for live reply packets; DeepSeek tool calls are executed by the WSL Holo host, returned as `role=tool`, and shown in CLI trace as purpose/candidate/tool/observation/evaluate/stop/final without raw reasoning leakage
+  - Stage159 hardening verification passed on `2026-05-27`: `tests\test_stage159_kernel_hardening.py` passed with `13 passed in 0.64s`; neighbor regression passed with `45 passed in 12.96s`; runtime regression passed with `91 passed in 25.35s`; full regression passed with `672 passed in 102.82s`; `agent-kernel-readiness` passed with 8 active probes; live-smoke core bench passed and wrote `artifacts\stage159\holo_core_bench_live_smoke.html`; public hygiene passed; `git diff --check` exited 0 with only CRLF normalization warnings.
 
 ## Invariants
 - Do not silently change online transport modes

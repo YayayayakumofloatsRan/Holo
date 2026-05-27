@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import subprocess
 from pathlib import Path
 
@@ -74,7 +73,8 @@ def test_apply_patch_records_changed_files(tmp_path: Path) -> None:
 
 def test_test_run_records_command_and_status(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    command = f'"{sys.executable}" -c "print(\'stage154-ok\')"'
+    (repo / "test_stage154_smoke.py").write_text("def test_stage154_ok():\n    assert True\n", encoding="utf-8")
+    command = "python -m pytest test_stage154_smoke.py -q"
 
     row = test_run(repo, command)
 
@@ -82,7 +82,7 @@ def test_test_run_records_command_and_status(tmp_path: Path) -> None:
     assert row["status"] == "ok"
     assert row["commands_run"] == [command]
     assert row["tests_run"] == [command]
-    assert "stage154-ok" in row["stdout_summary"]
+    assert "passed" in row["stdout_summary"]
 
 
 def test_final_engineering_claim_without_ledger_is_unverified() -> None:
@@ -96,7 +96,8 @@ def test_final_engineering_claim_without_ledger_is_unverified() -> None:
 
 def test_final_engineering_claim_with_ledger_is_grounded(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    command = f'"{sys.executable}" -c "print(\'stage154-ok\')"'
+    (repo / "test_stage154_smoke.py").write_text("def test_stage154_ok():\n    assert True\n", encoding="utf-8")
+    command = "python -m pytest test_stage154_smoke.py -q"
     ledger = normalize_engineering_action_ledger(
         [
             file_read(repo, "src/demo.py", start_line=1, end_line=1),
@@ -131,7 +132,7 @@ def test_dangerous_command_is_rejected_without_approval_ui(tmp_path: Path) -> No
 
     assert row["status"] == "rejected"
     assert row["commands_run"] == []
-    assert "dangerous" in row["stderr_summary"].lower()
+    assert row["stderr_summary"] == "command_not_allowlisted"
 
 
 def test_cli_event_stream_shows_engineering_actions(tmp_path: Path) -> None:

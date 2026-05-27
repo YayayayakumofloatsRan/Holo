@@ -9319,9 +9319,10 @@ def command_run_core_bench(
     *,
     output: str,
     dry_run: bool,
+    mode: str,
     fail_under: float | None,
 ) -> int:
-    report = run_holo_core_bench(output=output, dry_run=dry_run, fail_under=fail_under)
+    report = run_holo_core_bench(output=output, dry_run=dry_run, mode=mode, fail_under=fail_under)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if fail_under is not None and bool(report.get("fail_under_triggered", False)):
         return 1
@@ -10536,6 +10537,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     core_bench_parser.add_argument("--output", required=True)
     core_bench_parser.add_argument("--dry-run", action="store_true")
+    core_bench_parser.add_argument("--mode", choices=("dry-run", "live-smoke"), default="dry-run")
     core_bench_parser.add_argument("--fail-under", type=float, default=None)
     project_state_parser = subparsers.add_parser("project-state", help="Inspect the Stage155 project state graph")
     project_state_parser.add_argument("--project", required=True)
@@ -11575,6 +11577,7 @@ def main(argv: list[str] | None = None) -> int:
         return command_run_core_bench(
             output=args.output,
             dry_run=args.dry_run,
+            mode=args.mode,
             fail_under=args.fail_under,
         )
     if args.command == "project-state":

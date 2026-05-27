@@ -13,6 +13,7 @@ STAGE151_TOOL_DECISION_SCHEMA = "holo.stage151.tool_decision.v1"
 STAGE151_LIVE_TRACE_SCHEMA = "holo.stage151.live_trace.v1"
 WEB_OBSERVATION_SCHEMA = "holo.web_observation.v1"
 TIME_OBSERVATION_SCHEMA = "holo.time_observation.v1"
+NETWORK_HEALTH_SCHEMA = "holo.stage159.network_health.v1"
 
 URL_RE = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
 DDG_RESULT_RE = re.compile(
@@ -104,6 +105,29 @@ def build_time_observation(now: datetime | None = None) -> dict[str, Any]:
         "timezone": timezone_name,
         "observed_at": utc_now(),
         "confidence": 1.0,
+    }
+
+
+def build_network_health_report(
+    *,
+    network_enabled: bool,
+    provider: str = "host",
+    proxy_from_env: bool | None = None,
+    last_web_status: str = "",
+    last_error: str = "",
+) -> dict[str, Any]:
+    if proxy_from_env is None:
+        import os
+
+        proxy_from_env = any(os.environ.get(name) for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"))
+    return {
+        "schema": NETWORK_HEALTH_SCHEMA,
+        "network_enabled": bool(network_enabled),
+        "provider": str(provider or "host"),
+        "proxy_from_env": bool(proxy_from_env),
+        "last_web_status": str(last_web_status or ""),
+        "last_error": _compact(last_error, 180),
+        "observed_at": utc_now(),
     }
 
 

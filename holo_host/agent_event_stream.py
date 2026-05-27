@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .canonical_stop_reason import map_canonical_stop_reason
 from .common import compact_text
 from .engineering_action_fabric import normalize_engineering_action_ledger
+from .kernel_metadata_sanitizer import sanitize_public_metadata
 
 AGENT_EVENT_STREAM_SCHEMA = "holo.stage153.agent_event_stream.v1"
 
@@ -24,15 +26,12 @@ def _final_text(payload: dict[str, Any]) -> str:
 
 
 def sanitize_event_payload(value: Any) -> Any:
+    value = sanitize_public_metadata(value)
     if isinstance(value, dict):
         clean: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
             lowered = key_text.lower()
-            if lowered in {"reasoning_content", "chain_of_thought", "hidden_reasoning"}:
-                continue
-            if lowered in {"internal_messages", "assistant_messages"}:
-                continue
             clean[key] = sanitize_event_payload(item)
         return clean
     if isinstance(value, list):
@@ -216,7 +215,20 @@ def build_agent_event_stream(
         }
     )
     events.append(_cache_event(source))
-    events.append({"event": "stop", "reason": str(loop.get("stop_reason", source.get("stage152_stop_reason", "")) or "final")})
+    canonical_stop = map_canonical_stop_reason(
+        stage143=source.get("stage143_packet_budget", {}) if isinstance(source.get("stage143_packet_budget", {}), dict) else {},
+        stage151=source.get("stage151_tool_decision", {}) if isinstance(source.get("stage151_tool_decision", {}), dict) else {},
+        stage152=loop,
+        stage153=source.get("stage153_agent_event_stream", {}) if isinstance(source.get("stage153_agent_event_stream", {}), dict) else {},
+    )
+    events.append(
+        {
+            "event": "stop",
+            "reason": canonical_stop["canonical_stop_reason"],
+            "source": canonical_stop["canonical_stop_source"],
+            "raw_reason": canonical_stop["raw_stop_reason"],
+        }
+    )
     events.append({"event": "final", "summary": final_text})
     return {
         "schema": AGENT_EVENT_STREAM_SCHEMA,

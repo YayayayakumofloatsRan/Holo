@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import compact_text, stable_digest, utc_now
+from .safe_command_policy import parse_allowed_command
 
 ENGINEERING_ACTION_SCHEMA = "holo.stage154.engineering_action.v1"
 
@@ -314,7 +315,7 @@ def test_run(repo_root: str | os.PathLike[str], command: str, *, timeout_seconds
     started = time.perf_counter()
     root = _repo_root(repo_root)
     current = str(command or "").strip()
-    reason = _dangerous_command_reason(current)
+    argv, reason = parse_allowed_command(current, repo_root=root)
     if reason:
         return _action_row(
             action_type="test_run",
@@ -333,9 +334,8 @@ def test_run(repo_root: str | os.PathLike[str], command: str, *, timeout_seconds
         )
     try:
         result = subprocess.run(
-            current,
+            argv,
             cwd=root,
-            shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
