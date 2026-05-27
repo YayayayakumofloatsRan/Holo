@@ -264,6 +264,12 @@ Stage175: market research live smoke
 - Includes a weak third-party-source fixture that must fail rather than being promoted as a ready market-research report.
 - Verification on `2026-05-27`: targeted Stage175 `8 passed`, market stack `24 passed`, runtime `92 passed`, full regression `833 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage176: market research domain benchmark
+- Added an adversarial domain benchmark over Stage175 live-smoke results.
+- The benchmark covers primary SEC-like evidence, third-party source pollution, missing filing sections, metric conflicts, period mismatch, and web-only/no-filing-text cases.
+- Adds explicit domain gates for source authority, filing text presence, filing coverage, metric consistency, period alignment, unsupported claims, and agent trace validity, plus a naive web-overclaim baseline.
+- Verification on `2026-05-27`: targeted Stage176 `10 passed`, market stack `44 passed`, runtime `92 passed`, full regression `843 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

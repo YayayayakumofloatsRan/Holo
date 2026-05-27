@@ -54,6 +54,7 @@ from .stage168_source_authority import run_source_authority_audit
 from .stage169_market_research_pack import run_market_research_pack_bundle
 from .stage173_market_research_report import run_market_research_report_bundle
 from .stage175_market_research_live_smoke import run_market_research_live_smoke
+from .stage176_market_research_domain_benchmark import run_market_research_domain_benchmark
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
@@ -9415,6 +9416,19 @@ def command_run_market_research_live_smoke(
     return 0
 
 
+def command_run_market_research_domain_benchmark(
+    *,
+    output: str,
+    dry_run: bool,
+    fail_under: float | None,
+) -> int:
+    report = run_market_research_domain_benchmark(output=output, dry_run=dry_run, fail_under=fail_under)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_under is not None and bool(report.get("fail_under_triggered", False)):
+        return 1
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
@@ -10669,6 +10683,13 @@ def main(argv: list[str] | None = None) -> int:
     market_research_live_smoke_parser.add_argument("--output", required=True)
     market_research_live_smoke_parser.add_argument("--dry-run", action="store_true")
     market_research_live_smoke_parser.add_argument("--fail-under", type=float, default=None)
+    market_research_domain_parser = subparsers.add_parser(
+        "run-market-research-domain-bench",
+        help="Write the Stage176 market research domain benchmark artifacts",
+    )
+    market_research_domain_parser.add_argument("--output", required=True)
+    market_research_domain_parser.add_argument("--dry-run", action="store_true")
+    market_research_domain_parser.add_argument("--fail-under", type=float, default=None)
     project_state_parser = subparsers.add_parser("project-state", help="Inspect the Stage155 project state graph")
     project_state_parser.add_argument("--project", required=True)
     project_state_parser.add_argument("--summary", action="store_true")
@@ -11744,6 +11765,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "run-market-research-live-smoke":
         return command_run_market_research_live_smoke(
+            output=args.output,
+            dry_run=args.dry_run,
+            fail_under=args.fail_under,
+        )
+    if args.command == "run-market-research-domain-bench":
+        return command_run_market_research_domain_benchmark(
             output=args.output,
             dry_run=args.dry_run,
             fail_under=args.fail_under,

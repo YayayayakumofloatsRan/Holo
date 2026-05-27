@@ -131,6 +131,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 126. `docs/ENGINEERING_HANDOFF_STAGE174.md`
 127. `docs/STAGE175_MARKET_RESEARCH_LIVE_SMOKE.md`
 128. `docs/ENGINEERING_HANDOFF_STAGE175.md`
+129. `docs/STAGE176_MARKET_RESEARCH_DOMAIN_BENCHMARK.md`
+130. `docs/ENGINEERING_HANDOFF_STAGE176.md`
 
 ## What This Document Must Cover
 - current live state
@@ -145,9 +147,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage175-market-research-live-smoke`.
+- The current milestone tag is `stage176-market-research-domain-benchmark`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage175 Market Research Live Smoke: Holo can now run deterministic market-research live-smoke fixtures through model-proposed native tool calls, host report action execution, FSM stop validation, event traces, scorecards, artifacts, and Stage135 topology without live provider or network requirements.
+- Current focus is Stage176 Market Research Domain Benchmark: Holo now evaluates the Stage175 market-research agent path against adversarial evidence cases for primary-source authority, filing coverage, metric conflicts, period mismatch, missing filing text, naive web-overclaim, and report readiness without live provider or network requirements.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
