@@ -431,6 +431,12 @@ Stage203: dossier resume live trace
 - Stage135 topology now counts dossier-resume trace events through `dossier_resume_trace_event_count`.
 - Verification on `2026-05-28`: targeted `5 passed`.
 
+Stage204: market research agent trajectory
+- Added `holo.stage204.market_research_agent_trajectory.v1` to unify persisted dossier resume, Stage195 continuation rounds, and action/observation stop state into one public trajectory.
+- `market_research_dossier_resume(max_actions>1)` can now continue through bounded market-research rounds such as `web_search -> market_research_pack -> market_research_report`.
+- Stage153 renders `[market_trajectory]` rows, Stage152 public metadata preserves the trajectory, and Stage135 exposes `market_research_agent_trajectory` metrics.
+- Verification on `2026-05-28`: targeted `5 passed`; neighbor stack `33 passed`.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

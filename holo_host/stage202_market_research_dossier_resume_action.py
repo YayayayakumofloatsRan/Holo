@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from .common import compact_text, stable_digest, utc_now
 from .kernel_metadata_sanitizer import sanitize_public_metadata
-from .market_research_dossier_registry import resume_latest_market_research_dossier
+from .market_research_agent_trajectory import run_market_research_dossier_agent_trajectory
 
 STAGE202_MARKET_RESEARCH_DOSSIER_RESUME_ACTION_SCHEMA = "holo.stage202.market_research_dossier_resume_action.v1"
 
@@ -37,7 +37,7 @@ def execute_market_research_dossier_resume_action(
     project_key = str(args.get("project_key", "") or "")
     query = str(args.get("query", args.get("question", "")) or "")
     max_action_count = int(args.get("max_actions", max_actions) or max_actions or 1)
-    registry = resume_latest_market_research_dossier(
+    trajectory = run_market_research_dossier_agent_trajectory(
         state_dir=_state_dir(state_dir),
         thread_key=thread_key,
         project_key=project_key,
@@ -47,8 +47,11 @@ def execute_market_research_dossier_resume_action(
         open_page_fn=open_page_fn,
         max_actions=max(0, min(max_action_count, 4)),
     )
+    registry = dict(trajectory.get("stage201_market_research_dossier_registry", {}) or {})
     status = str(registry.get("status", "") or "missing")
     resume = dict(registry.get("stage200_market_research_dossier_resume", {}) or {})
+    if str(trajectory.get("status", "") or "") == "ready":
+        status = "ready"
     action_type = str(resume.get("selected_action", "") or "")
     record = {
         "schema": STAGE202_MARKET_RESEARCH_DOSSIER_RESUME_ACTION_SCHEMA,
@@ -72,6 +75,17 @@ def execute_market_research_dossier_resume_action(
             "schema": STAGE202_MARKET_RESEARCH_DOSSIER_RESUME_ACTION_SCHEMA,
             "status": status,
             "stage201_market_research_dossier_registry": registry,
+            "stage204_market_research_agent_trajectory": trajectory,
+            "stage195_market_research_continuation_loop": dict(trajectory.get("stage195_market_research_continuation_loop", {}) or {}),
+            "web_observation_ledger": [dict(row) for row in list(trajectory.get("web_observation_ledger", []) or []) if isinstance(row, dict)],
+            "market_research_pack_ledger": [
+                dict(row) for row in list(trajectory.get("market_research_pack_ledger", []) or []) if isinstance(row, dict)
+            ],
+            "market_research_report_ledger": [
+                dict(row) for row in list(trajectory.get("market_research_report_ledger", []) or []) if isinstance(row, dict)
+            ],
+            "stage169_market_research_pack": dict(trajectory.get("stage169_market_research_pack", {}) or {}),
+            "stage173_market_research_report": dict(trajectory.get("stage173_market_research_report", {}) or {}),
             "market_research_dossier_resume_ledger": [record],
             "tool_observation_ledger": [
                 {

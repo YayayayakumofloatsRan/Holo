@@ -587,6 +587,25 @@ def execute_deepseek_native_tool_call(
             "stage201_market_research_dossier_registry": dict(result.get("stage201_market_research_dossier_registry", {}))
             if isinstance(result.get("stage201_market_research_dossier_registry", {}), dict)
             else {},
+            "stage204_market_research_agent_trajectory": dict(result.get("stage204_market_research_agent_trajectory", {}))
+            if isinstance(result.get("stage204_market_research_agent_trajectory", {}), dict)
+            else {},
+            "stage195_market_research_continuation_loop": dict(result.get("stage195_market_research_continuation_loop", {}))
+            if isinstance(result.get("stage195_market_research_continuation_loop", {}), dict)
+            else {},
+            "web_observation_ledger": [dict(row) for row in list(result.get("web_observation_ledger", []) or []) if isinstance(row, dict)],
+            "market_research_pack_ledger": [
+                dict(row) for row in list(result.get("market_research_pack_ledger", []) or []) if isinstance(row, dict)
+            ],
+            "market_research_report_ledger": [
+                dict(row) for row in list(result.get("market_research_report_ledger", []) or []) if isinstance(row, dict)
+            ],
+            "stage169_market_research_pack": dict(result.get("stage169_market_research_pack", {}))
+            if isinstance(result.get("stage169_market_research_pack", {}), dict)
+            else {},
+            "stage173_market_research_report": dict(result.get("stage173_market_research_report", {}))
+            if isinstance(result.get("stage173_market_research_report", {}), dict)
+            else {},
             "market_research_dossier_resume_ledger": ledger,
             "tool_message": _tool_result_message(
                 call_id,
@@ -594,6 +613,9 @@ def execute_deepseek_native_tool_call(
                     "tool": name,
                     "status": str(primary.get("status", "") or ""),
                     "market_research_dossier_resume_ledger": ledger,
+                    "stage204_market_research_agent_trajectory": dict(result.get("stage204_market_research_agent_trajectory", {}))
+                    if isinstance(result.get("stage204_market_research_agent_trajectory", {}), dict)
+                    else {},
                 },
             ),
             "tool_observation_ledger": tool_ledger,
@@ -693,7 +715,9 @@ def run_deepseek_native_tool_loop(
     market_research_dossier_resume_ledger: list[dict[str, Any]] = []
     stage169_market_research_pack: dict[str, Any] = {}
     stage173_market_research_report: dict[str, Any] = {}
+    stage195_market_research_continuation_loop: dict[str, Any] = {}
     stage201_market_research_dossier_registry: dict[str, Any] = {}
+    stage204_market_research_agent_trajectory: dict[str, Any] = {}
     filing_text_retrieval: dict[str, Any] = {}
     time_observation: dict[str, Any] = {}
     stop_reason = "no_tool_calls"
@@ -749,8 +773,12 @@ def run_deepseek_native_tool_loop(
                 stage169_market_research_pack = dict(result.get("stage169_market_research_pack", {}))
             if isinstance(result.get("stage173_market_research_report", {}), dict) and result.get("stage173_market_research_report"):
                 stage173_market_research_report = dict(result.get("stage173_market_research_report", {}))
+            if isinstance(result.get("stage195_market_research_continuation_loop", {}), dict) and result.get("stage195_market_research_continuation_loop"):
+                stage195_market_research_continuation_loop = dict(result.get("stage195_market_research_continuation_loop", {}))
             if isinstance(result.get("stage201_market_research_dossier_registry", {}), dict) and result.get("stage201_market_research_dossier_registry"):
                 stage201_market_research_dossier_registry = dict(result.get("stage201_market_research_dossier_registry", {}))
+            if isinstance(result.get("stage204_market_research_agent_trajectory", {}), dict) and result.get("stage204_market_research_agent_trajectory"):
+                stage204_market_research_agent_trajectory = dict(result.get("stage204_market_research_agent_trajectory", {}))
             if isinstance(result.get("filing_text_retrieval", {}), dict) and result.get("filing_text_retrieval"):
                 filing_text_retrieval = dict(result.get("filing_text_retrieval", {}))
             if isinstance(result.get("time_observation", {}), dict) and result.get("time_observation"):
@@ -822,7 +850,9 @@ def run_deepseek_native_tool_loop(
         "market_research_dossier_resume_ledger": market_research_dossier_resume_ledger,
         "stage169_market_research_pack": stage169_market_research_pack,
         "stage173_market_research_report": stage173_market_research_report,
+        "stage195_market_research_continuation_loop": stage195_market_research_continuation_loop,
         "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
+        "stage204_market_research_agent_trajectory": stage204_market_research_agent_trajectory,
         "filing_text_retrieval": filing_text_retrieval,
         "time_observation": time_observation,
         "grounding": grounding,

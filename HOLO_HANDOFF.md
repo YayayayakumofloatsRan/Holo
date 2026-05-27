@@ -187,6 +187,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 182. `docs/ENGINEERING_HANDOFF_STAGE202.md`
 183. `docs/STAGE203_DOSSIER_RESUME_LIVE_TRACE.md`
 184. `docs/ENGINEERING_HANDOFF_STAGE203.md`
+185. `docs/STAGE204_MARKET_RESEARCH_AGENT_TRAJECTORY.md`
+186. `docs/ENGINEERING_HANDOFF_STAGE204.md`
 
 ## What This Document Must Cover
 - current live state
@@ -201,12 +203,13 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage203-dossier-resume-live-trace`.
+- The current milestone tag is `stage204-market-research-agent-trajectory`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage203 Dossier Resume Live Trace: Holo now exposes persisted market-research dossier continuation as a model-visible host action and renders the model decision, host action, observation, registry lookup, resume ledger count, and stop reason in the interactive CLI trace.
+- Current focus is Stage204 Market Research Agent Trajectory: Holo now lets a model-selected `market_research_dossier_resume` action continue a persisted dossier through bounded Stage195 market-research rounds, then renders the multi-action trajectory in CLI and topology metadata.
 - Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage202 verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage203 verification on `2026-05-28`: targeted live-trace suite `5 passed`.
+- Stage204 verification on `2026-05-28`: targeted trajectory suite `5 passed`; neighbor stack `33 passed`.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

@@ -458,6 +458,29 @@ def _stage201_market_research_registry_events(payload: dict[str, Any]) -> list[d
     ]
 
 
+def _stage204_market_research_trajectory_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    report = payload.get("stage204_market_research_agent_trajectory", {})
+    if not isinstance(report, dict):
+        return []
+    events: list[dict[str, Any]] = []
+    for row in list(report.get("trajectory_rows", []) or [])[:10]:
+        if not isinstance(row, dict):
+            continue
+        events.append(
+            {
+                "event": "market_trajectory",
+                "step_index": int(row.get("step_index", len(events) + 1) or len(events) + 1),
+                "phase": str(row.get("phase", "") or ""),
+                "action_type": str(row.get("action_type", "") or ""),
+                "status": str(row.get("status", "") or ""),
+                "observation_count": int(row.get("observation_count", 0) or 0),
+                "source_count": int(row.get("source_count", 0) or 0),
+                "stop_reason": str(row.get("canonical_stop_reason", "") or ""),
+            }
+        )
+    return events
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -703,6 +726,7 @@ def build_agent_event_stream(
         events.extend(_stage199_market_research_dossier_events(source))
         events.extend(_stage200_market_research_resume_events(source))
         events.extend(_stage201_market_research_registry_events(source))
+        events.extend(_stage204_market_research_trajectory_events(source))
         events.append(
             {
                 "event": "stop",
@@ -759,6 +783,7 @@ def build_agent_event_stream(
     events.extend(_stage199_market_research_dossier_events(source))
     events.extend(_stage200_market_research_resume_events(source))
     events.extend(_stage201_market_research_registry_events(source))
+    events.extend(_stage204_market_research_trajectory_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -991,6 +1016,12 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
             lines.append(
                 f"[market_registry] status={item.get('status', '')} lookup={item.get('lookup', '')} "
                 f"action={item.get('action', '') or 'none'}{resume_suffix}{ledger_suffix} stop={item.get('stop_reason', '')}"
+            )
+        elif event == "market_trajectory":
+            lines.append(
+                f"[market_trajectory] step={item.get('step_index', 0)} action={item.get('action_type', '') or 'none'} "
+                f"phase={item.get('phase', '')} status={item.get('status', '')} "
+                f"obs={item.get('observation_count', 0)} sources={item.get('source_count', 0)} stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
