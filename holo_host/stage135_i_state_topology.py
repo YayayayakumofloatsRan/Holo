@@ -207,6 +207,7 @@ def build_stage135_i_state_topology(
     stage161_model_tool_arbitration: dict[str, Any] | None = None,
     stage170_market_research_gate: dict[str, Any] | None = None,
     market_research_pack_ledger: list[dict[str, Any]] | None = None,
+    filing_text_retrieval: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -248,6 +249,7 @@ def build_stage135_i_state_topology(
     model_arbitration = _dict(stage161_model_tool_arbitration or packet.get("stage161_model_tool_arbitration", {}))
     market_research_gate = _dict(stage170_market_research_gate or packet.get("stage170_market_research_gate", {}))
     market_research_ledger = _list_dicts(market_research_pack_ledger or packet.get("market_research_pack_ledger", []))
+    filing_retrieval = _dict(filing_text_retrieval or packet.get("filing_text_retrieval", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -746,6 +748,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge("stage164_source_synthesis", "stage165_answer_citation_formatter", relation="formats_cited_answer", weight=0.54, summary="source synthesis is converted into a visible cited answer"))
         edges.append(_edge("stage165_answer_citation_formatter", "state_delta", relation="reports_cited_evidence", weight=0.38, summary="final answer can expose source URLs and bounded support status"))
 
+    if filing_retrieval:
+        retrieval_status = str(filing_retrieval.get("status", "") or "unknown")
+        retrieval_source = str(filing_retrieval.get("retrieval_source", "") or "")
+        text_chars = int(filing_retrieval.get("filing_text_char_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage172_filing_text_retrieval",
+                "filing text retrieval",
+                channel="filing_text_retrieval",
+                kind="tool_observation",
+                x=0.73,
+                y=0.31,
+                weight=0.72 if retrieval_status == "ok" else 0.24,
+                summary=f"status={retrieval_status}; source={retrieval_source}; chars={text_chars}",
+            )
+        )
+        source = "stage163_page_evidence_verifier" if "page_evidence" in retrieval_source else "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage172_filing_text_retrieval", relation="extracts_filing_text", weight=0.5, summary="authoritative page evidence is converted into filing text"))
+        target = "stage171_market_research_pack_action" if market_research_ledger else "state_delta"
+        edges.append(_edge("stage172_filing_text_retrieval", target, relation="feeds_market_research_pack", weight=0.51, summary="filing text feeds market-research pack construction"))
+
     if market_research_ledger:
         first_market = dict(market_research_ledger[0])
         action_status = str(first_market.get("status", "") or "unknown")
@@ -1057,6 +1080,10 @@ def build_stage135_i_state_topology(
                 ]
             ),
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
+            "filing_text_retrieval_node_count": sum(1 for node in nodes if node["channel"] == "filing_text_retrieval"),
+            "filing_text_retrieval_status": str(filing_retrieval.get("status", "") or "") if filing_retrieval else "",
+            "filing_text_retrieval_source": str(filing_retrieval.get("retrieval_source", "") or "") if filing_retrieval else "",
+            "filing_text_retrieval_char_count": int(filing_retrieval.get("filing_text_char_count", 0) or 0) if filing_retrieval else 0,
             "market_research_pack_action_node_count": sum(1 for node in nodes if node["channel"] == "market_research_pack_action"),
             "market_research_pack_action_status": str(market_research_ledger[0].get("status", "") or "") if market_research_ledger else "",
             "market_research_pack_action_pack_status": str(market_research_ledger[0].get("pack_status", "") or "") if market_research_ledger else "",
@@ -1303,6 +1330,49 @@ def attach_stage171_market_research_action_topology(
     metrics["market_research_pack_action_status"] = str(ledger[0].get("status", "") or "")
     metrics["market_research_pack_action_pack_status"] = str(ledger[0].get("pack_status", "") or "")
     metrics["market_research_pack_action_evidence_count"] = int(ledger[0].get("evidence_item_count", 0) or 0)
+    payload["metrics"] = metrics
+    return payload
+
+
+def attach_stage172_filing_text_retrieval_topology(
+    topology: dict[str, Any] | None,
+    filing_text_retrieval: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    retrieval = _dict(filing_text_retrieval)
+    if not payload.get("schema") or not retrieval:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if not any(isinstance(node, dict) and node.get("id") == "stage172_filing_text_retrieval" for node in nodes):
+        retrieval_status = str(retrieval.get("status", "") or "unknown")
+        retrieval_source = str(retrieval.get("retrieval_source", "") or "")
+        text_chars = int(retrieval.get("filing_text_char_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage172_filing_text_retrieval",
+                "filing text retrieval",
+                channel="filing_text_retrieval",
+                kind="tool_observation",
+                x=0.73,
+                y=0.31,
+                weight=0.72 if retrieval_status == "ok" else 0.24,
+                summary=f"status={retrieval_status}; source={retrieval_source}; chars={text_chars}",
+            )
+        )
+        node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+        target = "stage171_market_research_pack_action" if "stage171_market_research_pack_action" in node_ids else "state_delta"
+        edges.append(_edge("external_user_input", "stage172_filing_text_retrieval", relation="extracts_filing_text", weight=0.5, summary="authoritative page evidence is converted into filing text"))
+        edges.append(_edge("stage172_filing_text_retrieval", target, relation="feeds_market_research_pack", weight=0.51, summary="filing text feeds market-research pack construction"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["filing_text_retrieval_node_count"] = sum(1 for node in nodes if isinstance(node, dict) and node.get("channel") == "filing_text_retrieval")
+    metrics["filing_text_retrieval_status"] = str(retrieval.get("status", "") or "")
+    metrics["filing_text_retrieval_source"] = str(retrieval.get("retrieval_source", "") or "")
+    metrics["filing_text_retrieval_char_count"] = int(retrieval.get("filing_text_char_count", 0) or 0)
     payload["metrics"] = metrics
     return payload
 

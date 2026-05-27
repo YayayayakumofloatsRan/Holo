@@ -449,6 +449,7 @@ def execute_deepseek_native_tool_call(
             arguments,
             network_enabled=network_enabled,
             web_observation_ledger=arguments.get("web_observation_ledger", []),
+            open_page_fn=open_page_fn,
         )
         ledger = [dict(row) for row in list(result.get("market_research_pack_ledger", []) or []) if isinstance(row, dict)]
         tool_ledger = [dict(row) for row in list(result.get("tool_observation_ledger", []) or []) if isinstance(row, dict)]
@@ -467,6 +468,9 @@ def execute_deepseek_native_tool_call(
             ),
             "stage169_market_research_pack": dict(result.get("stage169_market_research_pack", {}))
             if isinstance(result.get("stage169_market_research_pack", {}), dict)
+            else {},
+            "filing_text_retrieval": dict(result.get("filing_text_retrieval", {}))
+            if isinstance(result.get("filing_text_retrieval", {}), dict)
             else {},
             "market_research_pack_ledger": ledger,
             "tool_message": _tool_result_message(
@@ -570,6 +574,7 @@ def run_deepseek_native_tool_loop(
     memory_observation_ledger: list[dict[str, Any]] = []
     market_research_pack_ledger: list[dict[str, Any]] = []
     stage169_market_research_pack: dict[str, Any] = {}
+    filing_text_retrieval: dict[str, Any] = {}
     time_observation: dict[str, Any] = {}
     stop_reason = "no_tool_calls"
     final_request_sent = False
@@ -615,6 +620,8 @@ def run_deepseek_native_tool_loop(
             )
             if isinstance(result.get("stage169_market_research_pack", {}), dict) and result.get("stage169_market_research_pack"):
                 stage169_market_research_pack = dict(result.get("stage169_market_research_pack", {}))
+            if isinstance(result.get("filing_text_retrieval", {}), dict) and result.get("filing_text_retrieval"):
+                filing_text_retrieval = dict(result.get("filing_text_retrieval", {}))
             if isinstance(result.get("time_observation", {}), dict) and result.get("time_observation"):
                 time_observation = dict(result.get("time_observation", {}))
         tool_messages.extend(round_tool_messages)
@@ -681,6 +688,7 @@ def run_deepseek_native_tool_loop(
         "memory_observation_ledger": memory_observation_ledger,
         "market_research_pack_ledger": market_research_pack_ledger,
         "stage169_market_research_pack": stage169_market_research_pack,
+        "filing_text_retrieval": filing_text_retrieval,
         "time_observation": time_observation,
         "grounding": grounding,
         "live_trace": live_trace,

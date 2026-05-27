@@ -240,6 +240,12 @@ Stage171: market research pack action
 - Stage153 event streams and Stage135 topology expose the market-research pack action without provider model paths, memory writes, WeChat starts, or transport widening.
 - Verification on `2026-05-27`: targeted `8 passed`, market stack `55 passed`, runtime `110 passed`, full regression `802 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage172: filing text retrieval
+- Added host-side filing text retrieval for market-research packs.
+- Stage171 can now consume existing Stage163 page evidence or open authoritative source URLs to extract filing text before building a Stage169 pack.
+- Stage152, Stage153, reply metadata, archive metadata, and Stage135 topology expose `filing_text_retrieval` without provider model paths, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted `15 passed`, market stack `62 passed`, runtime `110 passed`, full regression `809 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

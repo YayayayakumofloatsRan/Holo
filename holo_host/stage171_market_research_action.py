@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from .common import compact_text, stable_digest, utc_now
 from .stage169_market_research_pack import build_market_research_pack
+from .stage172_filing_text_retrieval import retrieve_filing_text
 
 STAGE171_MARKET_RESEARCH_ACTION_SCHEMA = "holo.stage171.market_research_pack_action.v1"
 STAGE171_MARKET_RESEARCH_LEDGER_SCHEMA = "holo.stage171.market_research_pack_ledger.v1"
@@ -66,8 +67,10 @@ def _ledger_row(
     pack: dict[str, Any] | None = None,
     failure_reasons: list[str] | None = None,
     source_urls: list[str] | None = None,
+    filing_text_retrieval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pack = dict(pack or {})
+    retrieval = dict(filing_text_retrieval or {})
     return {
         "schema": STAGE171_MARKET_RESEARCH_LEDGER_SCHEMA,
         "action_id": action_id,
@@ -80,8 +83,13 @@ def _ledger_row(
         "failure_reasons": list(failure_reasons if failure_reasons is not None else pack.get("failure_reasons", []) or []),
         "evidence_item_count": int(pack.get("evidence_item_count", 0) or 0),
         "source_urls": list(source_urls or []),
+        "filing_text_retrieval_id": str(retrieval.get("retrieval_id", "") or ""),
+        "filing_text_retrieval_status": str(retrieval.get("status", "") or ""),
+        "filing_text_retrieval_source": str(retrieval.get("retrieval_source", "") or ""),
+        "filing_text_char_count": int(retrieval.get("filing_text_char_count", 0) or 0),
         "observed_at": utc_now(),
         **({"stage169_market_research_pack": pack} if pack else {}),
+        **({"filing_text_retrieval": retrieval} if retrieval else {}),
     }
 
 
@@ -91,6 +99,7 @@ def execute_market_research_pack_action(
     network_enabled: bool,
     web_observation_ledger: Any = None,
     filing_text: str | None = None,
+    open_page_fn: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Execute the read-only market-research pack host action.
 
@@ -107,36 +116,34 @@ def execute_market_research_pack_action(
     action_id = "stage171_market_research_pack:" + stable_digest(query, filing_type, text[:200], limit=12)
     source_urls = _source_urls(web_rows)
 
-    if not network_enabled and not text and not web_rows:
-        ledger = _ledger_row(
-            action_id=action_id,
-            query=query,
-            filing_type=filing_type,
-            status="rejected_network_disabled",
-            failure_reasons=["network_disabled"],
-            source_urls=[],
-        )
-        return {
-            "schema": STAGE171_MARKET_RESEARCH_ACTION_SCHEMA,
-            "status": "rejected",
-            "action_id": action_id,
-            "market_research_pack_ledger": [ledger],
-            "tool_observation_ledger": [market_research_pack_ledger_to_tool_observation(ledger)],
-        }
+    retrieval = retrieve_filing_text(
+        query=query,
+        web_observation_ledger=web_rows,
+        network_enabled=network_enabled,
+        filing_text=text,
+        open_page_fn=open_page_fn,
+    )
+    text = str(retrieval.get("filing_text", "") or "")
+    if retrieval.get("source_url") and retrieval["source_url"] not in source_urls:
+        source_urls.insert(0, retrieval["source_url"])
 
-    if not text:
+    if str(retrieval.get("status", "") or "") != "ok":
+        rejected = str(retrieval.get("status", "") or "") == "rejected_network_disabled"
+        reasons = [str(item) for item in list(retrieval.get("failure_reasons", []) or []) if str(item)]
         ledger = _ledger_row(
             action_id=action_id,
             query=query,
             filing_type=filing_type,
-            status="missing_filing_text",
-            failure_reasons=["filing_text_missing"],
+            status="rejected_network_disabled" if rejected else str(retrieval.get("status", "") or "missing_filing_text"),
+            failure_reasons=reasons or ["filing_text_missing"],
             source_urls=source_urls,
+            filing_text_retrieval=retrieval,
         )
         return {
             "schema": STAGE171_MARKET_RESEARCH_ACTION_SCHEMA,
-            "status": "insufficient",
+            "status": "rejected" if rejected else "insufficient",
             "action_id": action_id,
+            "filing_text_retrieval": retrieval,
             "market_research_pack_ledger": [ledger],
             "tool_observation_ledger": [market_research_pack_ledger_to_tool_observation(ledger)],
         }
@@ -155,11 +162,13 @@ def execute_market_research_pack_action(
         status=status,
         pack=pack,
         source_urls=source_urls,
+        filing_text_retrieval=retrieval,
     )
     return {
         "schema": STAGE171_MARKET_RESEARCH_ACTION_SCHEMA,
         "status": status,
         "action_id": action_id,
+        "filing_text_retrieval": retrieval,
         "stage169_market_research_pack": pack,
         "market_research_pack_ledger": [ledger],
         "tool_observation_ledger": [market_research_pack_ledger_to_tool_observation(ledger)],

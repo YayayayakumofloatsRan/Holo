@@ -146,6 +146,19 @@ def _observation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "result_count": int(row.get("evidence_item_count", 0) or 0),
             }
         )
+    filing = payload.get("filing_text_retrieval", {})
+    if isinstance(filing, dict) and filing:
+        events.append(
+            {
+                "event": "observation",
+                "action_type": "filing_text_retrieval",
+                "status": str(filing.get("status", "") or ""),
+                "query": _compact(filing.get("query", filing.get("source_url", "")), 160),
+                "source_count": 1 if filing.get("source_url") else 0,
+                "source_urls": [str(filing.get("source_url", ""))] if filing.get("source_url") else [],
+                "result_count": int(filing.get("filing_text_char_count", 0) or 0),
+            }
+        )
     return events
 
 
