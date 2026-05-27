@@ -180,6 +180,22 @@ class _Stage208CrawlerBroker(CapabilityBroker):
                 "source_urls": [],
                 "error": "simulated_search_failure",
             }
+        if self.search_mode == "weak_then_official":
+            lowered = query.lower()
+            if "official" not in lowered and "docs" not in lowered and "documentation" not in lowered:
+                return {
+                    "query": query,
+                    "status": "ok",
+                    "provider": "stage208_mock_search",
+                    "results": [
+                        {
+                            "title": "Weak Codex overview",
+                            "url": "https://example.com/codex-overview",
+                            "snippet": "A weak third-party overview.",
+                        }
+                    ],
+                    "source_urls": ["https://example.com/codex-overview"],
+                }
         if "official" not in query.lower() and "docs" not in query.lower() and "codex" not in query.lower():
             return {
                 "query": query,

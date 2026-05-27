@@ -637,6 +637,14 @@ def build_grounded_web_observation_answer(
         for item in list(web_observation_ledger or [])
         if isinstance(item, dict) and str(item.get("status", "") or "") == "ok"
     ]
+    supported_rows = [
+        row
+        for row in rows
+        if str(dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {}).get("status", "") or "") == "supported"
+        or str(dict(row.get("source_synthesis", {}) if isinstance(row.get("source_synthesis", {}), dict) else {}).get("status", "") or "") == "supported"
+    ]
+    if supported_rows:
+        rows = supported_rows
     results: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     for row in rows:

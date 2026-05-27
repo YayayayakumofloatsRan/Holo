@@ -71,6 +71,7 @@ from .live_remediation_continuation import run_remediation_continuation_simulati
 from .agent_capability_gauntlet import run_agent_capability_gauntlet
 from .agent_real_use_drill import run_agent_real_use_drill
 from .agent_console_live_smoke import run_agent_console_live_smoke
+from .agent_console_search_loop_smoke import run_agent_console_search_loop_smoke
 from .live_crawler_search import write_live_crawler_search_artifacts
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
@@ -9621,6 +9622,25 @@ def command_run_agent_console_live_smoke(
     return 0
 
 
+def command_run_agent_console_search_loop_smoke(
+    *,
+    output: str,
+    dry_run: bool,
+    network_enabled: bool,
+    fail_under: float | None,
+) -> int:
+    report = run_agent_console_search_loop_smoke(
+        output=output,
+        dry_run=dry_run,
+        network_enabled=network_enabled,
+        fail_under=fail_under,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_under is not None and bool(report.get("fail_under_triggered", False)):
+        return 1
+    return 0
+
+
 def command_run_live_crawler_search(
     *,
     output: str,
@@ -11027,6 +11047,14 @@ def main(argv: list[str] | None = None) -> int:
     agent_console_live_smoke_parser.add_argument("--dry-run", action="store_true")
     agent_console_live_smoke_parser.add_argument("--network-disabled", action="store_true")
     agent_console_live_smoke_parser.add_argument("--fail-under", type=float, default=None)
+    agent_console_search_loop_smoke_parser = subparsers.add_parser(
+        "run-agent-console-search-loop-smoke",
+        help="Write the Stage209 multi-step agent console search-loop smoke artifacts",
+    )
+    agent_console_search_loop_smoke_parser.add_argument("--output", required=True)
+    agent_console_search_loop_smoke_parser.add_argument("--dry-run", action="store_true")
+    agent_console_search_loop_smoke_parser.add_argument("--network-disabled", action="store_true")
+    agent_console_search_loop_smoke_parser.add_argument("--fail-under", type=float, default=None)
     live_crawler_parser = subparsers.add_parser(
         "run-live-crawler-search",
         help="Write Stage186 bounded live crawler/search artifacts",
@@ -12197,6 +12225,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "run-agent-console-live-smoke":
         return command_run_agent_console_live_smoke(
+            output=args.output,
+            dry_run=args.dry_run,
+            network_enabled=not bool(args.network_disabled),
+            fail_under=args.fail_under,
+        )
+    if args.command == "run-agent-console-search-loop-smoke":
+        return command_run_agent_console_search_loop_smoke(
             output=args.output,
             dry_run=args.dry_run,
             network_enabled=not bool(args.network_disabled),

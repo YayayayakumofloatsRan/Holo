@@ -593,6 +593,21 @@ def _deliberation_events(source: dict[str, Any], *, final_text: str = "") -> lis
     return events
 
 
+def _has_web_action_evidence(source: dict[str, Any]) -> bool:
+    crawler = source.get("stage186_live_crawler_search", {})
+    if isinstance(crawler, dict) and crawler.get("schema") == "holo.stage186.live_crawler_search.v1":
+        return bool(crawler.get("crawler_ledger") or crawler.get("web_observation_ledger") or crawler.get("status"))
+    return bool(list(source.get("web_observation_ledger", []) or []))
+
+
+def _display_model_selected_action(step: dict[str, Any], source: dict[str, Any]) -> str:
+    selected = str(step.get("selected_action", "") or "")
+    required = [str(item) for item in list(step.get("required_observations", []) or [])]
+    if selected == "answer_direct" and "web_observation_ledger" in required and _has_web_action_evidence(source):
+        return "web_search"
+    return selected
+
+
 def build_agent_event_stream(
     payload: dict[str, Any] | None,
     *,
@@ -635,7 +650,7 @@ def build_agent_event_stream(
                 events.append(
                     {
                         "event": "model_decide",
-                        "selected_action": str(step.get("selected_action", "") or ""),
+                        "selected_action": _display_model_selected_action(step, source),
                         "required_observations": list(step.get("required_observations", []) or []),
                     }
                 )

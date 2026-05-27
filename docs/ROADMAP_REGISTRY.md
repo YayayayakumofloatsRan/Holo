@@ -461,6 +461,12 @@ Stage208: agent console live smoke
 - Failed search fixtures report attempted failure instead of future intent, and public artifacts remain free of private reasoning/provider internal messages.
 - Verification on `2026-05-28`: targeted agent-console live-smoke suite `3 passed`; neighbor console/crawler stack `10 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1028 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage209: agent console search loop smoke
+- Added `holo.stage209.agent_console_search_loop_smoke.v1` to verify that a weak first web result does not terminate the agent loop.
+- The dry-run fixture forces weak third-party evidence first, then official OpenAI Codex CLI documentation on the crawler's official/docs follow-up query.
+- Stage153 event rendering now corrects public `model_decide` display when crawler/web observations prove the turn actually executed `web_search` rather than direct answering.
+- Verification on `2026-05-28`: targeted multi-step search-loop/console/crawler stack `16 passed`; runtime `92 passed`; web-grounding neighbor stack `32 passed`; CLI artifact smoke passed; full suite `1030 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
