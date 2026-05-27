@@ -105,6 +105,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 100. `docs/ENGINEERING_HANDOFF_STAGE161.md`
 101. `docs/STAGE162_SEARCH_EVIDENCE_CONTROLLER.md`
 102. `docs/ENGINEERING_HANDOFF_STAGE162.md`
+103. `docs/STAGE163_PAGE_EVIDENCE_VERIFIER.md`
+104. `docs/ENGINEERING_HANDOFF_STAGE163.md`
 
 ## What This Document Must Cover
 - current live state
@@ -119,9 +121,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage162-search-evidence-controller`.
+- The current milestone tag is `stage163-page-evidence-verifier`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage162 Search Evidence Controller: Holo now scores web observations for source sufficiency, expands official/docs/current queries, retries weak search attempts within a bounded budget, records `search_evidence` on web ledgers, renders evidence status in CLI traces, and exposes search sufficiency in Stage135 topology without adding provider paths, memory writes, WeChat starts, or transport authority widening.
+- Current focus is Stage163 Page Evidence Verifier: Holo now opens candidate web-search source pages, extracts title/body text, scores page-body support, records `page_evidence` on web ledgers, renders page evidence in CLI traces, and exposes page verification in Stage135 topology without adding provider paths, memory writes, WeChat starts, or transport authority widening.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -458,6 +460,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage152 adds DeepSeek-native `time_observe`, `web_search`, `open_page`, `find_in_page`, and `memory_recall` tool schemas for live reply packets; DeepSeek tool calls are executed by the WSL Holo host, returned as `role=tool`, and shown in CLI trace as purpose/candidate/tool/observation/evaluate/stop/final without raw reasoning leakage
   - Stage159 hardening verification passed on `2026-05-27`: `tests\test_stage159_kernel_hardening.py` passed with `13 passed in 0.64s`; neighbor regression passed with `45 passed in 12.96s`; runtime regression passed with `91 passed in 25.35s`; full regression passed with `672 passed in 102.82s`; `agent-kernel-readiness` passed with 8 active probes; live-smoke core bench passed and wrote `artifacts\stage159\holo_core_bench_live_smoke.html`; public hygiene passed; `git diff --check` exited 0 with only CRLF normalization warnings.
   - Stage160R adds the depersonalized agent-loop FSM for `holo_cli` and engineering/research/project channels: every mandatory memory/web/engineering/project action must execute, fail, or be rejected before final speech; follow-ups inherit open goals; Stage153 events render `[goal]`, `[decide]`, `[act]`, `[observe]`, `[evaluate]`, `[stop]`, and `[final]`; prompt policy strips WeChat/persona/playful companion language from agent-kernel channels. Verification on `2026-05-27`: Stage160R targeted `16 passed`, neighbor `43 passed`, runtime `91 passed`, full regression `688 passed`, public hygiene passed, and `git diff --check` passed with CRLF normalization warnings only.
+  - Stage163 adds page-body verification after Stage162 web search: candidate URLs are opened, page text is scored against the query, `web_observation_ledger[*].page_evidence` records support/weak/unsupported/rejected status, CLI traces render `page=<status> opened=<count>`, and Stage135 exposes `page_evidence_verifier` metrics. Verification on `2026-05-27`: Stage163 targeted `8 passed`, neighbor `55 passed`, tool-stack regression `86 passed`, runtime `91 passed`, full regression `724 passed`, and live smoke verified `https://developers.openai.com/codex/cli` with `page_status=supported`.
 
 ## Invariants
 - Do not silently change online transport modes

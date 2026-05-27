@@ -192,6 +192,11 @@ Stage162: search evidence controller
 - Stage151 web search now retries query variants through `run_search_evidence_controller`; Stage152 native web calls inherit the same controller because they execute through Stage151 host tools.
 - Web observation rows carry `search_evidence`, Stage153 traces render evidence status/score, and Stage135 topology exposes search sufficiency metrics without adding provider paths, memory writes, WeChat starts, or transport widening.
 
+Stage163: page evidence verifier
+- Added page-body verification on top of Stage162 search result scoring so `web_search` can open candidate source URLs and verify that page text supports the requested query.
+- Web observation rows now carry `page_evidence` with support status, opened count, selected URL, evidence score, supporting snippet, and page observations.
+- Stage151/153 traces render page evidence status, Stage135 topology exposes `page_evidence_verifier`, and the stage preserves the no-provider-path, no-memory-write, no-WeChat-start, no-transport-widening boundary.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

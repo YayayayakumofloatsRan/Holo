@@ -673,6 +673,30 @@ def build_stage135_i_state_topology(
         if agent_loop_fsm:
             edges.append(_edge("stage162_search_evidence_controller", "stage160r_agent_loop_fsm", relation="feeds_stop_reason", weight=0.5, summary="search sufficiency informs host stop and failure reporting"))
 
+    page_scores = [
+        _dict(row.get("page_evidence", {}))
+        for row in web_ledger
+        if isinstance(row, dict) and isinstance(row.get("page_evidence", {}), dict)
+    ]
+    if page_scores:
+        best_page = max(page_scores, key=lambda item: float(item.get("best_evidence_score", 0.0) or 0.0))
+        nodes.append(
+            _node(
+                "stage163_page_evidence_verifier",
+                "page evidence verifier",
+                channel="page_evidence_verifier",
+                kind="observability_gate",
+                x=0.74,
+                y=0.12,
+                weight=max(0.34, min(0.9, float(best_page.get("best_evidence_score", 0.0) or 0.0))),
+                summary=f"best_status={best_page.get('status', '')}; opened={best_page.get('opened_count', 0)}; selected={compact_text(str(best_page.get('selected_url', '') or ''), 90)}",
+            )
+        )
+        source = "stage162_search_evidence_controller" if search_scores else "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage163_page_evidence_verifier", relation="opens_sources_and_verifies_page_body", weight=0.58, summary="candidate search URLs are opened and scored against page-body evidence"))
+        if agent_loop_fsm:
+            edges.append(_edge("stage163_page_evidence_verifier", "stage160r_agent_loop_fsm", relation="feeds_evidence_sufficiency", weight=0.48, summary="page-level support informs final grounding and stop reasoning"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -924,6 +948,10 @@ def build_stage135_i_state_topology(
             "search_evidence_observation_count": len(web_ledger),
             "search_evidence_best_status": str(max(search_scores, key=lambda item: float(item.get("evidence_score", 0.0) or 0.0)).get("status", "") or "") if search_scores else "",
             "search_evidence_best_score": float(max(search_scores, key=lambda item: float(item.get("evidence_score", 0.0) or 0.0)).get("evidence_score", 0.0) or 0.0) if search_scores else 0.0,
+            "page_evidence_verifier_node_count": sum(1 for node in nodes if node["channel"] == "page_evidence_verifier"),
+            "page_evidence_observation_count": len(page_scores),
+            "page_evidence_best_status": str(max(page_scores, key=lambda item: float(item.get("best_evidence_score", 0.0) or 0.0)).get("status", "") or "") if page_scores else "",
+            "page_evidence_best_score": float(max(page_scores, key=lambda item: float(item.get("best_evidence_score", 0.0) or 0.0)).get("best_evidence_score", 0.0) or 0.0) if page_scores else 0.0,
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
@@ -1179,6 +1207,9 @@ const colors = {{
   reaction_kernel: "#a45d55",
   react_loop: "#5268b2",
   context_memory_fabric: "#596d5a",
+  model_tool_arbitration: "#6577a8",
+  search_evidence_controller: "#4b7d87",
+  page_evidence_verifier: "#4d8a6a",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"

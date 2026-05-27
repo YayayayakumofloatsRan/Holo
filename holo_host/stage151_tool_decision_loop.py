@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .common import compact_text, stable_digest, utc_now
 from .stage162_search_evidence_controller import run_search_evidence_controller
+from .stage163_page_evidence_verifier import attach_page_evidence_to_web_observation
 
 STAGE151_TOOL_DECISION_SCHEMA = "holo.stage151.tool_decision.v1"
 STAGE151_LIVE_TRACE_SCHEMA = "holo.stage151.live_trace.v1"
@@ -403,7 +404,17 @@ def execute_tool_decision(
                 web_search_fn=web_search,
                 max_attempts=3,
             )
-            observations.extend([dict(row) for row in list(controller.get("observations", []) or []) if isinstance(row, dict)])
+            for row in [dict(row) for row in list(controller.get("observations", []) or []) if isinstance(row, dict)]:
+                observations.append(
+                    attach_page_evidence_to_web_observation(
+                        row,
+                        open_page_fn=open_page,
+                        network_enabled=network_enabled,
+                        query=str(row.get("query", "") or action.get("query", "") or ""),
+                        user_text=str(decision.get("user_text", "") or action.get("query", "") or ""),
+                        max_pages=2,
+                    )
+                )
         elif action_type == "open_page":
             observations.append(_web_response_to_observation(action, open_page(str(action.get("url", "") or ""))))
         elif action_type == "find_in_page":
@@ -549,6 +560,10 @@ def build_grounded_web_observation_answer(
     results: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     for row in rows:
+        page_evidence = dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {})
+        page_status = str(page_evidence.get("status", "") or "")
+        page_url = str(page_evidence.get("selected_url", "") or "")
+        page_snippet = _compact(page_evidence.get("supporting_snippet", ""), 220)
         for result in list(row.get("results", []) or []):
             if not isinstance(result, dict):
                 continue
@@ -560,7 +575,7 @@ def build_grounded_web_observation_answer(
                 {
                     "title": _compact(result.get("title", "") or url, 90),
                     "url": url,
-                    "snippet": _compact(result.get("snippet", ""), 150),
+                    "snippet": page_snippet if page_status == "supported" and page_snippet and (not page_url or page_url == url) else _compact(result.get("snippet", ""), 150),
                 }
             )
             if len(results) >= max_results:
@@ -667,6 +682,8 @@ def build_stage151_live_trace(
                     "error": _compact(row.get("error", ""), 120),
                     "search_evidence_status": str(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("status", "") or ""),
                     "evidence_score": float(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("evidence_score", 0.0) or 0.0),
+                    "page_evidence_status": str(dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {}).get("status", "") or ""),
+                    "page_opened_count": int(dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {}).get("opened_count", 0) or 0),
                 }
             )
     report = dict(grounding or {})
@@ -705,9 +722,11 @@ def format_stage151_live_trace(payload: dict[str, Any]) -> str:
             source_urls = list(event.get("source_urls", []) or [])
             sources = ",".join(str(url) for url in source_urls[:3])
             source = f" sources={sources}" if sources else ""
+            page_status = str(event.get("page_evidence_status", "") or "")
+            page = f" page={page_status} opened={event.get('page_opened_count', 0)}" if page_status else ""
             lines.append(
                 f"[observation] {event.get('action_type', event.get('tool', ''))} "
-                f"status={event.get('status', '')} results={event.get('result_count', 0)}{source}"
+                f"status={event.get('status', '')} results={event.get('result_count', 0)}{source}{page}"
             )
         elif kind == "grounding":
             missing = ",".join(str(item) for item in list(event.get("missing_observations", []) or [])) or "-"
