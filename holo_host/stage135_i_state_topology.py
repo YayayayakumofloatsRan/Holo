@@ -204,6 +204,7 @@ def build_stage135_i_state_topology(
     stage152_deepseek_tool_loop: dict[str, Any] | None = None,
     stage153_agent_event_stream: dict[str, Any] | None = None,
     stage160r_agent_loop_fsm: dict[str, Any] | None = None,
+    stage161_model_tool_arbitration: dict[str, Any] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
     network_health: dict[str, Any] | None = None,
@@ -241,6 +242,7 @@ def build_stage135_i_state_topology(
     native_tool_loop = _dict(stage152_deepseek_tool_loop or packet.get("stage152_deepseek_tool_loop", {}))
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
     agent_loop_fsm = _dict(stage160r_agent_loop_fsm or packet.get("stage160r_agent_loop_fsm", {}))
+    model_arbitration = _dict(stage161_model_tool_arbitration or packet.get("stage161_model_tool_arbitration", {}))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
     network_state = _dict(network_health or packet.get("network_health", {}))
@@ -624,6 +626,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage160r_agent_loop_fsm", relation="host_controls_mandatory_actions", weight=0.68, summary="mandatory actions must execute, reject, or fail before final speech"))
         edges.append(_edge("stage160r_agent_loop_fsm", "stage153_agent_event_stream" if agent_event_stream else "visible_fast_reaction", relation="drives_auditable_events", weight=0.62, summary="CLI events are rendered from FSM steps, not hidden reasoning"))
 
+    if model_arbitration:
+        selected_action = str(model_arbitration.get("selected_action", "") or "")
+        source = str(model_arbitration.get("source", "") or "model_arbitration")
+        nodes.append(
+            _node(
+                "stage161_model_tool_arbitration",
+                "model-first tool arbitration",
+                channel="model_tool_arbitration",
+                kind="agent_loop",
+                x=0.58,
+                y=0.08,
+                weight=0.72 if selected_action and selected_action != "answer_direct" else 0.46,
+                summary=f"selected={selected_action or 'answer_direct'}; source={source}; host validates and ledgers",
+            )
+        )
+        edges.append(_edge("external_user_input", "stage161_model_tool_arbitration", relation="model_selects_next_action", weight=0.62, summary="the model sees structured context and available actions before proposing the next action"))
+        if agent_loop_fsm:
+            edges.append(_edge("stage161_model_tool_arbitration", "stage160r_agent_loop_fsm", relation="host_fsm_executes_or_rejects", weight=0.68, summary="the host FSM treats the model choice as proposal, not authority"))
+        elif native_tool_loop:
+            edges.append(_edge("stage161_model_tool_arbitration", "stage152_deepseek_tool_loop", relation="maps_native_tool_calls_to_proposals", weight=0.5, summary="DeepSeek native tool calls are normalized as model-proposed actions"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -868,6 +891,9 @@ def build_stage135_i_state_topology(
             "agent_loop_fsm_node_count": sum(1 for node in nodes if node["channel"] == "agent_loop_fsm"),
             "agent_loop_fsm_step_count": int(agent_loop_fsm.get("step_count", 0) or len(_list_dicts(agent_loop_fsm.get("steps", [])))) if agent_loop_fsm else 0,
             "agent_loop_fsm_stop_reason": str(agent_loop_fsm.get("canonical_stop_reason", "") or agent_loop_fsm.get("stop_reason", "") or "") if agent_loop_fsm else "",
+            "model_tool_arbitration_node_count": sum(1 for node in nodes if node["channel"] == "model_tool_arbitration"),
+            "model_tool_arbitration_selected_action": str(model_arbitration.get("selected_action", "") or "") if model_arbitration else "",
+            "model_tool_arbitration_source": str(model_arbitration.get("source", "") or "") if model_arbitration else "",
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",

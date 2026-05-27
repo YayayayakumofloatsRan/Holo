@@ -186,6 +186,11 @@ def build_agent_event_stream(
         events: list[dict[str, Any]] = [
             {"event": "goal", "summary": _compact(user_text or source.get("input_summary", ""), 220)}
         ]
+        action_space_count = int(
+            source.get("stage161_tool_action_space_count", fsm.get("stage161_tool_action_space_count", 0)) or 0
+        )
+        if action_space_count:
+            events.append({"event": "action_space", "count": action_space_count})
         for step in list(fsm.get("steps", []) or []):
             if not isinstance(step, dict):
                 continue
@@ -197,6 +202,14 @@ def build_agent_event_stream(
                     {
                         "event": "decide",
                         "action_type": str(step.get("selected_action", "") or ""),
+                        "required_observations": list(step.get("required_observations", []) or []),
+                    }
+                )
+            elif phase == "model_decide":
+                events.append(
+                    {
+                        "event": "model_decide",
+                        "selected_action": str(step.get("selected_action", "") or ""),
                         "required_observations": list(step.get("required_observations", []) or []),
                     }
                 )
@@ -316,6 +329,11 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
         elif event == "candidate":
             need = ",".join(str(x) for x in list(item.get("required_observations", []) or [])) or "-"
             lines.append(f"[candidate] {item.get('action_type', '')} score={item.get('score', 0)} need={need}")
+        elif event == "action_space":
+            lines.append(f"[action_space] count={item.get('count', 0)}")
+        elif event == "model_decide":
+            need = ",".join(str(x) for x in list(item.get("required_observations", []) or [])) or "-"
+            lines.append(f"[model_decide] selected={item.get('selected_action', '')} need={need}")
         elif event == "decide":
             need = ",".join(str(x) for x in list(item.get("required_observations", []) or [])) or "-"
             lines.append(f"[decide] {item.get('action_type', '')} need={need}")

@@ -182,6 +182,11 @@ Stage160R: depersonalized agent-loop FSM
 - Added first-class intent frames and per-thread goal state so memory recall requests run host recall, follow-up turns inherit open goals, and `?` after a failed answer becomes a repair/follow-up path instead of social speculation.
 - Depersonalized `holo_cli`/engineering/research/project prompt policy, rendered Stage153 CLI events from FSM steps, and exposed Stage160R in Stage150/156 context, reply/archive metadata, active thread state, and Stage135 topology without provider calls, memory writes, WeChat starts, or transport widening.
 
+Stage161: model-first tool arbitration
+- Added a structured model-visible tool action space covering direct answer, clarification, memory, time, web, workspace, engineering, git, project-state, and defer actions.
+- Deterministic Stage151 routing now feeds weak `deterministic_hints`; the model proposes the next action, the host validates/executes/rejects, ledgers prove observations, and Stage160R FSM records `model_decide`.
+- CLI event streams render `[action_space]` and `[model_decide]`, Stage135 topology exposes `model_tool_arbitration`, and final claims still require web/time, memory, or engineering ledgers without adding provider paths, memory writes, WeChat starts, or transport widening.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

@@ -91,6 +91,9 @@ from .agent_intent_frame import build_intent_frame
 from .agent_loop_fsm import build_host_memory_recall_ledger, repair_final_with_fsm, run_agent_loop_fsm
 from .context_compiler import compile_context_memory, repair_visible_compact_leak
 from .project_state_graph import ProjectStateGraph, detect_project_state_updates
+from .model_tool_arbitration import derive_arbitration_from_stage152, deterministic_hints_from_stage151
+from .tool_action_space import build_tool_action_space
+from .tool_decision_contract import validate_tool_decision
 from .stage151_live_tool_trace import (
     build_stage151_live_tool_trace,
     evaluate_network_grounding,
@@ -9307,13 +9310,15 @@ class HoloReplyService:
         capability_started_at = time.perf_counter()
         if prebuilt_capability_context:
             capability_context = prebuilt_capability_context
-            stage151_decision = dict(capability_context.get("stage151_tool_decision", {})) if isinstance(capability_context.get("stage151_tool_decision", {}), dict) else {}
-            needs_stage151_web = bool(stage151_decision.get("network_required", False) or stage151_decision.get("selected_actions"))
-            has_stage151_web_observation = bool(list(capability_context.get("web_observation_ledger", []) or []))
-            if needs_stage151_web and not has_stage151_web_observation:
-                capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata, eager_network=True)
         else:
-            capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata)
+            capability_context = self.capabilities.summarize_turn(turn.text, turn.metadata, eager_network=False)
+        capability_context = dict(capability_context)
+        stage161_tool_action_space = build_tool_action_space()
+        capability_context["stage161_tool_action_space"] = stage161_tool_action_space
+        capability_context["stage161_tool_action_space_count"] = len(stage161_tool_action_space)
+        capability_context["stage161_deterministic_hints"] = deterministic_hints_from_stage151(
+            capability_context.get("stage151_tool_decision", {})
+        )
         capability_ms = int((time.perf_counter() - capability_started_at) * 1000)
         if isinstance(capability_context.get("tool_observation_ledger", []), list) and capability_context.get("tool_observation_ledger"):
             sidecar = dict(sidecar)
@@ -9596,6 +9601,25 @@ class HoloReplyService:
             if stage152_memory_rows:
                 sidecar["stage152_memory_observation_ledger"] = stage152_memory_rows
             sidecar["stage152_deepseek_tool_loop"] = stage152_deepseek_tool_loop
+        stage161_model_tool_arbitration = dict(reply_debug.get("stage161_model_tool_arbitration", {})) if isinstance(reply_debug.get("stage161_model_tool_arbitration", {}), dict) else {}
+        if not stage161_model_tool_arbitration:
+            stage161_model_tool_arbitration = derive_arbitration_from_stage152(
+                stage152_deepseek_tool_loop,
+                user_text=turn.text,
+            )
+        stage161_tool_decision_validation = validate_tool_decision(
+            stage161_model_tool_arbitration,
+            stage161_tool_action_space,
+            network_enabled=bool(getattr(self.config.runtime, "network_enabled", False)),
+            workspace_enabled=True,
+        )
+        sidecar["stage161_model_tool_arbitration"] = stage161_model_tool_arbitration
+        sidecar["stage161_tool_decision_validation"] = stage161_tool_decision_validation
+        capability_context = dict(capability_context)
+        capability_context["stage161_model_tool_arbitration"] = stage161_model_tool_arbitration
+        capability_context["stage161_tool_decision_validation"] = stage161_tool_decision_validation
+        reply_debug["stage161_model_tool_arbitration"] = stage161_model_tool_arbitration
+        reply_debug["stage161_tool_decision_validation"] = stage161_tool_decision_validation
         repaired_text = maybe_ground_visible_web_reply(
             user_text=turn.text,
             text=repaired_text,
@@ -9696,6 +9720,8 @@ class HoloReplyService:
         stage160r_agent_loop_fsm = run_agent_loop_fsm(
             intent_frame=stage160r_intent_frame,
             previous_goal_state=previous_goal_state,
+            model_arbitration=stage161_model_tool_arbitration,
+            tool_decision_validation=stage161_tool_decision_validation,
             tool_decision=capability_context.get("stage151_tool_decision", sidecar.get("stage151_tool_decision", {})),
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             memory_observation_ledger=memory_observation_ledger,
@@ -10026,6 +10052,9 @@ class HoloReplyService:
                 "stage160r_intent_frame": stage160r_intent_frame,
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
                 "stage160r_goal_state": stage160r_goal_state,
+                "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
+                "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
+                "stage161_tool_decision_validation": stage161_tool_decision_validation,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
                 "canonical_stop_reason": canonical_stop_reason,
@@ -10115,6 +10144,7 @@ class HoloReplyService:
                 stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
                 stage153_agent_event_stream=stage153_agent_event_stream,
                 stage160r_agent_loop_fsm=stage160r_agent_loop_fsm,
+                stage161_model_tool_arbitration=stage161_model_tool_arbitration,
                 engineering_action_ledger=engineering_action_ledger,
                 project_state_graph=project_state_graph,
                 network_health=network_health,
@@ -10222,6 +10252,9 @@ class HoloReplyService:
                 "stage160r_intent_frame": stage160r_intent_frame,
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
                 "stage160r_goal_state": stage160r_goal_state,
+                "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
+                "stage161_tool_decision_validation": stage161_tool_decision_validation,
+                "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -10336,6 +10369,9 @@ class HoloReplyService:
             "stage160r_intent_frame": stage160r_intent_frame,
             "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
             "stage160r_goal_state": stage160r_goal_state,
+            "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
+            "stage161_tool_decision_validation": stage161_tool_decision_validation,
+            "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
             "stage135_i_state_topology": stage135_i_state_topology,
             "tool_observation_ledger": tool_observation_ledger,
@@ -10511,6 +10547,9 @@ class HoloReplyService:
                 "stage160r_intent_frame": stage160r_intent_frame,
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
                 "stage160r_goal_state": stage160r_goal_state,
+                "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
+                "stage161_tool_decision_validation": stage161_tool_decision_validation,
+                "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_i_state_topology,
                 "tool_observation_ledger": tool_observation_ledger,
@@ -10555,6 +10594,8 @@ class HoloReplyService:
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage160r_intent_frame": stage160r_intent_frame,
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
+                "stage161_tool_decision_validation": stage161_tool_decision_validation,
             },
         )
         return result

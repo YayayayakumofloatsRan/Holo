@@ -142,6 +142,8 @@ def run_agent_loop_fsm(
     *,
     intent_frame: dict[str, Any],
     previous_goal_state: dict[str, Any] | None = None,
+    model_arbitration: dict[str, Any] | None = None,
+    tool_decision_validation: dict[str, Any] | None = None,
     tool_decision: dict[str, Any] | None = None,
     web_observation_ledger: Any = None,
     memory_observation_ledger: Any = None,
@@ -149,19 +151,50 @@ def run_agent_loop_fsm(
     final_text: str = "",
 ) -> dict[str, Any]:
     goal_id = str(intent_frame.get("goal_id", "") or "goal:" + stable_digest(intent_frame, limit=10))
-    mandatory = [str(item) for item in list(intent_frame.get("mandatory_actions", []) or []) if str(item).strip()]
+    arbitration = dict(model_arbitration or {})
+    selected_action = str(arbitration.get("selected_action", "") or "").strip()
+    stage161_model_first = bool(arbitration)
+    if stage161_model_first:
+        if selected_action in {"", "answer_direct"}:
+            mandatory = []
+        elif selected_action in {"ask_clarification", "defer"}:
+            mandatory = [selected_action]
+        else:
+            mandatory = [selected_action]
+    else:
+        mandatory = [str(item) for item in list(intent_frame.get("mandatory_actions", []) or []) if str(item).strip()]
+        selected_action = ",".join(mandatory) if mandatory else "answer_direct"
     required_observations = [str(item) for item in list(intent_frame.get("required_observations", []) or []) if str(item).strip()]
+    if stage161_model_first:
+        for item in list(arbitration.get("required_observations", []) or []):
+            text = str(item or "").strip()
+            if text and text not in required_observations:
+                required_observations.append(text)
     steps: list[dict[str, Any]] = [
         _step(index=0, phase="observe", goal_id=goal_id, required_observations=required_observations, new_information_score=0.1),
-        _step(
-            index=1,
-            phase="decide",
-            goal_id=goal_id,
-            selected_action=",".join(mandatory) if mandatory else "answer_direct",
-            required_observations=required_observations,
-            new_information_score=0.2,
-        ),
     ]
+    if stage161_model_first:
+        steps.append(
+            _step(
+                index=1,
+                phase="model_decide",
+                goal_id=goal_id,
+                selected_action=selected_action or "answer_direct",
+                required_observations=required_observations,
+                new_information_score=float(arbitration.get("confidence", 0.2) or 0.2),
+            )
+        )
+    else:
+        steps.append(
+            _step(
+                index=1,
+                phase="decide",
+                goal_id=goal_id,
+                selected_action=selected_action,
+                required_observations=required_observations,
+                new_information_score=0.2,
+            )
+        )
     stop_reason = "final_answer_ready"
     final_override_text = ""
     unresolved: list[str] = []
@@ -190,6 +223,12 @@ def run_agent_loop_fsm(
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["web_observation_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
             index += 1
             steps.append(_step(index=index, phase="observe_result", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["web_observation_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
+            index += 1
+        elif action in {"ask_clarification", "defer"}:
+            stop_reason = "needs_user_clarification"
+            reason = str(arbitration.get("fallback_if_failed", "") or arbitration.get("why_this_action", "") or action)
+            final_override_text = compact_text(reason, 220) if reason else "I need clarification before continuing this agent task."
+            steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status="skipped", skip_reason=action, required_observations=required_observations, unresolved_items=[action], canonical_stop_reason=stop_reason))
             index += 1
         else:
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status="skipped", skip_reason="host_action_not_implemented", required_observations=required_observations, unresolved_items=[action], canonical_stop_reason="needs_user_clarification"))
@@ -233,6 +272,10 @@ def run_agent_loop_fsm(
         "status": "completed",
         "goal_id": goal_id,
         "intent_type": str(intent_frame.get("intent_type", "") or ""),
+        "stage161_model_first": stage161_model_first,
+        "selected_action": selected_action,
+        "stage161_model_tool_arbitration": arbitration,
+        "stage161_tool_decision_validation": dict(tool_decision_validation or {}),
         "mandatory_actions": mandatory,
         "required_observations": required_observations,
         "step_count": len(steps),

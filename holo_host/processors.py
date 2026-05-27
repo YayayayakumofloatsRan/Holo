@@ -44,6 +44,8 @@ from .stage151_tool_decision_loop import maybe_ground_visible_web_reply
 from .canonical_stop_reason import map_canonical_stop_reason
 from .kernel_metadata_sanitizer import build_public_stage152_report
 from .agent_kernel_prompt_policy import strip_persona_prompt_text
+from .model_tool_arbitration import derive_arbitration_from_stage152
+from .tool_action_space import build_tool_action_space, render_action_space_for_prompt
 from .stage131_continuation import stage131_short_turn_requires_reply
 from .engineering_action_fabric import normalize_engineering_action_ledger
 from .tool_need import classify_tool_need
@@ -1924,6 +1926,14 @@ class CodexCliProcessor:
         prompt = append_stage123_internal_tool_contract(prompt)
         prompt = append_stage124_deep_packet_context(prompt, fast_packet)
         prompt = append_stage135_i_state_contract(prompt, stage135_i_state_prompt_frame)
+        stage161_tool_action_space = list(context.capability_context.get("stage161_tool_action_space", []) or build_tool_action_space())
+        prompt += (
+            "\n\nStage161 Model-First Tool Arbitration:\n"
+            "LLM proposes. Host executes or rejects. Ledger proves. Stop controller closes.\n"
+            "Use deterministic routing only as weak hints; choose from the structured action space when external evidence is needed.\n"
+            + render_action_space_for_prompt(stage161_tool_action_space)
+            + "\nIf you answer directly, do not claim web, memory, file, patch, test, or current evidence unless a ledger is present."
+        )
         prompt = strip_persona_prompt_text(prompt, channel=context.channel)
         lane_config = self.config.processor_fabric.provider_backends.get(lane)
         lane_max_output_tokens = int(getattr(lane_config, "max_output_tokens", 0) or 0)
@@ -2021,8 +2031,22 @@ class CodexCliProcessor:
             if isinstance(stage152_deepseek_tool_loop.get("memory_observation_ledger", []), list):
                 packet_after_tools["stage152_memory_observation_ledger"] = list(stage152_deepseek_tool_loop.get("memory_observation_ledger", []))
             packet_after_tools["stage152_deepseek_tool_loop"] = stage152_deepseek_tool_loop
+            packet_after_tools["stage161_model_tool_arbitration"] = derive_arbitration_from_stage152(
+                stage152_deepseek_tool_loop,
+                user_text=str(context.user_text or ""),
+            )
             context.mind_packet = packet_after_tools
             context.sidecar = packet_after_tools
+        stage161_model_tool_arbitration = dict(context.mind_packet.get("stage161_model_tool_arbitration", {}))
+        if not stage161_model_tool_arbitration:
+            stage161_model_tool_arbitration = derive_arbitration_from_stage152(
+                stage152_deepseek_tool_loop,
+                user_text=str(context.user_text or ""),
+            )
+            packet_after_stage161 = dict(context.mind_packet or context.sidecar)
+            packet_after_stage161["stage161_model_tool_arbitration"] = stage161_model_tool_arbitration
+            context.mind_packet = packet_after_stage161
+            context.sidecar = packet_after_stage161
         memory_observation_ledger = normalize_memory_observation_ledger(
             sidecar=context.mind_packet,
             reply_debug={"recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {}))},
@@ -2132,6 +2156,7 @@ class CodexCliProcessor:
             stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
             stage156_context_compiler=stage156_context_compiler,
             stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
+            stage161_model_tool_arbitration=stage161_model_tool_arbitration,
             engineering_action_ledger=engineering_action_ledger,
             project_state_graph=dict(context.mind_packet.get("project_state_graph", {})),
             canonical_stop=canonical_stop,
@@ -2162,6 +2187,8 @@ class CodexCliProcessor:
                 "agent_tool_loop": dict(result_metadata.get("agent_tool_loop", {})),
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_live_trace": dict(result_metadata.get("stage152_live_trace", {})) if isinstance(result_metadata.get("stage152_live_trace", {}), dict) else {},
+                "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
+                "stage161_tool_action_space_count": len(stage161_tool_action_space),
                 "canonical_stop_reason": canonical_stop["canonical_stop_reason"],
                 "canonical_stop_source": canonical_stop["canonical_stop_source"],
                 "web_observation_ledger": list(result_metadata.get("web_observation_ledger", [])) if isinstance(result_metadata.get("web_observation_ledger", []), list) else [],

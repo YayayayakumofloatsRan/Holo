@@ -99,6 +99,10 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 94. `docs/ENGINEERING_HANDOFF_STAGE158.md`
 95. `docs/STAGE159_AGENT_KERNEL_HARDENING.md`
 96. `docs/ENGINEERING_HANDOFF_STAGE159.md`
+97. `docs/STAGE160R_DEPERSONALIZED_AGENT_LOOP_FSM.md`
+98. `docs/ENGINEERING_HANDOFF_STAGE160R.md`
+99. `docs/STAGE161_MODEL_FIRST_TOOL_ARBITRATION.md`
+100. `docs/ENGINEERING_HANDOFF_STAGE161.md`
 
 ## What This Document Must Cover
 - current live state
@@ -113,9 +117,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage159-agent-kernel-hardening`.
+- The current milestone tag is `stage161-model-first-tool-arbitration`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage159 Agent Kernel hardening: Holo now sanitizes public Stage152 metadata, canonicalizes stop reasons, enforces allowlisted engineering test commands, runs active readiness probes, exposes offline live-smoke core bench fixtures, and records network health metadata without adding live domain work, provider calls, memory writes, WeChat starts, transport authority changes, or approval UI.
+- Current focus is Stage161 Model-First Tool Arbitration: Holo now exposes a structured tool action space to the model, treats deterministic Stage151 routing as weak hints, normalizes DeepSeek native tool calls as model-proposed actions, validates host execution through ledgers, shows `[model_decide]` in CLI traces, and keeps `holo_cli` depersonalized without adding runtime provider paths, memory writes, WeChat starts, or transport authority widening.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
