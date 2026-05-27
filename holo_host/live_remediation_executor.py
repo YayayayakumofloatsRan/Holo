@@ -112,13 +112,17 @@ def execute_live_remediation_actions(
     repo_root: str | Path | None = None,
     network_enabled: bool = False,
     web_search_fn: Callable[[str], dict[str, Any]] | None = None,
+    fallback_search_fns: list[tuple[str, Callable[[str], dict[str, Any]]]] | None = None,
     open_page_fn: Callable[[str], dict[str, Any]] | None = None,
     memory_recall_fn: Callable[[str], dict[str, Any]] | None = None,
     max_actions: int = 1,
 ) -> dict[str, Any]:
     loop = _dict(stage179_live_remediation_loop)
     stage178 = _dict(stage178_evidence_action_remediation)
-    actions = _list_dicts(loop.get("next_action_candidates", []))[: max(0, int(max_actions or 0))]
+    all_actions = _list_dicts(loop.get("next_action_candidates", []))
+    action_budget = max(0, int(max_actions or 0))
+    actions = all_actions[:action_budget]
+    remaining_actions = all_actions[action_budget:]
     issues = _issues_by_id(stage178)
     web_rows: list[dict[str, Any]] = []
     memory_rows: list[dict[str, Any]] = []
@@ -136,18 +140,19 @@ def execute_live_remediation_actions(
                 decision,
                 network_enabled=bool(network_enabled),
                 web_search_fn=web_search_fn,
+                fallback_search_fns=fallback_search_fns,
                 open_page_fn=open_page_fn,
             )
             web_rows.extend(observations)
-            if observations and str(observations[0].get("status", "") or "") == "ok":
+            if any(str(row.get("status", "") or "") == "ok" for row in observations):
                 executed += 1
                 results.append(_action_result(action, status="executed", observation_count=len(observations), stop_reason="final_answer_ready"))
-            elif observations and str(observations[0].get("status", "") or "") == "rejected_network_disabled":
+            elif any(str(row.get("status", "") or "") == "rejected_network_disabled" for row in observations):
                 rejected += 1
                 results.append(_action_result(action, status="rejected", observation_count=len(observations), stop_reason="boundary_or_permission", error="network_disabled"))
             else:
                 failed += 1
-                error = str(observations[0].get("error", "") if observations else "web_search_failed")
+                error = next((str(row.get("error", "") or "") for row in observations if str(row.get("error", "") or "")), "web_search_failed")
                 results.append(_action_result(action, status="failed", observation_count=len(observations), stop_reason="tool_failure_report", error=error))
             continue
         if required_tool == "file_read":
@@ -195,9 +200,22 @@ def execute_live_remediation_actions(
         rejected += 1
         results.append(_action_result(action, status="rejected", stop_reason="boundary_or_permission", error=f"unsupported_required_tool:{required_tool}"))
 
+    result_stops = [str(row.get("canonical_stop_reason", "") or "") for row in results]
     if not actions:
         status = "no_actions"
         stop_reason = str(loop.get("canonical_stop_reason", "") or "final_answer_ready")
+    elif "needs_user_clarification" in result_stops:
+        status = "partial" if executed else "blocked"
+        stop_reason = "needs_user_clarification"
+    elif failed:
+        status = "partial" if executed else "failed"
+        stop_reason = "tool_failure_report"
+    elif "boundary_or_permission" in result_stops:
+        status = "partial" if executed else "blocked"
+        stop_reason = "boundary_or_permission"
+    elif remaining_actions:
+        status = "partial"
+        stop_reason = "budget_exhausted"
     elif executed and not failed and not rejected:
         status = "executed"
         stop_reason = "final_answer_ready"
@@ -218,6 +236,11 @@ def execute_live_remediation_actions(
         "executed_count": executed,
         "rejected_count": rejected,
         "failed_count": failed,
+        "attempted_count": len(actions),
+        "skipped_count": len(remaining_actions),
+        "remaining_action_candidates": remaining_actions,
+        "next_action_required": bool(remaining_actions) or stop_reason in {"needs_user_clarification", "tool_failure_report", "boundary_or_permission", "budget_exhausted"},
+        "continuation_reason": "action_budget_exhausted" if remaining_actions else stop_reason if stop_reason != "final_answer_ready" else "",
         "action_results": results,
         "web_observation_ledger": web_rows,
         "memory_observation_ledger": memory_rows,

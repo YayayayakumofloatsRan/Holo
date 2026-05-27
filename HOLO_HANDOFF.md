@@ -141,6 +141,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 136. `docs/ENGINEERING_HANDOFF_STAGE179.md`
 137. `docs/STAGE180_LIVE_REMEDIATION_EXECUTOR.md`
 138. `docs/ENGINEERING_HANDOFF_STAGE180.md`
+139. `docs/STAGE181_LIVE_REMEDIATION_STRESS.md`
+140. `docs/ENGINEERING_HANDOFF_STAGE181.md`
 
 ## What This Document Must Cover
 - current live state
@@ -155,9 +157,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage180-live-remediation-executor`.
+- The current milestone tag is `stage181-live-remediation-stress`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage180 Live Remediation Executor: Stage179 next-action candidates now execute through existing safe host surfaces and re-enter the FSM as web, memory, or engineering observation ledgers.
+- Current focus is Stage181 Live Remediation Stress: the Stage178 -> Stage179 -> Stage180 action loop now has adversarial stress coverage for fallback recovery, partial execution, missing artifact paths, budget exhaustion, and topology-visible robustness metrics.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

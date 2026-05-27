@@ -225,6 +225,38 @@ def _remediation_success_text(intent_frame: dict[str, Any], remediation_executio
     return "The remediation action was executed and recorded as auditable observation."
 
 
+def _remediation_incomplete_text(intent_frame: dict[str, Any], remediation_execution: dict[str, Any], stop_reason: str) -> str:
+    raw = str(intent_frame.get("raw_user_text_exact", "") or "")
+    wants_zh = any("\u4e00" <= char <= "\u9fff" for char in raw)
+    remaining = _list_dicts(remediation_execution.get("remaining_action_candidates", []))
+    results = _list_dicts(remediation_execution.get("action_results", []))
+    remaining_names = ", ".join(str(action.get("action_type", "") or "") for action in remaining[:4] if str(action.get("action_type", "") or ""))
+    first_error = next((str(row.get("error", "") or "") for row in results if str(row.get("error", "") or "")), "")
+    if stop_reason == "budget_exhausted":
+        detail = remaining_names or "additional remediation actions"
+        if wants_zh:
+            return f"本轮补救动作预算已用完，仍有待执行动作：{compact_text(detail, 220)}。"
+        return f"The remediation action budget is exhausted for this turn; remaining actions: {compact_text(detail, 220)}."
+    if stop_reason == "needs_user_clarification":
+        detail = first_error or remaining_names or "missing action input"
+        if wants_zh:
+            return f"补救动作需要进一步澄清才能继续：{compact_text(detail, 220)}。"
+        return f"The remediation action needs clarification before continuing: {compact_text(detail, 220)}."
+    if stop_reason == "boundary_or_permission":
+        detail = first_error or "host boundary"
+        if wants_zh:
+            return f"补救动作被主机边界拒绝：{compact_text(detail, 220)}。"
+        return f"The remediation action was rejected by a host boundary: {compact_text(detail, 220)}."
+    if stop_reason == "tool_failure_report":
+        detail = first_error or "tool execution failed"
+        if wants_zh:
+            return f"补救动作已经尝试，但工具失败：{compact_text(detail, 220)}。"
+        return f"The remediation action was attempted but the tool failed: {compact_text(detail, 220)}."
+    if wants_zh:
+        return "补救动作尚未完成，不能把当前结果当作最终完成。"
+    return "The remediation action is incomplete, so this turn cannot be treated as fully finalized."
+
+
 def run_agent_loop_fsm(
     *,
     intent_frame: dict[str, Any],
@@ -350,8 +382,9 @@ def run_agent_loop_fsm(
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status="skipped", skip_reason="host_action_not_implemented", required_observations=required_observations, unresolved_items=[action], canonical_stop_reason="needs_user_clarification"))
             index += 1
             stop_reason = "needs_user_clarification"
-    remediation_executed = bool(remediation_execution) and str(remediation_execution.get("status", "") or "") in {"executed", "partial"}
-    if live_remediation and bool(live_remediation.get("blocked", False)) and not remediation_executed:
+    remediation_attempted = bool(remediation_execution) and bool(_list_dicts(remediation_execution.get("action_results", [])))
+    remediation_executed = remediation_attempted and str(remediation_execution.get("status", "") or "") in {"executed", "partial"}
+    if live_remediation and bool(live_remediation.get("blocked", False)) and not remediation_attempted:
         next_actions = _list_dicts(live_remediation.get("next_action_candidates", []))
         selected_next = dict(next_actions[0]) if next_actions else {}
         selected_type = str(selected_next.get("action_type", "") or live_remediation.get("selected_action_type", "") or "remediation")
@@ -390,13 +423,18 @@ def run_agent_loop_fsm(
             )
         )
         index += 1
-    elif remediation_executed:
+    elif remediation_attempted:
         exec_results = _list_dicts(remediation_execution.get("action_results", []))
+        remaining_actions = _list_dicts(remediation_execution.get("remaining_action_candidates", []))
         exec_stop = str(remediation_execution.get("canonical_stop_reason", "") or "final_answer_ready")
         stop_reason = exec_stop if exec_stop in ALLOWED_NEW_STOP_REASONS else "final_answer_ready"
         if stop_reason == "final_answer_ready":
             unresolved = []
             final_override_text = _remediation_success_text(intent_frame, remediation_execution)
+        else:
+            final_override_text = _remediation_incomplete_text(intent_frame, remediation_execution, stop_reason)
+        if remaining_actions:
+            unresolved = [str(action.get("action_type", "") or "") for action in remaining_actions]
         steps.append(
             _step(
                 index=index,
@@ -415,7 +453,7 @@ def run_agent_loop_fsm(
                 ],
                 observation_ids=[str(row.get("action_id", "") or row.get("memory_call_id", "") or row.get("observation_id", "") or "") for row in exec_results],
                 new_information_score=0.76,
-                unresolved_items=[] if stop_reason == "final_answer_ready" else [str(row.get("action_type", "") or "") for row in exec_results],
+                unresolved_items=[] if stop_reason == "final_answer_ready" else [str(action.get("action_type", "") or "") for action in remaining_actions] or [str(row.get("action_type", "") or "") for row in exec_results],
                 canonical_stop_reason=stop_reason,
             )
         )
@@ -465,7 +503,15 @@ def run_agent_loop_fsm(
         "stage178_evidence_action_remediation": remediation_report,
         "stage179_live_remediation_loop": live_remediation,
         "stage180_live_remediation_execution": remediation_execution,
-        "next_action_candidates": [] if remediation_executed and stop_reason == "final_answer_ready" else _list_dicts(live_remediation.get("next_action_candidates", [])) if live_remediation else [],
+        "next_action_candidates": (
+            []
+            if remediation_attempted and stop_reason == "final_answer_ready"
+            else _list_dicts(remediation_execution.get("remaining_action_candidates", []))
+            if remediation_attempted and _list_dicts(remediation_execution.get("remaining_action_candidates", []))
+            else _list_dicts(live_remediation.get("next_action_candidates", []))
+            if live_remediation
+            else []
+        ),
         "mandatory_actions": mandatory,
         "required_observations": required_observations,
         "step_count": len(steps),

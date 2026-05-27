@@ -59,6 +59,7 @@ from .stage177_market_research_remediation import run_market_research_remediatio
 from .evidence_action_remediation import run_evidence_action_remediation
 from .live_remediation_loop import run_live_remediation_simulation
 from .live_remediation_executor import run_live_remediation_execution_simulation
+from .live_remediation_stress import run_live_remediation_stress_simulation
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
@@ -9485,6 +9486,19 @@ def command_run_live_remediation_execution(
     return 0
 
 
+def command_run_live_remediation_stress(
+    *,
+    output: str,
+    dry_run: bool,
+    fail_under: float | None,
+) -> int:
+    report = run_live_remediation_stress_simulation(output=output, dry_run=dry_run, fail_under=fail_under)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_under is not None and bool(report.get("fail_under_triggered", False)):
+        return 1
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
@@ -10774,6 +10788,13 @@ def main(argv: list[str] | None = None) -> int:
     live_remediation_execution_parser.add_argument("--output", required=True)
     live_remediation_execution_parser.add_argument("--dry-run", action="store_true")
     live_remediation_execution_parser.add_argument("--fail-under", type=float, default=None)
+    live_remediation_stress_parser = subparsers.add_parser(
+        "run-live-remediation-stress",
+        help="Write the Stage181 adversarial live remediation stress artifacts",
+    )
+    live_remediation_stress_parser.add_argument("--output", required=True)
+    live_remediation_stress_parser.add_argument("--dry-run", action="store_true")
+    live_remediation_stress_parser.add_argument("--fail-under", type=float, default=None)
     project_state_parser = subparsers.add_parser("project-state", help="Inspect the Stage155 project state graph")
     project_state_parser.add_argument("--project", required=True)
     project_state_parser.add_argument("--summary", action="store_true")
@@ -11879,6 +11900,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "run-live-remediation-execution":
         return command_run_live_remediation_execution(
+            output=args.output,
+            dry_run=args.dry_run,
+            fail_under=args.fail_under,
+        )
+    if args.command == "run-live-remediation-stress":
+        return command_run_live_remediation_stress(
             output=args.output,
             dry_run=args.dry_run,
             fail_under=args.fail_under,

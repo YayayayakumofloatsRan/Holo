@@ -106,7 +106,9 @@ def test_file_read_remediation_executes_for_explicit_artifact_path(tmp_path: Pat
         max_actions=1,
     )
 
-    assert report["status"] == "executed"
+    assert report["status"] == "partial"
+    assert report["canonical_stop_reason"] == "budget_exhausted"
+    assert report["remaining_action_candidates"][0]["action_type"] == "plan_experiment_retry"
     assert report["engineering_action_ledger"][0]["action_type"] == "file_read"
     assert report["engineering_action_ledger"][0]["status"] == "ok"
     assert "loss=nan" in report["engineering_action_ledger"][0]["stdout_summary"]

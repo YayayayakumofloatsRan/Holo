@@ -214,6 +214,7 @@ def build_stage135_i_state_topology(
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
     stage179_live_remediation_loop: dict[str, Any] | None = None,
     stage180_live_remediation_execution: dict[str, Any] | None = None,
+    stage181_live_remediation_stress: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -262,6 +263,7 @@ def build_stage135_i_state_topology(
     evidence_action_remediation = _dict(stage178_evidence_action_remediation or packet.get("stage178_evidence_action_remediation", {}))
     live_remediation_loop = _dict(stage179_live_remediation_loop or packet.get("stage179_live_remediation_loop", {}))
     live_remediation_execution = _dict(stage180_live_remediation_execution or packet.get("stage180_live_remediation_execution", {}))
+    live_remediation_stress = _dict(stage181_live_remediation_stress or packet.get("stage181_live_remediation_stress", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -953,6 +955,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage180_live_remediation_executor", relation="executes_remediation_action", weight=0.62, summary="planned remediation actions are executed through existing host action surfaces"))
         edges.append(_edge("stage180_live_remediation_executor", "state_delta", relation="remediation_observation_reentry", weight=0.6, summary="execution observations re-enter the agent loop as grounding evidence"))
 
+    if live_remediation_stress:
+        stress_summary = _dict(live_remediation_stress.get("summary", {}))
+        case_count = int(stress_summary.get("case_count", live_remediation_stress.get("case_count", 0)) or 0)
+        fallback_count = int(stress_summary.get("fallback_recovery_count", 0) or 0)
+        budget_count = int(stress_summary.get("budget_guard_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage181_live_remediation_stress",
+                "live remediation stress",
+                channel="live_remediation_stress",
+                kind="agent_stress_gate",
+                x=1.0,
+                y=0.68,
+                weight=0.76 if str(live_remediation_stress.get("status", "") or "") == "passed" else 0.42,
+                summary=f"cases={case_count}; fallback_recovery={fallback_count}; budget_guards={budget_count}; status={live_remediation_stress.get('status', '')}",
+            )
+        )
+        source = "stage180_live_remediation_executor" if live_remediation_execution else "stage179_live_remediation_loop" if live_remediation_loop else "stage178_evidence_action_remediation" if evidence_action_remediation else "external_user_input"
+        edges.append(_edge(source, "stage181_live_remediation_stress", relation="stress_tests_remediation_execution", weight=0.54, summary="adversarial fixtures verify remediation execution under fallback, budget, and missing-evidence pressure"))
+        edges.append(_edge("stage181_live_remediation_stress", "state_delta", relation="records_agent_loop_robustness", weight=0.48, summary="stress metrics become topology evidence for live-loop robustness"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1255,6 +1278,9 @@ def build_stage135_i_state_topology(
             "live_remediation_executed_count": int(live_remediation_execution.get("executed_count", 0) or 0) if live_remediation_execution else 0,
             "live_remediation_rejected_count": int(live_remediation_execution.get("rejected_count", 0) or 0) if live_remediation_execution else 0,
             "live_remediation_execution_status": str(live_remediation_execution.get("status", "") or "") if live_remediation_execution else "",
+            "live_remediation_stress_node_count": sum(1 for node in nodes if node["channel"] == "live_remediation_stress"),
+            "live_remediation_stress_case_count": int(_dict(live_remediation_stress.get("summary", {})).get("case_count", live_remediation_stress.get("case_count", 0)) or 0) if live_remediation_stress else 0,
+            "live_remediation_stress_status": str(live_remediation_stress.get("status", "") or "") if live_remediation_stress else "",
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,

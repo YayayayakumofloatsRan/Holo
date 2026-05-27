@@ -293,6 +293,12 @@ Stage180: live remediation executor
 - `web_search`, `file_read`, and `memory_recall` remediation actions now run through existing host surfaces, produce ledgers, and re-enter the FSM as `remediation_execute` observations.
 - Added `[remediation_exec]` CLI event rendering, `run-live-remediation-execution` artifacts, and Stage135 `live_remediation_executor` metrics without provider calls, write-action execution, memory writes, WeChat starts, or transport widening.
 
+Stage181: live remediation stress
+- Added adversarial stress simulation for the Stage178 -> Stage179 -> Stage180 remediation loop.
+- Hardened Stage180 fallback and continuation semantics: fallback web success can recover a primary failure, skipped actions remain visible as `remaining_action_candidates`, multi-action budget exhaustion stops as `budget_exhausted`, and missing artifact paths stop as `needs_user_clarification`.
+- Added `run-live-remediation-stress` artifacts and Stage135 `live_remediation_stress` metrics without provider calls, live-network requirements, write-action execution, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted Stage181/remediation stack `35 passed`, runtime `92 passed`, full regression `888 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
