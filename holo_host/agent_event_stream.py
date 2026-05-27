@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 from typing import Any
 
 from .canonical_stop_reason import map_canonical_stop_reason
@@ -9,6 +11,16 @@ from .engineering_action_fabric import normalize_engineering_action_ledger
 from .kernel_metadata_sanitizer import sanitize_public_metadata
 
 AGENT_EVENT_STREAM_SCHEMA = "holo.stage153.agent_event_stream.v1"
+
+
+def _current_holo_milestone() -> str:
+    handoff = Path(__file__).resolve().parents[1] / "HOLO_HANDOFF.md"
+    try:
+        text = handoff.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    match = re.search(r"current milestone tag is `([^`]+)`", text, re.IGNORECASE)
+    return str(match.group(1)).strip() if match else ""
 
 
 def _compact(value: Any, limit: int = 180) -> str:
@@ -218,6 +230,76 @@ def _cache_event(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_stop_reason(reason: Any) -> str:
+    current = str(reason or "").strip()
+    if not current or current == "unknown":
+        return "final_answer_ready"
+    return current
+
+
+def _deliberation_events(source: dict[str, Any], *, final_text: str = "") -> list[dict[str, Any]]:
+    decision = source.get("stage151_tool_decision", {})
+    if not isinstance(decision, dict):
+        decision = {}
+    candidates = [dict(row) for row in list(decision.get("action_candidates", []) or []) if isinstance(row, dict)]
+    selected = [dict(row) for row in list(decision.get("selected_actions", []) or []) if isinstance(row, dict)]
+    observations = [dict(row) for row in list(source.get("web_observation_ledger", []) or []) if isinstance(row, dict)]
+    observations.extend(dict(row) for row in list(source.get("tool_observation_ledger", []) or []) if isinstance(row, dict))
+    observations.extend(dict(row) for row in normalize_engineering_action_ledger(source.get("engineering_action_ledger", [])))
+    grounding = source.get("engineering_claim_grounding", source.get("stage151_tool_decision_grounding", source.get("tool_grounding", {})))
+    if not isinstance(grounding, dict):
+        grounding = {}
+    purpose = str(decision.get("purpose", "") or "answer_direct")
+    top = str((selected[:1] or candidates[:1] or [{}])[0].get("action_type", "") or "answer_direct")
+    required = sorted(
+        {
+            str(item)
+            for row in (selected or candidates[:1])
+            for item in list(row.get("required_observations", []) or [])
+            if str(item)
+        }
+    )
+    status_counts: dict[str, int] = {}
+    for row in observations:
+        status = str(row.get("status", "") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    events = [
+        {
+            "event": "think",
+            "phase": "intent",
+            "summary": _compact(f"purpose={purpose}; top_action={top}", 220),
+        },
+        {
+            "event": "think",
+            "phase": "evidence",
+            "summary": _compact(
+                "required=" + (",".join(required) if required else "none")
+                + f"; observations={len(observations)}",
+                220,
+            ),
+        },
+        {
+            "event": "think",
+            "phase": "action",
+            "summary": _compact(
+                "selected=" + (",".join(str(row.get("action_type", "")) for row in selected) if selected else "none")
+                + "; statuses="
+                + (",".join(f"{key}:{value}" for key, value in sorted(status_counts.items())) if status_counts else "none"),
+                260,
+            ),
+        },
+        {
+            "event": "think",
+            "phase": "stop_check",
+            "summary": _compact(
+                f"grounding={grounding.get('status', '-') or '-'}; final_chars={len(str(final_text or ''))}",
+                220,
+            ),
+        },
+    ]
+    return events
+
+
 def build_agent_event_stream(
     payload: dict[str, Any] | None,
     *,
@@ -233,6 +315,9 @@ def build_agent_event_stream(
         events: list[dict[str, Any]] = [
             {"event": "goal", "summary": _compact(user_text or source.get("input_summary", ""), 220)}
         ]
+        milestone = _current_holo_milestone()
+        if milestone:
+            events.append({"event": "state", "milestone": milestone, "source": "HOLO_HANDOFF.md"})
         action_space_count = int(
             source.get("stage161_tool_action_space_count", fsm.get("stage161_tool_action_space_count", 0)) or 0
         )
@@ -340,7 +425,7 @@ def build_agent_event_stream(
         events.append(
             {
                 "event": "stop",
-                "reason": str(fsm.get("canonical_stop_reason", "") or "final_answer_ready"),
+                "reason": _safe_stop_reason(fsm.get("canonical_stop_reason", "")),
                 "source": "stage160r_agent_loop_fsm",
                 "raw_reason": str(fsm.get("stop_reason", "") or ""),
             }
@@ -374,6 +459,10 @@ def build_agent_event_stream(
             "evidence_count": int(source.get("stage150_context_memory_fabric_evidence_count", stage150.get("evidence_count", 0)) or 0),
         },
     ]
+    milestone = _current_holo_milestone()
+    if milestone:
+        events.append({"event": "state", "milestone": milestone, "source": "HOLO_HANDOFF.md"})
+    events.extend(_deliberation_events(source, final_text=final_text))
     events.extend(_stage151_candidates(source))
     events.extend(_tool_call_events(source))
     events.extend(_observation_events(source))
@@ -419,7 +508,7 @@ def build_agent_event_stream(
     events.append(
         {
             "event": "stop",
-            "reason": canonical_stop["canonical_stop_reason"],
+            "reason": _safe_stop_reason(canonical_stop["canonical_stop_reason"]),
             "source": canonical_stop["canonical_stop_source"],
             "raw_reason": canonical_stop["raw_stop_reason"],
         }
@@ -442,6 +531,8 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
         event = str(item.get("event", "") or "")
         if event == "goal":
             lines.append(f"[goal] {item.get('summary', '')}")
+        elif event == "state":
+            lines.append(f"[state] milestone={item.get('milestone', '')} source={item.get('source', '')}")
         elif event == "context":
             lines.append(
                 f"[context] thread={item.get('thread_key', '-') or '-'} chat={item.get('chat_name', '-') or '-'} "
@@ -450,6 +541,8 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
         elif event == "candidate":
             need = ",".join(str(x) for x in list(item.get("required_observations", []) or [])) or "-"
             lines.append(f"[candidate] {item.get('action_type', '')} score={item.get('score', 0)} need={need}")
+        elif event == "think":
+            lines.append(f"[think] {item.get('phase', '')}: {item.get('summary', '')}")
         elif event == "action_space":
             lines.append(f"[action_space] count={item.get('count', 0)}")
         elif event == "model_decide":

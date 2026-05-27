@@ -317,6 +317,12 @@ Stage184: real-use agent drill
 - Added `run-agent-real-use-drill` artifacts and Stage135 `real_use_drill` metrics without provider calls, memory writes, WeChat starts, transport widening, hidden reasoning exposure, or live-network test requirements.
 - Verification on `2026-05-27`: targeted Stage184 `8 passed`, stack `53 passed`, runtime `92 passed`, full regression `912 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage185: CLI introspection and search intent
+- Added current-milestone state and public `[think]` deliberation summaries to the Stage153 CLI event stream.
+- New turns no longer render `[stop] unknown`; legacy unknown stop metadata is mapped to a safe public stop reason.
+- Hardened Chinese search/crawler/current-source intent recognition for Stage151 and `CapabilityBroker`, including planned `web_search` tool requests when eager network execution is disabled.
+- Verification on `2026-05-27`: targeted Stage185 `6 passed`; neighbor `35 passed`; runtime `92 passed`; full suite `918 passed`; public hygiene and `git diff --check` passed.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

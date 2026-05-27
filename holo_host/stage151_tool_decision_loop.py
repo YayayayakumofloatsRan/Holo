@@ -68,6 +68,45 @@ ENGINEERING_HINTS = ("文件", "目录", "测试", "补丁", "commit", "git", "p
 FIND_HINTS = ("find in page", "find on page", "在网页里找", "网页里找", "页面里找", "在页面里找")
 TIME_HINTS = ("今天", "现在", "当前", "today", "now", "current", "as of today")
 
+WEB_HINTS = (
+    "联网",
+    "外网",
+    "上网",
+    "网页",
+    "网站",
+    "检索",
+    "搜索",
+    "搜一下",
+    "查一下",
+    "查找",
+    "爬虫",
+    "抓取",
+    "最新",
+    "新闻",
+    "官方",
+    "官网",
+    "主页",
+    "文档",
+    "论文",
+    "资料",
+    "财报",
+    "年报",
+    *WEB_HINTS,
+)
+MEMORY_HINTS = (
+    "记得",
+    "回忆",
+    "上次",
+    "上回",
+    "上一次",
+    "之前",
+    "以前",
+    "我们聊过",
+    *MEMORY_HINTS,
+)
+ENGINEERING_HINTS = ("文件", "目录", "测试", "补丁", "代码", "命令", *ENGINEERING_HINTS)
+TIME_HINTS = ("今天", "现在", "当前", "什么时候", "时间", *TIME_HINTS)
+
 
 def _compact(value: Any, limit: int = 240) -> str:
     return compact_text(" ".join(str(value or "").split()), limit)
@@ -138,6 +177,23 @@ def build_network_health_report(
 def _search_query_from_text(text: str) -> str:
     current = " ".join(str(text or "").strip().split())
     for prefix in (
+        "请你",
+        "请",
+        "帮我",
+        "你去",
+        "联网搜索",
+        "联网查找",
+        "外网检索",
+        "外网搜索",
+        "上网搜索",
+        "上网查",
+        "搜索一下",
+        "搜一下",
+        "查一下",
+        "查一查",
+        "检索",
+        "搜索",
+        "查找",
         "请你",
         "请",
         "帮我",

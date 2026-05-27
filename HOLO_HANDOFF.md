@@ -149,6 +149,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 144. `docs/ENGINEERING_HANDOFF_STAGE183.md`
 145. `docs/STAGE184_REAL_USE_AGENT_DRILL.md`
 146. `docs/ENGINEERING_HANDOFF_STAGE184.md`
+147. `docs/STAGE185_CLI_INTROSPECTION_AND_SEARCH_INTENT.md`
+148. `docs/ENGINEERING_HANDOFF_STAGE185.md`
 
 ## What This Document Must Cover
 - current live state
@@ -163,9 +165,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage184-real-use-agent-drill`.
+- The current milestone tag is `stage185-cli-introspection-search-intent`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage184 Real-Use Agent Drill: Holo's engineering/search/market-research kernel is now exercised through temporary-workspace real actions, deterministic web observation drills, network-disabled boundary handling, market report ledgers, claim-only baseline comparison, and topology-visible real-use metrics. The next pressure is live crawler/search maturity for market research and current-source retrieval.
+- Current focus is Stage185 CLI Introspection And Search Intent: live CLI traces now expose current milestone state, public multi-step deliberation summaries, safer non-unknown stop reasons, and hardened Chinese search/crawler intent routing. The next pressure is live crawler/search maturity for market research and current-source retrieval.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

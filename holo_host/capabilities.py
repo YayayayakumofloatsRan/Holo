@@ -79,6 +79,43 @@ MEMORY_LOCAL_HINTS = (
     "以前",
 )
 
+SEARCH_HINTS = (
+    "联网",
+    "外网",
+    "上网",
+    "网页",
+    "网站",
+    "检索",
+    "搜索",
+    "搜一下",
+    "查一下",
+    "查找",
+    "爬虫",
+    "抓取",
+    "最新",
+    "新闻",
+    "官方",
+    "官网",
+    "主页",
+    "文档",
+    "论文",
+    "资料",
+    "财报",
+    "年报",
+    *SEARCH_HINTS,
+)
+MEMORY_LOCAL_HINTS = (
+    "记得",
+    "回忆",
+    "上次",
+    "上回",
+    "上一次",
+    "之前",
+    "以前",
+    "我们聊过",
+    *MEMORY_LOCAL_HINTS,
+)
+
 
 def _safe_sidecar_candidates(path: Path) -> list[Path]:
     suffix = path.suffix
@@ -142,6 +179,29 @@ class CapabilityBroker:
             if eager_network
             else []
         )
+        planned_web_actions = [
+            dict(action)
+            for action in list(stage151_tool_decision.get("selected_actions", []) or [])
+            if isinstance(action, dict) and str(action.get("action_type", "") or "") in {"web_search", "open_page", "find_in_page"}
+        ]
+        if planned_web_actions and not eager_network:
+            for action in planned_web_actions[:3]:
+                action_type = str(action.get("action_type", "") or "web_search")
+                query = str(action.get("query", "") or action.get("url", "") or "").strip()
+                tool_requests.append(
+                    ToolRequest(
+                        name=action_type,
+                        reason=f"stage151 selected {action_type}; eager network disabled",
+                        payload={
+                            "query": action.get("query", ""),
+                            "url": action.get("url", ""),
+                            "pattern": action.get("pattern", ""),
+                            "status": "planned",
+                            "source_urls": [],
+                        },
+                    )
+                )
+                tool_context_lines.append(f"{action_type} planned: {query}" if query else f"{action_type} planned")
         for observation in web_observation_ledger:
             action_type = str(observation.get("action_type", "") or "web_search")
             payload = {
@@ -209,7 +269,7 @@ class CapabilityBroker:
         else:
             previews = []
 
-        if not web_observation_ledger and not previews and self._should_external_lookup(text, meta):
+        if not planned_web_actions and not web_observation_ledger and not previews and self._should_external_lookup(text, meta):
             query = self._normalize_lookup_query(text)
             reason = f"turn requests external lookup for {query}"
             if not self.config.runtime.network_enabled:
@@ -281,6 +341,16 @@ class CapabilityBroker:
     def _normalize_lookup_query(text: str) -> str:
         current = " ".join(str(text or "").strip().split())
         prefixes = (
+            "请帮我查一下",
+            "帮我查一下",
+            "帮我搜一下",
+            "你去查一下",
+            "你去搜一下",
+            "查一下",
+            "搜一下",
+            "搜索一下",
+            "搜索",
+            "检索",
             "帮我查一下",
             "帮我搜一下",
             "你去查一下",
