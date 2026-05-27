@@ -54,6 +54,7 @@ from .stage168_source_authority import run_source_authority_audit
 from .stage169_market_research_pack import run_market_research_pack_bundle
 from .stage173_market_research_report import run_market_research_report_bundle
 from .stage175_market_research_live_smoke import run_market_research_live_smoke
+from .market_research_trajectory_live_smoke import run_market_research_trajectory_live_smoke
 from .stage176_market_research_domain_benchmark import run_market_research_domain_benchmark
 from .stage177_market_research_remediation import run_market_research_remediation
 from .market_research_task_dossier import run_market_research_dossier_bundle
@@ -9617,6 +9618,25 @@ def command_run_live_crawler_search(
     return 0
 
 
+def command_run_market_research_trajectory_live_smoke(
+    *,
+    output: str,
+    dry_run: bool,
+    network_enabled: bool,
+    fail_under: float | None,
+) -> int:
+    report = run_market_research_trajectory_live_smoke(
+        output=output,
+        dry_run=dry_run,
+        network_enabled=network_enabled,
+        fail_under=fail_under,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_under is not None and bool(report.get("fail_under_triggered", False)):
+        return 1
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
@@ -10875,6 +10895,14 @@ def main(argv: list[str] | None = None) -> int:
     market_research_live_smoke_parser.add_argument("--output", required=True)
     market_research_live_smoke_parser.add_argument("--dry-run", action="store_true")
     market_research_live_smoke_parser.add_argument("--fail-under", type=float, default=None)
+    market_research_trajectory_live_smoke_parser = subparsers.add_parser(
+        "run-market-research-trajectory-live-smoke",
+        help="Write the Stage205 market research trajectory live-smoke artifacts",
+    )
+    market_research_trajectory_live_smoke_parser.add_argument("--output", required=True)
+    market_research_trajectory_live_smoke_parser.add_argument("--dry-run", action="store_true")
+    market_research_trajectory_live_smoke_parser.add_argument("--network-disabled", action="store_true")
+    market_research_trajectory_live_smoke_parser.add_argument("--fail-under", type=float, default=None)
     market_research_domain_parser = subparsers.add_parser(
         "run-market-research-domain-bench",
         help="Write the Stage176 market research domain benchmark artifacts",
@@ -12046,6 +12074,13 @@ def main(argv: list[str] | None = None) -> int:
         return command_run_market_research_live_smoke(
             output=args.output,
             dry_run=args.dry_run,
+            fail_under=args.fail_under,
+        )
+    if args.command == "run-market-research-trajectory-live-smoke":
+        return command_run_market_research_trajectory_live_smoke(
+            output=args.output,
+            dry_run=args.dry_run,
+            network_enabled=not bool(args.network_disabled),
             fail_under=args.fail_under,
         )
     if args.command == "run-market-research-domain-bench":

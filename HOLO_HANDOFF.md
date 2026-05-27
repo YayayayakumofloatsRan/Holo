@@ -189,6 +189,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 184. `docs/ENGINEERING_HANDOFF_STAGE203.md`
 185. `docs/STAGE204_MARKET_RESEARCH_AGENT_TRAJECTORY.md`
 186. `docs/ENGINEERING_HANDOFF_STAGE204.md`
+187. `docs/STAGE205_MARKET_RESEARCH_TRAJECTORY_LIVE_SMOKE.md`
+188. `docs/ENGINEERING_HANDOFF_STAGE205.md`
 
 ## What This Document Must Cover
 - current live state
@@ -203,13 +205,14 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage204-market-research-agent-trajectory`.
+- The current milestone tag is `stage205-market-research-trajectory-live-smoke`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage204 Market Research Agent Trajectory: Holo now lets a model-selected `market_research_dossier_resume` action continue a persisted dossier through bounded Stage195 market-research rounds, then renders the multi-action trajectory in CLI and topology metadata.
+- Current focus is Stage205 Market Research Trajectory Live Smoke: Holo now has a repeatable artifact bundle that seeds a weak persisted market-research dossier, resumes it through Stage204/Stage195, renders public action trajectory events, and verifies network-disabled/failing-search behavior without overclaiming current web evidence.
 - Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage202 verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage203 verification on `2026-05-28`: targeted live-trace suite `5 passed`.
 - Stage204 verification on `2026-05-28`: targeted trajectory suite `5 passed`; neighbor stack `33 passed`.
+- Stage205 verification on `2026-05-28`: targeted trajectory live-smoke suite `5 passed`; neighbor stack `27 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1020 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

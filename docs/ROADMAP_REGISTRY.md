@@ -437,6 +437,12 @@ Stage204: market research agent trajectory
 - Stage153 renders `[market_trajectory]` rows, Stage152 public metadata preserves the trajectory, and Stage135 exposes `market_research_agent_trajectory` metrics.
 - Verification on `2026-05-28`: targeted `5 passed`; neighbor stack `33 passed`.
 
+Stage205: market research trajectory live smoke
+- Added `holo.stage205.market_research_trajectory_live_smoke.v1` to verify the persisted dossier resume trajectory as an artifact bundle.
+- The dry-run path seeds a weak dossier and validates `web_search -> market_research_pack -> market_research_report` through Stage204, Stage153 event stream, and Stage135 topology.
+- Network-disabled and failing-search paths record attempted failures and avoid claiming current web evidence.
+- Verification on `2026-05-28`: targeted `5 passed`; neighbor stack `27 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1020 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
