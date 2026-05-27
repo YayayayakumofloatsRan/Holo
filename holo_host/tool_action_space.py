@@ -161,6 +161,27 @@ def build_tool_action_space(*, include_write_actions: bool = True) -> list[dict[
             examples=[{"when": "record accepted next action", "arguments": {"project": "Holo", "update": "Stage161 started"}}],
         ),
         _action(
+            "market_research_pack",
+            description="Build or require a source-authority-sufficient filing evidence pack before market or financial analysis claims.",
+            input_schema={
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "entity": {"type": "string"},
+                    "filing_type": {"type": "string"},
+                },
+            },
+            observation_schema={"ledger": "market_research_pack"},
+            requires_network=True,
+            examples=[
+                {
+                    "when": "user asks for company financial or filing analysis",
+                    "arguments": {"query": "Apple AAPL 2024 10-K financial analysis", "filing_type": "10-K"},
+                }
+            ],
+        ),
+        _action(
             "defer",
             description="Do not act now; report why the host should stop or wait.",
             input_schema={"type": "object", "properties": {"reason": {"type": "string"}}},

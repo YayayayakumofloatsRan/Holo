@@ -228,6 +228,12 @@ Stage169: market research pack
 - Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-market-research-pack --output artifacts\stage169\stage169_market_research_pack.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
 - Verification on `2026-05-27`: targeted `10 passed`, research stack `78 passed`, runtime `91 passed`, full regression `782 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage170: market research answer gate
+- Added deterministic answer-time gating for market-research and financial-analysis replies.
+- Financial metric, filing-section, and investment-judgment claims now require a ready Stage169 market-research pack before being stated as settled.
+- Added `market_research_pack` to the model-first tool action space and exposed the `stage170_market_research_gate` in reply metadata and Stage135 topology.
+- Verification on `2026-05-27`: targeted `11 passed`, market stack `47 passed`, runtime `92 passed`, full regression `794 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

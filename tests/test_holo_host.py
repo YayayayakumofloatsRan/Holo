@@ -3446,6 +3446,84 @@ class ReplyServiceTests(unittest.TestCase):
             finally:
                 close_service_handles(service)
 
+    def test_reply_service_propagates_stage170_market_research_gate_metadata(self) -> None:
+        from holo_host.stage169_market_research_pack import build_market_research_pack
+
+        sample_10k = """
+Item 1. Business
+Apple designs, manufactures and markets smartphones.
+Item 1A. Risk Factors
+The Company is exposed to competition and regulatory risks.
+Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations
+Net sales were $391.0 billion in 2024. Net income was $93.7 billion in 2024.
+Item 8. Financial Statements and Supplementary Data
+The consolidated statements include balance sheets and statements of operations.
+"""
+        pack = build_market_research_pack(
+            query="Apple AAPL 2024 10-K financial analysis",
+            web_observation_ledger=[
+                {
+                    "status": "ok",
+                    "source_urls": ["https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm"],
+                    "results": [
+                        {
+                            "title": "Apple Form 10-K",
+                            "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm",
+                            "snippet": "Apple Form 10-K annual report for fiscal year 2024.",
+                        }
+                    ],
+                }
+            ],
+            filing_text=sample_10k,
+        )
+
+        class Stage170MarketResearchProcessor:
+            name = "stage170_market_research_processor"
+
+            def generate(self, context: TurnContext, *, session_id: str = "") -> ReplyPlan:
+                return ReplyPlan(
+                    text="Apple net sales were $391.0 billion in 2024.",
+                    bubbles=[ReplyBubble("Apple net sales were $391.0 billion in 2024.")],
+                    attention_state=context.attention_state,
+                    turn_plan=TurnPlan(route="main", bubble_target=1),
+                    emotion_state=dict(context.emotion_state),
+                    route="main",
+                    processor=self.name,
+                    session_id=session_id or "stage170-session",
+                    raw_text="Apple net sales were $391.0 billion in 2024.",
+                    timing_ms={"processor_ms": 5, "recall_reconstruct_ms": 0},
+                    debug={"stage169_market_research_pack": pack},
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = load_config(repo_root=root)
+            store = QueueStore(config.runtime.db_path)
+            memory = FakeMemory()
+            service = HoloReplyService(config, store=store, runner=FakeRunner(), memory=memory)
+            service.processor = Stage170MarketResearchProcessor()
+            try:
+                result = service.handle_reply(
+                    {
+                        "chat_name": "TestUser",
+                        "sender": "TestUser",
+                        "text": "Analyze Apple AAPL 2024 10-K net sales.",
+                        "channel": "holo_cli",
+                        "message_id": "stage170-runtime-1",
+                    }
+                )
+
+                self.assertEqual(result["action"], "reply")
+                self.assertEqual(result["stage170_market_research_gate_status"], "supported")
+                self.assertIn("sec.gov", result["text"])
+                self.assertIn("stage170_market_research_gate", memory.observed_records[-1]["metadata"])
+                self.assertGreaterEqual(
+                    result["stage135_i_state_topology"]["metrics"]["market_research_gate_node_count"],
+                    1,
+                )
+            finally:
+                close_service_handles(service)
+
     def test_reply_service_ignores_recent_wechat_outbound_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

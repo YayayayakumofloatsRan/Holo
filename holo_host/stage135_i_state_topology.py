@@ -205,6 +205,7 @@ def build_stage135_i_state_topology(
     stage153_agent_event_stream: dict[str, Any] | None = None,
     stage160r_agent_loop_fsm: dict[str, Any] | None = None,
     stage161_model_tool_arbitration: dict[str, Any] | None = None,
+    stage170_market_research_gate: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -244,6 +245,7 @@ def build_stage135_i_state_topology(
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
     agent_loop_fsm = _dict(stage160r_agent_loop_fsm or packet.get("stage160r_agent_loop_fsm", {}))
     model_arbitration = _dict(stage161_model_tool_arbitration or packet.get("stage161_model_tool_arbitration", {}))
+    market_research_gate = _dict(stage170_market_research_gate or packet.get("stage170_market_research_gate", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -742,6 +744,28 @@ def build_stage135_i_state_topology(
         edges.append(_edge("stage164_source_synthesis", "stage165_answer_citation_formatter", relation="formats_cited_answer", weight=0.54, summary="source synthesis is converted into a visible cited answer"))
         edges.append(_edge("stage165_answer_citation_formatter", "state_delta", relation="reports_cited_evidence", weight=0.38, summary="final answer can expose source URLs and bounded support status"))
 
+    if market_research_gate:
+        gate_status = str(market_research_gate.get("status", "") or "unknown")
+        claim_count = int(market_research_gate.get("claim_count", 0) or 0)
+        supported_count = int(market_research_gate.get("supported_claim_count", 0) or 0)
+        unsupported_count = int(market_research_gate.get("unsupported_claim_count", 0) or 0)
+        weight = 0.72 if gate_status == "supported" else 0.36 if gate_status in {"not_required", "ready_no_financial_claim"} else 0.22
+        nodes.append(
+            _node(
+                "stage170_market_research_gate",
+                "market research evidence gate",
+                channel="market_research_gate",
+                kind="observability_gate",
+                x=0.86,
+                y=0.32,
+                weight=weight,
+                summary=f"status={gate_status}; claims={claim_count}; supported={supported_count}; unsupported={unsupported_count}",
+            )
+        )
+        source = "stage165_answer_citation_formatter" if source_syntheses else "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage170_market_research_gate", relation="requires_filing_pack_before_financial_claims", weight=0.58, summary="market research claims require a source-authority-sufficient filing pack"))
+        edges.append(_edge("stage170_market_research_gate", "state_delta", relation="gates_market_research_answer", weight=0.52, summary="unsupported financial claims are bounded before visible reply"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1009,6 +1033,10 @@ def build_stage135_i_state_topology(
                 ]
             ),
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
+            "market_research_gate_node_count": sum(1 for node in nodes if node["channel"] == "market_research_gate"),
+            "market_research_gate_status": str(market_research_gate.get("status", "") or "") if market_research_gate else "",
+            "market_research_gate_claim_count": int(market_research_gate.get("claim_count", 0) or 0) if market_research_gate else 0,
+            "market_research_gate_unsupported_count": int(market_research_gate.get("unsupported_claim_count", 0) or 0) if market_research_gate else 0,
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,
@@ -1158,6 +1186,51 @@ def attach_stage155_project_state_topology(
     metrics["project_state_graph_project"] = project_name
     metrics["project_state_graph_open_loop_count"] = int(project_state.get("open_loop_count", 0) or len(open_questions) + len(blocked_items))
     metrics["project_state_graph_next_action_count"] = int(project_state.get("next_action_count", 0) or len(next_actions))
+    payload["metrics"] = metrics
+    return payload
+
+
+def attach_stage170_market_research_topology(
+    topology: dict[str, Any] | None,
+    stage170_market_research_gate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    gate = _dict(stage170_market_research_gate)
+    if not payload.get("schema") or not gate:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if any(isinstance(node, dict) and node.get("id") == "stage170_market_research_gate" for node in nodes):
+        return payload
+    gate_status = str(gate.get("status", "") or "unknown")
+    claim_count = int(gate.get("claim_count", 0) or 0)
+    supported_count = int(gate.get("supported_claim_count", 0) or 0)
+    unsupported_count = int(gate.get("unsupported_claim_count", 0) or 0)
+    nodes.append(
+        _node(
+            "stage170_market_research_gate",
+            "market research evidence gate",
+            channel="market_research_gate",
+            kind="observability_gate",
+            x=0.86,
+            y=0.32,
+            weight=0.72 if gate_status == "supported" else 0.32,
+            summary=f"status={gate_status}; claims={claim_count}; supported={supported_count}; unsupported={unsupported_count}",
+        )
+    )
+    node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+    source = "stage165_answer_citation_formatter" if "stage165_answer_citation_formatter" in node_ids else "external_user_input"
+    edges.append(_edge(source, "stage170_market_research_gate", relation="requires_filing_pack_before_financial_claims", weight=0.58, summary="market research claims require source-authority-sufficient filing evidence"))
+    edges.append(_edge("stage170_market_research_gate", "state_delta", relation="gates_market_research_answer", weight=0.52, summary="unsupported financial claims are bounded before visible reply"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["market_research_gate_node_count"] = 1
+    metrics["market_research_gate_status"] = gate_status
+    metrics["market_research_gate_claim_count"] = claim_count
+    metrics["market_research_gate_unsupported_count"] = unsupported_count
     payload["metrics"] = metrics
     return payload
 
