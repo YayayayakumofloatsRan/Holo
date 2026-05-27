@@ -45,6 +45,10 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             need = ",".join(str(x) for x in list(event.get("required_observations", []) or [])) or "none"
             summary = f"selected={event.get('action_type', '')}; required={need}"
         return _card(phase, summary, source_event=kind, confidence=0.74)
+    if kind == "candidate":
+        need = ",".join(str(x) for x in list(event.get("required_observations", []) or [])) or "none"
+        summary = f"candidate={event.get('action_type', '')}; score={event.get('score', 0)}; required={need}"
+        return _card("model_decision", summary, source_event=kind, confidence=0.68)
     if kind in {"act", "tool_call", "crawl:query", "crawl:search", "crawl:open"}:
         if kind == "act":
             summary = f"{event.get('action_type', '')} status={event.get('status', '')}"
@@ -205,7 +209,7 @@ def render_public_thought_stream(report: dict[str, Any] | None) -> str:
     cards = _list_dicts(thought.get("cards", []))
     if not cards:
         return "[thought] no public thought stream recorded"
-    lines = ["[thought] public auditable loop; raw hidden reasoning is not exposed"]
+    lines = ["[thought] public auditable loop; private reasoning redacted"]
     for card in cards:
         phase = str(card.get("phase", "unknown") or "unknown")
         summary = str(card.get("summary", "") or "")

@@ -449,6 +449,12 @@ Stage206: live crawler reply loop
 - Stage153 FSM event stream now renders `[crawl:query]`, `[crawl:search]`, `[crawl:open]`, `[crawl:evaluate]`, and `[crawl:stop]` rows for actual reply turns.
 - Verification on `2026-05-28`: targeted reply-loop crawler suite `2 passed`; neighbor crawler/tool/CLI stack `33 passed`; runtime `92 passed`; full suite `1022 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage207: agent console public thought
+- Added `holo.stage207.agent_console.v1` and a CLI renderer that separates user input, public system/action/thought rows, and final visible answer.
+- `chat --trace` now renders the Stage207 console view, while `/trace` remains the raw Stage153 event stream and `/thoughts` remains the Stage191 public thought stream.
+- Stage191 now emits public `model_decision` cards for candidate events and avoids printing the phrase `raw hidden reasoning`.
+- Verification on `2026-05-28`: targeted agent-console suite `3 passed`; neighbor CLI/thought/crawler stack `17 passed`; runtime `92 passed`; full suite `1025 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

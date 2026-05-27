@@ -9640,6 +9640,7 @@ def command_run_market_research_trajectory_live_smoke(
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
+  /console               show last turn as CLI-friendly agent console
   /thoughts              show public thought stream for the last turn
   /json                  print last turn JSON metadata
   /tools                 show last turn tool observations
@@ -9799,6 +9800,12 @@ def _close_chat_service(service: HoloReplyService | None) -> None:
         service.memory.activation.close()
     if hasattr(service.memory, "graph"):
         service.memory.graph.close()
+
+
+def _chat_trace_use_ansi() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    return bool(getattr(sys.stdout, "isatty", lambda: False)())
 
 
 def command_project_state(
@@ -9994,6 +10001,9 @@ def command_chat(
             else:
                 print(cli_session.render_trace())
             return True
+        if command == "/console":
+            print(cli_session.render_console_turn(use_ansi=_chat_trace_use_ansi()))
+            return True
         if command == "/tools":
             print(cli_session.render_tools())
             return True
@@ -10163,7 +10173,7 @@ def command_chat(
             last_reply_payload = payload
             cli_session.record_turn(payload, user_text=text, transport=transport)
             if auto_event_stream:
-                print(cli_session.render_trace())
+                print(cli_session.render_console_turn(use_ansi=_chat_trace_use_ansi()))
             else:
                 print(_chat_response_text(payload))
             if show_json:
@@ -10193,7 +10203,7 @@ def command_chat(
             last_reply_payload = payload
             cli_session.record_turn(payload, user_text=text, transport=transport)
             if auto_event_stream:
-                print(cli_session.render_trace())
+                print(cli_session.render_console_turn(use_ansi=_chat_trace_use_ansi()))
             else:
                 print(_chat_response_text(payload))
             if show_json:

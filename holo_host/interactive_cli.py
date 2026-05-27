@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .agent_console_renderer import build_agent_console_report, render_agent_console_turn
 from .agent_event_stream import (
     build_agent_event_stream,
     render_agent_event_stream,
@@ -51,6 +52,12 @@ class InteractiveCliSession:
             transport=self.last_transport,
         )
         self.last_payload["stage153_agent_event_stream"] = self.last_event_stream
+        self.last_payload["stage207_agent_console"] = build_agent_console_report(
+            user_text=self.last_user_text,
+            final_text=str(self.last_payload.get("text", "") or ""),
+            event_stream=self.last_event_stream,
+            public_thought_stream=self.last_payload["stage191_public_thought_stream"],
+        )
         self.last_payload["stage153_interactive_cli_session"] = self.to_metadata()
         return self.last_event_stream
 
@@ -98,6 +105,22 @@ class InteractiveCliSession:
         )
         return render_public_thought_stream(report)
 
+    def render_console_turn(self, *, use_ansi: bool = False) -> str:
+        if not self.last_payload:
+            return "[console] no turns yet"
+        thought = (
+            dict(self.last_payload.get("stage191_public_thought_stream", {}))
+            if isinstance(self.last_payload.get("stage191_public_thought_stream", {}), dict)
+            else {}
+        )
+        return render_agent_console_turn(
+            user_text=self.last_user_text,
+            final_text=str(self.last_payload.get("text", "") or ""),
+            event_stream=self.last_event_stream,
+            public_thought_stream=thought,
+            use_ansi=use_ansi,
+        )
+
     def handle_command(self, command_line: str) -> str:
         command, _, _rest = str(command_line or "").partition(" ")
         command = command.strip().lower()
@@ -115,4 +138,6 @@ class InteractiveCliSession:
             return self.render_cache()
         if command in {"/thoughts", "/think"}:
             return self.render_thoughts()
+        if command == "/console":
+            return self.render_console_turn()
         return f"unknown command: {command}"
