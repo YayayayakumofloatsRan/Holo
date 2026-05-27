@@ -165,6 +165,16 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 160. `docs/ENGINEERING_HANDOFF_STAGE191.md`
 161. `docs/STAGE192_MARKET_RESEARCH_FEEDBACK_LOOP.md`
 162. `docs/ENGINEERING_HANDOFF_STAGE192.md`
+163. `docs/STAGE193_MARKET_RESEARCH_ACTION_PLANNER.md`
+164. `docs/ENGINEERING_HANDOFF_STAGE193.md`
+165. `docs/STAGE194_MARKET_RESEARCH_PLAN_EXECUTION.md`
+166. `docs/ENGINEERING_HANDOFF_STAGE194.md`
+167. `docs/STAGE195_MARKET_RESEARCH_CONTINUATION_LOOP.md`
+168. `docs/ENGINEERING_HANDOFF_STAGE195.md`
+169. `docs/STAGE196_MARKET_RESEARCH_SOURCE_PROMOTION.md`
+170. `docs/ENGINEERING_HANDOFF_STAGE196.md`
+171. `docs/STAGE197_MARKET_RESEARCH_REPORT_ASSEMBLY.md`
+172. `docs/ENGINEERING_HANDOFF_STAGE197.md`
 
 ## What This Document Must Cover
 - current live state
@@ -179,9 +189,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage196-market-research-source-promotion`.
+- The current milestone tag is `stage197-market-research-report-assembly`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage196 Market Research Source Promotion: Holo now promotes authoritative financial-filing web/page observations into pack-ready source state inside the bounded Stage195 continuation loop. The next pressure is source-promotion-aware report assembly with stronger citation quality and explicit insufficient-evidence outputs.
+- Current focus is Stage197 Market Research Report Assembly: Holo now checks whether a market-research report actually consumes the Stage196 promoted source in its citations before treating the report as ready. The next pressure is making this report-ready boundary drive live finalization and user-facing insufficient-evidence repairs.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

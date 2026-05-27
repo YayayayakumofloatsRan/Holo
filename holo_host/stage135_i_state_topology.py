@@ -215,6 +215,7 @@ def build_stage135_i_state_topology(
     stage194_market_research_plan_execution: dict[str, Any] | None = None,
     stage195_market_research_continuation_loop: dict[str, Any] | None = None,
     stage196_market_research_source_promotion: dict[str, Any] | None = None,
+    stage197_market_research_report_assembly: dict[str, Any] | None = None,
     stage177_market_research_remediation: dict[str, Any] | None = None,
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
     stage179_live_remediation_loop: dict[str, Any] | None = None,
@@ -277,6 +278,7 @@ def build_stage135_i_state_topology(
         or packet.get("stage196_market_research_source_promotion", {})
         or market_research_continuation.get("stage196_market_research_source_promotion", {})
     )
+    market_research_report_assembly = _dict(stage197_market_research_report_assembly or packet.get("stage197_market_research_report_assembly", {}))
     market_research_remediation = _dict(stage177_market_research_remediation or packet.get("stage177_market_research_remediation", {}))
     evidence_action_remediation = _dict(stage178_evidence_action_remediation or packet.get("stage178_evidence_action_remediation", {}))
     live_remediation_loop = _dict(stage179_live_remediation_loop or packet.get("stage179_live_remediation_loop", {}))
@@ -1001,6 +1003,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage196_market_research_source_promotion", relation="promotes_source_to_pack_ready_evidence", weight=0.7, summary="authoritative web/page evidence is promoted into a market-research source state"))
         edges.append(_edge("stage196_market_research_source_promotion", "stage171_market_research_pack_action" if market_research_ledger else "state_delta", relation="enables_market_research_pack", weight=0.54, summary="promoted filing source can feed pack generation"))
 
+    if market_research_report_assembly:
+        assembly_status = str(market_research_report_assembly.get("status", "") or "unknown")
+        ready = bool(market_research_report_assembly.get("final_report_ready", False))
+        citation_status = str(market_research_report_assembly.get("citation_quality_status", "") or "")
+        source_count = len(list(market_research_report_assembly.get("ordered_sources", []) or []))
+        nodes.append(
+            _node(
+                "stage197_market_research_report_assembly",
+                "market research report assembly",
+                channel="market_research_report_assembly",
+                kind="observability_gate",
+                x=0.995,
+                y=0.55,
+                weight=0.86 if ready else 0.34,
+                summary=f"status={assembly_status}; ready={ready}; citation={citation_status}; sources={source_count}",
+            )
+        )
+        source = "stage196_market_research_source_promotion" if market_research_source_promotion else "stage173_market_research_report" if market_research_report else "state_delta"
+        edges.append(_edge(source, "stage197_market_research_report_assembly", relation="checks_report_consumes_promoted_source", weight=0.72, summary="report assembly verifies that promoted sources are represented in final citations"))
+        edges.append(_edge("stage197_market_research_report_assembly", "state_delta", relation="reports_final_market_research_readiness", weight=0.54, summary="assembled report state exposes ready, insufficient-evidence, and citation-mismatch outcomes"))
+
     if market_research_remediation:
         remediation_status = str(market_research_remediation.get("status", "") or "unknown")
         action_count = len(list(market_research_remediation.get("remediation_actions", []) or []))
@@ -1525,6 +1548,10 @@ def build_stage135_i_state_topology(
             "market_research_source_promotion_status": str(market_research_source_promotion.get("status", "") or "") if market_research_source_promotion else "",
             "market_research_source_promotion_authority_status": str(market_research_source_promotion.get("authority_status", "") or "") if market_research_source_promotion else "",
             "market_research_source_promotion_can_build_pack": bool(market_research_source_promotion.get("can_build_market_research_pack", False)) if market_research_source_promotion else False,
+            "market_research_report_assembly_node_count": sum(1 for node in nodes if node["channel"] == "market_research_report_assembly"),
+            "market_research_report_assembly_status": str(market_research_report_assembly.get("status", "") or "") if market_research_report_assembly else "",
+            "market_research_report_assembly_ready": bool(market_research_report_assembly.get("final_report_ready", False)) if market_research_report_assembly else False,
+            "market_research_report_assembly_citation_quality_status": str(market_research_report_assembly.get("citation_quality_status", "") or "") if market_research_report_assembly else "",
             "market_research_remediation_node_count": sum(1 for node in nodes if node["channel"] == "market_research_remediation"),
             "market_research_remediation_required_count": 1 if market_research_remediation and not bool(market_research_remediation.get("can_finalize", False)) else 0,
             "market_research_remediation_action_count": len(list(market_research_remediation.get("remediation_actions", []) or [])) if market_research_remediation else 0,

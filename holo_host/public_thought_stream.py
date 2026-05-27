@@ -100,6 +100,13 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             f"pack={bool(event.get('can_build_pack', False))}; stop={event.get('stop_reason', '')}"
         )
         return _card("observation", summary, source_event=kind, confidence=0.84)
+    if kind == "report_assembly":
+        summary = (
+            f"status={event.get('status', '')}; ready={bool(event.get('ready', False))}; "
+            f"citation={event.get('citation_quality_status', '')}; sources={event.get('source_count', 0)}; "
+            f"stop={event.get('stop_reason', '')}"
+        )
+        return _card("self_feedback", summary, source_event=kind, confidence=0.84)
     if kind == "evaluate":
         unresolved = ",".join(str(x) for x in list(event.get("unresolved_items", []) or [])) or "none"
         return _card("stop_evaluation", f"status={event.get('status', '')}; unresolved={unresolved}", source_event=kind, confidence=0.78)
