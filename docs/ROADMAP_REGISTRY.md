@@ -346,6 +346,12 @@ Stage189: crawler source authority stop
 - Stage153 renders authority status in `[crawl:evaluate]` trace lines.
 - Verification on `2026-05-27`: targeted Stage189 `4 passed`; neighbor `26 passed`; runtime `92 passed`; full suite `934 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
 
+Stage190: self-feedback agent loop
+- Added `holo.stage190.self_feedback_loop.v1` and `holo.stage190.feedback_step.v1` as the public self-feedback control layer for agent actions.
+- Stage186 crawler reports now include `stage190_self_feedback_loop` with evidence score, authority status, marginal utility, next action, stop decision, and stop reason.
+- Stage153 renders `[feedback]` trace lines without exposing hidden chain-of-thought or raw provider reasoning.
+- Verification on `2026-05-27`: targeted Stage190 `4 passed`; neighbor `20 passed`; runtime `92 passed`; full suite `938 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

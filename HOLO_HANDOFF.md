@@ -159,6 +159,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 154. `docs/ENGINEERING_HANDOFF_STAGE188.md`
 155. `docs/STAGE189_CRAWLER_SOURCE_AUTHORITY_STOP.md`
 156. `docs/ENGINEERING_HANDOFF_STAGE189.md`
+157. `docs/STAGE190_SELF_FEEDBACK_AGENT_LOOP.md`
+158. `docs/ENGINEERING_HANDOFF_STAGE190.md`
 
 ## What This Document Must Cover
 - current live state
@@ -173,9 +175,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage189-crawler-source-authority-stop`.
+- The current milestone tag is `stage190-self-feedback-agent-loop`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage189 Crawler Source Authority Stop: live crawler evaluation now uses Stage168 source authority so financial/market-research searches do not stop on third-party summaries when primary filings or first-party disclosures are required. The next pressure is multi-source coverage planning and report-readiness gates for research workflows.
+- Current focus is Stage190 Self-Feedback Agent Loop: crawler actions now produce a public self-feedback ledger with evidence score, source authority, marginal utility, next action, and stop reason. The next pressure is expanding the same feedback controller into engineering and market-research report workflows.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

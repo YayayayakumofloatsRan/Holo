@@ -225,6 +225,32 @@ def _stage186_crawler_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
+def _stage190_feedback_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    report = payload.get("stage190_self_feedback_loop", {})
+    if not isinstance(report, dict) or not report:
+        crawler = payload.get("stage186_live_crawler_search", {})
+        if isinstance(crawler, dict):
+            report = crawler.get("stage190_self_feedback_loop", {})
+    if not isinstance(report, dict):
+        return []
+    events: list[dict[str, Any]] = []
+    for row in list(report.get("steps", []) or [])[:10]:
+        if not isinstance(row, dict):
+            continue
+        events.append(
+            {
+                "event": "feedback",
+                "action": str(row.get("action", "") or ""),
+                "evidence_score": float(row.get("combined_sufficiency_score", 0.0) or 0.0),
+                "marginal_utility": float(row.get("marginal_utility", 0.0) or 0.0),
+                "authority_status": str(row.get("authority_status", "") or ""),
+                "next_action": str(row.get("next_action", "") or ""),
+                "stop_reason": str(row.get("stop_reason", "") or ""),
+            }
+        )
+    return events
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -504,6 +530,7 @@ def build_agent_event_stream(
     events.extend(_tool_call_events(source))
     events.extend(_observation_events(source))
     events.extend(_stage186_crawler_events(source))
+    events.extend(_stage190_feedback_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -659,6 +686,14 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
             )
         elif event == "crawl:stop":
             lines.append(f"[crawl:stop] status={item.get('status', '')} reason={item.get('stop_reason', '')}")
+        elif event == "feedback":
+            authority = str(item.get("authority_status", "") or "")
+            authority_suffix = f" authority={authority}" if authority else ""
+            lines.append(
+                f"[feedback] {item.get('action', '')} score={item.get('evidence_score', 0)} "
+                f"delta={item.get('marginal_utility', 0)} next={item.get('next_action', '')} "
+                f"stop={item.get('stop_reason', '')}{authority_suffix}"
+            )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
             files_changed = len(list(item.get("files_changed", []) or []))

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .common import compact_text, stable_digest, utc_now
+from .agent_self_feedback_loop import build_self_feedback_report, evaluate_crawler_feedback_step
 from .kernel_metadata_sanitizer import PRIVATE_KEYS, sanitize_public_metadata
 from .stage168_source_authority import evaluate_source_authority
 from .stage151_tool_decision_loop import default_open_page, default_web_search
@@ -178,6 +179,8 @@ def run_live_crawler_search(
     page_observations: list[dict[str, Any]] = []
     source_urls: list[str] = []
     errors: list[str] = []
+    feedback_steps: list[dict[str, Any]] = []
+    prior_best_feedback_score = 0.0
 
     if not network_enabled:
         query = str(query_plan[0].get("query", "") or _strip_query(user_text))
@@ -201,6 +204,20 @@ def run_live_crawler_search(
             web_observations,
             task_type=_task_type_for_query(user_text),
         )
+        stage190_self_feedback_loop = build_self_feedback_report(
+            goal=user_text,
+            steps=[
+                evaluate_crawler_feedback_step(
+                    goal=user_text,
+                    query=query,
+                    action="web_search",
+                    page_evidence={"status": "rejected_network_disabled", "best_evidence_score": 0.0},
+                    source_authority=source_authority_report,
+                    remaining_query_budget=0,
+                )
+            ],
+            final_stop_reason="boundary_or_permission",
+        )
         crawler_ledger.append(_ledger_row("query", query=query, status="rejected_network_disabled", provider="network_gate"))
         status = "rejected_network_disabled"
         stop_reason = "boundary_or_permission"
@@ -216,6 +233,7 @@ def run_live_crawler_search(
                 "page_observation_ledger": page_observations,
                 "crawler_ledger": crawler_ledger,
                 "source_authority_report": source_authority_report,
+                "stage190_self_feedback_loop": stage190_self_feedback_loop,
                 "source_urls": source_urls,
                 "stop_reason": stop_reason,
                 "final_summary": _final_summary(status=status, stop_reason=stop_reason, query_count=1, opened_count=0, urls=[], errors=["network_disabled"], user_text=user_text),
@@ -255,6 +273,17 @@ def run_live_crawler_search(
         if web_row["error"]:
             errors.append(str(web_row["error"]))
         if str(web_row["status"]) != "ok" or not web_row["source_urls"]:
+            feedback = evaluate_crawler_feedback_step(
+                goal=user_text,
+                query=query,
+                action="web_search",
+                page_evidence={"status": str(web_row["status"]), "best_evidence_score": 0.0},
+                source_authority=authority_report,
+                remaining_query_budget=max(0, len(query_plan) - len(web_observations)),
+                prior_best_score=prior_best_feedback_score,
+            )
+            feedback_steps.append(feedback)
+            prior_best_feedback_score = max(prior_best_feedback_score, float(feedback.get("combined_sufficiency_score", 0.0) or 0.0))
             crawler_ledger.append(_ledger_row("evaluate", query=query, status="insufficient", reason="search_failed_or_empty"))
             continue
 
@@ -286,6 +315,17 @@ def run_live_crawler_search(
         authority_required = _authority_gate_required(authority_report)
         authority_status = str(authority_report.get("status", "") or "")
         authority_stop_reason = "authority_sufficient" if _authority_sufficient(authority_report) else "authority_insufficient"
+        feedback = evaluate_crawler_feedback_step(
+            goal=user_text,
+            query=query,
+            action="web_search",
+            page_evidence=page_evidence,
+            source_authority=authority_report,
+            remaining_query_budget=max(0, len(query_plan) - len(web_observations)),
+            prior_best_score=prior_best_feedback_score,
+        )
+        feedback_steps.append(feedback)
+        prior_best_feedback_score = max(prior_best_feedback_score, float(feedback.get("combined_sufficiency_score", 0.0) or 0.0))
         if _supported_page(page_evidence) and (not authority_required or _authority_sufficient(authority_report)) and selected_url and selected_url not in source_urls:
             source_urls.append(selected_url)
         crawler_ledger.append(
@@ -331,6 +371,11 @@ def run_live_crawler_search(
             authority_status=source_authority_report.get("status", ""),
         )
     )
+    stage190_self_feedback_loop = build_self_feedback_report(
+        goal=user_text,
+        steps=feedback_steps,
+        final_stop_reason=stop_reason,
+    )
     report = {
         "schema": STAGE186_LIVE_CRAWLER_SEARCH_SCHEMA,
         "status": status,
@@ -342,6 +387,7 @@ def run_live_crawler_search(
         "page_observation_ledger": page_observations,
         "crawler_ledger": crawler_ledger,
         "source_authority_report": source_authority_report,
+        "stage190_self_feedback_loop": stage190_self_feedback_loop,
         "source_urls": source_urls,
         "stop_reason": stop_reason,
         "final_summary": _final_summary(
