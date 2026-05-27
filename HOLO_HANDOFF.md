@@ -145,6 +145,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 140. `docs/ENGINEERING_HANDOFF_STAGE181.md`
 141. `docs/STAGE182_REMEDIATION_CONTINUATION.md`
 142. `docs/ENGINEERING_HANDOFF_STAGE182.md`
+143. `docs/STAGE183_AGENT_CAPABILITY_GAUNTLET.md`
+144. `docs/ENGINEERING_HANDOFF_STAGE183.md`
 
 ## What This Document Must Cover
 - current live state
@@ -159,9 +161,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage182-remediation-continuation`.
+- The current milestone tag is `stage183-agent-capability-gauntlet`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage182 Remediation Continuation: the Stage178 -> Stage179 -> Stage180 action loop now continues through bounded multi-round execution, sufficiency scoring, event-stream visibility, and topology-visible remediation continuation metrics.
+- Current focus is Stage183 Agent Capability Gauntlet: Holo's engineering/research kernel is now tested as an integrated agent surface across engineering execution, filing-grounded market research, remediation continuation, adversarial unsupported-claim detection, event trace quality, and topology-visible capability metrics.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

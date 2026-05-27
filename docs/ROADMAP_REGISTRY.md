@@ -305,6 +305,12 @@ Stage182: remediation continuation
 - Added `run-remediation-continuation` artifacts, `[remediation_continue]` event-stream visibility, and Stage135 `remediation_continuation` metrics without provider calls, memory writes, WeChat starts, transport widening, or live-network test requirements.
 - Verification on `2026-05-27`: targeted Stage182 `8 passed`, remediation stack `43 passed`, runtime `92 passed`, full regression `896 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage183: agent capability gauntlet
+- Added a Codex-style integrated capability gauntlet over Holo's base engineering/research kernel.
+- The gauntlet evaluates engineering ledgers, market-research report ledgers, Stage182 remediation continuation, event-stream completeness, stop reasons, hidden-reasoning hygiene, persona-free output, and adversarial unsupported-claim detection.
+- Added `run-agent-capability-gauntlet` artifacts and Stage135 `agent_capability_gauntlet` metrics without provider calls, memory writes, WeChat starts, transport widening, or live-network test requirements.
+- Verification on `2026-05-27`: targeted Stage183 `8 passed`, integrated stack `33 passed`, runtime `92 passed`, full regression `904 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

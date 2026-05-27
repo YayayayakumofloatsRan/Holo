@@ -216,6 +216,7 @@ def build_stage135_i_state_topology(
     stage180_live_remediation_execution: dict[str, Any] | None = None,
     stage181_live_remediation_stress: dict[str, Any] | None = None,
     stage182_remediation_continuation: dict[str, Any] | None = None,
+    stage183_agent_capability_gauntlet: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -266,6 +267,7 @@ def build_stage135_i_state_topology(
     live_remediation_execution = _dict(stage180_live_remediation_execution or packet.get("stage180_live_remediation_execution", {}))
     live_remediation_stress = _dict(stage181_live_remediation_stress or packet.get("stage181_live_remediation_stress", {}))
     remediation_continuation = _dict(stage182_remediation_continuation or packet.get("stage182_remediation_continuation", {}))
+    agent_capability_gauntlet = _dict(stage183_agent_capability_gauntlet or packet.get("stage183_agent_capability_gauntlet", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -1009,6 +1011,36 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage182_remediation_continuation", relation="continues_remediation_until_sufficient_or_stopped", weight=0.58, summary="remaining remediation actions are looped through execution and sufficiency scoring"))
         edges.append(_edge("stage182_remediation_continuation", "state_delta", relation="reenters_fsm_with_sufficiency", weight=0.52, summary="multi-round remediation observations update the live agent loop stop state"))
 
+    if agent_capability_gauntlet:
+        gauntlet_summary = _dict(agent_capability_gauntlet.get("summary", {}))
+        gauntlet_status = str(agent_capability_gauntlet.get("status", "") or "unknown")
+        gauntlet_cases = int(gauntlet_summary.get("case_count", agent_capability_gauntlet.get("case_count", 0)) or 0)
+        gauntlet_passed = int(gauntlet_summary.get("passed_case_count", 0) or 0)
+        gauntlet_score = float(gauntlet_summary.get("overall_score", 0.0) or 0.0)
+        nodes.append(
+            _node(
+                "stage183_agent_capability_gauntlet",
+                "agent capability gauntlet",
+                channel="agent_capability_gauntlet",
+                kind="agent_benchmark_gate",
+                x=1.0,
+                y=0.83,
+                weight=0.8 if gauntlet_status == "passed" else 0.4,
+                summary=f"status={gauntlet_status}; cases={gauntlet_cases}; passed={gauntlet_passed}; score={gauntlet_score}",
+            )
+        )
+        source = (
+            "stage182_remediation_continuation"
+            if remediation_continuation
+            else "stage180_live_remediation_executor"
+            if live_remediation_execution
+            else "stage160r_agent_loop_fsm"
+            if agent_loop_fsm
+            else "external_user_input"
+        )
+        edges.append(_edge(source, "stage183_agent_capability_gauntlet", relation="benchmarks_agent_kernel_capability", weight=0.57, summary="engineering, market research, and remediation surfaces are tested as one agent capability bundle"))
+        edges.append(_edge("stage183_agent_capability_gauntlet", "state_delta", relation="records_capability_pressure", weight=0.5, summary="gauntlet score becomes topology evidence for practical agent readiness"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1318,6 +1350,10 @@ def build_stage135_i_state_topology(
             "remediation_continuation_round_count": int(remediation_continuation.get("round_count", 0) or 0) if remediation_continuation else 0,
             "remediation_continuation_executed_count": int(remediation_continuation.get("executed_count", 0) or 0) if remediation_continuation else 0,
             "remediation_continuation_status": str(remediation_continuation.get("status", "") or "") if remediation_continuation else "",
+            "agent_capability_gauntlet_node_count": sum(1 for node in nodes if node["channel"] == "agent_capability_gauntlet"),
+            "agent_capability_gauntlet_case_count": int(_dict(agent_capability_gauntlet.get("summary", {})).get("case_count", agent_capability_gauntlet.get("case_count", 0)) or 0) if agent_capability_gauntlet else 0,
+            "agent_capability_gauntlet_passed_count": int(_dict(agent_capability_gauntlet.get("summary", {})).get("passed_case_count", 0) or 0) if agent_capability_gauntlet else 0,
+            "agent_capability_gauntlet_status": str(agent_capability_gauntlet.get("status", "") or "") if agent_capability_gauntlet else "",
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,
