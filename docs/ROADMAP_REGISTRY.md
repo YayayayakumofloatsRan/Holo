@@ -207,6 +207,11 @@ Stage165: answer citation formatter
 - Stage151 grounded web answers now prefer synthesized page evidence, render numbered URLs and support snippets, include freshness notes, and use bounded language for weak, unsupported, or conflicted sources.
 - Stage135 topology exposes `answer_citation_formatter` metrics while preserving the no-provider-model-path, no-memory-write, no-WeChat-start, no-transport-widening boundary.
 
+Stage166: search quality evaluation
+- Added deterministic search-quality evaluation over Stage151-165 for official docs, API docs, current information, financial filings, ambiguous entities, and failure cases.
+- Reports source support, citation sufficiency, freshness, unsupported current/web claims, source conflicts, CSS/page chrome leakage, expected-term coverage, latency, and a raw-result baseline.
+- Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-search-quality-eval --output artifacts\stage166\stage166_search_quality.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

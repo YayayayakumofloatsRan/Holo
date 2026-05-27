@@ -111,6 +111,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 106. `docs/ENGINEERING_HANDOFF_STAGE164.md`
 107. `docs/STAGE165_ANSWER_CITATION_FORMATTER.md`
 108. `docs/ENGINEERING_HANDOFF_STAGE165.md`
+109. `docs/STAGE166_SEARCH_QUALITY_EVAL.md`
+110. `docs/ENGINEERING_HANDOFF_STAGE166.md`
 
 ## What This Document Must Cover
 - current live state
@@ -125,9 +127,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage165-answer-citation-formatter`.
+- The current milestone tag is `stage166-search-quality-eval`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage165 Answer Citation Formatter: Holo now turns Stage164 source synthesis into final cited web answers with numbered URLs, snippets, freshness notes, and bounded weak/unsupported/conflicted-source language, while preserving the no provider model path, memory write, WeChat start, or transport authority widening boundary.
+- Current focus is Stage166 Search Quality Evaluation: Holo now has a deterministic search-quality benchmark over official docs, API docs, current information, financial filings, ambiguous entities, and failure cases, measuring support, citations, freshness, unsupported claims, conflicts, and visible answer cleanliness while preserving the no provider model path, memory write, WeChat start, or transport authority widening boundary.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -467,6 +469,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage163 adds page-body verification after Stage162 web search: candidate URLs are opened, page text is scored against the query, `web_observation_ledger[*].page_evidence` records support/weak/unsupported/rejected status, CLI traces render `page=<status> opened=<count>`, and Stage135 exposes `page_evidence_verifier` metrics. Verification on `2026-05-27`: Stage163 targeted `8 passed`, neighbor `55 passed`, tool-stack regression `86 passed`, runtime `91 passed`, full regression `724 passed`, and live smoke verified `https://developers.openai.com/codex/cli` with `page_status=supported`.
   - Stage164 adds search provider fallback and source synthesis: `web_observation_ledger[*].stage164_search_fallback` records provider attempts, `web_observation_ledger[*].source_synthesis` combines supported page evidence and flags conflicts, CLI traces render `synthesis=<status> supported_sources=<n>`, and Stage135 exposes `source_synthesis` metrics. Verification on `2026-05-27`: Stage164 targeted `8 passed`, neighbor `63 passed`, tool-stack regression `94 passed`, runtime `91 passed`, full regression `732 passed`, and live smoke forced primary failure then verified fallback provider `duckduckgo_html` with `source_synthesis=supported`.
   - Stage165 adds answer-time citation formatting: Stage151 grounded web answers now prefer Stage164 `source_synthesis`, render numbered source URLs and snippets, include freshness notes, and degrade to bounded weak/unsupported/conflicted-source language when support is insufficient. Verification on `2026-05-27`: Stage165 targeted `10 passed`, neighbor `59 passed`, tool-stack regression `104 passed`, runtime `91 passed`, full regression `742 passed`, public hygiene passed, `git diff --check` passed with CRLF normalization warnings only, and live smoke verified fallback search to `https://developers.openai.com/codex/cli` with a readable cited answer and no CSS noise.
+  - Stage166 adds search-quality evaluation: `run-search-quality-eval` writes HTML/JSON/JSONL artifacts over official docs, API docs, current information, financial filings, ambiguous entities, and failure cases, with metrics for support, citation sufficiency, freshness, unsupported claims, conflicts, CSS/page chrome leakage, expected-term coverage, and latency. Verification on `2026-05-27`: Stage166 targeted `10 passed`, search stack `48 passed`, runtime `91 passed`, full regression `752 passed`; dry-run report passed with `query_count=6`, full-stack citation sufficiency `1.0` versus raw baseline `0.1667`; live-smoke report passed against `https://developers.openai.com/codex/cli` with citation sufficiency `1.0` and unsupported claim rate `0.0`.
 
 ## Invariants
 - Do not silently change online transport modes

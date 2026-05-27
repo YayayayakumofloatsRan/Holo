@@ -48,6 +48,7 @@ from .stage146_benchmark_bundle import run_biomimetic_benchmark
 from .stage146_biomimetic_replay import export_biomimetic_replay
 from .stage147_replay_calibration import evaluate_replay_calibration
 from .holo_core_bench import run_holo_core_bench
+from .stage166_search_quality_eval import run_search_quality_eval
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
@@ -9329,6 +9330,20 @@ def command_run_core_bench(
     return 0
 
 
+def command_run_search_quality_eval(
+    *,
+    output: str,
+    dry_run: bool,
+    mode: str,
+    fail_under: float | None,
+) -> int:
+    report = run_search_quality_eval(output=output, dry_run=dry_run, mode=mode, fail_under=fail_under)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_under is not None and bool(report.get("fail_under_triggered", False)):
+        return 1
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
@@ -10539,6 +10554,14 @@ def main(argv: list[str] | None = None) -> int:
     core_bench_parser.add_argument("--dry-run", action="store_true")
     core_bench_parser.add_argument("--mode", choices=("dry-run", "live-smoke"), default="dry-run")
     core_bench_parser.add_argument("--fail-under", type=float, default=None)
+    search_quality_parser = subparsers.add_parser(
+        "run-search-quality-eval",
+        help="Write the Stage166 search quality evaluation artifacts",
+    )
+    search_quality_parser.add_argument("--output", required=True)
+    search_quality_parser.add_argument("--dry-run", action="store_true")
+    search_quality_parser.add_argument("--mode", choices=("dry-run", "live-smoke"), default="dry-run")
+    search_quality_parser.add_argument("--fail-under", type=float, default=None)
     project_state_parser = subparsers.add_parser("project-state", help="Inspect the Stage155 project state graph")
     project_state_parser.add_argument("--project", required=True)
     project_state_parser.add_argument("--summary", action="store_true")
@@ -11575,6 +11598,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "run-core-bench":
         return command_run_core_bench(
+            output=args.output,
+            dry_run=args.dry_run,
+            mode=args.mode,
+            fail_under=args.fail_under,
+        )
+    if args.command == "run-search-quality-eval":
+        return command_run_search_quality_eval(
             output=args.output,
             dry_run=args.dry_run,
             mode=args.mode,
