@@ -199,6 +199,7 @@ def build_stage135_i_state_topology(
     stage145_reaction_kernel_shadow: dict[str, Any] | None = None,
     stage148_react_state: dict[str, Any] | None = None,
     stage150_context_memory_fabric: dict[str, Any] | None = None,
+    stage156_context_compiler: dict[str, Any] | None = None,
     stage151_tool_decision: dict[str, Any] | None = None,
     stage152_deepseek_tool_loop: dict[str, Any] | None = None,
     stage153_agent_event_stream: dict[str, Any] | None = None,
@@ -232,6 +233,7 @@ def build_stage135_i_state_topology(
     reaction_kernel = _dict(stage145_reaction_kernel_shadow)
     react_state = _dict(stage148_react_state or packet.get("stage148_react_state", {}))
     context_memory_fabric = _dict(stage150_context_memory_fabric or packet.get("stage150_context_memory_fabric", {}))
+    context_compiler = _dict(stage156_context_compiler or packet.get("stage156_context_compiler", {}))
     tool_decision = _dict(stage151_tool_decision or packet.get("stage151_tool_decision", {}))
     native_tool_loop = _dict(stage152_deepseek_tool_loop or packet.get("stage152_deepseek_tool_loop", {}))
     agent_event_stream = _dict(stage153_agent_event_stream or packet.get("stage153_agent_event_stream", {}))
@@ -483,6 +485,26 @@ def build_stage135_i_state_topology(
             edges.append(_edge("user_directive_kernel", "context_memory_fabric", relation="overrides_persona_memory", weight=0.58, summary="user directives outrank persona and style memory in the context packet"))
         edges.append(_edge("context_memory_fabric", "fast_packet", relation="frames_provider_packet", weight=0.62, summary="structured context is rendered before provider speech"))
         edges.append(_edge("context_memory_fabric", "memory_delta", relation="separates_state_from_transcript", weight=0.5, summary="background compact is internal and raw chat is not treated as reusable memory"))
+
+    if context_compiler:
+        estimated_tokens = int(context_compiler.get("estimated_prompt_tokens", 0) or 0)
+        cache_ratio = float(context_compiler.get("cache_hit_ratio", 0.0) or 0.0)
+        truncated = list(context_compiler.get("truncated_sections", []) or [])
+        nodes.append(
+            _node(
+                "stage156_context_compiler",
+                "context compiler",
+                channel="context_compiler",
+                kind="context_packet",
+                x=0.48,
+                y=0.38,
+                weight=0.7 if estimated_tokens else 0.36,
+                summary=f"tokens={estimated_tokens}; stable={context_compiler.get('stable_prefix_tokens', 0)}; dynamic={context_compiler.get('dynamic_suffix_tokens', 0)}; cache_hit_ratio={cache_ratio}; truncated={len(truncated)}",
+            )
+        )
+        source = "context_memory_fabric" if context_memory_fabric else "holo_self"
+        edges.append(_edge(source, "stage156_context_compiler", relation="compiles_context_sections", weight=0.62, summary="Stage150 working context is compiled into stable prefix and dynamic suffix"))
+        edges.append(_edge("stage156_context_compiler", "fast_packet", relation="frames_provider_packet", weight=0.58, summary="compiled context controls prompt budget and cache discipline"))
 
     if project_state:
         project_name = str(project_state.get("project", "") or _dict(project_state.get("active_project", {})).get("title", "") or "project")
@@ -776,6 +798,10 @@ def build_stage135_i_state_topology(
             "context_memory_fabric_slot_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("reusable_state_slots", []))) if context_memory_fabric else 0,
             "context_memory_fabric_open_loop_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("open_loops", []))) if context_memory_fabric else 0,
             "context_memory_fabric_evidence_count": len(_list_dicts(_dict(context_memory_fabric.get("working_context_packet", {})).get("evidence_ledger_view", []))) if context_memory_fabric else 0,
+            "context_compiler_node_count": sum(1 for node in nodes if node["channel"] == "context_compiler"),
+            "context_compiler_estimated_prompt_tokens": int(context_compiler.get("estimated_prompt_tokens", 0) or 0) if context_compiler else 0,
+            "context_compiler_cache_hit_ratio": float(context_compiler.get("cache_hit_ratio", 0.0) or 0.0) if context_compiler else 0.0,
+            "context_compiler_truncated_count": len(list(context_compiler.get("truncated_sections", []) or [])) if context_compiler else 0,
             "tool_decision_loop_node_count": sum(1 for node in nodes if node["channel"] == "tool_decision_loop"),
             "tool_decision_loop_selected_count": len(_list_dicts(tool_decision.get("selected_actions", []))) if tool_decision else 0,
             "tool_decision_loop_purpose": str(tool_decision.get("purpose", "") or "") if tool_decision else "",
@@ -929,6 +955,50 @@ def attach_stage155_project_state_topology(
     metrics["project_state_graph_project"] = project_name
     metrics["project_state_graph_open_loop_count"] = int(project_state.get("open_loop_count", 0) or len(open_questions) + len(blocked_items))
     metrics["project_state_graph_next_action_count"] = int(project_state.get("next_action_count", 0) or len(next_actions))
+    payload["metrics"] = metrics
+    return payload
+
+
+def attach_stage156_context_compiler_topology(
+    topology: dict[str, Any] | None,
+    stage156_context_compiler: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(topology or {})
+    compiler = _dict(stage156_context_compiler)
+    if not payload.get("schema") or not compiler:
+        return payload
+    nodes = list(payload.get("nodes", []) or [])
+    edges = list(payload.get("edges", []) or [])
+    if any(isinstance(node, dict) and node.get("id") == "stage156_context_compiler" for node in nodes):
+        return payload
+    estimated_tokens = int(compiler.get("estimated_prompt_tokens", 0) or 0)
+    cache_ratio = float(compiler.get("cache_hit_ratio", 0.0) or 0.0)
+    truncated = list(compiler.get("truncated_sections", []) or [])
+    nodes.append(
+        _node(
+            "stage156_context_compiler",
+            "context compiler",
+            channel="context_compiler",
+            kind="context_packet",
+            x=0.48,
+            y=0.38,
+            weight=0.7 if estimated_tokens else 0.36,
+            summary=f"tokens={estimated_tokens}; stable={compiler.get('stable_prefix_tokens', 0)}; dynamic={compiler.get('dynamic_suffix_tokens', 0)}; cache_hit_ratio={cache_ratio}; truncated={len(truncated)}",
+        )
+    )
+    node_ids = {str(node.get("id", "") or "") for node in nodes if isinstance(node, dict)}
+    source = "context_memory_fabric" if "context_memory_fabric" in node_ids else "holo_self"
+    edges.append(_edge(source, "stage156_context_compiler", relation="compiles_context_sections", weight=0.62, summary="Stage150 working context is compiled into stable prefix and dynamic suffix"))
+    edges.append(_edge("stage156_context_compiler", "fast_packet", relation="frames_provider_packet", weight=0.58, summary="compiled context controls prompt budget and cache discipline"))
+    payload["nodes"] = nodes
+    payload["edges"] = edges
+    metrics = dict(payload.get("metrics", {}) or {})
+    metrics["node_count"] = len(nodes)
+    metrics["edge_count"] = len(edges)
+    metrics["context_compiler_node_count"] = 1
+    metrics["context_compiler_estimated_prompt_tokens"] = estimated_tokens
+    metrics["context_compiler_cache_hit_ratio"] = cache_ratio
+    metrics["context_compiler_truncated_count"] = len(truncated)
     payload["metrics"] = metrics
     return payload
 

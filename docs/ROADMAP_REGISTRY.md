@@ -159,8 +159,8 @@ Stage155: project state graph
 
 Stage156: context compiler and cache discipline
 - Implemented a deterministic `context_compiler` surface that separates stable prefix, project instructions, tool schema, directives, dynamic turn state, observations, and final constraints.
-- Records estimated token budget and DeepSeek-style cache hit/miss counters when usage metadata is available.
-- Keeps background compact internal and does not add provider calls, tool execution, memory writes, transport authority, WeChat starts, or live policy changes.
+- `reply_api.py` and `processors.py` now compile Stage156 before provider generation, render `Context Compiler State` into the prompt, update cache metrics from usage metadata, and propagate the report to reply JSON, outgoing/archive metadata, `ReplyPlan.debug`, CLI `/context` and `/cache`, and Stage135 topology.
+- Keeps background compact internal, protects Stage149 directives from truncation, repairs visible compact leakage, and does not add provider calls, tool execution, memory writes, transport authority, WeChat starts, or live policy changes.
 
 Stage157: Holo core bench
 - Implemented a deterministic dry-run `holo.stage157.core_bench.v1` availability bench over interactive CLI, tool loop, engineering actions, project state, context compiler, and domain scaffold surfaces.

@@ -9327,7 +9327,9 @@ CHAT_HELP = """Commands:
   /eng diff [path]            record git diff
   /health                show live readiness/health
   /memory [query]        show recall trace for current topic or query
+  /context               show Stage156 compiled context metadata
   /compact               show compact status metadata only
+  /cache                 show Stage156 cache budget metadata
   /clear                 clear the terminal screen only
   /status                show compact brain status
   /readiness             show live readiness
@@ -9675,6 +9677,12 @@ def command_chat(
             return run_engineering_command(rest)
         if command == "/compact":
             print(cli_session.render_compact())
+            return True
+        if command == "/context":
+            print(cli_session.render_context())
+            return True
+        if command == "/cache":
+            print(cli_session.render_cache())
             return True
         if command == "/clear":
             print("\033[2J\033[H", end="")

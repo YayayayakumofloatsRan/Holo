@@ -38,6 +38,7 @@ from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import stage148_prompt_lines
 from .stage149_user_directives import merge_stage149_semantic_directives, stage149_prompt_lines
 from .stage150_context_memory_fabric import build_stage150_context_memory_fabric, stage150_prompt_lines
+from .context_compiler import compile_context_memory, render_context_compiler_prompt_lines
 from .stage152_deepseek_tool_loop import deepseek_native_tool_names
 from .stage151_tool_decision_loop import maybe_ground_visible_web_reply
 from .stage131_continuation import stage131_short_turn_requires_reply
@@ -1501,8 +1502,20 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
     short_term_block = _render_section("Short Term Working Memory:", short_term_lines)
     stage149_lines = stage149_prompt_lines(packet.get("stage149_user_directives", {}))
     user_directive_block = _render_section("User Directive State:", stage149_lines)
-    stage150_lines = stage150_prompt_lines(packet.get("stage150_context_memory_fabric", {}))
+    stage150_report = dict(packet.get("stage150_context_memory_fabric", {})) if isinstance(packet.get("stage150_context_memory_fabric", {}), dict) else {}
+    stage156_report = dict(packet.get("stage156_context_compiler", {})) if isinstance(packet.get("stage156_context_compiler", {}), dict) else {}
+    if stage150_report and stage156_report.get("schema") != "holo.stage156.context_compiler.v1":
+        stage156_report = compile_context_memory(
+            stage150_report,
+            current_user_request=str(context.user_text or ""),
+            tool_schemas=tool_lines,
+        )
+        packet["stage156_context_compiler"] = stage156_report
+        context.mind_packet = packet
+        context.sidecar = packet
+    stage150_lines = stage150_prompt_lines(stage150_report)
     engineering_context_block = _render_section("Engineering Context State:", stage150_lines)
+    context_compiler_block = _render_section("Context Compiler State:", render_context_compiler_prompt_lines(stage156_report))
     stage148_lines = stage148_prompt_lines(packet.get("stage148_react_state", {}))
     reusable_state_block = _render_section("Reusable State Memory:", stage148_lines)
     react_state_block = _render_section(
@@ -1550,6 +1563,7 @@ def render_chat_prompt(context: TurnContext, *, turn_plan: TurnPlan) -> str:
         selected_action_block,
         user_directive_block,
         engineering_context_block,
+        context_compiler_block,
         situational_block,
         short_term_block,
         reusable_state_block,
@@ -1681,11 +1695,24 @@ class CodexCliProcessor:
         timeout_seconds = _reply_processor_timeout_seconds(context, lane)
         agent_tool_requests = _agent_tool_requests(context)
         short_term_lines = build_short_term_working_memory_lines(context)
-        stage150_lines = stage150_prompt_lines(context.mind_packet.get("stage150_context_memory_fabric", {}))
+        stage150_report = dict(context.mind_packet.get("stage150_context_memory_fabric", {})) if isinstance(context.mind_packet.get("stage150_context_memory_fabric", {}), dict) else {}
+        stage156_context_compiler = dict(context.mind_packet.get("stage156_context_compiler", {})) if isinstance(context.mind_packet.get("stage156_context_compiler", {}), dict) else {}
+        if stage150_report and stage156_context_compiler.get("schema") != "holo.stage156.context_compiler.v1":
+            stage156_context_compiler = compile_context_memory(
+                stage150_report,
+                current_user_request=str(context.user_text or ""),
+                tool_schemas=list(context.capability_context.get("tool_context_lines", [])),
+            )
+            packet_with_stage156 = dict(context.mind_packet or context.sidecar)
+            packet_with_stage156["stage156_context_compiler"] = stage156_context_compiler
+            context.mind_packet = packet_with_stage156
+            context.sidecar = packet_with_stage156
+        stage150_lines = stage150_prompt_lines(stage150_report)
+        stage156_lines = render_context_compiler_prompt_lines(stage156_context_compiler)
         stage135_i_state_prompt_frame = build_stage135_i_state_prompt_frame(context)
         stage132_fast_context_frame = build_stage132_fast_context_frame(
             context,
-            short_term_lines=stage150_lines[:12] + list(stage135_i_state_prompt_frame.get("lines", [])) + short_term_lines,
+            short_term_lines=stage156_lines[:12] + stage150_lines[:12] + list(stage135_i_state_prompt_frame.get("lines", [])) + short_term_lines,
         )
         fast_packet_started_at = time.perf_counter()
         fast_result = self._run_runner(
@@ -1729,6 +1756,11 @@ class CodexCliProcessor:
                 history=context.history,
                 sidecar=packet_after_fast,
                 capability_context=context.capability_context,
+            )
+            packet_after_fast["stage156_context_compiler"] = compile_context_memory(
+                dict(packet_after_fast.get("stage150_context_memory_fabric", {})),
+                current_user_request=str(context.user_text or ""),
+                tool_schemas=list(context.capability_context.get("tool_context_lines", [])),
             )
             context.mind_packet = packet_after_fast
             context.sidecar = packet_after_fast
@@ -1832,6 +1864,7 @@ class CodexCliProcessor:
                 stage144_context_economy=stage144_context_economy,
                 stage145_outcome_appraisal=stage145_outcome_appraisal,
                 stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
+                stage156_context_compiler=dict(context.mind_packet.get("stage156_context_compiler", {})),
             )
             return ReplyPlan(
                 text=joined,
@@ -1863,6 +1896,7 @@ class CodexCliProcessor:
                     "stage145_outcome_appraisal": stage145_outcome_appraisal,
                     "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
                     "stage150_context_memory_fabric": dict(context.mind_packet.get("stage150_context_memory_fabric", {})),
+                    "stage156_context_compiler": dict(context.mind_packet.get("stage156_context_compiler", {})),
                     "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                     "stage135_i_state_topology": stage135_topology,
                     "memory_observation_ledger": memory_observation_ledger,
@@ -1947,6 +1981,16 @@ class CodexCliProcessor:
         if result.returncode != 0:
             raise RuntimeError(result.stderr or result.stdout or "codex processor failure")
         result_metadata = dict(getattr(result, "metadata", {}) or {})
+        stage156_context_compiler = compile_context_memory(
+            dict(context.mind_packet.get("stage150_context_memory_fabric", {})),
+            current_user_request=str(context.user_text or ""),
+            tool_schemas=list(context.capability_context.get("tool_context_lines", [])),
+            usage=dict(result_metadata.get("usage", {})),
+        )
+        packet_after_usage = dict(context.mind_packet or context.sidecar)
+        packet_after_usage["stage156_context_compiler"] = stage156_context_compiler
+        context.mind_packet = packet_after_usage
+        context.sidecar = packet_after_usage
         tool_observation_ledger = list(result_metadata.get("tool_observation_ledger", []) or [])
         engineering_action_ledger = normalize_engineering_action_ledger(
             result_metadata.get("engineering_action_ledger", context.mind_packet.get("engineering_action_ledger", []))
@@ -2075,6 +2119,7 @@ class CodexCliProcessor:
             stage144_context_economy=stage144_context_economy,
             stage145_outcome_appraisal=stage145_outcome_appraisal,
             stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
+            stage156_context_compiler=stage156_context_compiler,
             stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
             engineering_action_ledger=engineering_action_ledger,
             project_state_graph=dict(context.mind_packet.get("project_state_graph", {})),
@@ -2125,6 +2170,7 @@ class CodexCliProcessor:
                 "stage145_outcome_appraisal": stage145_outcome_appraisal,
                 "stage145_reaction_kernel_shadow": stage145_reaction_kernel_shadow,
                 "stage150_context_memory_fabric": dict(context.mind_packet.get("stage150_context_memory_fabric", {})),
+                "stage156_context_compiler": stage156_context_compiler,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
                 "stage135_i_state_topology": stage135_topology,
                 "recall_reconstruction": dict(context.mind_packet.get("recall_reconstruction", {})),

@@ -10,9 +10,13 @@ CONTEXT_COMPILER_SCHEMA = "holo.stage156.context_compiler.v1"
 _NOISE_PATTERNS = (
     re.compile(r"^\s*#\s*In app browser:", re.I),
     re.compile(r"^\s*Current URL:\s*https?://(?:127\.0\.0\.1|0\.0\.0\.0|localhost)", re.I),
+    re.compile(r"^\s*Current URL:\s*http://(?:127\.0\.0\.1|0\.0\.0\.0|localhost)", re.I),
     re.compile(r"\b/health\b", re.I),
     re.compile(r"^\s*Holo CLI chat\s*\|", re.I),
     re.compile(r"^\s*Type /help for commands", re.I),
+    re.compile(r"^\s*environment[:=]", re.I),
+    re.compile(r"^\s*session started", re.I),
+    re.compile(r"^\s*health[-_ ]?check", re.I),
 )
 
 
@@ -50,6 +54,49 @@ def _clean_lines(lines: list[Any], *, limit: int = 10) -> list[str]:
     return cleaned
 
 
+def _observation_lines(value: Any, *, limit: int = 16) -> list[str]:
+    lines: list[str] = []
+
+    def visit(item: Any) -> None:
+        if len(lines) >= limit:
+            return
+        if item is None:
+            return
+        if isinstance(item, str):
+            lines.extend(_clean_lines([item], limit=limit - len(lines)))
+            return
+        if isinstance(item, dict):
+            status = str(item.get("status", "") or "").strip()
+            family = str(item.get("family", item.get("source_family", item.get("action_type", item.get("tool", "")))) or "").strip()
+            summary = str(item.get("summary", item.get("text", item.get("line", ""))) or "").strip()
+            if summary:
+                prefix = " ".join(part for part in (family, status) if part)
+                lines.extend(_clean_lines([f"{prefix}: {summary}" if prefix else summary], limit=limit - len(lines)))
+            for key in (
+                "tool_observations",
+                "engineering_observations",
+                "memory_observations",
+                "web_observations",
+                "visual_observation",
+                "time_observation",
+                "results",
+                "lines",
+            ):
+                if key in item:
+                    visit(item.get(key))
+            return
+        if isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child)
+                if len(lines) >= limit:
+                    break
+            return
+        lines.extend(_clean_lines([str(item)], limit=limit - len(lines)))
+
+    visit(value)
+    return _clean_lines(lines, limit=limit)
+
+
 def _section(title: str, lines: list[str]) -> str:
     body = "\n".join(f"- {line}" for line in lines if str(line).strip())
     return f"{title}\n{body}" if body else f"{title}\n- none"
@@ -59,7 +106,14 @@ def _compact_background(packet: dict[str, Any]) -> dict[str, Any]:
     compact = _dict(packet.get("compact_background_summary"))
     open_loops = _list(packet.get("open_loops")) or _list(packet.get("open_questions")) or []
     decisions = _list(packet.get("latest_decisions"))
-    events = _clean_lines(_list(packet.get("relevant_recent_events")), limit=6)
+    event_inputs: list[str] = []
+    for item in _list(packet.get("relevant_recent_events")):
+        if isinstance(item, dict):
+            event_inputs.append(str(item.get("summary", "") or item.get("text", "") or item.get("line", "") or ""))
+        else:
+            event_inputs.append(str(item or ""))
+    events = _clean_lines(event_inputs, limit=6)
+    filtered_events = _clean_lines(events, limit=6)
     return {
         "task_state_summary": compact_text(str(_dict(packet.get("active_task_state")).get("summary", "") or packet.get("user_goal", "")), 320),
         "decision_summary": "; ".join(
@@ -67,12 +121,14 @@ def _compact_background(packet: dict[str, Any]) -> dict[str, Any]:
             for item in decisions[:4]
         ),
         "directive_summary": compact_text(str(_dict(packet.get("directive_state")).get("summary", "")), 320),
-        "evidence_summary": "; ".join(events[:4]),
+        "evidence_summary": "; ".join(filtered_events[:4]),
         "open_loop_summary": "; ".join(
             compact_text(str(item.get("title", item) if isinstance(item, dict) else item), 180)
             for item in open_loops[:6]
         ),
         "unresolved_conflicts": list(compact.get("unresolved_conflicts", [])) if isinstance(compact.get("unresolved_conflicts"), list) else [],
+        "filtered_recent_events": filtered_events,
+        "user_visible": False,
     }
 
 
@@ -110,11 +166,13 @@ def compile_context_memory(
     packet = _dict(fabric.get("working_context_packet")) or fabric
     exact_request = str(current_user_request or _dict(packet.get("user_goal")).get("current_user_request_exact", "") or packet.get("user_goal", "") or "")
     directives = _extract_directives(packet)
-    observations = _clean_lines(
-        _list(packet.get("evidence_ledger_view"))
-        + _list(packet.get("tool_memory_visual_observations"))
-        + _list(packet.get("relevant_recent_events")),
-        limit=14,
+    observations = _observation_lines(
+        [
+            packet.get("evidence_ledger_view"),
+            packet.get("tool_memory_visual_observations"),
+            packet.get("relevant_recent_events"),
+        ],
+        limit=18,
     )
     active_project = _dict(packet.get("active_project"))
     active_tasks = _list(packet.get("active_tasks"))
@@ -190,6 +248,14 @@ def compile_context_memory(
         "schema": CONTEXT_COMPILER_SCHEMA,
         "compiled_at": utc_now(),
         "cache_key": "stage156:" + stable_digest(*sections.values(), limit=18),
+        "stable_prefix_cache_key": "stage156:stable:" + stable_digest(sections["stable_prefix"], sections["project_instruction_block"], sections["tool_schema_block"], limit=18),
+        "dynamic_suffix_digest": "stage156:dynamic:" + stable_digest(
+            sections["directive_block"],
+            sections["dynamic_turn_block"],
+            sections["observation_block"],
+            sections["final_constraints_block"],
+            limit=18,
+        ),
         "current_user_request_exact": exact_request,
         **sections,
         "background_compact": _compact_background(packet),
@@ -214,6 +280,55 @@ def compile_context_memory(
     }
 
 
+def render_context_compiler_prompt_lines(report: dict[str, Any] | None, *, limit: int = 36) -> list[str]:
+    payload = _dict(report)
+    if not payload:
+        return []
+    lines = [
+        f"schema={payload.get('schema', CONTEXT_COMPILER_SCHEMA)}",
+        f"cache_key={payload.get('cache_key', '')}",
+        f"stable_prefix_cache_key={payload.get('stable_prefix_cache_key', '')}",
+        f"stable_prefix_tokens={payload.get('stable_prefix_tokens', 0)}",
+        f"dynamic_suffix_tokens={payload.get('dynamic_suffix_tokens', 0)}",
+        f"estimated_prompt_tokens={payload.get('estimated_prompt_tokens', 0)}",
+        f"cache_hit_tokens={payload.get('cache_hit_tokens', 0)}",
+        f"cache_miss_tokens={payload.get('cache_miss_tokens', 0)}",
+        f"cache_hit_ratio={payload.get('cache_hit_ratio', 0.0)}",
+        f"truncated_sections={','.join(payload.get('truncated_sections', []) or []) or '-'}",
+        f"current_user_request_exact={compact_text(str(payload.get('current_user_request_exact', '') or ''), 280)}",
+        "stable_prefix=cacheable_static_policy",
+        "dynamic_suffix=current_turn_directives_observations_constraints",
+        "background_compact_internal_only=true",
+    ]
+    for key in (
+        "project_instruction_block",
+        "directive_block",
+        "dynamic_turn_block",
+        "observation_block",
+        "final_constraints_block",
+    ):
+        value = str(payload.get(key, "") or "")
+        if value.strip():
+            lines.append(f"{key}={compact_text(value, 420)}")
+    return [line for line in lines if str(line).strip()][:limit]
+
+
+_VISIBLE_COMPACT_PATTERNS = (
+    (re.compile(r"\bI compacted (?:the )?context\b", re.I), "I prepared the working context"),
+    (re.compile(r"\bI compressed (?:the )?context\b", re.I), "I prepared the working context"),
+    (re.compile(r"\bI summarized (?:the )?background compact\b", re.I), "I prepared the working context"),
+    (re.compile(r"我压缩了上下文"), "我整理了工作上下文"),
+    (re.compile(r"我做了上下文压缩"), "我整理了工作上下文"),
+)
+
+
+def repair_visible_compact_leak(text: str) -> str:
+    repaired = str(text or "")
+    for pattern, replacement in _VISIBLE_COMPACT_PATTERNS:
+        repaired = pattern.sub(replacement, repaired)
+    return repaired
+
+
 def render_context_compiler_report(report: dict[str, Any]) -> str:
     payload = _dict(report)
     if not payload:
@@ -223,6 +338,21 @@ def render_context_compiler_report(report: dict[str, Any]) -> str:
         f"schema={payload.get('schema', CONTEXT_COMPILER_SCHEMA)}",
         f"estimated_prompt_tokens={payload.get('estimated_prompt_tokens', 0)}",
         f"cache_hit_ratio={payload.get('cache_hit_ratio', 0.0)}",
+        f"cache_tokens=hit:{payload.get('cache_hit_tokens', 0)} miss:{payload.get('cache_miss_tokens', 0)}",
         f"truncated_sections={','.join(payload.get('truncated_sections', []) or []) or '-'}",
     ]
     return "\n".join(lines)
+
+
+def render_context_cache_status(report: dict[str, Any] | None) -> str:
+    payload = _dict(report)
+    if not payload:
+        return "[cache] no Stage156 context compiler report"
+    return (
+        "[cache] "
+        f"hit={int(payload.get('cache_hit_tokens', 0) or 0)} "
+        f"miss={int(payload.get('cache_miss_tokens', 0) or 0)} "
+        f"ratio={payload.get('cache_hit_ratio', 0.0)} "
+        f"stable_tokens={int(payload.get('stable_prefix_tokens', 0) or 0)} "
+        f"dynamic_tokens={int(payload.get('dynamic_suffix_tokens', 0) or 0)}"
+    )

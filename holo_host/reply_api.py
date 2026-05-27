@@ -76,6 +76,7 @@ from .stage135_i_state_topology import (
     attach_stage153_agent_event_stream_topology,
     attach_stage154_engineering_action_topology,
     attach_stage155_project_state_topology,
+    attach_stage156_context_compiler_topology,
     build_stage135_i_state_topology,
 )
 from .stage142_semantic_novelty_gate import apply_stage142_gate
@@ -85,6 +86,7 @@ from .stage145_reaction_kernel import build_stage145_shadow_reports
 from .stage148_react_agent_loop import build_stage148_react_state
 from .stage149_user_directives import apply_stage149_visible_directives, build_stage149_user_directives
 from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
+from .context_compiler import compile_context_memory, repair_visible_compact_leak
 from .project_state_graph import ProjectStateGraph, detect_project_state_updates
 from .stage151_live_tool_trace import (
     build_stage151_live_tool_trace,
@@ -9370,6 +9372,12 @@ class HoloReplyService:
             capability_context=capability_context,
         )
         sidecar["stage150_context_memory_fabric"] = stage150_context_memory_fabric
+        stage156_context_compiler = compile_context_memory(
+            stage150_context_memory_fabric,
+            current_user_request=turn.text,
+            tool_schemas=list(capability_context.get("tool_context_lines", [])),
+        )
+        sidecar["stage156_context_compiler"] = stage156_context_compiler
         attention_state = build_attention_state(turn.text, channel=turn.channel, metadata=turn.metadata)
         turn_context = TurnContext(
             channel=turn.channel,
@@ -9405,6 +9413,10 @@ class HoloReplyService:
             stage150_context_memory_fabric = dict(sidecar.get("stage150_context_memory_fabric", {}))
         else:
             sidecar["stage150_context_memory_fabric"] = stage150_context_memory_fabric
+        if isinstance(sidecar.get("stage156_context_compiler", {}), dict):
+            stage156_context_compiler = dict(sidecar.get("stage156_context_compiler", {}))
+        else:
+            sidecar["stage156_context_compiler"] = stage156_context_compiler
         processor_ms = int(reply_plan.timing_ms.get("processor_ms", 0))
 
         self.store.update_thread_session(int(thread["id"]), reply_plan.session_id)
@@ -9420,6 +9432,7 @@ class HoloReplyService:
         reply_debug = reply_plan.debug if isinstance(reply_plan.debug, dict) else {}
         reply_debug["stage149_user_directives"] = stage149_user_directives
         reply_debug["stage150_context_memory_fabric"] = stage150_context_memory_fabric
+        reply_debug["stage156_context_compiler"] = stage156_context_compiler
         stage149_user_directive_count = int(stage149_user_directives.get("hard_directive_count", 0) or 0)
         stage149_user_directive_status = str(stage149_user_directives.get("status", "") or "")
         stage132_progressive_stream = (
@@ -9617,6 +9630,8 @@ class HoloReplyService:
         memory_alignment_claim_count = int(memory_alignment.get("claim_count", 0) or 0)
         memory_alignment_unsupported_count = int(memory_alignment.get("unsupported_claim_count", 0) or 0)
         memory_alignment_contradicted_count = int(memory_alignment.get("contradicted_claim_count", 0) or 0)
+        repaired_text = repair_visible_compact_leak(repaired_text)
+        repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
         planned_bubbles = (
             reply_plan.bubbles
             if bool(stage132_progressive_stream.get("preserve_bubbles", False)) and not grounding_repaired
@@ -9648,6 +9663,8 @@ class HoloReplyService:
         cleaned_bubbles: list[ReplyBubble] = []
         for bubble in bubbles:
             bubble_text = apply_stage149_visible_directives(bubble.text, stage149_user_directives).strip()
+            bubble_text = repair_visible_compact_leak(bubble_text).strip()
+            bubble_text = apply_stage149_visible_directives(bubble_text, stage149_user_directives).strip()
             if not bubble_text:
                 continue
             if cleaned_bubbles and cleaned_bubbles[-1].text == bubble_text:
@@ -9659,6 +9676,8 @@ class HoloReplyService:
             " ".join(bubble.text for bubble in bubbles).strip(),
         )
         final_reply = apply_stage149_visible_directives(final_reply, stage149_user_directives) or "收到。"
+        final_reply = repair_visible_compact_leak(final_reply)
+        final_reply = apply_stage149_visible_directives(final_reply, stage149_user_directives) or final_reply
         project_state_update = detect_project_state_updates(
             project=project_name,
             user_text=turn.text,
@@ -9798,6 +9817,18 @@ class HoloReplyService:
         stage150_evidence_count = int(stage150_context_memory_fabric.get("evidence_count", 0) or 0)
         stage150_open_loop_count = int(stage150_context_memory_fabric.get("open_loop_count", 0) or 0)
         stage150_background_compact_internal = bool(stage150_context_memory_fabric.get("background_compact_internal_only", True))
+        stage156_context_compiler = compile_context_memory(
+            stage150_context_memory_fabric,
+            current_user_request=turn.text,
+            tool_schemas=list(capability_context.get("tool_context_lines", [])),
+            usage=dict(reply_debug.get("usage", {})) if isinstance(reply_debug.get("usage", {}), dict) else {},
+        )
+        sidecar["stage156_context_compiler"] = stage156_context_compiler
+        reply_debug["stage156_context_compiler"] = stage156_context_compiler
+        stage156_estimated_prompt_tokens = int(stage156_context_compiler.get("estimated_prompt_tokens", 0) or 0)
+        stage156_cache_hit_tokens = int(stage156_context_compiler.get("cache_hit_tokens", 0) or 0)
+        stage156_cache_miss_tokens = int(stage156_context_compiler.get("cache_miss_tokens", 0) or 0)
+        stage156_cache_hit_ratio = float(stage156_context_compiler.get("cache_hit_ratio", 0.0) or 0.0)
         stage151_live_tool_trace = build_stage151_live_tool_trace(
             user_text=turn.text,
             capability_context=capability_context,
@@ -9899,6 +9930,11 @@ class HoloReplyService:
                 stage135_i_state_topology,
                 stage153_agent_event_stream,
             )
+        if topology_present and stage156_context_compiler:
+            stage135_i_state_topology = attach_stage156_context_compiler_topology(
+                stage135_i_state_topology,
+                stage156_context_compiler,
+            )
         if topology_present and engineering_action_ledger:
             stage135_i_state_topology = attach_stage154_engineering_action_topology(
                 stage135_i_state_topology,
@@ -9918,6 +9954,7 @@ class HoloReplyService:
             or capability_context.get("stage151_tool_decision")
             or stage153_agent_event_stream
             or project_state_graph
+            or stage156_context_compiler
         ):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
@@ -9935,6 +9972,7 @@ class HoloReplyService:
                 stage145_outcome_appraisal=stage145_outcome_appraisal,
                 stage145_reaction_kernel_shadow=stage145_reaction_kernel_shadow,
                 stage150_context_memory_fabric=stage150_context_memory_fabric,
+                stage156_context_compiler=stage156_context_compiler,
                 stage151_tool_decision=capability_context.get("stage151_tool_decision", {}),
                 stage152_deepseek_tool_loop=stage152_deepseek_tool_loop,
                 stage153_agent_event_stream=stage153_agent_event_stream,
@@ -10006,6 +10044,11 @@ class HoloReplyService:
                 "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
                 "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
                 "stage150_background_compact_internal": stage150_background_compact_internal,
+                "stage156_context_compiler": stage156_context_compiler,
+                "stage156_estimated_prompt_tokens": stage156_estimated_prompt_tokens,
+                "stage156_cache_hit_tokens": stage156_cache_hit_tokens,
+                "stage156_cache_miss_tokens": stage156_cache_miss_tokens,
+                "stage156_cache_hit_ratio": stage156_cache_hit_ratio,
                 "stage151_network_grounding": stage151_network_grounding,
                 "stage151_network_grounding_status": stage151_network_grounding_status,
                 "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
@@ -10111,6 +10154,11 @@ class HoloReplyService:
             "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
             "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
             "stage150_background_compact_internal": stage150_background_compact_internal,
+            "stage156_context_compiler": stage156_context_compiler,
+            "stage156_estimated_prompt_tokens": stage156_estimated_prompt_tokens,
+            "stage156_cache_hit_tokens": stage156_cache_hit_tokens,
+            "stage156_cache_miss_tokens": stage156_cache_miss_tokens,
+            "stage156_cache_hit_ratio": stage156_cache_hit_ratio,
             "stage151_network_grounding": stage151_network_grounding,
             "stage151_network_grounding_status": stage151_network_grounding_status,
             "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,
@@ -10273,6 +10321,11 @@ class HoloReplyService:
                 "stage150_context_memory_fabric_evidence_count": stage150_evidence_count,
                 "stage150_context_memory_fabric_open_loop_count": stage150_open_loop_count,
                 "stage150_background_compact_internal": stage150_background_compact_internal,
+                "stage156_context_compiler": stage156_context_compiler,
+                "stage156_estimated_prompt_tokens": stage156_estimated_prompt_tokens,
+                "stage156_cache_hit_tokens": stage156_cache_hit_tokens,
+                "stage156_cache_miss_tokens": stage156_cache_miss_tokens,
+                "stage156_cache_hit_ratio": stage156_cache_hit_ratio,
                 "stage151_network_grounding": stage151_network_grounding,
                 "stage151_network_grounding_status": stage151_network_grounding_status,
                 "stage151_network_grounding_claim_count": stage151_network_grounding_claim_count,

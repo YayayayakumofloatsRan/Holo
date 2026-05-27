@@ -10,6 +10,7 @@ from .agent_event_stream import (
     render_tool_observations,
     safe_json_dumps,
 )
+from .context_compiler import render_context_cache_status, render_context_compiler_report
 
 INTERACTIVE_CLI_SESSION_SCHEMA = "holo.stage153.interactive_cli_session.v1"
 
@@ -71,6 +72,14 @@ class InteractiveCliSession:
     def render_compact(self) -> str:
         return render_compact_status(self.last_payload)
 
+    def render_context(self) -> str:
+        report = dict(self.last_payload.get("stage156_context_compiler", {})) if isinstance(self.last_payload.get("stage156_context_compiler", {}), dict) else {}
+        return render_context_compiler_report(report)
+
+    def render_cache(self) -> str:
+        report = dict(self.last_payload.get("stage156_context_compiler", {})) if isinstance(self.last_payload.get("stage156_context_compiler", {}), dict) else {}
+        return render_context_cache_status(report)
+
     def handle_command(self, command_line: str) -> str:
         command, _, _rest = str(command_line or "").partition(" ")
         command = command.strip().lower()
@@ -82,4 +91,8 @@ class InteractiveCliSession:
             return self.render_tools()
         if command == "/compact":
             return self.render_compact()
+        if command == "/context":
+            return self.render_context()
+        if command == "/cache":
+            return self.render_cache()
         return f"unknown command: {command}"
