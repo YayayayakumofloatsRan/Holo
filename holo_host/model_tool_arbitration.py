@@ -207,6 +207,8 @@ def derive_arbitration_from_stage152(
         required = ["engineering_action_ledger"]
     elif selected == "market_research_pack":
         required = ["market_research_pack_ledger"]
+    elif selected == "market_research_report":
+        required = ["market_research_report_ledger"]
     return sanitize_public_metadata(
         {
             "schema": MODEL_TOOL_ARBITRATION_SCHEMA,

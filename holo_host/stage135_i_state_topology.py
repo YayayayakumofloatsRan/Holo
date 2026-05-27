@@ -209,6 +209,7 @@ def build_stage135_i_state_topology(
     market_research_pack_ledger: list[dict[str, Any]] | None = None,
     filing_text_retrieval: dict[str, Any] | None = None,
     stage173_market_research_report: dict[str, Any] | None = None,
+    market_research_report_ledger: list[dict[str, Any]] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -252,6 +253,7 @@ def build_stage135_i_state_topology(
     market_research_ledger = _list_dicts(market_research_pack_ledger or packet.get("market_research_pack_ledger", []))
     filing_retrieval = _dict(filing_text_retrieval or packet.get("filing_text_retrieval", {}))
     market_research_report = _dict(stage173_market_research_report or packet.get("stage173_market_research_report", {}))
+    market_research_report_ledger_rows = _list_dicts(market_research_report_ledger or packet.get("market_research_report_ledger", []))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -837,6 +839,28 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage173_market_research_report", relation="synthesizes_market_research_report", weight=0.56, summary="filing pack evidence is converted into a bounded analyst report"))
         edges.append(_edge("stage173_market_research_report", "state_delta", relation="reports_market_research_evidence", weight=0.45, summary="report exposes citations, limitations, and unsupported-claim accounting"))
 
+    if market_research_report_ledger_rows:
+        first_report_action = dict(market_research_report_ledger_rows[0])
+        action_status = str(first_report_action.get("status", "") or "unknown")
+        report_status = str(first_report_action.get("report_status", "") or "")
+        citation_count = int(first_report_action.get("citation_count", 0) or 0)
+        nodes.append(
+            _node(
+                "stage174_market_research_report_action",
+                "market research report action",
+                channel="market_research_report_action",
+                kind="tool_observation",
+                x=0.84,
+                y=0.38,
+                weight=0.78 if action_status == "ok" else 0.3,
+                summary=f"status={action_status}; report={report_status}; citations={citation_count}",
+            )
+        )
+        source = "stage161_model_tool_arbitration" if model_arbitration else "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage174_market_research_report_action", relation="executes_market_research_report", weight=0.56, summary="host action generates a filing-grounded market research report"))
+        target = "stage173_market_research_report" if market_research_report else "state_delta"
+        edges.append(_edge("stage174_market_research_report_action", target, relation="emits_market_research_report", weight=0.54, summary="report action emits report evidence for topology and reply metadata"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1121,6 +1145,8 @@ def build_stage135_i_state_topology(
             "market_research_report_section_count": int(market_research_report.get("section_count", 0) or 0) if market_research_report else 0,
             "market_research_report_metric_count": int(market_research_report.get("metric_count", 0) or 0) if market_research_report else 0,
             "market_research_report_citation_count": int(market_research_report.get("citation_count", 0) or 0) if market_research_report else 0,
+            "market_research_report_action_node_count": sum(1 for node in nodes if node["channel"] == "market_research_report_action"),
+            "market_research_report_action_status": str(market_research_report_ledger_rows[0].get("status", "") or "") if market_research_report_ledger_rows else "",
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,

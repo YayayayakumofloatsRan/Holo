@@ -146,6 +146,20 @@ def _observation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "result_count": int(row.get("evidence_item_count", 0) or 0),
             }
         )
+    for row in list(payload.get("market_research_report_ledger", []) or [])[:5]:
+        if not isinstance(row, dict):
+            continue
+        events.append(
+            {
+                "event": "observation",
+                "action_type": "market_research_report",
+                "status": str(row.get("status", "") or ""),
+                "query": _compact(row.get("query", ""), 160),
+                "source_count": len(list(row.get("source_urls", []) or [])),
+                "source_urls": [str(url) for url in list(row.get("source_urls", []) or [])[:3]],
+                "result_count": int(row.get("citation_count", 0) or 0),
+            }
+        )
     filing = payload.get("filing_text_retrieval", {})
     if isinstance(filing, dict) and filing:
         events.append(
@@ -439,6 +453,7 @@ def render_tool_observations(payload: dict[str, Any] | None) -> str:
     rows = [row for row in list(source.get("web_observation_ledger", []) or []) if isinstance(row, dict)]
     rows.extend(row for row in list(source.get("tool_observation_ledger", []) or []) if isinstance(row, dict))
     rows.extend(row for row in list(source.get("market_research_pack_ledger", []) or []) if isinstance(row, dict))
+    rows.extend(row for row in list(source.get("market_research_report_ledger", []) or []) if isinstance(row, dict))
     rows.extend(row for row in normalize_engineering_action_ledger(source.get("engineering_action_ledger", [])))
     if not rows:
         return "[tools] no tool observations"
@@ -447,6 +462,8 @@ def render_tool_observations(payload: dict[str, Any] | None) -> str:
         action = str(row.get("action_type", row.get("tool", row.get("tool_name", ""))) or "")
         if not action and str(row.get("schema", "") or "") == "holo.stage171.market_research_pack_ledger.v1":
             action = "market_research_pack"
+        if not action and str(row.get("schema", "") or "") == "holo.stage174.market_research_report_ledger.v1":
+            action = "market_research_report"
         action = action or "tool"
         status = str(row.get("status", "") or "-")
         query = _compact(row.get("query", row.get("url", row.get("summary", ""))), 130)

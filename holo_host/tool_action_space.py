@@ -182,6 +182,27 @@ def build_tool_action_space(*, include_write_actions: bool = True) -> list[dict[
             ],
         ),
         _action(
+            "market_research_report",
+            description="Generate a bounded filing-grounded market-research report from a ready market-research pack or authoritative filing inputs.",
+            input_schema={
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "entity": {"type": "string"},
+                    "filing_type": {"type": "string"},
+                },
+            },
+            observation_schema={"ledger": "market_research_report_ledger"},
+            requires_network=True,
+            examples=[
+                {
+                    "when": "user asks for a complete company research report",
+                    "arguments": {"query": "Apple AAPL 2024 10-K market research report", "filing_type": "10-K"},
+                }
+            ],
+        ),
+        _action(
             "defer",
             description="Do not act now; report why the host should stop or wait.",
             input_schema={"type": "object", "properties": {"reason": {"type": "string"}}},

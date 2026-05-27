@@ -127,6 +127,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 122. `docs/ENGINEERING_HANDOFF_STAGE172.md`
 123. `docs/STAGE173_MARKET_RESEARCH_REPORT.md`
 124. `docs/ENGINEERING_HANDOFF_STAGE173.md`
+125. `docs/STAGE174_MARKET_RESEARCH_REPORT_ACTION.md`
+126. `docs/ENGINEERING_HANDOFF_STAGE174.md`
 
 ## What This Document Must Cover
 - current live state
@@ -141,9 +143,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage173-market-research-report`.
+- The current milestone tag is `stage174-market-research-report-action`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage173 Market Research Report: Holo can now convert Stage169-172 market-research evidence packs into deterministic filing-grounded analyst reports with citations, limitations, unsupported-claim accounting, and weak-baseline comparison.
+- Current focus is Stage174 Market Research Report Action: Holo can now expose the Stage173 report generator as a model-visible host action with ledgered execution through the native tool loop, FSM, event stream, reply/archive metadata, and Stage135 topology.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -491,6 +493,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage171 adds host execution for the `market_research_pack` action: DeepSeek/model-first tool loops can request a filing evidence pack, the WSL host records `market_research_pack_ledger`, the Stage169 pack feeds Stage170 answer gating, and Stage135 exposes `stage171_market_research_pack_action`. Verification on `2026-05-27`: Stage171 targeted `8 passed`, market stack `55 passed`, runtime `110 passed`, full regression `802 passed`; public hygiene passed and `git diff --check` passed with CRLF normalization warnings only.
   - Stage172 adds filing text retrieval for market-research packs: Stage171 can now use supplied filing text, Stage163 page evidence, or host-opened authoritative URLs to extract normalized filing text before building the Stage169 pack; Stage152, Stage153, reply/archive metadata, and Stage135 expose `filing_text_retrieval`. Verification on `2026-05-27`: Stage172 targeted `15 passed`, market stack `62 passed`, runtime `110 passed`, full regression `809 passed`; public hygiene passed and `git diff --check` passed with CRLF normalization warnings only.
   - Stage173 adds deterministic market-research report generation: Stage169-172 evidence packs are converted into filing-grounded analyst reports with citations, section/metric coverage, limitations, unsupported-claim accounting, weak web-only baseline comparison, CLI HTML/JSON/JSONL artifacts, and Stage135 `market_research_report` topology metrics without provider model calls, memory writes, WeChat starts, or transport widening. Verification on `2026-05-27`: Stage173 targeted `8 passed`, market stack `54 passed`, runtime `92 passed`, full regression `817 passed`; public hygiene passed and `git diff --check` passed with CRLF normalization warnings only.
+  - Stage174 adds a live `market_research_report` host action: the model-visible action space, DeepSeek native tool loop, Stage160R FSM, Stage153 event stream, reply/archive metadata, and Stage135 topology now carry `market_research_report_ledger` and `stage173_market_research_report` so report generation is part of the agent loop instead of only an offline artifact. Verification on `2026-05-27`: Stage174 targeted integration `40 passed`, runtime `92 passed`, full regression `825 passed`; public hygiene passed and `git diff --check` passed with CRLF normalization warnings only.
 
 ## Invariants
 - Do not silently change online transport modes

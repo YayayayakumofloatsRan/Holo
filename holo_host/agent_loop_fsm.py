@@ -137,6 +137,22 @@ def _market_research_pack_status(rows: list[dict[str, Any]]) -> tuple[str, str, 
     return "failed", "evidence_exhausted", ids, 0.18, unresolved or ["market_research_pack_insufficient"]
 
 
+def _market_research_report_status(rows: list[dict[str, Any]]) -> tuple[str, str, list[str], float, list[str]]:
+    if not rows:
+        return "failed", "evidence_exhausted", [], 0.0, ["market_research_report_ledger"]
+    ids = [str(row.get("action_id", "") or "") for row in rows if str(row.get("action_id", "") or "")]
+    statuses = [str(row.get("status", "") or "") for row in rows]
+    if any(status == "ok" for status in statuses):
+        return "executed", "final_answer_ready", ids, 0.88, []
+    unresolved = [
+        str(reason)
+        for row in rows[:2]
+        for reason in list(row.get("failure_reasons", []) or [row.get("status", "market_research_report_insufficient")])
+        if str(reason)
+    ]
+    return "failed", "evidence_exhausted", ids, 0.2, unresolved or ["market_research_report_insufficient"]
+
+
 def _failure_text(intent_frame: dict[str, Any], action: str, rows: list[dict[str, Any]], stop_reason: str) -> str:
     raw = str(intent_frame.get("raw_user_text_exact", "") or "")
     wants_zh = any("\u4e00" <= char <= "\u9fff" for char in raw)
@@ -157,6 +173,12 @@ def _failure_text(intent_frame: dict[str, Any], action: str, rows: list[dict[str
         if wants_zh:
             return f"\u6211\u5df2\u5c1d\u8bd5 market_research_pack\uff0c\u4f46\u6ca1\u6709\u5f97\u5230\u8db3\u591f\u7684\u6743\u5a01\u8d22\u62a5\u8bc1\u636e\uff1a{compact_text(reasons, 160)}\u3002"
         return f"market_research_pack was attempted but did not produce sufficient filing evidence: {compact_text(reasons, 160)}."
+    if action == "market_research_report":
+        row = rows[0] if rows else {}
+        reasons = ", ".join(str(item) for item in list(row.get("failure_reasons", []) or [])) or str(row.get("status", "") or "no report")
+        if wants_zh:
+            return f"\u6211\u5df2\u5c1d\u8bd5 market_research_report\uff0c\u4f46\u6ca1\u6709\u751f\u6210\u8db3\u591f\u53ef\u4fe1\u7684\u7814\u7a76\u62a5\u544a\uff1a{compact_text(reasons, 160)}\u3002"
+        return f"market_research_report was attempted but did not produce a sufficient filing-grounded report: {compact_text(reasons, 160)}."
     if stop_reason == "needs_user_clarification":
         return "I need a clarification before continuing this agent task."
     return "The required agent action did not produce enough evidence for a grounded final answer."
@@ -172,6 +194,7 @@ def run_agent_loop_fsm(
     web_observation_ledger: Any = None,
     memory_observation_ledger: Any = None,
     market_research_pack_ledger: Any = None,
+    market_research_report_ledger: Any = None,
     time_observation: dict[str, Any] | None = None,
     final_text: str = "",
 ) -> dict[str, Any]:
@@ -226,6 +249,7 @@ def run_agent_loop_fsm(
     web_rows = _list_dicts(web_observation_ledger)
     memory_rows = _list_dicts(memory_observation_ledger)
     market_rows = _list_dicts(market_research_pack_ledger)
+    market_report_rows = _list_dicts(market_research_report_ledger)
     index = 2
     for action in mandatory:
         if action == "memory_recall":
@@ -259,6 +283,16 @@ def run_agent_loop_fsm(
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_pack_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
             index += 1
             steps.append(_step(index=index, phase="observe_result", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_pack_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
+            index += 1
+        elif action == "market_research_report":
+            status, local_stop, ids, info_score, local_unresolved = _market_research_report_status(market_report_rows)
+            if local_stop != "final_answer_ready":
+                stop_reason = local_stop
+                final_override_text = _failure_text(intent_frame, action, market_report_rows, local_stop)
+                unresolved.extend(local_unresolved)
+            steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_report_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
+            index += 1
+            steps.append(_step(index=index, phase="observe_result", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_report_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
             index += 1
         elif action in {"ask_clarification", "defer"}:
             stop_reason = "needs_user_clarification"

@@ -16,6 +16,7 @@ from .stage151_tool_decision_loop import (
     web_observations_to_tool_ledger,
 )
 from .stage171_market_research_action import execute_market_research_pack_action
+from .stage174_market_research_report_action import execute_market_research_report_action
 
 STAGE152_TOOL_LOOP_SCHEMA = "holo.stage152.deepseek_tool_loop.v1"
 STAGE152_LIVE_TRACE_SCHEMA = "holo.stage152.live_trace.v1"
@@ -99,6 +100,24 @@ DEEPSEEK_NATIVE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
                 "filing_text": {"type": "string", "description": "Bounded filing text already retrieved by host evidence."},
                 "source_url": {"type": "string"},
                 "web_observation_ledger": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["query"],
+        },
+    },
+    "market_research_report": {
+        "description": "Generate a read-only filing-grounded market research report from authoritative filing evidence.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "query": {"type": "string", "description": "Company, ticker, period, and report request.", "minLength": 1},
+                "entity": {"type": "string"},
+                "filing_type": {"type": "string", "description": "SEC filing type, usually 10-K or 10-Q."},
+                "filing_text": {"type": "string", "description": "Bounded filing text already retrieved by host evidence."},
+                "source_url": {"type": "string"},
+                "web_observation_ledger": {"type": "array", "items": {"type": "object"}},
+                "market_research_pack_ledger": {"type": "array", "items": {"type": "object"}},
+                "market_research_pack": {"type": "object"},
             },
             "required": ["query"],
         },
@@ -483,6 +502,50 @@ def execute_deepseek_native_tool_call(
             ),
             "tool_observation_ledger": tool_ledger,
         }
+    if name == "market_research_report":
+        result = execute_market_research_report_action(
+            arguments,
+            network_enabled=network_enabled,
+            open_page_fn=open_page_fn,
+        )
+        report_ledger = [dict(row) for row in list(result.get("market_research_report_ledger", []) or []) if isinstance(row, dict)]
+        pack_ledger = [dict(row) for row in list(result.get("market_research_pack_ledger", []) or []) if isinstance(row, dict)]
+        tool_ledger = [dict(row) for row in list(result.get("tool_observation_ledger", []) or []) if isinstance(row, dict)]
+        for row in tool_ledger:
+            row["provider_call_id"] = call_id
+            row["tool"] = name
+        primary = report_ledger[0] if report_ledger else {"status": "missing", "failure_reasons": ["market_research_report_no_ledger"]}
+        return {
+            "call_id": call_id,
+            "tool": name,
+            "status": str(primary.get("status", "") or "missing"),
+            "summary": _compact(
+                f"{name}: {primary.get('status', '')} report={primary.get('report_status', '')} "
+                f"sections={primary.get('section_count', 0)} metrics={primary.get('metric_count', 0)} "
+                f"failures={','.join(str(x) for x in list(primary.get('failure_reasons', []) or []))}",
+                480,
+            ),
+            "stage169_market_research_pack": dict(result.get("stage169_market_research_pack", {}))
+            if isinstance(result.get("stage169_market_research_pack", {}), dict)
+            else {},
+            "stage173_market_research_report": dict(result.get("stage173_market_research_report", {}))
+            if isinstance(result.get("stage173_market_research_report", {}), dict)
+            else {},
+            "filing_text_retrieval": dict(result.get("filing_text_retrieval", {}))
+            if isinstance(result.get("filing_text_retrieval", {}), dict)
+            else {},
+            "market_research_pack_ledger": pack_ledger,
+            "market_research_report_ledger": report_ledger,
+            "tool_message": _tool_result_message(
+                call_id,
+                {
+                    "tool": name,
+                    "status": str(primary.get("status", "") or ""),
+                    "market_research_report_ledger": report_ledger,
+                },
+            ),
+            "tool_observation_ledger": tool_ledger,
+        }
     return {
         "call_id": call_id,
         "tool": name,
@@ -573,7 +636,9 @@ def run_deepseek_native_tool_loop(
     web_observation_ledger: list[dict[str, Any]] = []
     memory_observation_ledger: list[dict[str, Any]] = []
     market_research_pack_ledger: list[dict[str, Any]] = []
+    market_research_report_ledger: list[dict[str, Any]] = []
     stage169_market_research_pack: dict[str, Any] = {}
+    stage173_market_research_report: dict[str, Any] = {}
     filing_text_retrieval: dict[str, Any] = {}
     time_observation: dict[str, Any] = {}
     stop_reason = "no_tool_calls"
@@ -618,8 +683,13 @@ def run_deepseek_native_tool_loop(
             market_research_pack_ledger.extend(
                 [dict(row) for row in list(result.get("market_research_pack_ledger", []) or []) if isinstance(row, dict)]
             )
+            market_research_report_ledger.extend(
+                [dict(row) for row in list(result.get("market_research_report_ledger", []) or []) if isinstance(row, dict)]
+            )
             if isinstance(result.get("stage169_market_research_pack", {}), dict) and result.get("stage169_market_research_pack"):
                 stage169_market_research_pack = dict(result.get("stage169_market_research_pack", {}))
+            if isinstance(result.get("stage173_market_research_report", {}), dict) and result.get("stage173_market_research_report"):
+                stage173_market_research_report = dict(result.get("stage173_market_research_report", {}))
             if isinstance(result.get("filing_text_retrieval", {}), dict) and result.get("filing_text_retrieval"):
                 filing_text_retrieval = dict(result.get("filing_text_retrieval", {}))
             if isinstance(result.get("time_observation", {}), dict) and result.get("time_observation"):
@@ -687,7 +757,9 @@ def run_deepseek_native_tool_loop(
         "web_observation_ledger": web_observation_ledger,
         "memory_observation_ledger": memory_observation_ledger,
         "market_research_pack_ledger": market_research_pack_ledger,
+        "market_research_report_ledger": market_research_report_ledger,
         "stage169_market_research_pack": stage169_market_research_pack,
+        "stage173_market_research_report": stage173_market_research_report,
         "filing_text_retrieval": filing_text_retrieval,
         "time_observation": time_observation,
         "grounding": grounding,

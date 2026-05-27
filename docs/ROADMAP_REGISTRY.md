@@ -252,6 +252,12 @@ Stage173: market research report
 - Added `run-market-research-report` CLI artifacts and Stage135 `market_research_report` topology metrics without provider model paths, memory writes, WeChat starts, or transport widening.
 - Verification on `2026-05-27`: targeted `8 passed`, market stack `54 passed`, runtime `92 passed`, full regression `817 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage174: market research report action
+- Added a live `market_research_report` host action over Stage173 reports.
+- DeepSeek native tool calls, the Stage161 action space, Stage160R FSM, Stage153 event streams, reply/archive metadata, and Stage135 topology now expose `market_research_report_ledger`.
+- This connects market-research report generation to the actual agent loop without provider model paths outside processor fabric, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted integration `40 passed`, runtime `92 passed`, full regression `825 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

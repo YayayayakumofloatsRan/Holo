@@ -80,6 +80,7 @@ from .stage135_i_state_topology import (
     attach_stage170_market_research_topology,
     attach_stage171_market_research_action_topology,
     attach_stage172_filing_text_retrieval_topology,
+    attach_stage173_market_research_report_topology,
     build_stage135_i_state_topology,
 )
 from .stage142_semantic_novelty_gate import apply_stage142_gate
@@ -9636,6 +9637,33 @@ class HoloReplyService:
             if stage152_market_pack:
                 sidecar["stage169_market_research_pack"] = stage152_market_pack
                 reply_debug["stage169_market_research_pack"] = stage152_market_pack
+            stage152_market_report_rows = [
+                dict(row)
+                for row in list(stage152_deepseek_tool_loop.get("market_research_report_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            if stage152_market_report_rows:
+                existing_market_report_rows = [
+                    dict(row)
+                    for row in list(capability_context.get("market_research_report_ledger", sidecar.get("market_research_report_ledger", [])) or [])
+                    if isinstance(row, dict)
+                ]
+                seen_report_ids = {str(row.get("action_id", "") or "") for row in existing_market_report_rows}
+                for row in stage152_market_report_rows:
+                    row_id = str(row.get("action_id", "") or stable_digest(json.dumps(row, ensure_ascii=False, sort_keys=True), limit=12))
+                    if row_id not in seen_report_ids:
+                        existing_market_report_rows.append(row)
+                        seen_report_ids.add(row_id)
+                capability_context["market_research_report_ledger"] = existing_market_report_rows
+                sidecar["market_research_report_ledger"] = existing_market_report_rows
+            stage152_market_report = (
+                dict(stage152_deepseek_tool_loop.get("stage173_market_research_report", {}))
+                if isinstance(stage152_deepseek_tool_loop.get("stage173_market_research_report", {}), dict)
+                else {}
+            )
+            if stage152_market_report:
+                sidecar["stage173_market_research_report"] = stage152_market_report
+                reply_debug["stage173_market_research_report"] = stage152_market_report
             stage152_filing_text_retrieval = (
                 dict(stage152_deepseek_tool_loop.get("filing_text_retrieval", {}))
                 if isinstance(stage152_deepseek_tool_loop.get("filing_text_retrieval", {}), dict)
@@ -9839,6 +9867,32 @@ class HoloReplyService:
             reply_debug["filing_text_retrieval"] = filing_text_retrieval
         stage172_filing_text_retrieval_status = str(filing_text_retrieval.get("status", "") or "") if filing_text_retrieval else ""
         stage172_filing_text_retrieval_source = str(filing_text_retrieval.get("retrieval_source", "") or "") if filing_text_retrieval else ""
+        market_research_report_ledger = [
+            dict(row)
+            for row in list(capability_context.get("market_research_report_ledger", sidecar.get("market_research_report_ledger", [])) or [])
+            if isinstance(row, dict)
+        ]
+        if market_research_report_ledger:
+            sidecar["market_research_report_ledger"] = market_research_report_ledger
+            reply_debug["market_research_report_ledger"] = market_research_report_ledger
+        stage173_market_research_report = (
+            dict(capability_context.get("stage173_market_research_report", sidecar.get("stage173_market_research_report", {})))
+            if isinstance(capability_context.get("stage173_market_research_report", sidecar.get("stage173_market_research_report", {})), dict)
+            else {}
+        )
+        if not stage173_market_research_report and market_research_report_ledger:
+            nested_report = market_research_report_ledger[0].get("stage173_market_research_report", {})
+            if isinstance(nested_report, dict):
+                stage173_market_research_report = dict(nested_report)
+        if stage173_market_research_report:
+            sidecar["stage173_market_research_report"] = stage173_market_research_report
+            reply_debug["stage173_market_research_report"] = stage173_market_research_report
+        stage174_market_research_report_action_status = (
+            str(market_research_report_ledger[0].get("status", "") or "") if market_research_report_ledger else ""
+        )
+        stage173_market_research_report_status = (
+            str(stage173_market_research_report.get("status", "") or "") if stage173_market_research_report else ""
+        )
         sidecar["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
         reply_debug["stage160r_agent_loop_fsm"] = stage160r_agent_loop_fsm
         reply_debug["stage160r_intent_frame"] = stage160r_intent_frame
@@ -10168,6 +10222,10 @@ class HoloReplyService:
                 "filing_text_retrieval": filing_text_retrieval,
                 "stage172_filing_text_retrieval_status": stage172_filing_text_retrieval_status,
                 "stage172_filing_text_retrieval_source": stage172_filing_text_retrieval_source,
+                "stage173_market_research_report": stage173_market_research_report,
+                "stage173_market_research_report_status": stage173_market_research_report_status,
+                "market_research_report_ledger": market_research_report_ledger,
+                "stage174_market_research_report_action_status": stage174_market_research_report_action_status,
                 "stage170_market_research_gate": stage170_market_research_gate,
                 "stage170_market_research_gate_status": stage170_market_research_gate_status,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
@@ -10241,6 +10299,11 @@ class HoloReplyService:
                 stage135_i_state_topology,
                 stage170_market_research_gate,
             )
+        if topology_present and stage173_market_research_report:
+            stage135_i_state_topology = attach_stage173_market_research_report_topology(
+                stage135_i_state_topology,
+                stage173_market_research_report,
+            )
         elif not topology_present and (
             memory_alignment_claim_count > 0
             or stage142_candidate_count > 1
@@ -10254,6 +10317,8 @@ class HoloReplyService:
             or stage156_context_compiler
             or filing_text_retrieval
             or market_research_pack_ledger
+            or market_research_report_ledger
+            or stage173_market_research_report
             or stage170_market_research_gate
         ):
             stage135_i_state_topology = build_stage135_i_state_topology(
@@ -10280,6 +10345,8 @@ class HoloReplyService:
                 stage161_model_tool_arbitration=stage161_model_tool_arbitration,
                 filing_text_retrieval=filing_text_retrieval,
                 market_research_pack_ledger=market_research_pack_ledger,
+                market_research_report_ledger=market_research_report_ledger,
+                stage173_market_research_report=stage173_market_research_report,
                 stage170_market_research_gate=stage170_market_research_gate,
                 web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 engineering_action_ledger=engineering_action_ledger,
@@ -10399,6 +10466,10 @@ class HoloReplyService:
                 "filing_text_retrieval": filing_text_retrieval,
                 "stage172_filing_text_retrieval_status": stage172_filing_text_retrieval_status,
                 "stage172_filing_text_retrieval_source": stage172_filing_text_retrieval_source,
+                "stage173_market_research_report": stage173_market_research_report,
+                "stage173_market_research_report_status": stage173_market_research_report_status,
+                "market_research_report_ledger": market_research_report_ledger,
+                "stage174_market_research_report_action_status": stage174_market_research_report_action_status,
                 "stage170_market_research_gate": stage170_market_research_gate,
                 "stage170_market_research_gate_status": stage170_market_research_gate_status,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
@@ -10527,6 +10598,10 @@ class HoloReplyService:
             "filing_text_retrieval": filing_text_retrieval,
             "stage172_filing_text_retrieval_status": stage172_filing_text_retrieval_status,
             "stage172_filing_text_retrieval_source": stage172_filing_text_retrieval_source,
+            "stage173_market_research_report": stage173_market_research_report,
+            "stage173_market_research_report_status": stage173_market_research_report_status,
+            "market_research_report_ledger": market_research_report_ledger,
+            "stage174_market_research_report_action_status": stage174_market_research_report_action_status,
             "stage170_market_research_gate": stage170_market_research_gate,
             "stage170_market_research_gate_status": stage170_market_research_gate_status,
             "stage170_market_research_claim_count": stage170_market_research_claim_count,
@@ -10716,6 +10791,10 @@ class HoloReplyService:
                 "filing_text_retrieval": filing_text_retrieval,
                 "stage172_filing_text_retrieval_status": stage172_filing_text_retrieval_status,
                 "stage172_filing_text_retrieval_source": stage172_filing_text_retrieval_source,
+                "stage173_market_research_report": stage173_market_research_report,
+                "stage173_market_research_report_status": stage173_market_research_report_status,
+                "market_research_report_ledger": market_research_report_ledger,
+                "stage174_market_research_report_action_status": stage174_market_research_report_action_status,
                 "stage170_market_research_gate": stage170_market_research_gate,
                 "stage170_market_research_gate_status": stage170_market_research_gate_status,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
