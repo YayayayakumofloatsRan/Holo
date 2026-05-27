@@ -213,6 +213,7 @@ def build_stage135_i_state_topology(
     stage192_market_research_feedback_loop: dict[str, Any] | None = None,
     stage193_market_research_action_plan: dict[str, Any] | None = None,
     stage194_market_research_plan_execution: dict[str, Any] | None = None,
+    stage195_market_research_continuation_loop: dict[str, Any] | None = None,
     stage177_market_research_remediation: dict[str, Any] | None = None,
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
     stage179_live_remediation_loop: dict[str, Any] | None = None,
@@ -269,6 +270,7 @@ def build_stage135_i_state_topology(
     market_research_feedback = _dict(stage192_market_research_feedback_loop or packet.get("stage192_market_research_feedback_loop", {}))
     market_research_action_plan = _dict(stage193_market_research_action_plan or packet.get("stage193_market_research_action_plan", {}))
     market_research_plan_execution = _dict(stage194_market_research_plan_execution or packet.get("stage194_market_research_plan_execution", {}))
+    market_research_continuation = _dict(stage195_market_research_continuation_loop or packet.get("stage195_market_research_continuation_loop", {}))
     market_research_remediation = _dict(stage177_market_research_remediation or packet.get("stage177_market_research_remediation", {}))
     evidence_action_remediation = _dict(stage178_evidence_action_remediation or packet.get("stage178_evidence_action_remediation", {}))
     live_remediation_loop = _dict(stage179_live_remediation_loop or packet.get("stage179_live_remediation_loop", {}))
@@ -950,6 +952,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage194_market_research_plan_execution", relation="executes_market_research_action_plan", weight=0.64, summary="planned market-research action is executed through host tools and ledgers"))
         edges.append(_edge("stage194_market_research_plan_execution", "stage192_market_research_feedback_loop" if market_research_feedback else "state_delta", relation="feeds_post_action_feedback", weight=0.54, summary="execution ledgers re-enter report-readiness feedback"))
 
+    if market_research_continuation:
+        continuation_status = str(market_research_continuation.get("status", "") or "unknown")
+        round_count = int(market_research_continuation.get("round_count", 0) or 0)
+        executed_round_count = int(market_research_continuation.get("executed_round_count", 0) or 0)
+        can_finalize = bool(market_research_continuation.get("can_finalize", False))
+        nodes.append(
+            _node(
+                "stage195_market_research_continuation_loop",
+                "market research continuation loop",
+                channel="market_research_continuation",
+                kind="action_loop",
+                x=0.985,
+                y=0.49,
+                weight=0.82 if can_finalize else 0.5 if executed_round_count else 0.28,
+                summary=f"status={continuation_status}; rounds={round_count}; executed={executed_round_count}; ready={can_finalize}; stop={market_research_continuation.get('canonical_stop_reason', '')}",
+            )
+        )
+        source = "stage194_market_research_plan_execution" if market_research_plan_execution else "stage193_market_research_action_plan" if market_research_action_plan else "stage192_market_research_feedback_loop" if market_research_feedback else "external_user_input"
+        edges.append(_edge(source, "stage195_market_research_continuation_loop", relation="continues_market_research_until_stop", weight=0.68, summary="bounded feedback-plan-execute rounds continue until report readiness or a boundary"))
+        edges.append(_edge("stage195_market_research_continuation_loop", "state_delta", relation="reports_market_research_loop_stop", weight=0.52, summary="continuation loop exposes round count, readiness, and canonical stop reason"))
+
     if market_research_remediation:
         remediation_status = str(market_research_remediation.get("status", "") or "unknown")
         action_count = len(list(market_research_remediation.get("remediation_actions", []) or []))
@@ -1466,6 +1489,10 @@ def build_stage135_i_state_topology(
             "market_research_plan_execution_status": str(market_research_plan_execution.get("status", "") or "") if market_research_plan_execution else "",
             "market_research_plan_execution_action": str(market_research_plan_execution.get("executed_action", "") or "") if market_research_plan_execution else "",
             "market_research_plan_execution_executed_count": int(market_research_plan_execution.get("executed_count", 0) or 0) if market_research_plan_execution else 0,
+            "market_research_continuation_node_count": sum(1 for node in nodes if node["channel"] == "market_research_continuation"),
+            "market_research_continuation_status": str(market_research_continuation.get("status", "") or "") if market_research_continuation else "",
+            "market_research_continuation_round_count": int(market_research_continuation.get("round_count", 0) or 0) if market_research_continuation else 0,
+            "market_research_continuation_can_finalize": bool(market_research_continuation.get("can_finalize", False)) if market_research_continuation else False,
             "market_research_remediation_node_count": sum(1 for node in nodes if node["channel"] == "market_research_remediation"),
             "market_research_remediation_required_count": 1 if market_research_remediation and not bool(market_research_remediation.get("can_finalize", False)) else 0,
             "market_research_remediation_action_count": len(list(market_research_remediation.get("remediation_actions", []) or [])) if market_research_remediation else 0,

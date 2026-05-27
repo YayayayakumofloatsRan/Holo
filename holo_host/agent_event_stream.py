@@ -310,6 +310,24 @@ def _stage194_market_action_execution_events(payload: dict[str, Any]) -> list[di
     ]
 
 
+def _stage195_market_continuation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    loop = payload.get("stage195_market_research_continuation_loop", {})
+    if not isinstance(loop, dict):
+        return []
+    return [
+        {
+            "event": "market_continue",
+            "status": str(loop.get("status", "") or ""),
+            "round_count": int(loop.get("round_count", 0) or 0),
+            "executed_round_count": int(loop.get("executed_round_count", 0) or 0),
+            "blocked_round_count": int(loop.get("blocked_round_count", 0) or 0),
+            "failed_round_count": int(loop.get("failed_round_count", 0) or 0),
+            "can_finalize": bool(loop.get("can_finalize", False)),
+            "stop_reason": str(loop.get("canonical_stop_reason", "") or ""),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -548,6 +566,7 @@ def build_agent_event_stream(
         events.extend(_stage192_market_feedback_events(source))
         events.extend(_stage193_market_action_plan_events(source))
         events.extend(_stage194_market_action_execution_events(source))
+        events.extend(_stage195_market_continuation_events(source))
         events.append(
             {
                 "event": "stop",
@@ -597,6 +616,7 @@ def build_agent_event_stream(
     events.extend(_stage192_market_feedback_events(source))
     events.extend(_stage193_market_action_plan_events(source))
     events.extend(_stage194_market_action_execution_events(source))
+    events.extend(_stage195_market_continuation_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -775,6 +795,13 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[market_exec] status={item.get('status', '')} action={item.get('executed_action', '')} "
                 f"executed={item.get('executed_count', 0)} rejected={item.get('rejected_count', 0)} "
                 f"failed={item.get('failed_count', 0)} stop={item.get('stop_reason', '')}"
+            )
+        elif event == "market_continue":
+            lines.append(
+                f"[market_continue] status={item.get('status', '')} rounds={item.get('round_count', 0)} "
+                f"executed={item.get('executed_round_count', 0)} blocked={item.get('blocked_round_count', 0)} "
+                f"failed={item.get('failed_round_count', 0)} ready={str(bool(item.get('can_finalize', False))).lower()} "
+                f"stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))

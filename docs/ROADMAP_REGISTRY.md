@@ -376,6 +376,12 @@ Stage194: market research plan execution
 - Stage153 renders `[market_exec]` lines, Stage191 public thoughts include execution action cards, and Stage135 topology exposes `market_research_plan_execution`.
 - Verification on `2026-05-28`: targeted Stage194 `5 passed`; neighbor `32 passed`; runtime `92 passed`; full suite `956 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage195: market research continuation loop
+- Added `holo.stage195.market_research_continuation_loop.v1` and per-round continuation rows over Stage192 feedback, Stage193 planning, and Stage194 execution.
+- Stage195 can reuse an initial Stage194 execution, continue with bounded additional host rounds, and stop at report readiness, host boundary, tool failure, or round-budget exhaustion.
+- Stage153 renders `[market_continue]` lines, Stage191 public thoughts include continuation self-feedback cards, and Stage135 topology exposes `market_research_continuation_loop`.
+- Verification on `2026-05-28`: targeted Stage195 `6 passed`; neighbor `38 passed`; runtime `92 passed`; full suite `962 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
