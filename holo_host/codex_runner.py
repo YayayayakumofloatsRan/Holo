@@ -948,6 +948,7 @@ class DeepSeekProvider(ProcessorProvider):
                 memory_corpus=request.metadata.get("tool_memory_corpus"),
                 memory_corpus_path=request.metadata.get("tool_memory_corpus_path"),
                 repo_root=runner.config.runtime.repo_root,
+                state_dir=runner.config.runtime.state_dir,
             )
             decoded = dict(stage152_loop.get("final_decoded", decoded))
             usage = dict(stage152_loop.get("usage", usage))
@@ -966,6 +967,8 @@ class DeepSeekProvider(ProcessorProvider):
                 "tool_observation_ledger": list(stage152_loop.get("tool_observation_ledger", []) or []),
                 "web_observation_ledger": list(stage152_loop.get("web_observation_ledger", []) or []),
                 "memory_observation_ledger": list(stage152_loop.get("memory_observation_ledger", []) or []),
+                "market_research_dossier_resume_ledger": list(stage152_loop.get("market_research_dossier_resume_ledger", []) or []),
+                "stage201_market_research_dossier_registry": dict(stage152_loop.get("stage201_market_research_dossier_registry", {}) or {}),
                 "time_observation": dict(stage152_loop.get("time_observation", {}) or {}),
                 "tool_failure_reentry": any(
                     str(row.get("status", "") or "").lower() in {"rejected", "skipped", "denied", "error"}
@@ -1024,6 +1027,9 @@ class DeepSeekProvider(ProcessorProvider):
             metadata["stage152_live_trace"] = dict(stage152_public.get("live_trace", {}) or {})
             metadata["web_observation_ledger"] = list(stage152_public.get("web_observation_ledger", []) or [])
             metadata["memory_observation_ledger"] = list(stage152_public.get("memory_observation_ledger", []) or [])
+            metadata["market_research_dossier_resume_ledger"] = list(stage152_public.get("market_research_dossier_resume_ledger", []) or [])
+            if stage152_public.get("stage201_market_research_dossier_registry"):
+                metadata["stage201_market_research_dossier_registry"] = dict(stage152_public.get("stage201_market_research_dossier_registry", {}) or {})
             if stage152_public.get("time_observation"):
                 metadata["time_observation"] = dict(stage152_public.get("time_observation", {}) or {})
         return ProcessorTaskResult(

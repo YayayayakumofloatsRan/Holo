@@ -203,6 +203,27 @@ def build_tool_action_space(*, include_write_actions: bool = True) -> list[dict[
             ],
         ),
         _action(
+            "market_research_dossier_resume",
+            description="Load and resume the latest persisted market-research dossier for the current thread or project before answering follow-up research requests.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "thread_key": {"type": "string"},
+                    "project_key": {"type": "string"},
+                    "query": {"type": "string"},
+                    "max_actions": {"type": "integer"},
+                },
+            },
+            observation_schema={"ledger": "market_research_dossier_resume_ledger"},
+            requires_network=False,
+            examples=[
+                {
+                    "when": "user says continue this market research or asks what remains in the existing dossier",
+                    "arguments": {"thread_key": "holo_cli:default", "query": "continue latest market research"},
+                }
+            ],
+        ),
+        _action(
             "defer",
             description="Do not act now; report why the host should stop or wait.",
             input_schema={"type": "object", "properties": {"reason": {"type": "string"}}},

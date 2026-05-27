@@ -154,6 +154,21 @@ def _market_research_report_status(rows: list[dict[str, Any]]) -> tuple[str, str
     return "failed", "evidence_exhausted", ids, 0.2, unresolved or ["market_research_report_insufficient"]
 
 
+def _market_research_dossier_resume_status(rows: list[dict[str, Any]]) -> tuple[str, str, list[str], float, list[str]]:
+    if not rows:
+        return "failed", "needs_user_clarification", [], 0.0, ["market_research_dossier_resume_ledger"]
+    ids = [str(row.get("action_id", "") or "") for row in rows if str(row.get("action_id", "") or "")]
+    statuses = [str(row.get("status", "") or "") for row in rows]
+    if any(status in {"resumed", "completed", "already_complete", "no_next_action", "recorded"} for status in statuses):
+        return "executed", "final_answer_ready", ids, 0.86, []
+    if any(status == "missing" for status in statuses):
+        return "failed", "needs_user_clarification", ids, 0.0, ["persisted_market_research_dossier_missing"]
+    if any(status == "rejected_network_disabled" for status in statuses):
+        return "rejected", "boundary_or_permission", ids, 0.0, ["network_disabled"]
+    unresolved = [str(row.get("summary", "") or row.get("status", "market_research_dossier_resume_failed")) for row in rows[:2]]
+    return "failed", "evidence_exhausted", ids, 0.18, unresolved or ["market_research_dossier_resume_failed"]
+
+
 def _failure_text(intent_frame: dict[str, Any], action: str, rows: list[dict[str, Any]], stop_reason: str) -> str:
     raw = str(intent_frame.get("raw_user_text_exact", "") or "")
     wants_zh = any("\u4e00" <= char <= "\u9fff" for char in raw)
@@ -180,6 +195,12 @@ def _failure_text(intent_frame: dict[str, Any], action: str, rows: list[dict[str
         if wants_zh:
             return f"\u6211\u5df2\u5c1d\u8bd5 market_research_report\uff0c\u4f46\u6ca1\u6709\u751f\u6210\u8db3\u591f\u53ef\u4fe1\u7684\u7814\u7a76\u62a5\u544a\uff1a{compact_text(reasons, 160)}\u3002"
         return f"market_research_report was attempted but did not produce a sufficient filing-grounded report: {compact_text(reasons, 160)}."
+    if action == "market_research_dossier_resume":
+        row = rows[0] if rows else {}
+        detail = str(row.get("summary", "") or row.get("status", "") or "no persisted dossier")
+        if wants_zh:
+            return f"\u6211\u5df2\u5c1d\u8bd5 market_research_dossier_resume\uff0c\u4f46\u6ca1\u6709\u627e\u5230\u53ef\u7ee7\u7eed\u7684\u5e02\u573a\u7814\u7a76 dossier\uff1a{compact_text(detail, 160)}\u3002"
+        return f"market_research_dossier_resume was attempted but no resumable dossier was available: {compact_text(detail, 160)}."
     if stop_reason == "needs_user_clarification":
         return "I need a clarification before continuing this agent task."
     return "The required agent action did not produce enough evidence for a grounded final answer."
@@ -268,6 +289,8 @@ def run_agent_loop_fsm(
     memory_observation_ledger: Any = None,
     market_research_pack_ledger: Any = None,
     market_research_report_ledger: Any = None,
+    market_research_dossier_resume_ledger: Any = None,
+    stage201_market_research_dossier_registry: dict[str, Any] | None = None,
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
     stage180_live_remediation_execution: dict[str, Any] | None = None,
     time_observation: dict[str, Any] | None = None,
@@ -325,6 +348,7 @@ def run_agent_loop_fsm(
     memory_rows = _list_dicts(memory_observation_ledger)
     market_rows = _list_dicts(market_research_pack_ledger)
     market_report_rows = _list_dicts(market_research_report_ledger)
+    dossier_resume_rows = _list_dicts(market_research_dossier_resume_ledger)
     remediation_report = dict(stage178_evidence_action_remediation or {})
     live_remediation = build_live_remediation_loop(remediation_report, goal_id=goal_id, current_stop_reason=stop_reason) if remediation_report else {}
     remediation_execution = dict(stage180_live_remediation_execution or {})
@@ -371,6 +395,16 @@ def run_agent_loop_fsm(
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_report_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
             index += 1
             steps.append(_step(index=index, phase="observe_result", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_report_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
+            index += 1
+        elif action == "market_research_dossier_resume":
+            status, local_stop, ids, info_score, local_unresolved = _market_research_dossier_resume_status(dossier_resume_rows)
+            if local_stop != "final_answer_ready":
+                stop_reason = local_stop
+                final_override_text = _failure_text(intent_frame, action, dossier_resume_rows, local_stop)
+                unresolved.extend(local_unresolved)
+            steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_dossier_resume_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
+            index += 1
+            steps.append(_step(index=index, phase="observe_result", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["market_research_dossier_resume_ledger"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
             index += 1
         elif action in {"ask_clarification", "defer"}:
             stop_reason = "needs_user_clarification"
@@ -500,6 +534,8 @@ def run_agent_loop_fsm(
         "selected_action": selected_action,
         "stage161_model_tool_arbitration": arbitration,
         "stage161_tool_decision_validation": dict(tool_decision_validation or {}),
+        "stage201_market_research_dossier_registry": dict(stage201_market_research_dossier_registry or {}),
+        "market_research_dossier_resume_ledger": dossier_resume_rows,
         "stage178_evidence_action_remediation": remediation_report,
         "stage179_live_remediation_loop": live_remediation,
         "stage180_live_remediation_execution": remediation_execution,

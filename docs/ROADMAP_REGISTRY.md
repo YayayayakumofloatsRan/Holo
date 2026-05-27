@@ -420,6 +420,12 @@ Stage201: market research dossier registry
 - Stage153 renders `[market_registry]` lines, Stage191 public thoughts include registry working-memory cards, and Stage135 topology exposes `market_research_dossier_registry`.
 - Verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage202: market research dossier resume action
+- Added `market_research_dossier_resume` to the model-visible tool action space and DeepSeek native tool registry.
+- The host now executes dossier resume through the Stage201 registry and Stage200 resume path, records `market_research_dossier_resume_ledger`, and returns a provider tool message.
+- Stage160R evaluates dossier-resume observations as part of the agent loop, so continuation requests can be grounded in persisted research state instead of transcript reconstruction.
+- Verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

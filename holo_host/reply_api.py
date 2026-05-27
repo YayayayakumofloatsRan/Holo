@@ -9440,6 +9440,8 @@ class HoloReplyService:
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             memory_observation_ledger=stage160r_memory_observation_ledger,
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+            market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
+            stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
             stage178_evidence_action_remediation=stage178_evidence_action_remediation,
             time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
         )
@@ -9723,6 +9725,24 @@ class HoloReplyService:
                 capability_context["filing_text_retrieval"] = stage152_filing_text_retrieval
                 sidecar["filing_text_retrieval"] = stage152_filing_text_retrieval
                 reply_debug["filing_text_retrieval"] = stage152_filing_text_retrieval
+            stage152_dossier_resume_rows = [
+                dict(row)
+                for row in list(stage152_deepseek_tool_loop.get("market_research_dossier_resume_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            if stage152_dossier_resume_rows:
+                capability_context["market_research_dossier_resume_ledger"] = stage152_dossier_resume_rows
+                sidecar["market_research_dossier_resume_ledger"] = stage152_dossier_resume_rows
+                reply_debug["market_research_dossier_resume_ledger"] = stage152_dossier_resume_rows
+            stage152_dossier_registry = (
+                dict(stage152_deepseek_tool_loop.get("stage201_market_research_dossier_registry", {}))
+                if isinstance(stage152_deepseek_tool_loop.get("stage201_market_research_dossier_registry", {}), dict)
+                else {}
+            )
+            if stage152_dossier_registry:
+                capability_context["stage201_market_research_dossier_registry"] = stage152_dossier_registry
+                sidecar["stage201_market_research_dossier_registry"] = stage152_dossier_registry
+                reply_debug["stage201_market_research_dossier_registry"] = stage152_dossier_registry
             sidecar["stage152_deepseek_tool_loop"] = stage152_deepseek_tool_loop
         stage161_model_tool_arbitration = dict(reply_debug.get("stage161_model_tool_arbitration", {})) if isinstance(reply_debug.get("stage161_model_tool_arbitration", {}), dict) else {}
         if not stage161_model_tool_arbitration:
@@ -9849,6 +9869,8 @@ class HoloReplyService:
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             memory_observation_ledger=memory_observation_ledger,
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+            market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
+            stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
             stage178_evidence_action_remediation=stage178_evidence_action_remediation,
             time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
             final_text=repaired_text,
@@ -9936,6 +9958,8 @@ class HoloReplyService:
                 web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 memory_observation_ledger=memory_observation_ledger,
                 market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+                market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
+                stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
                 stage178_evidence_action_remediation=stage178_evidence_action_remediation,
                 stage180_live_remediation_execution=stage180_live_remediation_execution,
                 time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
@@ -10129,7 +10153,11 @@ class HoloReplyService:
         stage198_market_research_finalization_gate = {}
         stage199_market_research_task_dossier = {}
         stage200_market_research_dossier_resume = {}
-        stage201_market_research_dossier_registry = {}
+        stage201_market_research_dossier_registry = (
+            dict(sidecar.get("stage201_market_research_dossier_registry", {}))
+            if isinstance(sidecar.get("stage201_market_research_dossier_registry", {}), dict)
+            else {}
+        )
         if stage192_market_research_feedback_loop and (stage193_market_research_action_plan or stage194_market_research_plan_execution):
             stage195_market_research_continuation_loop = run_market_research_continuation_loop(
                 question=turn.text,
