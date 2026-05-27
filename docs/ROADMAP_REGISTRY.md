@@ -276,6 +276,12 @@ Stage177: market research remediation
 - Added `run-market-research-remediation` CLI artifacts and Stage135 `market_research_remediation` topology metrics without provider calls, memory writes, WeChat starts, network requirements, or transport widening.
 - Verification on `2026-05-27`: targeted Stage177 `10 passed`, market stack `28 passed`, runtime `92 passed`, full regression `853 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
 
+Stage178: evidence action remediation
+- Added a domain-independent evidence/action remediation controller.
+- Literature source gaps, math derivation gaps, GPU experiment failures, unsupported memory claims, missing tool ledgers, evidence conflicts, and scope mismatches now map to explicit next actions and success criteria.
+- Added `run-evidence-action-remediation` CLI artifacts and Stage135 `evidence_action_remediation` topology metrics without provider calls, network fetches, tool execution, memory writes, WeChat starts, or transport widening.
+- Verification on `2026-05-27`: targeted Stage178 `9 passed`, remediation stack `29 passed`, runtime `92 passed`, full regression `862 passed`, public hygiene passed, and `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

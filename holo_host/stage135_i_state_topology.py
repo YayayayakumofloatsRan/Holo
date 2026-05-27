@@ -211,6 +211,7 @@ def build_stage135_i_state_topology(
     stage173_market_research_report: dict[str, Any] | None = None,
     market_research_report_ledger: list[dict[str, Any]] | None = None,
     stage177_market_research_remediation: dict[str, Any] | None = None,
+    stage178_evidence_action_remediation: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -256,6 +257,7 @@ def build_stage135_i_state_topology(
     market_research_report = _dict(stage173_market_research_report or packet.get("stage173_market_research_report", {}))
     market_research_report_ledger_rows = _list_dicts(market_research_report_ledger or packet.get("market_research_report_ledger", []))
     market_research_remediation = _dict(stage177_market_research_remediation or packet.get("stage177_market_research_remediation", {}))
+    evidence_action_remediation = _dict(stage178_evidence_action_remediation or packet.get("stage178_evidence_action_remediation", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -884,6 +886,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage177_market_research_remediation", relation="diagnoses_market_research_failure", weight=0.58, summary="domain benchmark failures are converted into evidence-remediation actions"))
         edges.append(_edge("stage177_market_research_remediation", "state_delta", relation="plans_next_evidence_action", weight=0.48, summary="operator-facing next actions prevent unsupported market-research finalization"))
 
+    if evidence_action_remediation:
+        remediation_status = str(evidence_action_remediation.get("status", "") or "unknown")
+        issue_count = int(evidence_action_remediation.get("issue_count", 0) or 0)
+        action_count = int(evidence_action_remediation.get("action_count", 0) or len(list(evidence_action_remediation.get("actions", []) or [])))
+        can_finalize = bool(evidence_action_remediation.get("can_finalize", False))
+        nodes.append(
+            _node(
+                "stage178_evidence_action_remediation",
+                "evidence action remediation",
+                channel="evidence_action_remediation",
+                kind="action_plan",
+                x=0.95,
+                y=0.48,
+                weight=0.74 if can_finalize else 0.44,
+                summary=f"status={remediation_status}; issues={issue_count}; actions={action_count}; can_finalize={can_finalize}",
+            )
+        )
+        source = "stage177_market_research_remediation" if market_research_remediation else "stage153_agent_event_stream" if agent_event_stream else "external_user_input"
+        edges.append(_edge(source, "stage178_evidence_action_remediation", relation="generalizes_evidence_gap_to_action", weight=0.57, summary="cross-domain evidence gaps are converted into bounded next actions"))
+        edges.append(_edge("stage178_evidence_action_remediation", "state_delta", relation="blocks_or_allows_finalization", weight=0.47, summary="answers finalize only when evidence-action remediation is clean"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1174,6 +1197,10 @@ def build_stage135_i_state_topology(
             "market_research_remediation_required_count": 1 if market_research_remediation and not bool(market_research_remediation.get("can_finalize", False)) else 0,
             "market_research_remediation_action_count": len(list(market_research_remediation.get("remediation_actions", []) or [])) if market_research_remediation else 0,
             "market_research_remediation_status": str(market_research_remediation.get("status", "") or "") if market_research_remediation else "",
+            "evidence_action_remediation_node_count": sum(1 for node in nodes if node["channel"] == "evidence_action_remediation"),
+            "evidence_action_remediation_issue_count": int(evidence_action_remediation.get("issue_count", 0) or 0) if evidence_action_remediation else 0,
+            "evidence_action_remediation_action_count": int(evidence_action_remediation.get("action_count", 0) or len(list(evidence_action_remediation.get("actions", []) or []))) if evidence_action_remediation else 0,
+            "evidence_action_remediation_status": str(evidence_action_remediation.get("status", "") or "") if evidence_action_remediation else "",
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,
