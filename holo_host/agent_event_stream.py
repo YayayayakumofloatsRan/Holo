@@ -238,6 +238,7 @@ def build_agent_event_stream(
         )
         if action_space_count:
             events.append({"event": "action_space", "count": action_space_count})
+        rendered_remediation_execute = False
         for step in list(fsm.get("steps", []) or []):
             if not isinstance(step, dict):
                 continue
@@ -298,6 +299,33 @@ def build_agent_event_stream(
                         "status": str(step.get("action_status", "") or "planned"),
                     }
                 )
+            elif phase == "remediation_execute":
+                rendered_remediation_execute = True
+                events.append(
+                    {
+                        "event": "remediation_exec",
+                        "action_type": str(step.get("selected_action", "") or ""),
+                        "status": str(step.get("action_status", "") or "executed"),
+                        "observation_count": len(list(step.get("required_observations", []) or [])),
+                    }
+                )
+        execution = source.get("stage180_live_remediation_execution", fsm.get("stage180_live_remediation_execution", {}))
+        if (
+            not rendered_remediation_execute
+            and isinstance(execution, dict)
+            and execution.get("schema") == "holo.stage180.live_remediation_executor.v1"
+        ):
+            for row in list(execution.get("action_results", []) or [])[:5]:
+                if not isinstance(row, dict):
+                    continue
+                events.append(
+                    {
+                        "event": "remediation_exec",
+                        "action_type": str(row.get("action_type", "") or ""),
+                        "status": str(row.get("status", "") or ""),
+                        "observation_count": int(row.get("observation_count", 0) or 0),
+                    }
+                )
         events.append(
             {
                 "event": "stop",
@@ -339,6 +367,19 @@ def build_agent_event_stream(
     events.extend(_tool_call_events(source))
     events.extend(_observation_events(source))
     events.extend(_engineering_events(source))
+    execution = source.get("stage180_live_remediation_execution", {})
+    if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
+        for row in list(execution.get("action_results", []) or [])[:5]:
+            if not isinstance(row, dict):
+                continue
+            events.append(
+                {
+                    "event": "remediation_exec",
+                    "action_type": str(row.get("action_type", "") or ""),
+                    "status": str(row.get("status", "") or ""),
+                    "observation_count": int(row.get("observation_count", 0) or 0),
+                }
+            )
     events.append(
         {
             "event": "grounding",
@@ -413,6 +454,10 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
             unresolved = ",".join(str(x) for x in list(item.get("unresolved_items", []) or [])) or "-"
             lines.append(
                 f"[remediation] {item.get('action_type', '')} status={item.get('status', '')} tools={tools} unresolved={unresolved}"
+            )
+        elif event == "remediation_exec":
+            lines.append(
+                f"[remediation_exec] {item.get('action_type', '')} status={item.get('status', '')} observations={int(item.get('observation_count', 0) or 0)}"
             )
         elif event == "tool_call":
             if item.get("status") == "no_tool_calls" or item.get("action_type") == "none":

@@ -93,6 +93,7 @@ from .stage150_context_memory_fabric import build_stage150_context_memory_fabric
 from .agent_goal_state import coerce_goal_state, update_goal_state
 from .agent_intent_frame import build_intent_frame
 from .agent_loop_fsm import build_host_memory_recall_ledger, repair_final_with_fsm, run_agent_loop_fsm
+from .live_remediation_executor import execute_live_remediation_actions
 from .context_compiler import compile_context_memory, repair_visible_compact_leak
 from .project_state_graph import ProjectStateGraph, detect_project_state_updates
 from .model_tool_arbitration import derive_arbitration_from_stage152, deterministic_hints_from_stage151
@@ -9825,6 +9826,87 @@ class HoloReplyService:
             time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
             final_text=repaired_text,
         )
+        stage180_live_remediation_execution: dict[str, Any] = {}
+        stage179_candidate_loop = (
+            dict(stage160r_agent_loop_fsm.get("stage179_live_remediation_loop", {}))
+            if isinstance(stage160r_agent_loop_fsm.get("stage179_live_remediation_loop", {}), dict)
+            else {}
+        )
+        if stage179_candidate_loop and bool(stage179_candidate_loop.get("blocked", False)):
+            def _stage180_memory_recall(query: str) -> dict[str, Any]:
+                rows = normalize_memory_observation_ledger(
+                    sidecar=sidecar,
+                    reply_debug=reply_debug,
+                    tool_observation_ledger=tool_observation_ledger,
+                    active_memory_refresh=active_history_report or demoted_history_refresh_report or {},
+                    query=query,
+                )
+                if rows:
+                    return dict(rows[0])
+                return {
+                    "memory_call_id": "stage180:memory-unavailable",
+                    "query": query,
+                    "status": "unavailable",
+                    "selected_ids": [],
+                    "summary": "memory recall unavailable in current turn",
+                    "confidence": 0.0,
+                }
+
+            stage180_live_remediation_execution = execute_live_remediation_actions(
+                stage179_candidate_loop,
+                stage178_evidence_action_remediation=stage178_evidence_action_remediation,
+                repo_root=Path.cwd(),
+                network_enabled=bool(getattr(self.config.runtime, "network_enabled", False)),
+                memory_recall_fn=_stage180_memory_recall,
+                max_actions=1,
+            )
+            stage180_web_rows = [
+                dict(row)
+                for row in list(stage180_live_remediation_execution.get("web_observation_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            if stage180_web_rows:
+                capability_context = dict(capability_context)
+                capability_context["web_observation_ledger"] = list(
+                    capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])) or []
+                ) + stage180_web_rows
+                sidecar["web_observation_ledger"] = capability_context["web_observation_ledger"]
+            stage180_memory_rows = [
+                dict(row)
+                for row in list(stage180_live_remediation_execution.get("memory_observation_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            if stage180_memory_rows:
+                memory_observation_ledger = normalize_memory_observation_ledger(list(memory_observation_ledger or []) + stage180_memory_rows)
+                sidecar["memory_observation_ledger"] = memory_observation_ledger
+            stage180_engineering_rows = [
+                dict(row)
+                for row in list(stage180_live_remediation_execution.get("engineering_action_ledger", []) or [])
+                if isinstance(row, dict)
+            ]
+            if stage180_engineering_rows:
+                engineering_action_ledger = normalize_engineering_action_ledger(list(engineering_action_ledger or []) + stage180_engineering_rows)
+                sidecar["engineering_action_ledger"] = engineering_action_ledger
+                capability_context = dict(capability_context)
+                capability_context["engineering_action_ledger"] = engineering_action_ledger
+                tool_observation_ledger = merge_tool_observation_ledgers(
+                    tool_observation_ledger,
+                    engineering_ledger_to_tool_observations(stage180_engineering_rows),
+                )
+            stage160r_agent_loop_fsm = run_agent_loop_fsm(
+                intent_frame=stage160r_intent_frame,
+                previous_goal_state=previous_goal_state,
+                model_arbitration=stage161_model_tool_arbitration,
+                tool_decision_validation=stage161_tool_decision_validation,
+                tool_decision=capability_context.get("stage151_tool_decision", sidecar.get("stage151_tool_decision", {})),
+                web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
+                memory_observation_ledger=memory_observation_ledger,
+                market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+                stage178_evidence_action_remediation=stage178_evidence_action_remediation,
+                stage180_live_remediation_execution=stage180_live_remediation_execution,
+                time_observation=capability_context.get("time_observation", sidecar.get("time_observation", {})),
+                final_text=repaired_text,
+            )
         repaired_text = normalize_external_speech_for_context(
             turn_context,
             repair_final_with_fsm(repaired_text, stage160r_agent_loop_fsm, channel=turn.channel),
@@ -9934,6 +10016,10 @@ class HoloReplyService:
             sidecar["stage179_live_remediation_loop"] = stage179_live_remediation_loop
             reply_debug["stage179_live_remediation_loop"] = stage179_live_remediation_loop
             capability_context["stage179_live_remediation_loop"] = stage179_live_remediation_loop
+        if stage180_live_remediation_execution:
+            sidecar["stage180_live_remediation_execution"] = stage180_live_remediation_execution
+            reply_debug["stage180_live_remediation_execution"] = stage180_live_remediation_execution
+            capability_context["stage180_live_remediation_execution"] = stage180_live_remediation_execution
         reply_debug["memory_alignment"] = memory_alignment
         memory_alignment_status = str(memory_alignment.get("status", "") or "")
         memory_alignment_claim_count = int(memory_alignment.get("claim_count", 0) or 0)
@@ -10249,6 +10335,7 @@ class HoloReplyService:
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
                 "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
                 "stage179_live_remediation_loop": stage179_live_remediation_loop,
+                "stage180_live_remediation_execution": stage180_live_remediation_execution,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
@@ -10351,6 +10438,7 @@ class HoloReplyService:
             or capability_context.get("stage151_tool_decision")
             or stage153_agent_event_stream
             or stage160r_agent_loop_fsm
+            or stage180_live_remediation_execution
             or project_state_graph
             or stage156_context_compiler
             or filing_text_retrieval
@@ -10382,6 +10470,7 @@ class HoloReplyService:
                 stage160r_agent_loop_fsm=stage160r_agent_loop_fsm,
                 stage178_evidence_action_remediation=stage178_evidence_action_remediation,
                 stage179_live_remediation_loop=stage179_live_remediation_loop,
+                stage180_live_remediation_execution=stage180_live_remediation_execution,
                 stage161_model_tool_arbitration=stage161_model_tool_arbitration,
                 filing_text_retrieval=filing_text_retrieval,
                 market_research_pack_ledger=market_research_pack_ledger,
@@ -10629,6 +10718,7 @@ class HoloReplyService:
             "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
             "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
             "stage179_live_remediation_loop": stage179_live_remediation_loop,
+            "stage180_live_remediation_execution": stage180_live_remediation_execution,
             "stage160r_goal_state": stage160r_goal_state,
             "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
             "stage161_tool_decision_validation": stage161_tool_decision_validation,
@@ -10824,6 +10914,7 @@ class HoloReplyService:
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
                 "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
                 "stage179_live_remediation_loop": stage179_live_remediation_loop,
+                "stage180_live_remediation_execution": stage180_live_remediation_execution,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
@@ -10889,6 +10980,7 @@ class HoloReplyService:
                 "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
                 "stage178_evidence_action_remediation": stage178_evidence_action_remediation,
                 "stage179_live_remediation_loop": stage179_live_remediation_loop,
+                "stage180_live_remediation_execution": stage180_live_remediation_execution,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
             },

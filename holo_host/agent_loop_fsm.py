@@ -185,6 +185,46 @@ def _failure_text(intent_frame: dict[str, Any], action: str, rows: list[dict[str
     return "The required agent action did not produce enough evidence for a grounded final answer."
 
 
+def _remediation_success_text(intent_frame: dict[str, Any], remediation_execution: dict[str, Any]) -> str:
+    raw = str(intent_frame.get("raw_user_text_exact", "") or "")
+    wants_zh = any("\u4e00" <= char <= "\u9fff" for char in raw)
+    web_rows = _list_dicts(remediation_execution.get("web_observation_ledger", []))
+    memory_rows = _list_dicts(remediation_execution.get("memory_observation_ledger", []))
+    engineering_rows = _list_dicts(remediation_execution.get("engineering_action_ledger", []))
+    if memory_rows:
+        grounded = next((row for row in memory_rows if str(row.get("status", "") or "") == "grounded"), memory_rows[0])
+        summary = compact_text(str(grounded.get("summary", "") or "memory evidence was retrieved"), 220)
+        if wants_zh:
+            return f"已执行 memory_recall，并取得可用记忆证据：{summary}"
+        return f"memory_recall was executed and produced usable evidence: {summary}"
+    if web_rows:
+        ok_rows = [row for row in web_rows if str(row.get("status", "") or "") == "ok"]
+        source_urls = [
+            str(url)
+            for row in ok_rows[:3]
+            for url in list(row.get("source_urls", []) or [])[:2]
+            if str(url)
+        ]
+        source_text = ", ".join(source_urls[:3]) if source_urls else "no source URL recorded"
+        if wants_zh:
+            return f"已执行 web_search，并取得联网观察记录。来源：{compact_text(source_text, 220)}"
+        return f"web_search was executed and produced web observations. Sources: {compact_text(source_text, 220)}"
+    if engineering_rows:
+        changed = [
+            str(path)
+            for row in engineering_rows[:3]
+            for path in list(row.get("files_changed", []) or row.get("files_read", []) or [])[:3]
+            if str(path)
+        ]
+        detail = ", ".join(changed[:4]) if changed else "engineering ledger recorded"
+        if wants_zh:
+            return f"已执行工程补救动作，并记录工程 ledger：{compact_text(detail, 220)}"
+        return f"The engineering remediation action was executed and ledgered: {compact_text(detail, 220)}"
+    if wants_zh:
+        return "已执行补救动作，并记录了可审计观察。"
+    return "The remediation action was executed and recorded as auditable observation."
+
+
 def run_agent_loop_fsm(
     *,
     intent_frame: dict[str, Any],
@@ -197,6 +237,7 @@ def run_agent_loop_fsm(
     market_research_pack_ledger: Any = None,
     market_research_report_ledger: Any = None,
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
+    stage180_live_remediation_execution: dict[str, Any] | None = None,
     time_observation: dict[str, Any] | None = None,
     final_text: str = "",
 ) -> dict[str, Any]:
@@ -254,6 +295,7 @@ def run_agent_loop_fsm(
     market_report_rows = _list_dicts(market_research_report_ledger)
     remediation_report = dict(stage178_evidence_action_remediation or {})
     live_remediation = build_live_remediation_loop(remediation_report, goal_id=goal_id, current_stop_reason=stop_reason) if remediation_report else {}
+    remediation_execution = dict(stage180_live_remediation_execution or {})
     index = 2
     for action in mandatory:
         if action == "memory_recall":
@@ -308,7 +350,8 @@ def run_agent_loop_fsm(
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status="skipped", skip_reason="host_action_not_implemented", required_observations=required_observations, unresolved_items=[action], canonical_stop_reason="needs_user_clarification"))
             index += 1
             stop_reason = "needs_user_clarification"
-    if live_remediation and bool(live_remediation.get("blocked", False)):
+    remediation_executed = bool(remediation_execution) and str(remediation_execution.get("status", "") or "") in {"executed", "partial"}
+    if live_remediation and bool(live_remediation.get("blocked", False)) and not remediation_executed:
         next_actions = _list_dicts(live_remediation.get("next_action_candidates", []))
         selected_next = dict(next_actions[0]) if next_actions else {}
         selected_type = str(selected_next.get("action_type", "") or live_remediation.get("selected_action_type", "") or "remediation")
@@ -343,6 +386,36 @@ def run_agent_loop_fsm(
                 observation_ids=[str(action.get("action_id", "") or "") for action in next_actions if str(action.get("action_id", "") or "")],
                 new_information_score=0.68,
                 unresolved_items=[str(action.get("action_type", "") or "") for action in next_actions],
+                canonical_stop_reason=stop_reason,
+            )
+        )
+        index += 1
+    elif remediation_executed:
+        exec_results = _list_dicts(remediation_execution.get("action_results", []))
+        exec_stop = str(remediation_execution.get("canonical_stop_reason", "") or "final_answer_ready")
+        stop_reason = exec_stop if exec_stop in ALLOWED_NEW_STOP_REASONS else "final_answer_ready"
+        if stop_reason == "final_answer_ready":
+            unresolved = []
+            final_override_text = _remediation_success_text(intent_frame, remediation_execution)
+        steps.append(
+            _step(
+                index=index,
+                phase="remediation_execute",
+                goal_id=goal_id,
+                selected_action=str((exec_results[0] if exec_results else {}).get("action_type", "") or "remediation_execute"),
+                action_status=str(remediation_execution.get("status", "") or "executed"),
+                required_observations=[
+                    name
+                    for name, rows in (
+                        ("web_observation_ledger", _list_dicts(remediation_execution.get("web_observation_ledger", []))),
+                        ("memory_observation_ledger", _list_dicts(remediation_execution.get("memory_observation_ledger", []))),
+                        ("engineering_action_ledger", _list_dicts(remediation_execution.get("engineering_action_ledger", []))),
+                    )
+                    if rows
+                ],
+                observation_ids=[str(row.get("action_id", "") or row.get("memory_call_id", "") or row.get("observation_id", "") or "") for row in exec_results],
+                new_information_score=0.76,
+                unresolved_items=[] if stop_reason == "final_answer_ready" else [str(row.get("action_type", "") or "") for row in exec_results],
                 canonical_stop_reason=stop_reason,
             )
         )
@@ -391,7 +464,8 @@ def run_agent_loop_fsm(
         "stage161_tool_decision_validation": dict(tool_decision_validation or {}),
         "stage178_evidence_action_remediation": remediation_report,
         "stage179_live_remediation_loop": live_remediation,
-        "next_action_candidates": _list_dicts(live_remediation.get("next_action_candidates", [])) if live_remediation else [],
+        "stage180_live_remediation_execution": remediation_execution,
+        "next_action_candidates": [] if remediation_executed and stop_reason == "final_answer_ready" else _list_dicts(live_remediation.get("next_action_candidates", [])) if live_remediation else [],
         "mandatory_actions": mandatory,
         "required_observations": required_observations,
         "step_count": len(steps),
