@@ -9562,6 +9562,7 @@ def command_run_live_crawler_search(
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
+  /thoughts              show public thought stream for the last turn
   /json                  print last turn JSON metadata
   /tools                 show last turn tool observations
   /eng search <query> [glob]  repo-scoped search with Stage154 ledger
@@ -9917,6 +9918,9 @@ def command_chat(
             return True
         if command == "/tools":
             print(cli_session.render_tools())
+            return True
+        if command in {"/thoughts", "/think"}:
+            print(cli_session.render_thoughts())
             return True
         if command == "/eng":
             return run_engineering_command(rest)

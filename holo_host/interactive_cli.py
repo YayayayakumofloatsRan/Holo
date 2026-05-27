@@ -11,6 +11,7 @@ from .agent_event_stream import (
     safe_json_dumps,
 )
 from .context_compiler import render_context_cache_status, render_context_compiler_report
+from .public_thought_stream import build_public_thought_stream, render_public_thought_stream
 
 INTERACTIVE_CLI_SESSION_SCHEMA = "holo.stage153.interactive_cli_session.v1"
 
@@ -35,6 +36,15 @@ class InteractiveCliSession:
         self.last_event_stream = build_agent_event_stream(
             self.last_payload,
             user_text=self.last_user_text,
+            thread_key=self.thread_key,
+            chat_name=self.chat_name,
+            channel=self.channel,
+            transport=self.last_transport,
+        )
+        self.last_payload["stage191_public_thought_stream"] = build_public_thought_stream(
+            self.last_payload,
+            user_text=self.last_user_text,
+            event_stream=self.last_event_stream,
             thread_key=self.thread_key,
             chat_name=self.chat_name,
             channel=self.channel,
@@ -80,6 +90,14 @@ class InteractiveCliSession:
         report = dict(self.last_payload.get("stage156_context_compiler", {})) if isinstance(self.last_payload.get("stage156_context_compiler", {}), dict) else {}
         return render_context_cache_status(report)
 
+    def render_thoughts(self) -> str:
+        report = (
+            dict(self.last_payload.get("stage191_public_thought_stream", {}))
+            if isinstance(self.last_payload.get("stage191_public_thought_stream", {}), dict)
+            else {}
+        )
+        return render_public_thought_stream(report)
+
     def handle_command(self, command_line: str) -> str:
         command, _, _rest = str(command_line or "").partition(" ")
         command = command.strip().lower()
@@ -95,4 +113,6 @@ class InteractiveCliSession:
             return self.render_context()
         if command == "/cache":
             return self.render_cache()
+        if command in {"/thoughts", "/think"}:
+            return self.render_thoughts()
         return f"unknown command: {command}"

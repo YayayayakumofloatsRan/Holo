@@ -352,6 +352,12 @@ Stage190: self-feedback agent loop
 - Stage153 renders `[feedback]` trace lines without exposing hidden chain-of-thought or raw provider reasoning.
 - Verification on `2026-05-27`: targeted Stage190 `4 passed`; neighbor `20 passed`; runtime `92 passed`; full suite `938 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
 
+Stage191: public thought stream
+- Added `holo.stage191.public_thought_stream.v1` and public thought cards derived from sanitized event streams.
+- Interactive CLI now supports `/thoughts` and `/think` to render goal, decision, action, observation, self-feedback, grounding, stop, and final cards.
+- Reply API propagates `stage191_public_thought_stream` into debug, outgoing metadata, reply JSON, and archive metadata while keeping raw hidden reasoning private.
+- Verification on `2026-05-27`: targeted Stage191 `3 passed`; neighbor `29 passed`; runtime `92 passed`; full suite `941 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

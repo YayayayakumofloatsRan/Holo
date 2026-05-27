@@ -118,6 +118,7 @@ from .stage151_tool_decision_loop import (
     repair_tool_decision_grounding,
 )
 from .agent_event_stream import build_agent_event_stream
+from .public_thought_stream import build_public_thought_stream
 from .interactive_cli import INTERACTIVE_CLI_SESSION_SCHEMA
 from .canonical_stop_reason import map_canonical_stop_reason
 from .kernel_metadata_sanitizer import build_public_stage152_report, sanitize_public_metadata
@@ -10397,7 +10398,33 @@ class HoloReplyService:
         )
         stage153_agent_event_stream["canonical_stop_reason"] = canonical_stop_reason
         stage153_agent_event_stream["canonical_stop_source"] = canonical_stop_source
+        stage191_public_thought_stream = build_public_thought_stream(
+            {
+                "action": "reply",
+                "text": final_reply,
+                "bubbles": [bubble.text for bubble in bubbles],
+                "thread_key": incoming.thread_key,
+                "chat_name": turn.chat_name,
+                "channel": turn.channel,
+                "stage153_agent_event_stream": stage153_agent_event_stream,
+                "stage160r_agent_loop_fsm": stage160r_agent_loop_fsm,
+                "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
+                "stage186_live_crawler_search": stage186_live_crawler_search,
+                "stage151_tool_decision": capability_context.get("stage151_tool_decision", {}),
+                "web_observation_ledger": capability_context.get("web_observation_ledger", []),
+                "tool_observation_ledger": tool_observation_ledger,
+                "engineering_action_ledger": engineering_action_ledger,
+                "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
+            },
+            user_text=turn.text,
+            event_stream=stage153_agent_event_stream,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            channel=turn.channel,
+            transport="reply_api",
+        )
         reply_debug["stage153_agent_event_stream"] = stage153_agent_event_stream
+        reply_debug["stage191_public_thought_stream"] = stage191_public_thought_stream
         reply_debug["stage153_interactive_cli_session"] = stage153_interactive_cli_session
         reply_debug["network_health"] = network_health
         reply_debug["canonical_stop_reason"] = canonical_stop_reason
@@ -10611,6 +10638,7 @@ class HoloReplyService:
                 "network_health": network_health,
                 "stage153_agent_event_stream": stage153_agent_event_stream,
                 "stage153_interactive_cli_session": stage153_interactive_cli_session,
+                "stage191_public_thought_stream": stage191_public_thought_stream,
                 "engineering_action_ledger": engineering_action_ledger,
                 "engineering_action_count": engineering_action_count,
                 "engineering_claim_grounding": engineering_claim_grounding,
@@ -10813,6 +10841,7 @@ class HoloReplyService:
         }
         archive_metadata["stage153_agent_event_stream"] = stage153_agent_event_stream
         archive_metadata["stage153_interactive_cli_session"] = stage153_interactive_cli_session
+        archive_metadata["stage191_public_thought_stream"] = stage191_public_thought_stream
         memory_write_report: dict[str, Any] = {}
         if self.config.memory.auto_observe:
             with self._memory_lock:
@@ -10942,6 +10971,7 @@ class HoloReplyService:
                 "network_health": network_health,
                 "stage153_agent_event_stream": stage153_agent_event_stream,
                 "stage153_interactive_cli_session": stage153_interactive_cli_session,
+                "stage191_public_thought_stream": stage191_public_thought_stream,
                 "engineering_action_ledger": engineering_action_ledger,
                 "engineering_action_count": engineering_action_count,
                 "engineering_claim_grounding": engineering_claim_grounding,

@@ -161,6 +161,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 156. `docs/ENGINEERING_HANDOFF_STAGE189.md`
 157. `docs/STAGE190_SELF_FEEDBACK_AGENT_LOOP.md`
 158. `docs/ENGINEERING_HANDOFF_STAGE190.md`
+159. `docs/STAGE191_PUBLIC_THOUGHT_STREAM.md`
+160. `docs/ENGINEERING_HANDOFF_STAGE191.md`
 
 ## What This Document Must Cover
 - current live state
@@ -175,9 +177,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage190-self-feedback-agent-loop`.
+- The current milestone tag is `stage191-public-thought-stream`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage190 Self-Feedback Agent Loop: crawler actions now produce a public self-feedback ledger with evidence score, source authority, marginal utility, next action, and stop reason. The next pressure is expanding the same feedback controller into engineering and market-research report workflows.
+- Current focus is Stage191 Public Thought Stream: Holo now renders a CLI-friendly public thought stream derived from event, action, observation, self-feedback, and stop ledgers while keeping raw provider/private chain-of-thought hidden. The next pressure is expanding the feedback controller into engineering and market-research report readiness workflows.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
