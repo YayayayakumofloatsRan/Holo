@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 from holo_host.agent_event_stream import build_agent_event_stream, render_agent_event_stream
 from holo_host.capabilities import CapabilityBroker
@@ -9,6 +11,9 @@ from holo_host.stage151_tool_decision_loop import build_tool_decision_report
 
 
 def test_public_trace_includes_current_stage_state_from_handoff() -> None:
+    handoff = Path("HOLO_HANDOFF.md").read_text(encoding="utf-8")
+    expected = re.search(r"current milestone tag is `([^`]+)`", handoff, re.IGNORECASE)
+    assert expected is not None
     stream = build_agent_event_stream(
         {"text": "Current stage status."},
         user_text="what stage are you on?",
@@ -18,7 +23,7 @@ def test_public_trace_includes_current_stage_state_from_handoff() -> None:
     )
     rendered = render_agent_event_stream(stream)
 
-    assert "[state] milestone=stage185-cli-introspection-search-intent" in rendered
+    assert f"[state] milestone={expected.group(1)}" in rendered
     assert any(event.get("event") == "state" for event in stream["events"])
 
 

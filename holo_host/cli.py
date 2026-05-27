@@ -63,6 +63,7 @@ from .live_remediation_stress import run_live_remediation_stress_simulation
 from .live_remediation_continuation import run_remediation_continuation_simulation
 from .agent_capability_gauntlet import run_agent_capability_gauntlet
 from .agent_real_use_drill import run_agent_real_use_drill
+from .live_crawler_search import write_live_crawler_search_artifacts
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
@@ -9541,6 +9542,23 @@ def command_run_agent_real_use_drill(
     return 0
 
 
+def command_run_live_crawler_search(
+    *,
+    output: str,
+    dry_run: bool,
+    query: str,
+    network_enabled: bool,
+) -> int:
+    report = write_live_crawler_search_artifacts(
+        output=output,
+        dry_run=dry_run,
+        user_text=query,
+        network_enabled=network_enabled,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
@@ -10858,6 +10876,14 @@ def main(argv: list[str] | None = None) -> int:
     agent_real_use_drill_parser.add_argument("--output", required=True)
     agent_real_use_drill_parser.add_argument("--dry-run", action="store_true")
     agent_real_use_drill_parser.add_argument("--fail-under", type=float, default=None)
+    live_crawler_parser = subparsers.add_parser(
+        "run-live-crawler-search",
+        help="Write Stage186 bounded live crawler/search artifacts",
+    )
+    live_crawler_parser.add_argument("--output", required=True)
+    live_crawler_parser.add_argument("--dry-run", action="store_true")
+    live_crawler_parser.add_argument("--query", default="联网检索 Codex CLI 官方文档并给出来源")
+    live_crawler_parser.add_argument("--network-disabled", action="store_true")
     project_state_parser = subparsers.add_parser("project-state", help="Inspect the Stage155 project state graph")
     project_state_parser.add_argument("--project", required=True)
     project_state_parser.add_argument("--summary", action="store_true")
@@ -11990,6 +12016,13 @@ def main(argv: list[str] | None = None) -> int:
             output=args.output,
             dry_run=args.dry_run,
             fail_under=args.fail_under,
+        )
+    if args.command == "run-live-crawler-search":
+        return command_run_live_crawler_search(
+            output=args.output,
+            dry_run=args.dry_run,
+            query=args.query,
+            network_enabled=not bool(args.network_disabled),
         )
     if args.command == "project-state":
         return command_project_state(

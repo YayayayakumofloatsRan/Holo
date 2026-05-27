@@ -323,6 +323,12 @@ Stage185: CLI introspection and search intent
 - Hardened Chinese search/crawler/current-source intent recognition for Stage151 and `CapabilityBroker`, including planned `web_search` tool requests when eager network execution is disabled.
 - Verification on `2026-05-27`: targeted Stage185 `6 passed`; neighbor `35 passed`; runtime `92 passed`; full suite `918 passed`; public hygiene and `git diff --check` passed.
 
+Stage186: live crawler search
+- Added a bounded query/open/evaluate crawler loop that records `crawler_ledger`, web observations, opened-page observations, source URLs, evidence sufficiency, and stop reasons.
+- Added `run-live-crawler-search` artifacts for deterministic dry-run and optional live host web providers.
+- Stage135 topology now exposes `live_crawler_search` node and metrics.
+- Verification on `2026-05-27`: targeted Stage186 `8 passed`; neighbor `38 passed`; runtime `92 passed`; full suite `926 passed`; public hygiene and `git diff --check` passed.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

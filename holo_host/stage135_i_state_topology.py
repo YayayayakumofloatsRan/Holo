@@ -218,6 +218,7 @@ def build_stage135_i_state_topology(
     stage182_remediation_continuation: dict[str, Any] | None = None,
     stage183_agent_capability_gauntlet: dict[str, Any] | None = None,
     stage184_real_use_drill: dict[str, Any] | None = None,
+    stage186_live_crawler_search: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -270,6 +271,7 @@ def build_stage135_i_state_topology(
     remediation_continuation = _dict(stage182_remediation_continuation or packet.get("stage182_remediation_continuation", {}))
     agent_capability_gauntlet = _dict(stage183_agent_capability_gauntlet or packet.get("stage183_agent_capability_gauntlet", {}))
     real_use_drill = _dict(stage184_real_use_drill or packet.get("stage184_real_use_drill", {}))
+    live_crawler_search = _dict(stage186_live_crawler_search or packet.get("stage186_live_crawler_search", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -1074,6 +1076,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage184_real_use_drill", relation="executes_real_agent_drills", weight=0.58, summary="temporary-workspace engineering actions and web evidence drills are executed instead of assumed"))
         edges.append(_edge("stage184_real_use_drill", "state_delta", relation="records_real_use_capability_pressure", weight=0.52, summary="real-use drill deltas compare full loop behavior against claim-only baseline"))
 
+    if live_crawler_search:
+        crawler_status = str(live_crawler_search.get("status", "") or "unknown")
+        query_count = int(live_crawler_search.get("query_count", 0) or 0)
+        opened_count = int(live_crawler_search.get("opened_page_count", 0) or 0)
+        source_count = len(list(live_crawler_search.get("source_urls", []) or []))
+        nodes.append(
+            _node(
+                "stage186_live_crawler_search",
+                "live crawler search",
+                channel="live_crawler_search",
+                kind="web_crawler_gate",
+                x=1.0,
+                y=0.96,
+                weight=0.84 if crawler_status == "sufficient" else 0.42,
+                summary=f"status={crawler_status}; queries={query_count}; opened={opened_count}; sources={source_count}",
+            )
+        )
+        source = "stage151_tool_decision_loop" if tool_decision else "external_user_input"
+        edges.append(_edge(source, "stage186_live_crawler_search", relation="executes_query_open_evaluate_loop", weight=0.6, summary="search intent becomes a bounded query/open/evidence sufficiency crawler loop"))
+        edges.append(_edge("stage186_live_crawler_search", "state_delta", relation="records_web_evidence_sufficiency", weight=0.54, summary="crawler evidence and stop reason become inspectable agent state"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1393,6 +1416,10 @@ def build_stage135_i_state_topology(
             "real_use_drill_full_loop_score": float(_dict(real_use_drill.get("summary", {})).get("full_loop_score", 0.0) or 0.0) if real_use_drill else 0.0,
             "real_use_drill_claim_only_baseline_score": float(_dict(real_use_drill.get("summary", {})).get("claim_only_baseline_score", 0.0) or 0.0) if real_use_drill else 0.0,
             "real_use_drill_status": str(real_use_drill.get("status", "") or "") if real_use_drill else "",
+            "live_crawler_search_node_count": sum(1 for node in nodes if node["channel"] == "live_crawler_search"),
+            "live_crawler_search_status": str(live_crawler_search.get("status", "") or "") if live_crawler_search else "",
+            "live_crawler_search_query_count": int(live_crawler_search.get("query_count", 0) or 0) if live_crawler_search else 0,
+            "live_crawler_search_opened_page_count": int(live_crawler_search.get("opened_page_count", 0) or 0) if live_crawler_search else 0,
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,
