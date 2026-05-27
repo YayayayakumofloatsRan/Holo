@@ -121,6 +121,13 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             f"resume={bool(event.get('can_resume', False))}"
         )
         return _card("working_memory", summary, source_event=kind, confidence=0.84)
+    if kind == "market_resume":
+        summary = (
+            f"status={event.get('status', '')}; action={event.get('action', '')}; "
+            f"executed={event.get('executed', 0)}; rejected={event.get('rejected', 0)}; "
+            f"failed={event.get('failed', 0)}; stop={event.get('stop_reason', '')}"
+        )
+        return _card("action", summary, source_event=kind, confidence=0.84)
     if kind == "evaluate":
         unresolved = ",".join(str(x) for x in list(event.get("unresolved_items", []) or [])) or "none"
         return _card("stop_evaluation", f"status={event.get('status', '')}; unresolved={unresolved}", source_event=kind, confidence=0.78)

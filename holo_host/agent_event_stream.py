@@ -404,6 +404,26 @@ def _stage199_market_research_dossier_events(payload: dict[str, Any]) -> list[di
     ]
 
 
+def _stage200_market_research_resume_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    resume = payload.get("stage200_market_research_dossier_resume", {})
+    if not isinstance(resume, dict):
+        return []
+    execution = resume.get("stage194_market_research_plan_execution", {})
+    if not isinstance(execution, dict):
+        execution = {}
+    return [
+        {
+            "event": "market_resume",
+            "status": str(resume.get("status", "") or ""),
+            "action": str(resume.get("selected_action", "") or ""),
+            "executed": int(execution.get("executed_count", 0) or 0),
+            "rejected": int(execution.get("rejected_count", 0) or 0),
+            "failed": int(execution.get("failed_count", 0) or 0),
+            "stop_reason": str(resume.get("canonical_stop_reason", "") or ""),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -647,6 +667,7 @@ def build_agent_event_stream(
         events.extend(_stage197_market_report_assembly_events(source))
         events.extend(_stage198_market_report_finalization_events(source))
         events.extend(_stage199_market_research_dossier_events(source))
+        events.extend(_stage200_market_research_resume_events(source))
         events.append(
             {
                 "event": "stop",
@@ -701,6 +722,7 @@ def build_agent_event_stream(
     events.extend(_stage197_market_report_assembly_events(source))
     events.extend(_stage198_market_report_finalization_events(source))
     events.extend(_stage199_market_research_dossier_events(source))
+    events.extend(_stage200_market_research_resume_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -918,6 +940,12 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[market_dossier] status={item.get('status', '')} "
                 f"sources={item.get('source_count', 0)} metrics={item.get('metric_count', 0)} "
                 f"next={item.get('next_action_count', 0)} resume={str(bool(item.get('can_resume', False))).lower()}"
+            )
+        elif event == "market_resume":
+            lines.append(
+                f"[market_resume] status={item.get('status', '')} action={item.get('action', '') or 'none'} "
+                f"executed={item.get('executed', 0)} rejected={item.get('rejected', 0)} "
+                f"failed={item.get('failed', 0)} stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))

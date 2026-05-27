@@ -57,6 +57,7 @@ from .stage175_market_research_live_smoke import run_market_research_live_smoke
 from .stage176_market_research_domain_benchmark import run_market_research_domain_benchmark
 from .stage177_market_research_remediation import run_market_research_remediation
 from .market_research_task_dossier import run_market_research_dossier_bundle
+from .market_research_dossier_resume import run_market_research_dossier_resume_bundle
 from .evidence_action_remediation import run_evidence_action_remediation
 from .live_remediation_loop import run_live_remediation_simulation
 from .live_remediation_executor import run_live_remediation_execution_simulation
@@ -9465,6 +9466,19 @@ def command_run_market_research_dossier(
     return 0
 
 
+def command_run_market_research_dossier_resume(
+    *,
+    output: str,
+    dry_run: bool,
+    fail_under: float | None,
+) -> int:
+    report = run_market_research_dossier_resume_bundle(output=output, dry_run=dry_run, fail_under=fail_under)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_under is not None and bool(report.get("fail_under_triggered", False)):
+        return 1
+    return 0
+
+
 def command_run_evidence_action_remediation(
     *,
     output: str,
@@ -10852,6 +10866,13 @@ def main(argv: list[str] | None = None) -> int:
     market_research_dossier_parser.add_argument("--output", required=True)
     market_research_dossier_parser.add_argument("--dry-run", action="store_true")
     market_research_dossier_parser.add_argument("--fail-under", type=float, default=None)
+    market_research_dossier_resume_parser = subparsers.add_parser(
+        "run-market-research-dossier-resume",
+        help="Write the Stage200 market research dossier resume artifacts",
+    )
+    market_research_dossier_resume_parser.add_argument("--output", required=True)
+    market_research_dossier_resume_parser.add_argument("--dry-run", action="store_true")
+    market_research_dossier_resume_parser.add_argument("--fail-under", type=float, default=None)
     evidence_action_remediation_parser = subparsers.add_parser(
         "run-evidence-action-remediation",
         help="Write the Stage178 generic evidence-action remediation artifacts",
@@ -12002,6 +12023,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "run-market-research-dossier":
         return command_run_market_research_dossier(
+            output=args.output,
+            dry_run=args.dry_run,
+            fail_under=args.fail_under,
+        )
+    if args.command == "run-market-research-dossier-resume":
+        return command_run_market_research_dossier_resume(
             output=args.output,
             dry_run=args.dry_run,
             fail_under=args.fail_under,
