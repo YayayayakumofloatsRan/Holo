@@ -12,6 +12,13 @@ STAGE163_PAGE_EVIDENCE_SCORE_SCHEMA = "holo.stage163.page_evidence_score.v1"
 _SCRIPT_STYLE_RE = re.compile(r"<(script|style|noscript)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
+_CSS_AT_RULE_RE = re.compile(r"@[a-zA-Z-]+\s+[^;{}]{0,300}(?:;|\{[^{}]{0,2000}\})", re.DOTALL)
+_CSS_SELECTOR_RULE_RE = re.compile(r"(?:^|\s)[.#][A-Za-z0-9_-][^{]{0,240}\{[^{}]{0,2400}\}", re.DOTALL)
+_CSS_PROPERTY_FRAGMENT_RE = re.compile(
+    r"\b(?:display|align-items|justify-content|min-height|border|border-radius|background|padding|color|font-size|font-weight|line-height|white-space|transition|opacity|outline|cursor)\s*:\s*[^;{}]{0,180};?",
+    re.IGNORECASE,
+)
+_CSS_VAR_RE = re.compile(r"var\(--[^)]+\)", re.IGNORECASE)
 
 _STOPWORDS = {
     "a",
@@ -44,7 +51,15 @@ def _compact(value: Any, limit: int = 260) -> str:
 
 def _strip_tags(value: str, *, limit: int = 4000) -> str:
     without_code = _SCRIPT_STYLE_RE.sub(" ", str(value or ""))
+    without_code = _CSS_AT_RULE_RE.sub(" ", without_code)
+    for _ in range(6):
+        cleaned = _CSS_SELECTOR_RULE_RE.sub(" ", without_code)
+        if cleaned == without_code:
+            break
+        without_code = cleaned
     text = unescape(_TAG_RE.sub(" ", without_code))
+    text = _CSS_PROPERTY_FRAGMENT_RE.sub(" ", text)
+    text = _CSS_VAR_RE.sub(" ", text)
     return _compact(text, limit)
 
 

@@ -335,6 +335,11 @@ Stage187: live chat crawler integration
 - Stage153 event stream renders `[crawl:query]`, `[crawl:search]`, `[crawl:open]`, `[crawl:evaluate]`, and `[crawl:stop]` from live crawler ledgers.
 - Verification on `2026-05-27`: targeted Stage187 `2 passed`; neighbor `37 passed`; runtime `92 passed`; full suite `928 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
 
+Stage188: crawler evidence quality
+- Hardened Stage163 opened-page evidence extraction so CSS-heavy documentation pages no longer leak `@layer`, selector blocks, CSS property fragments, custom-property `var(...)` fragments, or Astro-style selectors into source evidence.
+- Stage151 web grounding and Stage186/187 crawler flows now receive cleaner readable page text and supporting snippets.
+- Verification on `2026-05-27`: targeted Stage188 `2 passed`; neighbor `32 passed`; runtime `92 passed`; full suite `930 passed`; public hygiene passed; `git diff --check` had CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
