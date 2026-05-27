@@ -197,6 +197,11 @@ Stage163: page evidence verifier
 - Web observation rows now carry `page_evidence` with support status, opened count, selected URL, evidence score, supporting snippet, and page observations.
 - Stage151/153 traces render page evidence status, Stage135 topology exposes `page_evidence_verifier`, and the stage preserves the no-provider-path, no-memory-write, no-WeChat-start, no-transport-widening boundary.
 
+Stage164: search fallback and source synthesis
+- Added host-side search provider fallback so `web_search` can try providers in order and record which provider produced sufficient Stage162 evidence.
+- Added deterministic source synthesis over Stage163 page evidence, including supported/weak/conflicted/unsupported status, citations, confidence, and simple conflict flags.
+- Stage151/153 traces render source synthesis status, Stage135 topology exposes `source_synthesis`, and the stage preserves the no-provider-model-path, no-memory-write, no-WeChat-start, no-transport-widening boundary.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

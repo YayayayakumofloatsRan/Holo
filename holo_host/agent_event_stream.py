@@ -112,6 +112,8 @@ def _observation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "evidence_score": float(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("evidence_score", 0.0) or 0.0),
                 "page_evidence_status": str(dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {}).get("status", "") or ""),
                 "page_opened_count": int(dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {}).get("opened_count", 0) or 0),
+                "source_synthesis_status": str(dict(row.get("source_synthesis", {}) if isinstance(row.get("source_synthesis", {}), dict) else {}).get("status", "") or ""),
+                "source_synthesis_supported_count": int(dict(row.get("source_synthesis", {}) if isinstance(row.get("source_synthesis", {}), dict) else {}).get("supported_source_count", 0) or 0),
             }
         )
     for row in list(payload.get("tool_observation_ledger", []) or [])[:8]:
@@ -369,9 +371,15 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 evidence_suffix = f" evidence={evidence} score={item.get('evidence_score', 0)}"
             page = str(item.get("page_evidence_status", "") or "")
             page_suffix = f" page={page} opened={item.get('page_opened_count', 0)}" if page else ""
+            synthesis = str(item.get("source_synthesis_status", "") or "")
+            synthesis_suffix = (
+                f" synthesis={synthesis} supported_sources={item.get('source_synthesis_supported_count', 0)}"
+                if synthesis
+                else ""
+            )
             lines.append(
                 f"[observation] {item.get('action_type', '')} status={item.get('status', '')} "
-                f"sources={sources} results={item.get('result_count', 0)}{evidence_suffix}{page_suffix}"
+                f"sources={sources} results={item.get('result_count', 0)}{evidence_suffix}{page_suffix}{synthesis_suffix}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))

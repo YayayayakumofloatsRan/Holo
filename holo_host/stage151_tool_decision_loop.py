@@ -8,8 +8,8 @@ from urllib import error, parse, request
 from urllib.parse import parse_qs, urlparse
 
 from .common import compact_text, stable_digest, utc_now
-from .stage162_search_evidence_controller import run_search_evidence_controller
 from .stage163_page_evidence_verifier import attach_page_evidence_to_web_observation
+from .stage164_search_fallback_synthesis import attach_source_synthesis_to_observations, run_search_fallback_controller
 
 STAGE151_TOOL_DECISION_SCHEMA = "holo.stage151.tool_decision.v1"
 STAGE151_LIVE_TRACE_SCHEMA = "holo.stage151.live_trace.v1"
@@ -372,6 +372,7 @@ def execute_tool_decision(
     *,
     network_enabled: bool,
     web_search_fn: Callable[[str], dict[str, Any]] | None = None,
+    fallback_search_fns: list[tuple[str, Callable[[str], dict[str, Any]]]] | None = None,
     open_page_fn: Callable[[str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
@@ -397,15 +398,18 @@ def execute_tool_decision(
             )
             continue
         if action_type == "web_search":
-            controller = run_search_evidence_controller(
+            providers: list[tuple[str, Callable[[str], dict[str, Any]]]] = [("primary", web_search)]
+            providers.extend(list(fallback_search_fns or []))
+            controller = run_search_fallback_controller(
                 str(action.get("query", "") or ""),
                 user_text=str(decision.get("user_text", "") or action.get("query", "") or ""),
                 network_enabled=network_enabled,
-                web_search_fn=web_search,
-                max_attempts=3,
+                search_providers=providers,
+                max_attempts_per_provider=3,
             )
+            search_rows: list[dict[str, Any]] = []
             for row in [dict(row) for row in list(controller.get("observations", []) or []) if isinstance(row, dict)]:
-                observations.append(
+                search_rows.append(
                     attach_page_evidence_to_web_observation(
                         row,
                         open_page_fn=open_page,
@@ -415,6 +419,12 @@ def execute_tool_decision(
                         max_pages=2,
                     )
                 )
+            observations.extend(
+                attach_source_synthesis_to_observations(
+                    search_rows,
+                    query=str(action.get("query", "") or ""),
+                )
+            )
         elif action_type == "open_page":
             observations.append(_web_response_to_observation(action, open_page(str(action.get("url", "") or ""))))
         elif action_type == "find_in_page":
@@ -684,6 +694,8 @@ def build_stage151_live_trace(
                     "evidence_score": float(dict(row.get("search_evidence", {}) if isinstance(row.get("search_evidence", {}), dict) else {}).get("evidence_score", 0.0) or 0.0),
                     "page_evidence_status": str(dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {}).get("status", "") or ""),
                     "page_opened_count": int(dict(row.get("page_evidence", {}) if isinstance(row.get("page_evidence", {}), dict) else {}).get("opened_count", 0) or 0),
+                    "source_synthesis_status": str(dict(row.get("source_synthesis", {}) if isinstance(row.get("source_synthesis", {}), dict) else {}).get("status", "") or ""),
+                    "source_synthesis_supported_count": int(dict(row.get("source_synthesis", {}) if isinstance(row.get("source_synthesis", {}), dict) else {}).get("supported_source_count", 0) or 0),
                 }
             )
     report = dict(grounding or {})
@@ -724,9 +736,15 @@ def format_stage151_live_trace(payload: dict[str, Any]) -> str:
             source = f" sources={sources}" if sources else ""
             page_status = str(event.get("page_evidence_status", "") or "")
             page = f" page={page_status} opened={event.get('page_opened_count', 0)}" if page_status else ""
+            synthesis_status = str(event.get("source_synthesis_status", "") or "")
+            synthesis = (
+                f" synthesis={synthesis_status} supported_sources={event.get('source_synthesis_supported_count', 0)}"
+                if synthesis_status
+                else ""
+            )
             lines.append(
                 f"[observation] {event.get('action_type', event.get('tool', ''))} "
-                f"status={event.get('status', '')} results={event.get('result_count', 0)}{source}{page}"
+                f"status={event.get('status', '')} results={event.get('result_count', 0)}{source}{page}{synthesis}"
             )
         elif kind == "grounding":
             missing = ",".join(str(item) for item in list(event.get("missing_observations", []) or [])) or "-"

@@ -697,6 +697,30 @@ def build_stage135_i_state_topology(
         if agent_loop_fsm:
             edges.append(_edge("stage163_page_evidence_verifier", "stage160r_agent_loop_fsm", relation="feeds_evidence_sufficiency", weight=0.48, summary="page-level support informs final grounding and stop reasoning"))
 
+    source_syntheses = [
+        _dict(row.get("source_synthesis", {}))
+        for row in web_ledger
+        if isinstance(row, dict) and isinstance(row.get("source_synthesis", {}), dict)
+    ]
+    if source_syntheses:
+        best_synthesis = max(source_syntheses, key=lambda item: float(item.get("confidence", 0.0) or 0.0))
+        nodes.append(
+            _node(
+                "stage164_source_synthesis",
+                "source synthesis",
+                channel="source_synthesis",
+                kind="observability_gate",
+                x=0.82,
+                y=0.18,
+                weight=max(0.34, min(0.9, float(best_synthesis.get("confidence", 0.0) or 0.0))),
+                summary=f"status={best_synthesis.get('status', '')}; supported={best_synthesis.get('supported_source_count', 0)}; risks={','.join(str(x) for x in list(best_synthesis.get('risk_flags', []) or [])) or '-'}",
+            )
+        )
+        source = "stage163_page_evidence_verifier" if page_scores else "stage162_search_evidence_controller" if search_scores else "stage151_tool_decision_loop"
+        edges.append(_edge(source, "stage164_source_synthesis", relation="synthesizes_opened_sources", weight=0.56, summary="supported page evidence is combined into a source-level answer basis"))
+        if agent_loop_fsm:
+            edges.append(_edge("stage164_source_synthesis", "stage160r_agent_loop_fsm", relation="feeds_final_grounding", weight=0.46, summary="source synthesis informs final evidence reporting"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -952,6 +976,9 @@ def build_stage135_i_state_topology(
             "page_evidence_observation_count": len(page_scores),
             "page_evidence_best_status": str(max(page_scores, key=lambda item: float(item.get("best_evidence_score", 0.0) or 0.0)).get("status", "") or "") if page_scores else "",
             "page_evidence_best_score": float(max(page_scores, key=lambda item: float(item.get("best_evidence_score", 0.0) or 0.0)).get("best_evidence_score", 0.0) or 0.0) if page_scores else 0.0,
+            "source_synthesis_node_count": sum(1 for node in nodes if node["channel"] == "source_synthesis"),
+            "source_synthesis_status": str(max(source_syntheses, key=lambda item: float(item.get("confidence", 0.0) or 0.0)).get("status", "") or "") if source_syntheses else "",
+            "source_synthesis_supported_source_count": int(max(source_syntheses, key=lambda item: float(item.get("confidence", 0.0) or 0.0)).get("supported_source_count", 0) or 0) if source_syntheses else 0,
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
@@ -1210,6 +1237,7 @@ const colors = {{
   model_tool_arbitration: "#6577a8",
   search_evidence_controller: "#4b7d87",
   page_evidence_verifier: "#4d8a6a",
+  source_synthesis: "#7b7340",
   visual_delta: "#458080",
   tool_result: "#7f8a3f",
   holo_visible: "#2f6f91"
