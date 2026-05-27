@@ -109,6 +109,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 104. `docs/ENGINEERING_HANDOFF_STAGE163.md`
 105. `docs/STAGE164_SEARCH_FALLBACK_AND_SOURCE_SYNTHESIS.md`
 106. `docs/ENGINEERING_HANDOFF_STAGE164.md`
+107. `docs/STAGE165_ANSWER_CITATION_FORMATTER.md`
+108. `docs/ENGINEERING_HANDOFF_STAGE165.md`
 
 ## What This Document Must Cover
 - current live state
@@ -123,9 +125,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage164-search-fallback-source-synthesis`.
+- The current milestone tag is `stage165-answer-citation-formatter`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage164 Search Fallback And Source Synthesis: Holo now tries search providers in order, records provider fallback evidence, synthesizes supported page evidence across opened sources, renders synthesis status in CLI traces, and exposes source synthesis in Stage135 topology without adding provider model paths, memory writes, WeChat starts, or transport authority widening.
+- Current focus is Stage165 Answer Citation Formatter: Holo now turns Stage164 source synthesis into final cited web answers with numbered URLs, snippets, freshness notes, and bounded weak/unsupported/conflicted-source language, while preserving the no provider model path, memory write, WeChat start, or transport authority widening boundary.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`
@@ -464,6 +466,7 @@ These files change while Holo is alive. Do not treat them like static docs, and 
   - Stage160R adds the depersonalized agent-loop FSM for `holo_cli` and engineering/research/project channels: every mandatory memory/web/engineering/project action must execute, fail, or be rejected before final speech; follow-ups inherit open goals; Stage153 events render `[goal]`, `[decide]`, `[act]`, `[observe]`, `[evaluate]`, `[stop]`, and `[final]`; prompt policy strips WeChat/persona/playful companion language from agent-kernel channels. Verification on `2026-05-27`: Stage160R targeted `16 passed`, neighbor `43 passed`, runtime `91 passed`, full regression `688 passed`, public hygiene passed, and `git diff --check` passed with CRLF normalization warnings only.
   - Stage163 adds page-body verification after Stage162 web search: candidate URLs are opened, page text is scored against the query, `web_observation_ledger[*].page_evidence` records support/weak/unsupported/rejected status, CLI traces render `page=<status> opened=<count>`, and Stage135 exposes `page_evidence_verifier` metrics. Verification on `2026-05-27`: Stage163 targeted `8 passed`, neighbor `55 passed`, tool-stack regression `86 passed`, runtime `91 passed`, full regression `724 passed`, and live smoke verified `https://developers.openai.com/codex/cli` with `page_status=supported`.
   - Stage164 adds search provider fallback and source synthesis: `web_observation_ledger[*].stage164_search_fallback` records provider attempts, `web_observation_ledger[*].source_synthesis` combines supported page evidence and flags conflicts, CLI traces render `synthesis=<status> supported_sources=<n>`, and Stage135 exposes `source_synthesis` metrics. Verification on `2026-05-27`: Stage164 targeted `8 passed`, neighbor `63 passed`, tool-stack regression `94 passed`, runtime `91 passed`, full regression `732 passed`, and live smoke forced primary failure then verified fallback provider `duckduckgo_html` with `source_synthesis=supported`.
+  - Stage165 adds answer-time citation formatting: Stage151 grounded web answers now prefer Stage164 `source_synthesis`, render numbered source URLs and snippets, include freshness notes, and degrade to bounded weak/unsupported/conflicted-source language when support is insufficient. Verification on `2026-05-27`: Stage165 targeted `10 passed`, neighbor `59 passed`, tool-stack regression `104 passed`, runtime `91 passed`, full regression `742 passed`, public hygiene passed, `git diff --check` passed with CRLF normalization warnings only, and live smoke verified fallback search to `https://developers.openai.com/codex/cli` with a readable cited answer and no CSS noise.
 
 ## Invariants
 - Do not silently change online transport modes

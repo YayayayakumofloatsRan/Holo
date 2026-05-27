@@ -720,6 +720,27 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage164_source_synthesis", relation="synthesizes_opened_sources", weight=0.56, summary="supported page evidence is combined into a source-level answer basis"))
         if agent_loop_fsm:
             edges.append(_edge("stage164_source_synthesis", "stage160r_agent_loop_fsm", relation="feeds_final_grounding", weight=0.46, summary="source synthesis informs final evidence reporting"))
+        citation_count = len(
+            [
+                item
+                for item in list(best_synthesis.get("citations", []) or [])
+                if isinstance(item, dict) and str(item.get("url", "") or "").strip()
+            ]
+        )
+        nodes.append(
+            _node(
+                "stage165_answer_citation_formatter",
+                "answer citation formatter",
+                channel="answer_citation_formatter",
+                kind="observability_gate",
+                x=0.88,
+                y=0.24,
+                weight=max(0.34, min(0.9, float(best_synthesis.get("confidence", 0.0) or 0.0))),
+                summary=f"status={best_synthesis.get('status', '')}; citations={citation_count}; visible answer uses source synthesis",
+            )
+        )
+        edges.append(_edge("stage164_source_synthesis", "stage165_answer_citation_formatter", relation="formats_cited_answer", weight=0.54, summary="source synthesis is converted into a visible cited answer"))
+        edges.append(_edge("stage165_answer_citation_formatter", "state_delta", relation="reports_cited_evidence", weight=0.38, summary="final answer can expose source URLs and bounded support status"))
 
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
@@ -979,6 +1000,14 @@ def build_stage135_i_state_topology(
             "source_synthesis_node_count": sum(1 for node in nodes if node["channel"] == "source_synthesis"),
             "source_synthesis_status": str(max(source_syntheses, key=lambda item: float(item.get("confidence", 0.0) or 0.0)).get("status", "") or "") if source_syntheses else "",
             "source_synthesis_supported_source_count": int(max(source_syntheses, key=lambda item: float(item.get("confidence", 0.0) or 0.0)).get("supported_source_count", 0) or 0) if source_syntheses else 0,
+            "answer_citation_formatter_node_count": sum(1 for node in nodes if node["channel"] == "answer_citation_formatter"),
+            "answer_citation_formatter_citation_count": len(
+                [
+                    item
+                    for item in list((max(source_syntheses, key=lambda row: float(row.get("confidence", 0.0) or 0.0)) if source_syntheses else {}).get("citations", []) or [])
+                    if isinstance(item, dict) and str(item.get("url", "") or "").strip()
+                ]
+            ),
             "kernel_hardening_node_count": sum(1 for node in nodes if node["channel"] == "kernel_hardening"),
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",

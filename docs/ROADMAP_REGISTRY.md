@@ -202,6 +202,11 @@ Stage164: search fallback and source synthesis
 - Added deterministic source synthesis over Stage163 page evidence, including supported/weak/conflicted/unsupported status, citations, confidence, and simple conflict flags.
 - Stage151/153 traces render source synthesis status, Stage135 topology exposes `source_synthesis`, and the stage preserves the no-provider-model-path, no-memory-write, no-WeChat-start, no-transport-widening boundary.
 
+Stage165: answer citation formatter
+- Added deterministic answer-time citation formatting over Stage164 source synthesis.
+- Stage151 grounded web answers now prefer synthesized page evidence, render numbered URLs and support snippets, include freshness notes, and use bounded language for weak, unsupported, or conflicted sources.
+- Stage135 topology exposes `answer_citation_formatter` metrics while preserving the no-provider-model-path, no-memory-write, no-WeChat-start, no-transport-widening boundary.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

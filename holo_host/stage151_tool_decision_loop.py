@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from .common import compact_text, stable_digest, utc_now
 from .stage163_page_evidence_verifier import attach_page_evidence_to_web_observation
 from .stage164_search_fallback_synthesis import attach_source_synthesis_to_observations, run_search_fallback_controller
+from .stage165_answer_citation_formatter import maybe_format_cited_web_answer
 
 STAGE151_TOOL_DECISION_SCHEMA = "holo.stage151.tool_decision.v1"
 STAGE151_LIVE_TRACE_SCHEMA = "holo.stage151.live_trace.v1"
@@ -562,6 +563,14 @@ def build_grounded_web_observation_answer(
     time_observation: dict[str, Any] | None = None,
     max_results: int = 3,
 ) -> str:
+    cited_answer = maybe_format_cited_web_answer(
+        user_text=user_text,
+        web_observation_ledger=web_observation_ledger,
+        time_observation=time_observation,
+        channel="holo_cli",
+    )
+    if cited_answer:
+        return cited_answer
     rows = [
         dict(item)
         for item in list(web_observation_ledger or [])
