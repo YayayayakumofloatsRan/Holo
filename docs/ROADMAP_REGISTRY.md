@@ -382,6 +382,12 @@ Stage195: market research continuation loop
 - Stage153 renders `[market_continue]` lines, Stage191 public thoughts include continuation self-feedback cards, and Stage135 topology exposes `market_research_continuation_loop`.
 - Verification on `2026-05-28`: targeted Stage195 `6 passed`; neighbor `38 passed`; runtime `92 passed`; full suite `962 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage196: market research source promotion
+- Added `holo.stage196.market_research_source_promotion.v1` to promote SEC/IR financial-filing web/page observations into pack-ready source state.
+- Stage196 rejects third-party filing summaries as weak, can delegate missing-source discovery to the bounded Stage186 live crawler, and records whether a selected URL can feed `market_research_pack`.
+- Stage153 renders `[source_promote]` lines, Stage191 public thoughts include source-observation cards, and Stage135 topology exposes `market_research_source_promotion`.
+- Verification on `2026-05-28`: targeted Stage196+195 `12 passed`; neighbor `47 passed`; runtime `92 passed`; full suite `968 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

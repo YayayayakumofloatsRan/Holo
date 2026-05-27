@@ -179,9 +179,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage195-market-research-continuation-loop`.
+- The current milestone tag is `stage196-market-research-source-promotion`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage195 Market Research Continuation Loop: Holo now runs bounded market-research feedback, planning, execution, and observation rounds over Stage192/193/194 until report readiness, evidence exhaustion, tool failure, or a host boundary. The next pressure is stronger source-to-pack promotion and richer live SEC/IR crawling for financial research.
+- Current focus is Stage196 Market Research Source Promotion: Holo now promotes authoritative financial-filing web/page observations into pack-ready source state inside the bounded Stage195 continuation loop. The next pressure is source-promotion-aware report assembly with stronger citation quality and explicit insufficient-evidence outputs.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

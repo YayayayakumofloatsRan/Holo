@@ -6,6 +6,7 @@ from .common import compact_text, stable_digest, utc_now
 from .market_research_action_planner import build_market_research_action_plan
 from .market_research_feedback_loop import build_market_research_feedback_loop
 from .market_research_plan_executor import execute_market_research_action_plan
+from .market_research_source_promotion import promote_market_research_sources
 from .stage168_source_authority import evaluate_source_authority
 
 STAGE195_MARKET_RESEARCH_CONTINUATION_LOOP_SCHEMA = "holo.stage195.market_research_continuation_loop.v1"
@@ -157,6 +158,7 @@ def _round(
     feedback: dict[str, Any],
     plan: dict[str, Any],
     execution: dict[str, Any],
+    source_promotion: dict[str, Any] | None = None,
     reused_initial_execution: bool = False,
 ) -> dict[str, Any]:
     selected_action = _selected_action(plan)
@@ -170,6 +172,7 @@ def _round(
         "feedback": feedback,
         "action_plan": plan,
         "execution": execution,
+        "source_promotion": _dict(source_promotion),
         "selected_action": selected_action,
         "execution_status": status,
         "executed_count": int(execution.get("executed_count", 0) or 0),
@@ -244,6 +247,7 @@ def run_market_research_continuation_loop(
     feedback = _dict(initial_stage192_feedback_loop)
     plan = _dict(initial_stage193_action_plan)
     execution = _dict(initial_stage194_execution)
+    latest_source_promotion: dict[str, Any] = {}
     stop_reason = "budget_exhausted" if remaining <= 0 else "final_answer_ready"
 
     if execution and remaining > 0:
@@ -276,6 +280,12 @@ def run_market_research_continuation_loop(
             pack=pack,
             report=report,
         )
+        latest_source_promotion = promote_market_research_sources(
+            question=question_text,
+            web_observation_ledger=web_rows,
+            network_enabled=bool(network_enabled),
+            max_crawl_queries=0,
+        )
         rounds.append(
             _round(
                 question=question_text,
@@ -283,6 +293,7 @@ def run_market_research_continuation_loop(
                 feedback=feedback,
                 plan=plan,
                 execution=execution,
+                source_promotion=latest_source_promotion,
                 reused_initial_execution=True,
             )
         )
@@ -350,6 +361,12 @@ def run_market_research_continuation_loop(
             pack=pack,
             report=report,
         )
+        latest_source_promotion = promote_market_research_sources(
+            question=question_text,
+            web_observation_ledger=web_rows,
+            network_enabled=bool(network_enabled),
+            max_crawl_queries=0,
+        )
         rounds.append(
             _round(
                 question=question_text,
@@ -357,6 +374,7 @@ def run_market_research_continuation_loop(
                 feedback=feedback,
                 plan=plan,
                 execution=execution,
+                source_promotion=latest_source_promotion,
             )
         )
         remaining -= 1
@@ -412,6 +430,7 @@ def run_market_research_continuation_loop(
         "final_stage192_feedback_loop": final_feedback,
         "final_stage193_action_plan": _dict(plan),
         "final_stage194_market_research_plan_execution": _dict(rounds[-1].get("execution", {})) if rounds else {},
+        "stage196_market_research_source_promotion": latest_source_promotion,
         "web_observation_ledger": web_rows,
         "tool_observation_ledger": tool_rows,
         "market_research_pack_ledger": pack_rows,

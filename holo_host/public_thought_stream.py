@@ -93,6 +93,13 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             f"stop={event.get('stop_reason', '')}"
         )
         return _card("self_feedback", summary, source_event=kind, confidence=0.84)
+    if kind == "source_promote":
+        summary = (
+            f"status={event.get('status', '')}; authority={event.get('authority_status', '')}; "
+            f"family={event.get('source_family', '')}; page={event.get('page_evidence_status', '')}; "
+            f"pack={bool(event.get('can_build_pack', False))}; stop={event.get('stop_reason', '')}"
+        )
+        return _card("observation", summary, source_event=kind, confidence=0.84)
     if kind == "evaluate":
         unresolved = ",".join(str(x) for x in list(event.get("unresolved_items", []) or [])) or "none"
         return _card("stop_evaluation", f"status={event.get('status', '')}; unresolved={unresolved}", source_event=kind, confidence=0.78)
