@@ -212,6 +212,11 @@ Stage166: search quality evaluation
 - Reports source support, citation sufficiency, freshness, unsupported current/web claims, source conflicts, CSS/page chrome leakage, expected-term coverage, latency, and a raw-result baseline.
 - Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-search-quality-eval --output artifacts\stage166\stage166_search_quality.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
 
+Stage167: live search canary
+- Added deterministic provider-comparison, source-freshness, quote-extraction, and ambiguous-entity canary checks over the Stage151-166 search evidence chain.
+- Reports best provider, failed-provider count, source freshness markers, clean supporting quotes, ambiguity failures, and public artifact safety.
+- Writes HTML/JSON/JSONL artifacts through `python -m holo_host run-live-search-canary --output artifacts\stage167\stage167_live_search_canary.html --dry-run` without provider model calls, memory writes, WeChat starts, or transport widening.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
