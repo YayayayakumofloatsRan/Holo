@@ -163,9 +163,9 @@ Stage156: context compiler and cache discipline
 - Keeps background compact internal, protects Stage149 directives from truncation, repairs visible compact leakage, and does not add provider calls, tool execution, memory writes, transport authority, WeChat starts, or live policy changes.
 
 Stage157: Holo core bench
-- Implemented a deterministic dry-run `holo.stage157.core_bench.v1` availability bench over interactive CLI, tool loop, engineering actions, project state, context compiler, and domain scaffold surfaces.
-- The bench is local readiness evidence, not a model-quality benchmark.
-- It does not call providers, execute tools, write memory, start WeChat, widen transport authority, or apply policy.
+- Implemented HoloCoreBench as a deterministic `holo.stage157.core_bench.v1` reliability suite over recent recall, directive adherence, durable instructions, project-state recall, task continuation, web/time grounding, tool claim grounding, engineering patch/test claims, context compaction, CLI trace visibility, and stop-reason correctness.
+- Writes `.html`, `.json`, and `.jsonl` artifacts through `python -m holo_host run-core-bench --output artifacts\stage157\holo_core_bench.html --dry-run`; `--fail-under` is the only mode that makes failures return nonzero.
+- Scores pass rate, unsupported claim rate, directive violation rate, memory honesty, tool grounding, project continuity, context waste, cache hit ratio, and latency estimate without provider calls, tool execution, memory writes, WeChat starts, transport authority widening, or live policy changes.
 
 Stage158: Agent Kernel v1
 - Implemented scaffold-only domain modules for math research, physics research, market research, and ProjectH ops.

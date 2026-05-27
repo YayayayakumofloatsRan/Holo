@@ -94,8 +94,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 89. `docs/STAGE156_CONTEXT_COMPILER_CACHE_DISCIPLINE.md`
 90. `docs/ENGINEERING_HANDOFF_STAGE156.md`
 91. `docs/STAGE157_HOLO_CORE_BENCH.md`
-92. `docs/STAGE158_AGENT_KERNEL_V1.md`
-93. `docs/ENGINEERING_HANDOFF_STAGE158.md`
+92. `docs/ENGINEERING_HANDOFF_STAGE157.md`
+93. `docs/STAGE158_AGENT_KERNEL_V1.md`
+94. `docs/ENGINEERING_HANDOFF_STAGE158.md`
 
 ## What This Document Must Cover
 - current live state
@@ -110,9 +111,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage156-context-compiler-cache-discipline` for the reset pass on this branch.
+- The current milestone tag is `stage157-holo-core-bench`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage156 Context Compiler and Cache Discipline: Holo now compiles the Stage150 working-context packet into stable prefix, project instructions, tool schema, directives, dynamic turn state, observations, and final constraints before provider generation. Stage154 engineering action ledgers remain the host evidence layer for repo work, and Stage155 project state remains the reusable continuity layer. Stage157/158 docs may exist downstream, but Stage156 is the corrected active reset point.
+- Current focus is Stage157 HoloCoreBench Reliability Suite: Holo now has a deterministic dry-run reliability benchmark over recent recall, directive adherence, project continuity, web/time grounding, tool grounding, engineering claim grounding, context compaction, CLI trace visibility, and packet stop reasons. Stage154 engineering action ledgers remain the host evidence layer for repo work, Stage155 project state remains the reusable continuity layer, and Stage156 context compiler is the prompt/cache discipline layer.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

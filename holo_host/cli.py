@@ -47,6 +47,7 @@ from .stage135_i_state_topology import write_stage135_i_state_topology_artifacts
 from .stage146_benchmark_bundle import run_biomimetic_benchmark
 from .stage146_biomimetic_replay import export_biomimetic_replay
 from .stage147_replay_calibration import evaluate_replay_calibration
+from .holo_core_bench import run_holo_core_bench
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .interactive_cli import InteractiveCliSession
@@ -9314,6 +9315,19 @@ def command_evaluate_replay_calibration(
     return 0
 
 
+def command_run_core_bench(
+    *,
+    output: str,
+    dry_run: bool,
+    fail_under: float | None,
+) -> int:
+    report = run_holo_core_bench(output=output, dry_run=dry_run, fail_under=fail_under)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if fail_under is not None and bool(report.get("fail_under_triggered", False)):
+        return 1
+    return 0
+
+
 CHAT_HELP = """Commands:
   /help                  show this help
   /trace                 show last turn agent event stream
@@ -10516,6 +10530,13 @@ def main(argv: list[str] | None = None) -> int:
     replay_calibration_parser.add_argument("--replay-json", default=None)
     replay_calibration_parser.add_argument("--output", required=True)
     replay_calibration_parser.add_argument("--dry-run", action="store_true")
+    core_bench_parser = subparsers.add_parser(
+        "run-core-bench",
+        help="Write the Stage157 HoloCoreBench reliability artifacts",
+    )
+    core_bench_parser.add_argument("--output", required=True)
+    core_bench_parser.add_argument("--dry-run", action="store_true")
+    core_bench_parser.add_argument("--fail-under", type=float, default=None)
     project_state_parser = subparsers.add_parser("project-state", help="Inspect the Stage155 project state graph")
     project_state_parser.add_argument("--project", required=True)
     project_state_parser.add_argument("--summary", action="store_true")
@@ -11549,6 +11570,12 @@ def main(argv: list[str] | None = None) -> int:
             replay_json=args.replay_json,
             output=args.output,
             dry_run=args.dry_run,
+        )
+    if args.command == "run-core-bench":
+        return command_run_core_bench(
+            output=args.output,
+            dry_run=args.dry_run,
+            fail_under=args.fail_under,
         )
     if args.command == "project-state":
         return command_project_state(
