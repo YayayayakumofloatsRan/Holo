@@ -370,6 +370,12 @@ Stage193: market research action planner
 - Stage153 renders `[market_plan]` lines, Stage191 public thoughts include `action_plan` cards, and Stage135 topology exposes a compact `market_research_action_plan` node.
 - Verification on `2026-05-28`: targeted Stage193 `6 passed`; neighbor `33 passed`; runtime `92 passed`; full suite `951 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage194: market research plan execution
+- Added `holo.stage194.market_research_plan_execution.v1` and per-action execution results for Stage193 plans.
+- Stage194 executes the first planned host-supported action through existing web, filing text, market-research pack, and market-research report ledgers, then emits post-action Stage192 feedback.
+- Stage153 renders `[market_exec]` lines, Stage191 public thoughts include execution action cards, and Stage135 topology exposes `market_research_plan_execution`.
+- Verification on `2026-05-28`: targeted Stage194 `5 passed`; neighbor `32 passed`; runtime `92 passed`; full suite `956 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

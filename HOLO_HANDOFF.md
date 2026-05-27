@@ -179,9 +179,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage193-market-research-action-planner`.
+- The current milestone tag is `stage194-market-research-plan-execution`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage193 Market Research Action Planner: Holo now converts filing-grounded report feedback into concrete next market-research actions such as SEC/IR search, filing text retrieval, pack rebuild, report generation, finalization, or explicit blocked/exhausted status. The next pressure is connecting this plan back into live execution so market research can iterate until the readiness gate passes or evidence is exhausted.
+- Current focus is Stage194 Market Research Plan Execution: Holo now consumes Stage193 market-research action plans, executes the first host-supported action through existing ledgers, and feeds the result back into Stage192 report-readiness feedback. The next pressure is bounded continuation across repeated plan/execute/feedback rounds until report readiness, evidence exhaustion, or host boundary.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

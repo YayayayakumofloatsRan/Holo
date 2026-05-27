@@ -78,6 +78,13 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             f"first={event.get('first_action', '')}; candidates={event.get('candidate_count', 0)}; stop={event.get('stop_reason', '')}"
         )
         return _card("action_plan", summary, source_event=kind, confidence=0.82)
+    if kind == "market_exec":
+        summary = (
+            f"status={event.get('status', '')}; action={event.get('executed_action', '')}; "
+            f"executed={event.get('executed_count', 0)}; rejected={event.get('rejected_count', 0)}; "
+            f"failed={event.get('failed_count', 0)}; stop={event.get('stop_reason', '')}"
+        )
+        return _card("action", summary, source_event=kind, confidence=0.82)
     if kind == "evaluate":
         unresolved = ",".join(str(x) for x in list(event.get("unresolved_items", []) or [])) or "none"
         return _card("stop_evaluation", f"status={event.get('status', '')}; unresolved={unresolved}", source_event=kind, confidence=0.78)

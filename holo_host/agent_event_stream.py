@@ -293,6 +293,23 @@ def _stage193_market_action_plan_events(payload: dict[str, Any]) -> list[dict[st
     ]
 
 
+def _stage194_market_action_execution_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    execution = payload.get("stage194_market_research_plan_execution", {})
+    if not isinstance(execution, dict):
+        return []
+    return [
+        {
+            "event": "market_exec",
+            "status": str(execution.get("status", "") or ""),
+            "executed_action": str(execution.get("executed_action", "") or ""),
+            "executed_count": int(execution.get("executed_count", 0) or 0),
+            "rejected_count": int(execution.get("rejected_count", 0) or 0),
+            "failed_count": int(execution.get("failed_count", 0) or 0),
+            "stop_reason": str(execution.get("canonical_stop_reason", "") or ""),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -530,6 +547,7 @@ def build_agent_event_stream(
         events.extend(_stage190_feedback_events(source))
         events.extend(_stage192_market_feedback_events(source))
         events.extend(_stage193_market_action_plan_events(source))
+        events.extend(_stage194_market_action_execution_events(source))
         events.append(
             {
                 "event": "stop",
@@ -578,6 +596,7 @@ def build_agent_event_stream(
     events.extend(_stage190_feedback_events(source))
     events.extend(_stage192_market_feedback_events(source))
     events.extend(_stage193_market_action_plan_events(source))
+    events.extend(_stage194_market_action_execution_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -750,6 +769,12 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
                 f"[market_plan] status={item.get('status', '')} next={item.get('next_action', '')} "
                 f"candidates={item.get('candidate_count', 0)} first={item.get('first_action', '')} "
                 f"stop={item.get('stop_reason', '')}{blocked_suffix}{query_suffix}"
+            )
+        elif event == "market_exec":
+            lines.append(
+                f"[market_exec] status={item.get('status', '')} action={item.get('executed_action', '')} "
+                f"executed={item.get('executed_count', 0)} rejected={item.get('rejected_count', 0)} "
+                f"failed={item.get('failed_count', 0)} stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
