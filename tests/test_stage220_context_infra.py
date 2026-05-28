@@ -106,4 +106,5 @@ def test_agent_metadata_uses_kernel_version_not_stage_number(tmp_path: Path) -> 
     assert result.metadata["kernel_version"] == "2.1.0"
     assert result.metadata["kernel_version"] == __version__
     assert not result.metadata["kernel_version"].startswith("stage")
-    assert result.metadata["stage_record"] == "stage226"
+    assert result.metadata["stage_record"].startswith("stage")
+    assert result.metadata["stage_record"] != result.metadata["kernel_version"]

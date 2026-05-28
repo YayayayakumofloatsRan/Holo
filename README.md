@@ -37,6 +37,8 @@ Initial Stage219 goal:
   `docs/STAGE228_SOURCE_POLICY_PROVIDER.md`.
 - Page fetcher diagnostics and extraction are tracked in
   `docs/STAGE229_PAGE_FETCHER_EXTRACTION.md`.
+- Action self-feedback reports are tracked in
+  `docs/STAGE230_ACTION_SELF_FEEDBACK_LOOP.md`.
 
 Run:
 
