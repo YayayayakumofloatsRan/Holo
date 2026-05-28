@@ -58,7 +58,7 @@ def test_resume_uses_task_id_and_journal_state_not_retry_phrase():
             evaluator=FakeEvaluator.final_answer("已根据 journal 中的任务状态继续。"),
         )
 
-        resumed_result = resumed_loop.resume(task_id, user_input="README.md")
+        resumed_result = resumed_loop.resume(task_id, thread_id="local:default", user_input="README.md")
 
         assert resumed_result.status == "completed"
         assert resumed_result.task_id == task_id
@@ -68,6 +68,7 @@ def test_resume_uses_task_id_and_journal_state_not_retry_phrase():
             "act-clarify",
             "act-final",
         ]
+        assert all(record.data.get("thread_id", "local:default") == "local:default" for record in records)
     finally:
         if journal_path.exists():
             journal_path.unlink()

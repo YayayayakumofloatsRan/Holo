@@ -41,20 +41,28 @@ class LoopControllerV3:
 
     def run_event(self, event: Event) -> AgentResult:
         input_text = str(event.payload.get("text", ""))
-        task = self.session_engine.start(input_text)
+        thread_id = str(event.payload.get("thread_id", "local:default"))
+        task = self.session_engine.start(input_text, thread_id=thread_id)
         self._record_start_event(task, event)
         return self._drive(task, feedback=None)
 
-    def resume(self, task_id: str, *, user_input: str) -> AgentResult:
+    def resume(self, task_id: str, *, user_input: str, thread_id: str = "local:default") -> AgentResult:
         records = self.journal.require_task(task_id)
+        task_threads = {
+            str(record.data["thread_id"])
+            for record in records
+            if "thread_id" in record.data
+        }
+        if task_threads and thread_id not in task_threads:
+            raise ValueError(f"thread_id {thread_id!r} does not match task_id {task_id!r}")
         run_index = 1 + len({record.run_id for record in records})
-        task = self.session_engine.resume(task_id, user_input, run_index)
+        task = self.session_engine.resume(task_id, user_input, run_index, thread_id=thread_id)
         event = Event(
             event_id=f"evt-{task.run_id}-resume",
             run_id=task.run_id,
             type="input.resumed",
             timestamp_ms=len(records) + 1,
-            payload={"text": user_input},
+            payload={"text": user_input, "thread_id": thread_id},
             source="resume",
         )
         self.journal.append(
@@ -62,7 +70,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=None,
             kind="resume",
-            data={**event.to_dict(), "user_input": user_input},
+            data={**event.to_dict(), "user_input": user_input, "thread_id": task.thread_id},
             event_ref=event.event_id,
             state_delta={"status": "resumed"},
         )
@@ -71,7 +79,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=None,
             kind="run",
-            data={"run_id": task.run_id, "status": task.status},
+            data={"run_id": task.run_id, "status": task.status, "thread_id": task.thread_id},
             event_ref=event.event_id,
             state_delta={"status": task.status},
         )
@@ -107,6 +115,7 @@ class LoopControllerV3:
                 "task_id": task.task_id,
                 "status": task.status,
                 "input_text": str(event.payload.get("text", "")),
+                "thread_id": task.thread_id,
             },
             event_ref=event.event_id,
             state_delta={"status": task.status},
@@ -116,7 +125,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=None,
             kind="run",
-            data={"run_id": task.run_id, "status": task.status},
+            data={"run_id": task.run_id, "status": task.status, "thread_id": task.thread_id},
             event_ref=event.event_id,
             state_delta={"status": task.status},
         )

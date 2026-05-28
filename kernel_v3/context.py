@@ -15,12 +15,13 @@ class ContextCompiler:
         ]
         return ContextBundle(
             context_id=f"ctx-{task.run_id}-{len(records) + 1}",
-            thread_key="local:default",
+            thread_key=task.thread_id,
             event_ids=event_ids,
             memory_refs=[],
             state={
                 "task_id": task.task_id,
                 "run_id": task.run_id,
+                "thread_id": task.thread_id,
                 "input_text": task.input_text,
                 "journal_records": len(records),
             },
