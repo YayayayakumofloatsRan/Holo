@@ -182,7 +182,10 @@ def build_search_goal(user_question: str, *, region: str | None = None) -> Searc
             blocked_domains=["reddit.com", "quora.com"],
         )
 
-    if _contains_any(lowered, ("deepseek", "api-docs.deepseek.com")) and _contains_any(lowered, ("tool", "calling", "docs", "documentation", "文档", "官方")):
+    if _contains_any(lowered, ("deepseek", "api-docs.deepseek.com")) and _contains_any(
+        lowered,
+        ("tool", "calling", "docs", "documentation", "api key", "apikey", "key", "文档", "官方", "密钥", "用法"),
+    ):
         return SearchGoal(
             user_question=text,
             task_type="api_docs",

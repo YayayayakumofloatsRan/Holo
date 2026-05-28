@@ -36,6 +36,20 @@ def test_source_policy_provider_returns_deepseek_tool_docs_candidate() -> None:
     assert attempt.results[0]["source_family"] == "official_docs"
 
 
+def test_source_policy_provider_returns_deepseek_api_key_docs_candidate() -> None:
+    provider = SourcePolicyProvider()
+
+    attempt = provider.search(
+        "上网查一下deepseek api key的用法",
+        allowed_domains=["api-docs.deepseek.com"],
+        max_results=5,
+    )
+
+    assert attempt.status == "ok"
+    assert attempt.results[0]["url"] == "https://api-docs.deepseek.com/"
+    assert attempt.results[0]["source_family"] == "official_docs"
+
+
 def test_deepseek_api_docs_are_classified_as_primary_official_docs() -> None:
     classified = classify_source_url("https://api-docs.deepseek.com/guides/function_calling")
 

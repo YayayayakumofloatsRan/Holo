@@ -43,6 +43,8 @@ Initial Stage219 goal:
   `docs/STAGE231_CONTEXT_KERNEL_AND_DYNAMIC_FINAL_CONTRACT.md`.
 - Model-evaluated action self-feedback is tracked in
   `docs/STAGE232_MODEL_EVALUATED_SELF_FEEDBACK.md`.
+- Provider timeout diagnosis and chat goal continuity are tracked in
+  `docs/STAGE233_PROVIDER_TIMEOUT_AND_CHAT_GOAL_CONTINUITY.md`.
 
 Run:
 

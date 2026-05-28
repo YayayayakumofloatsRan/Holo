@@ -81,6 +81,20 @@ class SourcePolicyProvider:
                     "source_family": "official_docs",
                 }
             )
+        if ("deepseek" in lowered and ("api key" in lowered or "apikey" in lowered or "api-key" in lowered or "key" in lowered or "密钥" in lowered or "用法" in lowered)) and domain_allowed(
+            "https://api-docs.deepseek.com/",
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        ):
+            candidates.append(
+                {
+                    "title": "DeepSeek API Docs",
+                    "url": "https://api-docs.deepseek.com/",
+                    "snippet": "Official DeepSeek API documentation, including API key authentication usage.",
+                    "provider": self.name,
+                    "source_family": "official_docs",
+                }
+            )
         return SearchAttempt(
             provider=self.name,
             query=query,
