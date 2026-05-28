@@ -27,20 +27,24 @@ def test_context_pack_is_sectioned_bounded_hash_stable_and_roundtrips():
         observation_ref="obs-1",
     )
 
-    compiler = ContextPackCompiler(token_budget=128, permission_state={"mode": "read_only"})
+    compiler = ContextPackCompiler(token_budget=512, permission_state={"mode": "read_only"})
     pack = compiler.compile(task, journal, tool_briefs=[{"name": "file.read", "side_effect": "read"}])
     same_pack = compiler.compile(task, journal, tool_briefs=[{"name": "file.read", "side_effect": "read"}])
 
     assert [section["name"] for section in pack.sections] == [
         "user_event",
         "active_task_state",
+        "project_profile",
         "recent_observations",
+        "artifact_references",
+        "memory_refs",
         "tool_briefs",
         "permission_state",
-        "memory_refs",
     ]
     assert pack.source_refs == [event.record_id, observation.record_id]
-    assert pack.budget == {"token_budget": 128, "section_count": 6}
+    assert pack.budget["token_budget"] == 512
+    assert pack.budget["section_count"] == 8
+    assert pack.budget["within_budget"] is True
     assert pack.redactions == []
     assert pack.payload_hash == same_pack.payload_hash
     assert ContextPackCompiler.from_dict(json.loads(json.dumps(pack.to_dict()))) == pack

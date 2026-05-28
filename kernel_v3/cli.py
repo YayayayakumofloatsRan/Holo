@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from kernel_v3.context import ContextCompiler, ContextPackCompiler
@@ -14,6 +15,7 @@ from kernel_v3.trace import TraceRenderer
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     parser = argparse.ArgumentParser(prog="holo-v3")
     parser.add_argument("--journal", default="kernel_v3/.holo-v3-journal.jsonl")
     parser.add_argument("--index", default="kernel_v3/.holo-v3-journal.sqlite")
@@ -30,7 +32,14 @@ def main(argv: list[str] | None = None) -> int:
     resume_parser.add_argument("text")
 
     context_parser = sub.add_parser("context")
-    context_parser.add_argument("task_id")
+    context_sub = context_parser.add_subparsers(dest="context_command")
+    context_dump = context_sub.add_parser("dump")
+    context_dump.add_argument("task_id")
+    context_sections = context_sub.add_parser("sections")
+    context_sections.add_argument("task_id")
+    context_artifacts = context_sub.add_parser("artifacts")
+    context_artifacts.add_argument("task_id")
+    context_parser.add_argument("legacy_task_id", nargs="?")
 
     sub.add_parser("tools")
 
@@ -56,12 +65,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "context":
-        state = _active_task(journal, args.task_id)
+        task_id = args.legacy_task_id or getattr(args, "task_id", None)
+        if task_id is None:
+            parser.error("context requires a task_id or a context subcommand")
+        state = _active_task(journal, task_id)
         pack = ContextPackCompiler(permission_state={"mode": "read_write"}).compile(
             state,
             journal,
             tool_briefs=_tool_briefs(),
+            step_id=state.step_id,
         )
+        if args.context_command == "sections":
+            print(json.dumps([section["name"] for section in pack.sections], ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.context_command == "artifacts":
+            artifacts = next(section for section in pack.sections if section["name"] == "artifact_references")
+            print(json.dumps(artifacts["artifacts"], ensure_ascii=False, sort_keys=True))
+            return 0
         print(json.dumps(pack.to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
 
@@ -75,6 +95,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     raise AssertionError(f"unhandled command: {args.command}")
+
+
+def _normalize_argv(argv: list[str]) -> list[str]:
+    if "context" not in argv:
+        return argv
+    try:
+        index = argv.index("context")
+    except ValueError:
+        return argv
+    if index + 1 >= len(argv):
+        return argv
+    next_token = argv[index + 1]
+    if next_token in {"dump", "sections", "artifacts"} or next_token.startswith("-"):
+        return argv
+    return argv[: index + 1] + ["dump"] + argv[index + 1 :]
 
 
 def _loop(journal: JournalStore, *, answer: str) -> LoopControllerV3:
