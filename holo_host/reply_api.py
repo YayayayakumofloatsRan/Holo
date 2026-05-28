@@ -116,6 +116,7 @@ from .market_research_dossier_registry import (
     record_market_research_dossier,
 )
 from .market_research_plan_executor import execute_market_research_action_plan
+from .market_research_operator_live_action import run_market_research_operator_live_action
 from .stage151_live_tool_trace import (
     build_stage151_live_tool_trace,
     evaluate_network_grounding,
@@ -267,11 +268,28 @@ def _optional_payload_str(payload: dict[str, Any], key: str) -> str | None:
 def _build_logger(log_dir: Path) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("holo_host.reply_api")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     if logger.handlers:
+        has_file_handler = False
+        for handler in list(logger.handlers):
+            if isinstance(handler, logging.FileHandler):
+                try:
+                    if not Path(handler.baseFilename).parent.exists():
+                        logger.removeHandler(handler)
+                        handler.close()
+                    else:
+                        has_file_handler = True
+                except OSError:
+                    logger.removeHandler(handler)
+                    handler.close()
+        if has_file_handler:
+            return logger
+        file_handler = logging.FileHandler(log_dir / "reply_api.log", encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
         return logger
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     file_handler = logging.FileHandler(log_dir / "reply_api.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -9436,8 +9454,43 @@ class HoloReplyService:
             for action in list(dict(capability_context.get("stage151_tool_decision", {})).get("selected_actions", []) or [])
             if isinstance(action, dict)
         ]
+        stage215_market_research_operator_action = run_market_research_operator_live_action(
+            user_text=turn.text,
+            metadata=turn.metadata,
+            channel=turn.channel,
+            network_enabled=bool(getattr(self.config.runtime, "network_enabled", False)),
+            web_search_fn=self.capabilities._external_lookup,
+            open_page_fn=self.capabilities._open_page_for_crawler,
+        )
+        stage214_market_research_operator_run = (
+            dict(stage215_market_research_operator_action.get("stage214_market_research_operator_run", {}))
+            if isinstance(stage215_market_research_operator_action.get("stage214_market_research_operator_run", {}), dict)
+            else {}
+        )
+        if stage214_market_research_operator_run:
+            capability_context = dict(capability_context)
+            capability_context["stage215_market_research_operator_action"] = stage215_market_research_operator_action
+            capability_context["stage214_market_research_operator_run"] = stage214_market_research_operator_run
+            if isinstance(stage214_market_research_operator_run.get("stage186_live_crawler_search", {}), dict):
+                capability_context["stage186_live_crawler_search"] = dict(stage214_market_research_operator_run.get("stage186_live_crawler_search", {}))
+                capability_context["web_observation_ledger"] = [
+                    dict(row)
+                    for row in list(capability_context["stage186_live_crawler_search"].get("web_observation_ledger", []) or [])
+                    if isinstance(row, dict)
+                ]
+            for operator_key in (
+                "stage196_market_research_source_promotion",
+                "stage169_market_research_pack",
+                "stage173_market_research_report",
+                "stage197_market_research_report_assembly",
+                "stage198_market_research_finalization_gate",
+                "stage212_action_journal",
+            ):
+                if isinstance(stage214_market_research_operator_run.get(operator_key, {}), dict):
+                    capability_context[operator_key] = dict(stage214_market_research_operator_run.get(operator_key, {}))
         needs_live_crawler = (
             turn.channel in {"holo_cli", "engineering", "research", "project"}
+            and not stage214_market_research_operator_run
             and any(str(action.get("action_type", "") or "") == "web_search" for action in selected_stage151_actions)
             and not dict(capability_context.get("stage186_live_crawler_search", {}) if isinstance(capability_context.get("stage186_live_crawler_search", {}), dict) else {}).get("status")
         )
@@ -9465,7 +9518,14 @@ class HoloReplyService:
         if isinstance(capability_context.get("tool_observation_ledger", []), list) and capability_context.get("tool_observation_ledger"):
             sidecar = dict(sidecar)
             sidecar["tool_observation_ledger"] = list(capability_context.get("tool_observation_ledger", []))
-        for key in ("time_observation", "stage151_tool_decision", "web_observation_ledger", "stage186_live_crawler_search"):
+        for key in (
+            "time_observation",
+            "stage151_tool_decision",
+            "web_observation_ledger",
+            "stage186_live_crawler_search",
+            "stage215_market_research_operator_action",
+            "stage214_market_research_operator_run",
+        ):
             if capability_context.get(key):
                 sidecar = dict(sidecar)
                 sidecar[key] = capability_context.get(key)
@@ -10456,6 +10516,52 @@ class HoloReplyService:
             sidecar["stage201_market_research_dossier_registry"] = stage201_market_research_dossier_registry
             reply_debug["stage201_market_research_dossier_registry"] = stage201_market_research_dossier_registry
             capability_context["stage201_market_research_dossier_registry"] = stage201_market_research_dossier_registry
+        if stage214_market_research_operator_run:
+            sidecar["stage215_market_research_operator_action"] = stage215_market_research_operator_action
+            sidecar["stage214_market_research_operator_run"] = stage214_market_research_operator_run
+            reply_debug["stage215_market_research_operator_action"] = stage215_market_research_operator_action
+            reply_debug["stage214_market_research_operator_run"] = stage214_market_research_operator_run
+            capability_context = dict(capability_context)
+            capability_context["stage215_market_research_operator_action"] = stage215_market_research_operator_action
+            capability_context["stage214_market_research_operator_run"] = stage214_market_research_operator_run
+            if isinstance(stage214_market_research_operator_run.get("stage186_live_crawler_search", {}), dict):
+                capability_context["stage186_live_crawler_search"] = dict(stage214_market_research_operator_run.get("stage186_live_crawler_search", {}))
+                sidecar["stage186_live_crawler_search"] = capability_context["stage186_live_crawler_search"]
+                capability_context["web_observation_ledger"] = [
+                    dict(row)
+                    for row in list(capability_context["stage186_live_crawler_search"].get("web_observation_ledger", []) or [])
+                    if isinstance(row, dict)
+                ]
+                sidecar["web_observation_ledger"] = capability_context["web_observation_ledger"]
+            if isinstance(stage214_market_research_operator_run.get("stage196_market_research_source_promotion", {}), dict):
+                stage196_market_research_source_promotion = dict(stage214_market_research_operator_run.get("stage196_market_research_source_promotion", {}))
+                sidecar["stage196_market_research_source_promotion"] = stage196_market_research_source_promotion
+                reply_debug["stage196_market_research_source_promotion"] = stage196_market_research_source_promotion
+                capability_context["stage196_market_research_source_promotion"] = stage196_market_research_source_promotion
+            if isinstance(stage214_market_research_operator_run.get("stage169_market_research_pack", {}), dict):
+                stage169_market_research_pack = dict(stage214_market_research_operator_run.get("stage169_market_research_pack", {}))
+                sidecar["stage169_market_research_pack"] = stage169_market_research_pack
+                reply_debug["stage169_market_research_pack"] = stage169_market_research_pack
+                capability_context["stage169_market_research_pack"] = stage169_market_research_pack
+            if isinstance(stage214_market_research_operator_run.get("stage173_market_research_report", {}), dict):
+                stage173_market_research_report = dict(stage214_market_research_operator_run.get("stage173_market_research_report", {}))
+                sidecar["stage173_market_research_report"] = stage173_market_research_report
+                reply_debug["stage173_market_research_report"] = stage173_market_research_report
+                capability_context["stage173_market_research_report"] = stage173_market_research_report
+            if isinstance(stage214_market_research_operator_run.get("stage197_market_research_report_assembly", {}), dict):
+                stage197_market_research_report_assembly = dict(stage214_market_research_operator_run.get("stage197_market_research_report_assembly", {}))
+                sidecar["stage197_market_research_report_assembly"] = stage197_market_research_report_assembly
+                reply_debug["stage197_market_research_report_assembly"] = stage197_market_research_report_assembly
+                capability_context["stage197_market_research_report_assembly"] = stage197_market_research_report_assembly
+            if isinstance(stage214_market_research_operator_run.get("stage198_market_research_finalization_gate", {}), dict):
+                stage198_market_research_finalization_gate = dict(stage214_market_research_operator_run.get("stage198_market_research_finalization_gate", {}))
+                sidecar["stage198_market_research_finalization_gate"] = stage198_market_research_finalization_gate
+                reply_debug["stage198_market_research_finalization_gate"] = stage198_market_research_finalization_gate
+                capability_context["stage198_market_research_finalization_gate"] = stage198_market_research_finalization_gate
+            final_operator_text = str(stage214_market_research_operator_run.get("final_visible_text", "") or "").strip()
+            if final_operator_text:
+                repaired_text = normalize_external_speech_for_context(turn_context, final_operator_text)
+                repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
         stage171_market_research_pack_action_status = (
             str(market_research_pack_ledger[0].get("status", "") or "") if market_research_pack_ledger else ""
         )
@@ -10854,6 +10960,8 @@ class HoloReplyService:
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
                 "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
+                "stage215_market_research_operator_action": stage215_market_research_operator_action,
+                "stage214_market_research_operator_run": stage214_market_research_operator_run,
                 "stage160r_goal_state": stage160r_goal_state,
                 "stage161_model_tool_arbitration": stage161_model_tool_arbitration,
                 "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
@@ -10881,6 +10989,8 @@ class HoloReplyService:
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
                 "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
+                "stage215_market_research_operator_action": stage215_market_research_operator_action,
+                "stage214_market_research_operator_run": stage214_market_research_operator_run,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
                 "stage152_stop_reason": stage152_stop_reason,
                 "canonical_stop_reason": canonical_stop_reason,
@@ -11198,6 +11308,8 @@ class HoloReplyService:
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
                 "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
+                "stage215_market_research_operator_action": stage215_market_research_operator_action,
+                "stage214_market_research_operator_run": stage214_market_research_operator_run,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
                 "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
@@ -11345,6 +11457,8 @@ class HoloReplyService:
             "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
             "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
             "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
+            "stage215_market_research_operator_action": stage215_market_research_operator_action,
+            "stage214_market_research_operator_run": stage214_market_research_operator_run,
             "stage170_market_research_claim_count": stage170_market_research_claim_count,
             "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
             "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,
@@ -11555,6 +11669,8 @@ class HoloReplyService:
                 "stage199_market_research_task_dossier": stage199_market_research_task_dossier,
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
                 "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
+                "stage215_market_research_operator_action": stage215_market_research_operator_action,
+                "stage214_market_research_operator_run": stage214_market_research_operator_run,
                 "stage170_market_research_claim_count": stage170_market_research_claim_count,
                 "stage170_market_research_unsupported_count": stage170_market_research_unsupported_count,
                 "stage135_i_state_prompt_frame": stage135_i_state_prompt_frame,

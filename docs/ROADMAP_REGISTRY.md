@@ -497,6 +497,12 @@ Stage214: market research operator run
 - Added `run-market-research-operator-run` CLI to write `.html`, `.json`, and `.jsonl` artifacts under `artifacts/stage214`.
 - Verification on `2026-05-28`: targeted `2 passed`; neighbor Stage214/213/212/205 stack `12 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1043 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage215: market research operator live action
+- Added `holo.stage215.market_research_operator_action.v1` to connect Stage214's operator run to live `holo_cli` reply turns.
+- Actionable financial, market-research, fundamental, SEC, or filing-grounded prompts now execute the operator trajectory and can replace generic capability text with the finalized report.
+- Stage153 renders `[market_operator]` rows for the operator action and every Stage214 phase while keeping raw hidden reasoning/provider internals private.
+- Verification on `2026-05-28`: targeted Stage215/214/153 suite `13 passed`; runtime `92 passed`; full suite `1045 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
