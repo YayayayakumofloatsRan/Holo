@@ -225,9 +225,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage217-operator-registry-dispatch`.
+- The current milestone tag is `stage218-web-research-operator`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage217 Operator Registry Dispatch: model-selected operator actions now dispatch through `holo_host/operator_registry.py`; `market_research_operator_run` is the first registered live operator and future domain operators should reuse the same registry/dispatch contract.
+- Current focus is Stage218 Web Research Operator: `web_research_operator_run` is now the second registered live operator, reusing Stage186 crawler search and Stage212 action journal for domain-neutral source-grounded web/literature research.
 - Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage202 verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage203 verification on `2026-05-28`: targeted live-trace suite `5 passed`.
@@ -245,6 +245,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Stage215 verification on `2026-05-28`: targeted Stage215/214/153 suite `13 passed`; runtime `92 passed`; full suite `1045 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage216 verification on `2026-05-28`: targeted Stage216 unit/reply-path suite `5 passed`; targeted Stage216/215/161 stack `23 passed`; runtime `92 passed`; full suite `1050 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage217 verification on `2026-05-28`: targeted Stage217 registry/dispatch suite `5 passed`; targeted Stage217/216/215/161/153 stack `37 passed`; runtime `92 passed`; full suite `1055 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+- Stage218 verification on `2026-05-28`: targeted Stage218 web-research operator suite `8 passed`; targeted Stage218/217/216/186/212 stack `29 passed`; runtime `92 passed`; full suite `1063 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

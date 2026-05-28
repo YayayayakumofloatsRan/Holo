@@ -116,7 +116,7 @@ from .market_research_dossier_registry import (
     record_market_research_dossier,
 )
 from .market_research_plan_executor import execute_market_research_action_plan
-from .operator_registry import dispatch_operator_action
+from .operator_registry import dispatch_operator_action, get_operator_definition
 from .market_research_operator_live_action import run_market_research_operator_live_action
 from .stage151_live_tool_trace import (
     build_stage151_live_tool_trace,
@@ -9468,6 +9468,7 @@ class HoloReplyService:
             if isinstance(stage215_market_research_operator_action.get("stage214_market_research_operator_run", {}), dict)
             else {}
         )
+        stage218_web_research_operator_run: dict[str, Any] = {}
         stage217_operator_dispatch: dict[str, Any] = {}
         if stage214_market_research_operator_run:
             capability_context = dict(capability_context)
@@ -9527,6 +9528,7 @@ class HoloReplyService:
             "stage186_live_crawler_search",
             "stage215_market_research_operator_action",
             "stage214_market_research_operator_run",
+            "stage218_web_research_operator_run",
         ):
             if capability_context.get(key):
                 sidecar = dict(sidecar)
@@ -9609,6 +9611,7 @@ class HoloReplyService:
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
             stage215_market_research_operator_action=stage215_market_research_operator_action,
             stage214_market_research_operator_run=stage214_market_research_operator_run,
+            stage218_web_research_operator_run=stage218_web_research_operator_run,
             market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
             stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
             stage178_evidence_action_remediation=stage178_evidence_action_remediation,
@@ -9932,10 +9935,20 @@ class HoloReplyService:
         capability_context["stage161_tool_decision_validation"] = stage161_tool_decision_validation
         reply_debug["stage161_model_tool_arbitration"] = stage161_model_tool_arbitration
         reply_debug["stage161_tool_decision_validation"] = stage161_tool_decision_validation
+        selected_operator_id = str(stage161_model_tool_arbitration.get("selected_action", "") or "").strip()
+        selected_operator_definition = get_operator_definition(selected_operator_id) if selected_operator_id else {}
+        selected_required_observation = str(selected_operator_definition.get("required_observation", "") or "")
+        selected_observation_present = (
+            bool(stage214_market_research_operator_run)
+            if selected_required_observation == "stage214_market_research_operator_run"
+            else bool(stage218_web_research_operator_run)
+            if selected_required_observation == "stage218_web_research_operator_run"
+            else False
+        )
         if (
             turn.channel in {"holo_cli", "engineering", "research", "project"}
-            and not stage214_market_research_operator_run
-            and str(stage161_model_tool_arbitration.get("selected_action", "") or "") == "market_research_operator_run"
+            and selected_operator_definition
+            and not selected_observation_present
         ):
             operator_meta = dict(turn.metadata or {})
             if operator_meta.get("stage216_market_research_operator_dry_run"):
@@ -9966,6 +9979,11 @@ class HoloReplyService:
                     dict(dispatch_updates.get("stage214_market_research_operator_run", {}))
                     if isinstance(dispatch_updates.get("stage214_market_research_operator_run", {}), dict)
                     else stage214_market_research_operator_run
+                )
+                stage218_web_research_operator_run = (
+                    dict(dispatch_updates.get("stage218_web_research_operator_run", {}))
+                    if isinstance(dispatch_updates.get("stage218_web_research_operator_run", {}), dict)
+                    else stage218_web_research_operator_run
                 )
             sidecar["stage217_operator_dispatch"] = stage217_operator_dispatch
             capability_context["stage217_operator_dispatch"] = stage217_operator_dispatch
@@ -10090,6 +10108,7 @@ class HoloReplyService:
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
             stage215_market_research_operator_action=stage215_market_research_operator_action,
             stage214_market_research_operator_run=stage214_market_research_operator_run,
+            stage218_web_research_operator_run=stage218_web_research_operator_run,
             market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
             stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
             stage178_evidence_action_remediation=stage178_evidence_action_remediation,
@@ -10181,6 +10200,7 @@ class HoloReplyService:
                 market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
                 stage215_market_research_operator_action=stage215_market_research_operator_action,
                 stage214_market_research_operator_run=stage214_market_research_operator_run,
+                stage218_web_research_operator_run=stage218_web_research_operator_run,
                 market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
                 stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
                 stage178_evidence_action_remediation=stage178_evidence_action_remediation,
@@ -10608,6 +10628,28 @@ class HoloReplyService:
             if final_operator_text:
                 repaired_text = normalize_external_speech_for_context(turn_context, final_operator_text)
                 repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
+        if stage218_web_research_operator_run:
+            sidecar["stage218_web_research_operator_run"] = stage218_web_research_operator_run
+            reply_debug["stage218_web_research_operator_run"] = stage218_web_research_operator_run
+            capability_context = dict(capability_context)
+            capability_context["stage218_web_research_operator_run"] = stage218_web_research_operator_run
+            if isinstance(stage218_web_research_operator_run.get("stage186_live_crawler_search", {}), dict):
+                capability_context["stage186_live_crawler_search"] = dict(stage218_web_research_operator_run.get("stage186_live_crawler_search", {}))
+                sidecar["stage186_live_crawler_search"] = capability_context["stage186_live_crawler_search"]
+                capability_context["web_observation_ledger"] = [
+                    dict(row)
+                    for row in list(capability_context["stage186_live_crawler_search"].get("web_observation_ledger", []) or [])
+                    if isinstance(row, dict)
+                ]
+                sidecar["web_observation_ledger"] = capability_context["web_observation_ledger"]
+            if isinstance(stage218_web_research_operator_run.get("stage212_action_journal", {}), dict):
+                sidecar["stage212_action_journal"] = dict(stage218_web_research_operator_run.get("stage212_action_journal", {}))
+                reply_debug["stage212_action_journal"] = sidecar["stage212_action_journal"]
+                capability_context["stage212_action_journal"] = sidecar["stage212_action_journal"]
+            final_operator_text = str(stage218_web_research_operator_run.get("final_visible_text", "") or "").strip()
+            if final_operator_text:
+                repaired_text = normalize_external_speech_for_context(turn_context, final_operator_text)
+                repaired_text = apply_stage149_visible_directives(repaired_text, stage149_user_directives)
         stage171_market_research_pack_action_status = (
             str(market_research_pack_ledger[0].get("status", "") or "") if market_research_pack_ledger else ""
         )
@@ -11007,6 +11049,7 @@ class HoloReplyService:
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
                 "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
                 "stage217_operator_dispatch": stage217_operator_dispatch,
+                "stage218_web_research_operator_run": stage218_web_research_operator_run,
                 "stage215_market_research_operator_action": stage215_market_research_operator_action,
                 "stage214_market_research_operator_run": stage214_market_research_operator_run,
                 "stage160r_goal_state": stage160r_goal_state,
@@ -11037,6 +11080,7 @@ class HoloReplyService:
                 "stage200_market_research_dossier_resume": stage200_market_research_dossier_resume,
                 "stage201_market_research_dossier_registry": stage201_market_research_dossier_registry,
                 "stage217_operator_dispatch": stage217_operator_dispatch,
+                "stage218_web_research_operator_run": stage218_web_research_operator_run,
                 "stage215_market_research_operator_action": stage215_market_research_operator_action,
                 "stage214_market_research_operator_run": stage214_market_research_operator_run,
                 "stage152_deepseek_tool_loop": stage152_deepseek_tool_loop,
@@ -11090,6 +11134,7 @@ class HoloReplyService:
         reply_debug["stage191_public_thought_stream"] = stage191_public_thought_stream
         reply_debug["stage153_interactive_cli_session"] = stage153_interactive_cli_session
         reply_debug["stage217_operator_dispatch"] = stage217_operator_dispatch
+        reply_debug["stage218_web_research_operator_run"] = stage218_web_research_operator_run
         reply_debug["network_health"] = network_health
         reply_debug["canonical_stop_reason"] = canonical_stop_reason
         reply_debug["canonical_stop_source"] = canonical_stop_source
@@ -11178,6 +11223,7 @@ class HoloReplyService:
             or stage199_market_research_task_dossier
             or stage200_market_research_dossier_resume
             or stage201_market_research_dossier_registry
+            or stage218_web_research_operator_run
         ):
             stage135_i_state_topology = build_stage135_i_state_topology(
                 context=turn_context,
@@ -11221,6 +11267,7 @@ class HoloReplyService:
                 stage200_market_research_dossier_resume=stage200_market_research_dossier_resume,
                 stage201_market_research_dossier_registry=stage201_market_research_dossier_registry,
                 stage186_live_crawler_search=stage186_live_crawler_search,
+                stage218_web_research_operator_run=stage218_web_research_operator_run,
                 web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 engineering_action_ledger=engineering_action_ledger,
                 project_state_graph=project_state_graph,
@@ -11335,6 +11382,7 @@ class HoloReplyService:
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
                 "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
                 "stage217_operator_dispatch": stage217_operator_dispatch,
+                "stage218_web_research_operator_run": stage218_web_research_operator_run,
                 "stage169_market_research_pack": stage169_market_research_pack,
                 "market_research_pack_ledger": market_research_pack_ledger,
                 "stage171_market_research_pack_action_status": stage171_market_research_pack_action_status,
@@ -11485,6 +11533,7 @@ class HoloReplyService:
             "stage161_tool_decision_validation": stage161_tool_decision_validation,
             "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
             "stage217_operator_dispatch": stage217_operator_dispatch,
+            "stage218_web_research_operator_run": stage218_web_research_operator_run,
             "stage169_market_research_pack": stage169_market_research_pack,
             "market_research_pack_ledger": market_research_pack_ledger,
             "stage171_market_research_pack_action_status": stage171_market_research_pack_action_status,
@@ -11698,6 +11747,7 @@ class HoloReplyService:
                 "stage161_tool_decision_validation": stage161_tool_decision_validation,
                 "stage161_tool_action_space_count": int(capability_context.get("stage161_tool_action_space_count", 0) or 0),
                 "stage217_operator_dispatch": stage217_operator_dispatch,
+                "stage218_web_research_operator_run": stage218_web_research_operator_run,
                 "stage169_market_research_pack": stage169_market_research_pack,
                 "market_research_pack_ledger": market_research_pack_ledger,
                 "stage171_market_research_pack_action_status": stage171_market_research_pack_action_status,

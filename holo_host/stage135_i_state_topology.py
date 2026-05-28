@@ -230,6 +230,7 @@ def build_stage135_i_state_topology(
     stage183_agent_capability_gauntlet: dict[str, Any] | None = None,
     stage184_real_use_drill: dict[str, Any] | None = None,
     stage186_live_crawler_search: dict[str, Any] | None = None,
+    stage218_web_research_operator_run: dict[str, Any] | None = None,
     web_observation_ledger: list[dict[str, Any]] | None = None,
     engineering_action_ledger: list[dict[str, Any]] | None = None,
     project_state_graph: dict[str, Any] | None = None,
@@ -298,6 +299,7 @@ def build_stage135_i_state_topology(
     agent_capability_gauntlet = _dict(stage183_agent_capability_gauntlet or packet.get("stage183_agent_capability_gauntlet", {}))
     real_use_drill = _dict(stage184_real_use_drill or packet.get("stage184_real_use_drill", {}))
     live_crawler_search = _dict(stage186_live_crawler_search or packet.get("stage186_live_crawler_search", {}))
+    web_research_operator = _dict(stage218_web_research_operator_run or packet.get("stage218_web_research_operator_run", {}))
     web_ledger = _list_dicts(web_observation_ledger or packet.get("web_observation_ledger", []))
     engineering_ledger = normalize_engineering_action_ledger(engineering_action_ledger or packet.get("engineering_action_ledger", []))
     project_state = _dict(project_state_graph or packet.get("project_state_graph", {}))
@@ -1353,6 +1355,26 @@ def build_stage135_i_state_topology(
         edges.append(_edge(source, "stage186_live_crawler_search", relation="executes_query_open_evaluate_loop", weight=0.6, summary="search intent becomes a bounded query/open/evidence sufficiency crawler loop"))
         edges.append(_edge("stage186_live_crawler_search", "state_delta", relation="records_web_evidence_sufficiency", weight=0.54, summary="crawler evidence and stop reason become inspectable agent state"))
 
+    if web_research_operator:
+        operator_status = str(web_research_operator.get("status", "") or "unknown")
+        trajectory_count = len(_list_dicts(web_research_operator.get("operator_trajectory", [])))
+        source_count = len(list(web_research_operator.get("source_urls", []) or []))
+        nodes.append(
+            _node(
+                "stage218_web_research_operator",
+                "web research operator",
+                channel="web_research_operator",
+                kind="operator_run",
+                x=1.0,
+                y=0.985,
+                weight=0.86 if operator_status == "ready" else 0.44,
+                summary=f"status={operator_status}; trajectory={trajectory_count}; sources={source_count}; stop={web_research_operator.get('canonical_stop_reason', '')}",
+            )
+        )
+        source = "stage217_operator_dispatch" if any(node["id"] == "stage217_operator_dispatch" for node in nodes) else "stage186_live_crawler_search" if live_crawler_search else "external_user_input"
+        edges.append(_edge(source, "stage218_web_research_operator", relation="dispatches_web_research_operator", weight=0.62, summary="model-selected web research operator executes through the registry and Stage186 crawler"))
+        edges.append(_edge("stage218_web_research_operator", "state_delta", relation="records_web_research_operator_result", weight=0.55, summary="operator status, sources, and action journal become inspectable agent state"))
+
     if canonical_state or network_state:
         canonical_reason = str(canonical_state.get("canonical_stop_reason", "") or "unknown")
         canonical_source = str(canonical_state.get("canonical_stop_source", "") or "none")
@@ -1725,6 +1747,10 @@ def build_stage135_i_state_topology(
             "live_crawler_search_status": str(live_crawler_search.get("status", "") or "") if live_crawler_search else "",
             "live_crawler_search_query_count": int(live_crawler_search.get("query_count", 0) or 0) if live_crawler_search else 0,
             "live_crawler_search_opened_page_count": int(live_crawler_search.get("opened_page_count", 0) or 0) if live_crawler_search else 0,
+            "web_research_operator_node_count": sum(1 for node in nodes if node["channel"] == "web_research_operator"),
+            "web_research_operator_status": str(web_research_operator.get("status", "") or "") if web_research_operator else "",
+            "web_research_operator_source_count": len(list(web_research_operator.get("source_urls", []) or [])) if web_research_operator else 0,
+            "web_research_operator_trajectory_count": len(_list_dicts(web_research_operator.get("operator_trajectory", []))) if web_research_operator else 0,
             "canonical_stop_reason": str(canonical_state.get("canonical_stop_reason", "") or "") if canonical_state else "",
             "canonical_stop_source": str(canonical_state.get("canonical_stop_source", "") or "") if canonical_state else "",
             "network_enabled": bool(network_state.get("network_enabled", False)) if network_state else False,

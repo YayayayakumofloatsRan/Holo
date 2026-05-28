@@ -202,6 +202,31 @@ def _market_research_operator_status(
     return "failed", "tool_failure_report", ids, 0.2, unresolved
 
 
+def _web_research_operator_status(operator_run: dict[str, Any]) -> tuple[str, str, list[str], float, list[str]]:
+    if not operator_run:
+        return "failed", "evidence_exhausted", [], 0.0, ["stage218_web_research_operator_run"]
+    run_status = str(operator_run.get("status", "") or "")
+    ids = [text for text in (str(operator_run.get("operator_run_id", "") or ""),) if text]
+    if run_status == "ready":
+        return "executed", "final_answer_ready", ids, 0.9, []
+    if run_status == "rejected":
+        reasons = [
+            str(reason)
+            for reason in list(operator_run.get("failure_reasons", []) or [])
+            if str(reason)
+        ] or [str(operator_run.get("canonical_stop_reason", "") or "web_research_operator_rejected")]
+        return "rejected", "boundary_or_permission", ids, 0.0, reasons
+    local_stop = str(operator_run.get("canonical_stop_reason", "") or "tool_failure_report")
+    if local_stop not in ALLOWED_NEW_STOP_REASONS:
+        local_stop = "tool_failure_report"
+    reasons = [
+        str(reason)
+        for reason in list(operator_run.get("failure_reasons", []) or [])
+        if str(reason)
+    ] or [run_status or "web_research_operator_failed"]
+    return "failed", local_stop, ids, 0.22, reasons
+
+
 def _failure_text(intent_frame: dict[str, Any], action: str, rows: list[dict[str, Any]], stop_reason: str) -> str:
     raw = str(intent_frame.get("raw_user_text_exact", "") or "")
     wants_zh = any("\u4e00" <= char <= "\u9fff" for char in raw)
@@ -240,6 +265,12 @@ def _failure_text(intent_frame: dict[str, Any], action: str, rows: list[dict[str
         if wants_zh:
             return f"\u6211\u5df2\u5c1d\u8bd5 market_research_operator_run\uff0c\u4f46\u5b8c\u6574\u7814\u7a76\u7b97\u5b50\u672a\u5f97\u5230\u53ef\u4ea4\u4ed8\u7ed3\u679c\uff1a{compact_text(reasons, 160)}\u3002"
         return f"market_research_operator_run was attempted but did not produce a ready research result: {compact_text(reasons, 160)}."
+    if action == "web_research_operator_run":
+        row = rows[0] if rows else {}
+        reasons = ", ".join(str(item) for item in list(row.get("failure_reasons", []) or [])) or str(row.get("status", "") or "operator did not produce sufficient web evidence")
+        if wants_zh:
+            return f"\u6211\u5df2\u5c1d\u8bd5 web_research_operator_run\uff0c\u4f46\u6ca1\u6709\u5f97\u5230\u8db3\u591f\u8054\u7f51\u8bc1\u636e\uff1a{compact_text(reasons, 160)}\u3002"
+        return f"web_research_operator_run was attempted but did not produce sufficient web evidence: {compact_text(reasons, 160)}."
     if stop_reason == "needs_user_clarification":
         return "I need a clarification before continuing this agent task."
     return "The required agent action did not produce enough evidence for a grounded final answer."
@@ -331,6 +362,7 @@ def run_agent_loop_fsm(
     market_research_dossier_resume_ledger: Any = None,
     stage215_market_research_operator_action: dict[str, Any] | None = None,
     stage214_market_research_operator_run: dict[str, Any] | None = None,
+    stage218_web_research_operator_run: dict[str, Any] | None = None,
     stage201_market_research_dossier_registry: dict[str, Any] | None = None,
     stage178_evidence_action_remediation: dict[str, Any] | None = None,
     stage180_live_remediation_execution: dict[str, Any] | None = None,
@@ -392,6 +424,7 @@ def run_agent_loop_fsm(
     dossier_resume_rows = _list_dicts(market_research_dossier_resume_ledger)
     market_operator_action = dict(stage215_market_research_operator_action or {})
     market_operator_run = dict(stage214_market_research_operator_run or {})
+    web_research_operator_run = dict(stage218_web_research_operator_run or {})
     remediation_report = dict(stage178_evidence_action_remediation or {})
     live_remediation = build_live_remediation_loop(remediation_report, goal_id=goal_id, current_stop_reason=stop_reason) if remediation_report else {}
     remediation_execution = dict(stage180_live_remediation_execution or {})
@@ -459,6 +492,17 @@ def run_agent_loop_fsm(
             steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["stage214_market_research_operator_run"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
             index += 1
             steps.append(_step(index=index, phase="observe_result", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["stage214_market_research_operator_run"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
+            index += 1
+        elif action == "web_research_operator_run":
+            status, local_stop, ids, info_score, local_unresolved = _web_research_operator_status(web_research_operator_run)
+            if local_stop != "final_answer_ready":
+                stop_reason = local_stop
+                rows = [web_research_operator_run] if web_research_operator_run else []
+                final_override_text = _failure_text(intent_frame, action, rows, local_stop)
+                unresolved.extend(local_unresolved)
+            steps.append(_step(index=index, phase="act_or_skip", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["stage218_web_research_operator_run"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
+            index += 1
+            steps.append(_step(index=index, phase="observe_result", goal_id=goal_id, selected_action=action, action_status=status, required_observations=["stage218_web_research_operator_run"], observation_ids=ids, new_information_score=info_score, unresolved_items=local_unresolved, canonical_stop_reason=local_stop))
             index += 1
         elif action in {"ask_clarification", "defer"}:
             stop_reason = "needs_user_clarification"
@@ -592,6 +636,7 @@ def run_agent_loop_fsm(
         "market_research_dossier_resume_ledger": dossier_resume_rows,
         "stage215_market_research_operator_action": market_operator_action,
         "stage214_market_research_operator_run": market_operator_run,
+        "stage218_web_research_operator_run": web_research_operator_run,
         "stage178_evidence_action_remediation": remediation_report,
         "stage179_live_remediation_loop": live_remediation,
         "stage180_live_remediation_execution": remediation_execution,

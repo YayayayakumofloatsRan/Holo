@@ -532,6 +532,32 @@ def _stage215_market_operator_events(payload: dict[str, Any]) -> list[dict[str, 
     return events
 
 
+def _stage218_web_research_operator_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    report = payload.get("stage218_web_research_operator_run", {})
+    if not isinstance(report, dict) or not report:
+        return []
+    events: list[dict[str, Any]] = []
+    for row in list(report.get("operator_trajectory", []) or [])[:12]:
+        if not isinstance(row, dict):
+            continue
+        events.append(
+            {
+                "event": "web_research_operator",
+                "phase": str(row.get("phase", "") or ""),
+                "status": str(row.get("status", "") or ""),
+                "summary": _compact(row.get("summary", ""), 180),
+                "observation_count": int(row.get("observation_count", 0) or 0),
+                "source_count": int(row.get("source_count", 0) or 0),
+                "stop_reason": str(
+                    row.get("canonical_stop_reason", "")
+                    or report.get("canonical_stop_reason", "")
+                    or ("final_answer_ready" if str(row.get("status", "") or "") == "ready" else "")
+                ),
+            }
+        )
+    return events
+
+
 def _stage217_operator_dispatch_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     report = payload.get("stage217_operator_dispatch", {})
     if not isinstance(report, dict) or not report:
@@ -812,6 +838,7 @@ def build_agent_event_stream(
         events.extend(_stage204_market_research_trajectory_events(source))
         events.extend(_stage217_operator_dispatch_events(source))
         events.extend(_stage215_market_operator_events(source))
+        events.extend(_stage218_web_research_operator_events(source))
         events.append(
             {
                 "event": "stop",
@@ -872,6 +899,7 @@ def build_agent_event_stream(
     events.extend(_stage204_market_research_trajectory_events(source))
     events.extend(_stage217_operator_dispatch_events(source))
     events.extend(_stage215_market_operator_events(source))
+    events.extend(_stage218_web_research_operator_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
     if isinstance(execution, dict) and execution.get("schema") == "holo.stage180.live_remediation_executor.v1":
@@ -1126,6 +1154,11 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
             lines.append(
                 f"[operator_dispatch] id={item.get('operator_id', '')} status={item.get('status', '')} "
                 f"requires={item.get('required_observation', '') or '-'} stop={item.get('stop_reason', '')}"
+            )
+        elif event == "web_research_operator":
+            lines.append(
+                f"[web_research_operator] phase={item.get('phase', '')} status={item.get('status', '')} "
+                f"sources={item.get('source_count', 0)} stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))

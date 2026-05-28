@@ -515,6 +515,13 @@ Stage217: operator registry dispatch
 - Stage153 now renders `[operator_dispatch]` rows before the existing `[market_operator]` phase trajectory.
 - Verification on `2026-05-28`: targeted Stage217 registry/dispatch suite `5 passed`; targeted Stage217/216/215/161/153 stack `37 passed`; runtime `92 passed`; full suite `1055 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage218: web research operator
+- Added `holo.stage218.web_research_operator_run.v1`.
+- Registered `web_research_operator_run` as the second live operator and the first domain-neutral web/literature research operator.
+- The operator reuses Stage186 live crawler search and Stage212 action journal, then feeds `stage218_web_research_operator_run` into Stage160R FSM, reply metadata, Stage153 event stream, and Stage135 topology.
+- Stage153 now renders `[web_research_operator]` trajectory rows after `[operator_dispatch]`.
+- Verification on `2026-05-28`: targeted Stage218 web-research operator suite `8 passed`; targeted Stage218/217/216/186/212 stack `29 passed`; runtime `92 passed`; full suite `1063 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

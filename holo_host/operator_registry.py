@@ -5,6 +5,7 @@ from typing import Any, Callable
 from .common import stable_digest, utc_now
 from .kernel_metadata_sanitizer import sanitize_public_metadata
 from .market_research_operator_live_action import run_market_research_operator_live_action
+from .web_research_operator import run_web_research_operator
 
 OPERATOR_REGISTRY_SCHEMA = "holo.stage217.operator_registry.v1"
 OPERATOR_DISPATCH_SCHEMA = "holo.stage217.operator_dispatch.v1"
@@ -42,9 +43,39 @@ _MARKET_OPERATOR = {
     ],
 }
 
+_WEB_RESEARCH_OPERATOR = {
+    "schema": OPERATOR_REGISTRY_SCHEMA,
+    "operator_id": "web_research_operator_run",
+    "operator_name": "Web Research Operator Run",
+    "description": "Run a bounded web/literature research trajectory: query planning, search, page opening, evidence evaluation, action journal, and grounded brief.",
+    "required_observation": "stage218_web_research_operator_run",
+    "input_schema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+            "query": {"type": "string"},
+            "max_queries": {"type": "integer"},
+            "max_pages_per_query": {"type": "integer"},
+        },
+    },
+    "observation_schema": {"ledger": "stage218_web_research_operator_run"},
+    "risk_level": "low",
+    "requires_network": True,
+    "requires_workspace": False,
+    "is_readonly": True,
+    "implements_live_work": True,
+    "public_trace_event": "web_research_operator",
+    "examples": [
+        {
+            "when": "user asks for current web search, source-grounded documentation scouting, or literature-style web research",
+            "arguments": {"query": "OpenAI Codex CLI official documentation", "max_queries": 3},
+        }
+    ],
+}
+
 
 def list_operator_definitions() -> list[dict[str, Any]]:
-    return [dict(_MARKET_OPERATOR)]
+    return [dict(_MARKET_OPERATOR), dict(_WEB_RESEARCH_OPERATOR)]
 
 
 def get_operator_definition(operator_id: str) -> dict[str, Any]:
@@ -98,6 +129,23 @@ def _capability_updates_from_market_operator(action_report: dict[str, Any], oper
     ):
         if isinstance(operator_run.get(key, {}), dict):
             updates[key] = dict(operator_run.get(key, {}))
+    return sanitize_public_metadata(updates)
+
+
+def _capability_updates_from_web_research_operator(operator_run: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {
+        "stage218_web_research_operator_run": operator_run,
+    }
+    crawler = dict(operator_run.get("stage186_live_crawler_search", {})) if isinstance(operator_run.get("stage186_live_crawler_search", {}), dict) else {}
+    if crawler:
+        updates["stage186_live_crawler_search"] = crawler
+        updates["web_observation_ledger"] = [
+            dict(row)
+            for row in list(crawler.get("web_observation_ledger", []) or [])
+            if isinstance(row, dict)
+        ]
+    if isinstance(operator_run.get("stage212_action_journal", {}), dict):
+        updates["stage212_action_journal"] = dict(operator_run.get("stage212_action_journal", {}))
     return sanitize_public_metadata(updates)
 
 
@@ -170,6 +218,36 @@ def dispatch_operator_action(
                 "final_visible_text": str(action_report.get("final_visible_text", "") or operator_run.get("final_visible_text", "") or ""),
                 "canonical_stop_reason": stop_reason,
                 "failure_reasons": list(action_report.get("failure_reasons", []) or operator_run.get("failure_reasons", []) or []),
+                "created_at": utc_now(),
+            }
+        )
+
+    if selected_action == "web_research_operator_run":
+        operator_run = run_web_research_operator(
+            user_text=user_text,
+            action_arguments=action_args,
+            network_enabled=bool(network_enabled),
+            web_search_fn=web_search_fn,
+            open_page_fn=open_page_fn,
+        )
+        updates = _capability_updates_from_web_research_operator(operator_run)
+        run_status = str(operator_run.get("status", "") or "")
+        status = "executed" if run_status == "ready" else "failed"
+        stop_reason = str(operator_run.get("canonical_stop_reason", "") or "")
+        if not stop_reason:
+            stop_reason = "final_answer_ready" if status == "executed" else "tool_failure_report"
+        return sanitize_public_metadata(
+            {
+                "schema": OPERATOR_DISPATCH_SCHEMA,
+                "dispatch_id": "stage217_dispatch:" + stable_digest(user_text, selected_action, operator_run.get("operator_run_id", ""), limit=12),
+                "status": status,
+                "operator_id": selected_action,
+                "selected_action": selected_action,
+                "required_observation": str(definition.get("required_observation", "") or ""),
+                "capability_context_updates": updates,
+                "final_visible_text": str(operator_run.get("final_visible_text", "") or ""),
+                "canonical_stop_reason": stop_reason,
+                "failure_reasons": list(operator_run.get("failure_reasons", []) or []),
                 "created_at": utc_now(),
             }
         )
