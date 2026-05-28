@@ -491,6 +491,12 @@ Stage213: market research action journal smoke
 - Added `run-market-research-action-journal-smoke` CLI to write `.html`, `.json`, and `.jsonl` artifacts under `artifacts/stage213`.
 - Verification on `2026-05-28`: targeted `2 passed`; neighbor Stage213/212/209 stack `7 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1041 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage214: market research operator run
+- Added `holo.stage214.market_research_operator_run.v1` to execute an end-to-end operator trajectory: plan, crawl, source promotion, pack, report, assembly, finalization, and action journal.
+- Reuses Stage186, Stage196, Stage169, Stage173, Stage197, Stage198, and Stage212 instead of creating a parallel market-research stack.
+- Added `run-market-research-operator-run` CLI to write `.html`, `.json`, and `.jsonl` artifacts under `artifacts/stage214`.
+- Verification on `2026-05-28`: targeted `2 passed`; neighbor Stage214/213/212/205 stack `12 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1043 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
