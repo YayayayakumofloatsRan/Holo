@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .context_kernel import build_context_pack, render_context_for_model
 from .event_log import EventLog, sanitize
+from .final_answer_contract import build_final_answer_contract
 from .hooks import HookManager, event_to_hook_payload, observation_to_hook_payload
 from .model import ModelClient, RuleFallbackModel
 from .prompt_policy import SYSTEM_PROMPT, assert_no_persona_text
@@ -88,9 +90,11 @@ class HoloAgent:
         workspace = load_workspace_context(self.config.workspace_root)
         workflow_policy = build_workflow_policy(user_text)
         search_goal = build_search_goal(user_text)
+        action_space = self._action_space()
         context: dict[str, Any] = {
             "system_prompt": SYSTEM_PROMPT,
             "workspace": workspace.to_dict(),
+            "action_space": action_space,
             "workflow_policy": workflow_policy,
             "search_goal": search_goal.to_dict(),
             "step": 0,
@@ -102,7 +106,6 @@ class HoloAgent:
             f"instructions={len(workspace.instruction_layers)} skills={len(workspace.skills)}",
             workspace=workspace.to_dict(),
         )
-        action_space = self._action_space()
         self._emit(events, "action_space", f"count={len(action_space)}", actions=action_space)
         self._emit(events, "workflow_policy", workflow_policy["task_family"], policy=workflow_policy)
 
@@ -112,6 +115,7 @@ class HoloAgent:
         failed_signatures: set[str] = set()
         decisions: list[dict[str, Any]] = []
         self_feedback_reports: list[dict[str, Any]] = []
+        final_answer_contract: dict[str, Any] = {}
         for step in range(self.config.max_steps):
             context["step"] = step
             context["observations"] = [obs.to_dict() for obs in observations]
@@ -119,6 +123,19 @@ class HoloAgent:
             context["source_authority"] = build_source_authority_report(context["observations"])
             context["crawl_report"] = build_crawl_report(search_goal, context["observations"]).to_dict()
             context["decisions"] = decisions
+            context_pack = build_context_pack(
+                user_text=user_text,
+                workspace=workspace,
+                action_space=action_space,
+                workflow_policy=workflow_policy,
+                search_goal=search_goal.to_dict(),
+                observations=context["observations"],
+                self_feedback_reports=self_feedback_reports,
+                decisions=decisions,
+                stop_reason=stop_reason,
+            )
+            context["context_pack"] = context_pack
+            context["rendered_context"] = render_context_for_model(context_pack)
             decision = self.model.decide(
                 user_text=user_text,
                 context={k: v for k, v in context.items() if k != "system_prompt"},
@@ -131,12 +148,19 @@ class HoloAgent:
             self._emit(events, "model_decide", f"selected={decision.action}", decision=decision.to_dict())
 
             if decision.action == "answer_direct":
+                observation_dicts = [obs.to_dict() for obs in observations]
                 final = self.model.finalize(
                     user_text=user_text,
-                    observations=[obs.to_dict() for obs in observations],
+                    observations=observation_dicts,
                     context=context,
                 )
-                engineering_report = verify_engineering_final(final, [obs.to_dict() for obs in observations])
+                final_answer_contract = build_final_answer_contract(
+                    user_text=user_text,
+                    final_text=final,
+                    observations=observation_dicts,
+                )
+                self._emit(events, "final_contract", final_answer_contract.get("answer_type", ""), final_answer_contract=final_answer_contract)
+                engineering_report = verify_engineering_final(final, observation_dicts, answer_contract=final_answer_contract)
                 if engineering_report["status"] != "ok":
                     final = repair_unverified_engineering_final(final, engineering_report)
                     stop_reason = "evidence_exhausted"
@@ -241,6 +265,8 @@ class HoloAgent:
                 "stage_record": "stage230",
                 "model": self.config.model_name,
                 "self_feedback_reports": list(self_feedback_reports),
+                "final_answer_contract": final_answer_contract,
+                "context_pack": context.get("context_pack", {}),
                 "search_goal": search_goal.to_dict(),
                 "crawl_report": build_crawl_report(search_goal, [obs.to_dict() for obs in observations]).to_dict(),
                 "source_authority": build_source_authority_report([obs.to_dict() for obs in observations]),

@@ -39,6 +39,8 @@ Initial Stage219 goal:
   `docs/STAGE229_PAGE_FETCHER_EXTRACTION.md`.
 - Action self-feedback reports are tracked in
   `docs/STAGE230_ACTION_SELF_FEEDBACK_LOOP.md`.
+- Context kernel packing and dynamic final claim obligations are tracked in
+  `docs/STAGE231_CONTEXT_KERNEL_AND_DYNAMIC_FINAL_CONTRACT.md`.
 
 Run:
 

@@ -48,7 +48,32 @@ def build_workflow_policy(user_text: str) -> dict[str, Any]:
     }
 
 
-def verify_engineering_final(text: str, observations: list[dict[str, Any]]) -> dict[str, Any]:
+def verify_engineering_final(
+    text: str,
+    observations: list[dict[str, Any]],
+    *,
+    answer_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if answer_contract:
+        missing_from_contract = sorted(set(str(tool) for tool in answer_contract.get("missing_required_tools", []) if str(tool)))
+        if missing_from_contract:
+            return {
+                "status": "unverified_engineering_claim",
+                "missing_observations": missing_from_contract,
+                "observed_tools": sorted(
+                    {str(obs.get("tool", "")) for obs in observations if str(obs.get("status", "")) == "ok"}
+                ),
+                "answer_type": answer_contract.get("answer_type", ""),
+                "claim_obligations": answer_contract.get("claim_obligations", []),
+            }
+        return {
+            "status": "ok",
+            "missing_observations": [],
+            "observed_tools": sorted(
+                {str(obs.get("tool", "")) for obs in observations if str(obs.get("status", "")) == "ok"}
+            ),
+            "answer_type": answer_contract.get("answer_type", ""),
+        }
     lowered = str(text or "").lower()
     observed_tools = {str(obs.get("tool", "")) for obs in observations if str(obs.get("status", "")) == "ok"}
     missing: list[str] = []

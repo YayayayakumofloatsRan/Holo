@@ -116,6 +116,24 @@ def _first_url(text: str) -> str:
     return match.group(0).rstrip(".,;:!?") if match else ""
 
 
+def _has_chinese(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _is_capability_question(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(token in lowered for token in ("what can you do", "capabilities", "what are you able to do")) or any(
+        token in str(text or "") for token in ("你现在可以做什么", "你能做什么", "可以做什么", "能力", "能干什么")
+    )
+
+
+def _action_names(context: dict[str, Any]) -> list[str]:
+    rows = context.get("action_space", [])
+    if not isinstance(rows, list):
+        return []
+    return [str(item.get("name", "") or "") for item in rows if isinstance(item, dict) and str(item.get("name", "") or "").strip()]
+
+
 @dataclass(slots=True)
 class RuleFallbackModel:
     """Explicit offline fallback for local development.
@@ -239,6 +257,36 @@ class RuleFallbackModel:
         )
 
     def finalize(self, *, user_text: str, observations: list[dict[str, Any]], context: dict[str, Any]) -> str:
+        if not observations:
+            actions = set(_action_names(context))
+            if _is_capability_question(user_text):
+                if _has_chinese(user_text):
+                    capabilities = [
+                        "直接回答不需要外部证据的问题",
+                        "按模型决策调用工具并记录 observation ledger",
+                    ]
+                    if {"web_search", "open_page"} & actions:
+                        capabilities.append("进行网页搜索、打开网页、抽取页面正文并报告来源或失败原因")
+                    if {"workspace_search", "file_read", "apply_patch", "test_run", "git_diff", "git_status"} & actions:
+                        capabilities.append("在工作区内搜索、读文件、修改补丁、运行测试和查看 git diff/status")
+                    if "web_research" in actions:
+                        capabilities.append("执行有边界的 web research operator，形成 source/citation 证据")
+                    return "我现在可以：\n- " + "\n- ".join(capabilities)
+                capabilities = [
+                    "answer questions that do not require external evidence",
+                    "choose tools through the agent loop and record observation ledgers",
+                ]
+                if {"web_search", "open_page"} & actions:
+                    capabilities.append("search the web, open pages, extract text, and report sources or failures")
+                if {"workspace_search", "file_read", "apply_patch", "test_run", "git_diff", "git_status"} & actions:
+                    capabilities.append("search/read/edit/test the workspace and inspect git state")
+                if "web_research" in actions:
+                    capabilities.append("run bounded web research with source/citation evidence")
+                return "I can:\n- " + "\n- ".join(capabilities)
+            if _has_chinese(user_text):
+                return "我可以直接回答这类不需要外部证据的问题；如果需要当前事实、网页、文件或测试结果，我会先调用工具并记录观察。"
+            return "I can answer directly when no external evidence is needed. For current facts, web, files, or tests, I should call tools and record observations first."
+
         for obs in reversed(observations):
             if obs.get("tool") == "open_page" and obs.get("status") == "ok":
                 url = obs.get("data", {}).get("url", "")
