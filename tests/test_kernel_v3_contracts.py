@@ -3,6 +3,7 @@ from pathlib import Path
 
 import kernel_v3.contracts as contracts
 from kernel_v3.contracts import (
+    ArtifactRef,
     CandidateAction,
     ContextBundle,
     Event,
@@ -17,6 +18,7 @@ from kernel_v3.contracts import (
     Step,
     Task,
     ToolCall,
+    ToolManifest,
 )
 
 
@@ -89,6 +91,17 @@ SCHEMA_EXAMPLES = [
         arguments={"query": "Holo"},
         status="requested",
     ),
+    ToolManifest(
+        name="workspace.search",
+        version="1",
+        resource_kind="workspace",
+        operator_kind="search",
+        side_effect_class="read",
+        permissions_required=["workspace:read"],
+        enabled=True,
+        description="Search workspace text",
+        input_schema={"query": "str"},
+    ),
     Observation(
         observation_id="obs-1",
         run_id="run-1",
@@ -99,6 +112,13 @@ SCHEMA_EXAMPLES = [
         observed_at_ms=1_700_000_000_003,
         action_id="act-1",
         tool_call_id="tool-1",
+    ),
+    ArtifactRef(
+        artifact_id="artifact-obs-1",
+        kind="observation_payload",
+        uri="journal://obs-1",
+        payload_hash="hash-1",
+        metadata={"observation_id": "obs-1"},
     ),
     Feedback(
         feedback_id="fb-1",

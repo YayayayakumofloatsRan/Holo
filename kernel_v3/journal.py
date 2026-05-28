@@ -104,6 +104,54 @@ class JournalStore:
             raise ValueError(f"unknown task_id: {task_id}")
         return records
 
+    def index_records(
+        self,
+        *,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        kind: str | None = None,
+    ) -> list[JsonObject]:
+        if self.index_path is None:
+            raise RuntimeError("index_path is not configured")
+        clauses = []
+        values: list[str] = []
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            values.append(task_id)
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            values.append(run_id)
+        if kind is not None:
+            clauses.append("kind = ?")
+            values.append(kind)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                SELECT
+                    record_id,
+                    task_id,
+                    run_id,
+                    step_id,
+                    kind,
+                    event_ref,
+                    action_ref,
+                    observation_ref,
+                    feedback_ref,
+                    payload_hash,
+                    recorded_at_ms
+                FROM journal_index
+                """
+                + where
+                + " ORDER BY recorded_at_ms",
+                values,
+            )
+            columns = [column[0] for column in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
     def _connect(self) -> sqlite3.Connection:
         if self.index_path is None:
             raise RuntimeError("index_path is not configured")

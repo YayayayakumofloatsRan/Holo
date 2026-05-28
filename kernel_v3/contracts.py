@@ -117,6 +117,19 @@ class ToolCall(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ToolManifest(Contract):
+    name: str
+    version: str
+    resource_kind: str
+    operator_kind: str
+    side_effect_class: str
+    permissions_required: list[str]
+    enabled: bool
+    description: str
+    input_schema: JsonObject
+
+
+@dataclass(frozen=True, kw_only=True)
 class Observation(Contract):
     observation_id: str
     run_id: str
@@ -127,6 +140,15 @@ class Observation(Contract):
     observed_at_ms: int
     action_id: str | None
     tool_call_id: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ArtifactRef(Contract):
+    artifact_id: str
+    kind: str
+    uri: str
+    payload_hash: str
+    metadata: JsonObject
 
 
 @dataclass(frozen=True, kw_only=True)

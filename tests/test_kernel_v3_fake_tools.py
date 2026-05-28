@@ -1,4 +1,5 @@
 from kernel_v3.contracts import CandidateAction
+from kernel_v3.policy import PolicyGate
 from kernel_v3.tools import ToolRegistry
 
 
@@ -31,42 +32,49 @@ def test_fake_workspace_tools_cover_phase0_5_simple_tools():
             side_effect_class="none",
         )
     )
-    search = registry.execute(
-        CandidateAction(
-            action_id="act-search",
-            kind="tool",
-            name="workspace.search",
-            description="search",
-            score=1.0,
-            payload={"query": "host-owned"},
-            reasons=[],
-            side_effect_class="read",
-        )
+    search_action = CandidateAction(
+        action_id="act-search",
+        kind="tool",
+        name="workspace.search",
+        description="search",
+        score=1.0,
+        payload={"query": "host-owned"},
+        reasons=[],
+        side_effect_class="read",
     )
-    read = registry.execute(
-        CandidateAction(
-            action_id="act-read",
-            kind="tool",
-            name="file.read",
-            description="read",
-            score=1.0,
-            payload={"path": "README.md"},
-            reasons=[],
-            side_effect_class="read",
-        )
+    read_action = CandidateAction(
+        action_id="act-read",
+        kind="tool",
+        name="file.read",
+        description="read",
+        score=1.0,
+        payload={"path": "README.md"},
+        reasons=[],
+        side_effect_class="read",
     )
-    write = registry.execute(
-        CandidateAction(
-            action_id="act-write",
-            kind="tool",
-            name="blocked_external_write",
-            description="write",
-            score=1.0,
-            payload={"target": "external"},
-            reasons=[],
-            side_effect_class="destructive",
-        )
+    write_action = CandidateAction(
+        action_id="act-write",
+        kind="tool",
+        name="blocked_external_write",
+        description="write",
+        score=1.0,
+        payload={"target": "external"},
+        reasons=[],
+        side_effect_class="destructive",
     )
+    gate = PolicyGate(permission="read_write")
+    search = registry.execute_with_artifacts(
+        search_action,
+        policy_decision=gate.validate(run_id="run-1", action=search_action, manifest=registry.manifest_for_action(search_action)),
+    ).observation
+    read = registry.execute_with_artifacts(
+        read_action,
+        policy_decision=gate.validate(run_id="run-1", action=read_action, manifest=registry.manifest_for_action(read_action)),
+    ).observation
+    write = registry.execute_with_artifacts(
+        write_action,
+        policy_decision=gate.validate(run_id="run-1", action=write_action, manifest=registry.manifest_for_action(write_action)),
+    ).observation
 
     assert respond.kind == "respond_result"
     assert ask_user.kind == "ask_user"

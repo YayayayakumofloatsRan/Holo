@@ -138,51 +138,58 @@ class LoopControllerV3:
 
     def _drive(self, task: TaskState, feedback: Feedback | None) -> AgentResult:
         current_feedback = feedback
+        step_index = 0
         while True:
+            step_index += 1
+            step_id = f"step-{step_index}"
             context = self.context_compiler.compile(task, self.journal)
             self.journal.append(
                 task_id=task.task_id,
                 run_id=task.run_id,
-                step_id=None,
+                step_id=step_id,
                 kind="context",
                 data=context.to_dict(),
                 event_ref=self._last_ref(task.task_id, "event_ref"),
                 state_delta={"context_id": context.context_id},
             )
             action = self.planner.propose(context, current_feedback)
-            self._record_action(task, action)
-            decision = self.policy_gate.validate(run_id=task.run_id, action=action)
+            self._record_action(task, action, step_id=step_id)
+            manifest = self.tool_registry.manifest_for_action(action)
+            decision = self.policy_gate.validate(run_id=task.run_id, action=action, manifest=manifest)
             self.journal.append(
                 task_id=task.task_id,
                 run_id=task.run_id,
-                step_id=None,
+                step_id=step_id,
                 kind="policy_decision",
                 data=decision.to_dict(),
                 event_ref=self._last_ref(task.task_id, "event_ref"),
                 action_ref=action.action_id,
                 state_delta={"policy_allowed": decision.allowed},
             )
+            artifact_refs = []
             if decision.allowed:
-                observation = self.tool_registry.execute(action)
-                observation = self._bind_observation(task.run_id, action, observation)
+                tool_result = self.tool_registry.execute_with_artifacts(action, policy_decision=decision)
+                observation = self._bind_observation(task.run_id, action, tool_result.observation)
+                artifact_refs = tool_result.artifact_refs
             else:
                 observation = self._blocked_observation(task.run_id, action, decision.reason)
             self.journal.append(
                 task_id=task.task_id,
                 run_id=task.run_id,
-                step_id=None,
+                step_id=step_id,
                 kind="observation",
                 data=observation.to_dict(),
                 event_ref=self._last_ref(task.task_id, "event_ref"),
                 action_ref=action.action_id,
                 observation_ref=observation.observation_id,
                 state_delta={"observation_status": observation.status},
+                artifact_refs=[artifact.artifact_id for artifact in artifact_refs],
             )
             current_feedback = self.evaluator.evaluate(context, observation)
             self.journal.append(
                 task_id=task.task_id,
                 run_id=task.run_id,
-                step_id=None,
+                step_id=step_id,
                 kind="feedback",
                 data=current_feedback.to_dict(),
                 event_ref=self._last_ref(task.task_id, "event_ref"),
@@ -192,13 +199,13 @@ class LoopControllerV3:
                 state_delta={"feedback_status": current_feedback.status},
             )
             if self.stop_controller.should_stop(current_feedback):
-                return self._result(task, current_feedback)
+                return self._result(task, current_feedback, step_id=step_id)
 
-    def _record_action(self, task: TaskState, action: CandidateAction) -> None:
+    def _record_action(self, task: TaskState, action: CandidateAction, *, step_id: str) -> None:
         self.journal.append(
             task_id=task.task_id,
             run_id=task.run_id,
-            step_id=None,
+            step_id=step_id,
             kind="action",
             data=action.to_dict(),
             event_ref=self._last_ref(task.task_id, "event_ref"),
@@ -237,7 +244,7 @@ class LoopControllerV3:
             tool_call_id=None,
         )
 
-    def _result(self, task: TaskState, feedback: Feedback) -> AgentResult:
+    def _result(self, task: TaskState, feedback: Feedback, *, step_id: str | None = None) -> AgentResult:
         status = "completed" if feedback.status == "final_answer_ready" else feedback.status
         result = AgentResult(
             task_id=task.task_id,
@@ -249,7 +256,7 @@ class LoopControllerV3:
         self.journal.append(
             task_id=task.task_id,
             run_id=task.run_id,
-            step_id=None,
+            step_id=step_id,
             kind="result",
             data={
                 "task_id": result.task_id,
