@@ -45,6 +45,8 @@ Initial Stage219 goal:
   `docs/STAGE232_MODEL_EVALUATED_SELF_FEEDBACK.md`.
 - Provider timeout diagnosis and chat goal continuity are tracked in
   `docs/STAGE233_PROVIDER_TIMEOUT_AND_CHAT_GOAL_CONTINUITY.md`.
+- Current engineering handoff is tracked in
+  `docs/ENGINEERING_HANDOFF_2026-05-28_AGENT_KERNEL_V2.md`.
 
 Run:
 
