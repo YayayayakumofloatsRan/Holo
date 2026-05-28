@@ -509,6 +509,12 @@ Stage216: model-first market operator action
 - The Stage160R FSM treats a ready Stage214 operator run as executed evidence and closes with `final_answer_ready` instead of `needs_user_clarification`.
 - Verification on `2026-05-28`: targeted Stage216 unit/reply-path suite `5 passed`; targeted Stage216/215/161 stack `23 passed`; runtime `92 passed`; full suite `1050 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage217: operator registry dispatch
+- Added `holo.stage217.operator_registry.v1` and `holo.stage217.operator_dispatch.v1`.
+- Registered `market_research_operator_run` as the first live operator and moved model-selected operator execution through `dispatch_operator_action(...)`.
+- Stage153 now renders `[operator_dispatch]` rows before the existing `[market_operator]` phase trajectory.
+- Verification on `2026-05-28`: targeted Stage217 registry/dispatch suite `5 passed`; targeted Stage217/216/215/161/153 stack `37 passed`; runtime `92 passed`; full suite `1055 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

@@ -532,6 +532,21 @@ def _stage215_market_operator_events(payload: dict[str, Any]) -> list[dict[str, 
     return events
 
 
+def _stage217_operator_dispatch_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    report = payload.get("stage217_operator_dispatch", {})
+    if not isinstance(report, dict) or not report:
+        return []
+    return [
+        {
+            "event": "operator_dispatch",
+            "operator_id": str(report.get("operator_id", "") or report.get("selected_action", "") or ""),
+            "status": str(report.get("status", "") or ""),
+            "required_observation": str(report.get("required_observation", "") or ""),
+            "stop_reason": str(report.get("canonical_stop_reason", "") or ""),
+        }
+    ]
+
+
 def _engineering_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     label_by_action = {
@@ -795,6 +810,7 @@ def build_agent_event_stream(
         events.extend(_stage200_market_research_resume_events(source))
         events.extend(_stage201_market_research_registry_events(source))
         events.extend(_stage204_market_research_trajectory_events(source))
+        events.extend(_stage217_operator_dispatch_events(source))
         events.extend(_stage215_market_operator_events(source))
         events.append(
             {
@@ -854,6 +870,7 @@ def build_agent_event_stream(
     events.extend(_stage200_market_research_resume_events(source))
     events.extend(_stage201_market_research_registry_events(source))
     events.extend(_stage204_market_research_trajectory_events(source))
+    events.extend(_stage217_operator_dispatch_events(source))
     events.extend(_stage215_market_operator_events(source))
     events.extend(_engineering_events(source))
     execution = source.get("stage180_live_remediation_execution", {})
@@ -1104,6 +1121,11 @@ def render_agent_event_stream(stream: dict[str, Any] | None) -> str:
             lines.append(
                 f"[market_operator] phase={item.get('phase', '')} status={item.get('status', '')} "
                 f"obs={item.get('observation_count', 0)} sources={item.get('source_count', 0)} stop={item.get('stop_reason', '')}"
+            )
+        elif event == "operator_dispatch":
+            lines.append(
+                f"[operator_dispatch] id={item.get('operator_id', '')} status={item.get('status', '')} "
+                f"requires={item.get('required_observation', '') or '-'} stop={item.get('stop_reason', '')}"
             )
         elif event.startswith("eng:"):
             files_read = len(list(item.get("files_read", []) or []))
