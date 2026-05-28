@@ -13,7 +13,7 @@ from .hooks import HookManager, event_to_hook_payload, observation_to_hook_paylo
 from .model import ModelClient, RuleFallbackModel
 from .prompt_policy import SYSTEM_PROMPT, assert_no_persona_text
 from .schema import AgentResult, Event, Observation
-from .self_feedback import evaluate_self_feedback
+from .self_feedback import evaluate_self_feedback_with_model
 from .source_authority import build_source_authority_report
 from .tools import ToolRegistry
 from .web_research_kernel import build_crawl_report, build_search_goal
@@ -196,13 +196,20 @@ class HoloAgent:
             observations.append(obs)
             self.hooks.emit("after_tool", **observation_to_hook_payload(obs))
             self._emit(events, "observation", f"{obs.tool} status={obs.status}", observation=obs.to_dict())
-            feedback = evaluate_self_feedback(
+            feedback = evaluate_self_feedback_with_model(
+                model=self.model,
                 user_text=user_text,
                 decision=decision,
                 observation=obs,
                 context=context,
             )
             self_feedback_reports.append(feedback)
+            self._emit(
+                events,
+                "model_evaluate",
+                f"evaluator={feedback['evaluator']} next={feedback['recommended_next_action']} stop={feedback['canonical_stop_reason']}",
+                self_feedback=feedback,
+            )
             self._emit(
                 events,
                 "self_feedback",
@@ -262,7 +269,7 @@ class HoloAgent:
             observations=observations,
             metadata={
                 "kernel_version": __version__,
-                "stage_record": "stage230",
+                "stage_record": "stage232",
                 "model": self.config.model_name,
                 "self_feedback_reports": list(self_feedback_reports),
                 "final_answer_contract": final_answer_contract,

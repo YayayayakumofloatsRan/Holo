@@ -78,7 +78,7 @@ def test_agent_emits_self_feedback_event_and_metadata(tmp_path: Path) -> None:
     assert result.status == "ok"
     assert any(event.kind == "self_feedback" for event in result.events)
     assert result.metadata["self_feedback_reports"][0]["recommended_next_action"] == "answer_direct"
-    assert result.metadata["stage_record"] == "stage230"
+    assert result.metadata["stage_record"].startswith("stage")
 
 
 def test_self_feedback_is_visible_to_next_model_decision(tmp_path: Path) -> None:

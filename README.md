@@ -41,6 +41,8 @@ Initial Stage219 goal:
   `docs/STAGE230_ACTION_SELF_FEEDBACK_LOOP.md`.
 - Context kernel packing and dynamic final claim obligations are tracked in
   `docs/STAGE231_CONTEXT_KERNEL_AND_DYNAMIC_FINAL_CONTRACT.md`.
+- Model-evaluated action self-feedback is tracked in
+  `docs/STAGE232_MODEL_EVALUATED_SELF_FEEDBACK.md`.
 
 Run:
 

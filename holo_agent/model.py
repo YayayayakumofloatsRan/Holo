@@ -395,3 +395,46 @@ class DeepSeekJsonModel:
             "next_query": str(data.get("next_query", "") or ""),
             "evaluator": self.model,
         }
+
+    def evaluate_action_feedback(
+        self,
+        *,
+        user_text: str,
+        decision: dict[str, Any],
+        observation: dict[str, Any],
+        context: dict[str, Any],
+        host_feedback: dict[str, Any],
+    ) -> dict[str, Any]:
+        contract = {
+            "evidence_sufficient": False,
+            "recoverable_failure": False,
+            "evidence_gap": "short public gap summary",
+            "recommended_next_action": "answer_direct | open_page | web_search | ask_clarification | another action name",
+            "canonical_stop_reason": "continue | final_answer_ready | tool_failure_report | needs_user_clarification | evidence_exhausted | budget_exhausted",
+            "marginal_utility": 0.0,
+            "reason": "short auditable reason, not hidden chain of thought",
+        }
+        prompt = (
+            f"{SYSTEM_PROMPT}\n\n"
+            "Evaluate the last host action observation for the agent loop. "
+            "Use the structured context, action decision, observation ledger, and host baseline feedback. "
+            "Decide whether evidence is sufficient, what gap remains, which next action is useful, and which stop reason applies. "
+            "Do not expose hidden chain-of-thought; give only a concise auditable reason. Return JSON only.\n\n"
+            f"User request:\n{user_text}\n\n"
+            f"Rendered context:\n{str(context.get('rendered_context', ''))[:8000]}\n\n"
+            f"Decision:\n{json.dumps(decision, ensure_ascii=False)}\n\n"
+            f"Observation:\n{json.dumps(observation, ensure_ascii=False)}\n\n"
+            f"Host baseline feedback:\n{json.dumps(host_feedback, ensure_ascii=False)}\n\n"
+            f"Return JSON only:\n{json.dumps(contract, ensure_ascii=False)}"
+        )
+        data = _extract_json(self._call([{"role": "user", "content": prompt}], temperature=0.0))
+        return {
+            "evidence_sufficient": bool(data.get("evidence_sufficient", False)),
+            "recoverable_failure": bool(data.get("recoverable_failure", False)),
+            "evidence_gap": str(data.get("evidence_gap", "") or ""),
+            "recommended_next_action": str(data.get("recommended_next_action", "") or ""),
+            "canonical_stop_reason": str(data.get("canonical_stop_reason", "") or ""),
+            "marginal_utility": max(0.0, min(1.0, float(data.get("marginal_utility", 0.0) or 0.0))),
+            "reason": str(data.get("reason", "") or ""),
+            "evaluator": self.model,
+        }
