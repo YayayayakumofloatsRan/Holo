@@ -82,6 +82,51 @@ def test_empty_tool_run_says_no_tool_calls() -> None:
     assert "[tool_call] no tool calls" in rendered
 
 
+def test_web_search_error_maps_to_tool_failure_and_suppresses_empty_market_events() -> None:
+    stream = build_agent_event_stream(
+        {
+            "text": "web_search was attempted but failed: ssl eof.",
+            "stage151_tool_decision": {
+                "purpose": "gather_web_evidence",
+                "selected_actions": [{"action_type": "web_search", "required_observations": ["web_observation_ledger"]}],
+                "action_candidates": [
+                    {"action_type": "web_search", "score": 0.86, "required_observations": ["web_observation_ledger"]}
+                ],
+            },
+            "web_observation_ledger": [
+                {
+                    "schema": "holo.web_observation.v1",
+                    "observation_id": "web:error",
+                    "action_type": "web_search",
+                    "query": "a share sources",
+                    "status": "error",
+                    "provider": "duckduckgo_html",
+                    "results": [],
+                    "source_urls": [],
+                    "error": "ssl eof",
+                }
+            ],
+            "stage193_market_research_action_plan": {},
+            "stage194_market_research_plan_execution": {},
+            "stage195_market_research_continuation_loop": {},
+            "stage196_market_research_source_promotion": {},
+            "stage197_market_research_report_assembly": {},
+            "stage198_market_research_finalization_gate": {},
+            "stage199_market_research_task_dossier": {},
+            "stage200_market_research_dossier_resume": {},
+            "stage201_market_research_dossier_registry": {},
+        },
+        user_text="search for a share sources",
+        channel="holo_cli",
+    )
+    rendered = render_agent_event_stream(stream)
+
+    assert "[observation] web_search status=error" in rendered
+    assert "[stop] tool_failure_report" in rendered
+    assert "[market_plan]" not in rendered
+    assert "[market_exec]" not in rendered
+
+
 def test_interactive_session_stores_thread_key_and_last_turn() -> None:
     session = InteractiveCliSession(thread_key="holo_cli:kept", chat_name="HoloCLI", channel="holo_cli")
     session.record_turn(_reply_payload(), user_text="hello", transport="live_http")

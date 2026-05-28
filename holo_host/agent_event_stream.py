@@ -292,7 +292,7 @@ def _stage192_market_feedback_events(payload: dict[str, Any]) -> list[dict[str, 
 
 def _stage193_market_action_plan_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     plan = payload.get("stage193_market_research_action_plan", {})
-    if not isinstance(plan, dict):
+    if not isinstance(plan, dict) or not plan:
         return []
     candidates = [dict(row) for row in list(plan.get("action_candidates", []) or []) if isinstance(row, dict)]
     first = candidates[0] if candidates else {}
@@ -312,7 +312,7 @@ def _stage193_market_action_plan_events(payload: dict[str, Any]) -> list[dict[st
 
 def _stage194_market_action_execution_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     execution = payload.get("stage194_market_research_plan_execution", {})
-    if not isinstance(execution, dict):
+    if not isinstance(execution, dict) or not execution:
         return []
     return [
         {
@@ -329,7 +329,7 @@ def _stage194_market_action_execution_events(payload: dict[str, Any]) -> list[di
 
 def _stage195_market_continuation_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     loop = payload.get("stage195_market_research_continuation_loop", {})
-    if not isinstance(loop, dict):
+    if not isinstance(loop, dict) or not loop:
         return []
     return [
         {
@@ -347,11 +347,11 @@ def _stage195_market_continuation_events(payload: dict[str, Any]) -> list[dict[s
 
 def _stage196_market_source_promotion_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     report = payload.get("stage196_market_research_source_promotion", {})
-    if not isinstance(report, dict):
+    if not isinstance(report, dict) or not report:
         loop = payload.get("stage195_market_research_continuation_loop", {})
         if isinstance(loop, dict):
             report = loop.get("stage196_market_research_source_promotion", {})
-    if not isinstance(report, dict):
+    if not isinstance(report, dict) or not report:
         return []
     return [
         {
@@ -369,7 +369,7 @@ def _stage196_market_source_promotion_events(payload: dict[str, Any]) -> list[di
 
 def _stage197_market_report_assembly_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     report = payload.get("stage197_market_research_report_assembly", {})
-    if not isinstance(report, dict):
+    if not isinstance(report, dict) or not report:
         return []
     return [
         {
@@ -387,7 +387,7 @@ def _stage197_market_report_assembly_events(payload: dict[str, Any]) -> list[dic
 
 def _stage198_market_report_finalization_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     gate = payload.get("stage198_market_research_finalization_gate", {})
-    if not isinstance(gate, dict):
+    if not isinstance(gate, dict) or not gate:
         return []
     return [
         {
@@ -404,7 +404,7 @@ def _stage198_market_report_finalization_events(payload: dict[str, Any]) -> list
 
 def _stage199_market_research_dossier_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     dossier = payload.get("stage199_market_research_task_dossier", {})
-    if not isinstance(dossier, dict):
+    if not isinstance(dossier, dict) or not dossier:
         return []
     resume = dossier.get("resume_state", {})
     if not isinstance(resume, dict):
@@ -423,7 +423,7 @@ def _stage199_market_research_dossier_events(payload: dict[str, Any]) -> list[di
 
 def _stage200_market_research_resume_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     resume = payload.get("stage200_market_research_dossier_resume", {})
-    if not isinstance(resume, dict):
+    if not isinstance(resume, dict) or not resume:
         return []
     execution = resume.get("stage194_market_research_plan_execution", {})
     if not isinstance(execution, dict):
@@ -443,7 +443,7 @@ def _stage200_market_research_resume_events(payload: dict[str, Any]) -> list[dic
 
 def _stage201_market_research_registry_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     registry = payload.get("stage201_market_research_dossier_registry", {})
-    if not isinstance(registry, dict):
+    if not isinstance(registry, dict) or not registry:
         return []
     lookup = registry.get("lookup", {})
     if not isinstance(lookup, dict):
@@ -933,9 +933,15 @@ def build_agent_event_stream(
         }
     )
     events.append(_cache_event(source))
+    stage151_stop_payload = (
+        dict(source.get("stage151_tool_decision", {}))
+        if isinstance(source.get("stage151_tool_decision", {}), dict)
+        else {}
+    )
+    stage151_stop_payload["web_observation_ledger"] = list(source.get("web_observation_ledger", []) or [])
     canonical_stop = map_canonical_stop_reason(
         stage143=source.get("stage143_packet_budget", {}) if isinstance(source.get("stage143_packet_budget", {}), dict) else {},
-        stage151=source.get("stage151_tool_decision", {}) if isinstance(source.get("stage151_tool_decision", {}), dict) else {},
+        stage151=stage151_stop_payload,
         stage152=loop,
         stage153=source.get("stage153_agent_event_stream", {}) if isinstance(source.get("stage153_agent_event_stream", {}), dict) else {},
     )

@@ -28,6 +28,10 @@ DDG_SNIPPET_RE = re.compile(
     r'<(?:a|div)[^>]+class="result__snippet"[^>]*>(?P<snippet>.*?)</(?:a|div)>',
     re.IGNORECASE | re.DOTALL,
 )
+BING_RESULT_RE = re.compile(
+    r'<li[^>]+class="b_algo"[^>]*>.*?<h2[^>]*>\s*<a[^>]+href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?(?:<p[^>]*>(?P<snippet>.*?)</p>)?',
+    re.IGNORECASE | re.DOTALL,
+)
 
 WEB_HINTS = (
     "联网",
@@ -369,24 +373,69 @@ def default_web_search(query: str) -> dict[str, Any]:
     current = _compact(query, 180)
     if not current:
         return {"query": "", "status": "empty", "results": []}
-    url = f"https://html.duckduckgo.com/html/?q={parse.quote_plus(current)}"
-    opener = request.build_opener()
-    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def _open(url: str, *, timeout: int = 6, limit: int = 64000) -> str:
+        opener = request.build_opener()
+        opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+        with opener.open(url, timeout=timeout) as response:  # noqa: S310
+            return response.read(limit).decode("utf-8", errors="replace")
+
+    ddg_url = f"https://html.duckduckgo.com/html/?q={parse.quote_plus(current)}"
+    provider_attempts: list[dict[str, Any]] = []
     try:
-        with opener.open(url, timeout=6) as response:  # noqa: S310
-            html_text = response.read(64000).decode("utf-8", errors="replace")
+        html_text = _open(ddg_url)
     except (OSError, error.URLError, TimeoutError) as exc:
-        return {"query": current, "status": "error", "results": [], "error": str(exc), "provider": "duckduckgo_html"}
-    anchors = list(DDG_RESULT_RE.finditer(html_text))
-    snippets = [match.group("snippet") for match in DDG_SNIPPET_RE.finditer(html_text)]
-    results: list[dict[str, Any]] = []
-    for index, match in enumerate(anchors[:5]):
+        provider_attempts.append({"provider": "duckduckgo_html", "status": "error", "error": str(exc)})
+    else:
+        anchors = list(DDG_RESULT_RE.finditer(html_text))
+        snippets = [match.group("snippet") for match in DDG_SNIPPET_RE.finditer(html_text)]
+        results: list[dict[str, Any]] = []
+        for index, match in enumerate(anchors[:5]):
+            title = _strip_tags(match.group("title"), limit=140)
+            target_url = _decode_duckduckgo_href(match.group("url"))
+            snippet = _strip_tags(snippets[index] if index < len(snippets) else "", limit=220)
+            if title or snippet:
+                results.append({"title": title, "url": target_url, "snippet": snippet})
+        if results:
+            return {
+                "query": current,
+                "status": "ok",
+                "results": results,
+                "provider": "duckduckgo_html",
+                "provider_attempts": provider_attempts + [{"provider": "duckduckgo_html", "status": "ok"}],
+            }
+        provider_attempts.append({"provider": "duckduckgo_html", "status": "empty"})
+
+    bing_url = f"https://www.bing.com/search?q={parse.quote_plus(current)}"
+    try:
+        html_text = _open(bing_url, timeout=8)
+    except (OSError, error.URLError, TimeoutError) as exc:
+        provider_attempts.append({"provider": "bing_html", "status": "error", "error": str(exc)})
+        return {
+            "query": current,
+            "status": "error",
+            "results": [],
+            "error": "; ".join(str(item.get("error", "")) for item in provider_attempts if item.get("error")) or "search_provider_failed",
+            "provider": "bing_html",
+            "provider_attempts": provider_attempts,
+        }
+    results = []
+    for match in BING_RESULT_RE.finditer(html_text):
         title = _strip_tags(match.group("title"), limit=140)
-        target_url = _decode_duckduckgo_href(match.group("url"))
-        snippet = _strip_tags(snippets[index] if index < len(snippets) else "", limit=220)
+        target_url = unescape(str(match.group("url") or ""))
+        snippet = _strip_tags(match.group("snippet") or "", limit=220)
         if title or snippet:
             results.append({"title": title, "url": target_url, "snippet": snippet})
-    return {"query": current, "status": "ok" if results else "empty", "results": results, "provider": "duckduckgo_html"}
+        if len(results) >= 5:
+            break
+    provider_attempts.append({"provider": "bing_html", "status": "ok" if results else "empty"})
+    return {
+        "query": current,
+        "status": "ok" if results else "empty",
+        "results": results,
+        "provider": "bing_html",
+        "provider_attempts": provider_attempts,
+    }
 
 
 def default_open_page(url: str) -> dict[str, Any]:
@@ -695,12 +744,23 @@ def maybe_ground_visible_web_reply(
     time_observation: dict[str, Any] | None = None,
 ) -> str:
     current = str(text or "").strip()
+    all_rows = [dict(item) for item in list(web_observation_ledger or []) if isinstance(item, dict)]
     rows = [
         dict(item)
-        for item in list(web_observation_ledger or [])
-        if isinstance(item, dict) and str(item.get("status", "") or "") == "ok" and list(item.get("source_urls", []) or [])
+        for item in all_rows
+        if str(item.get("status", "") or "") == "ok" and list(item.get("source_urls", []) or [])
     ]
     if not rows:
+        failed_rows = [row for row in all_rows if str(row.get("status", "") or "") in {"error", "failed", "rejected_network_disabled"}]
+        user_lowered = str(user_text or "").lower()
+        if failed_rows and any(marker in user_lowered for marker in ("search", "look up", "source", "sources", "web", "internet", "official", "latest")):
+            row = failed_rows[0]
+            status = str(row.get("status", "") or "error")
+            error_text = _compact(row.get("error", "") or status, 180)
+            action_type = str(row.get("action_type", "") or "web_search")
+            if status == "rejected_network_disabled":
+                return f"{action_type} was rejected because network is disabled. I cannot treat this as current web evidence."
+            return f"{action_type} was attempted but failed: {error_text}. I cannot treat this as current web evidence."
         return current
     lowered = current.lower()
     user_lowered = str(user_text or "").lower()

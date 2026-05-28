@@ -16,6 +16,7 @@ from .stage151_live_tool_trace import build_external_lookup_observation
 from .stage151_tool_decision_loop import (
     build_time_observation,
     build_tool_decision_report,
+    default_web_search,
     default_open_page,
     execute_tool_decision,
     web_observations_to_tool_ledger,
@@ -446,32 +447,9 @@ class CapabilityBroker:
         query = self._normalize_lookup_query(text)
         if not query:
             return {"query": "", "results": [], "status": "skipped"}
-        url = f"https://html.duckduckgo.com/html/?q={parse.quote_plus(query)}"
-        opener = request.build_opener()
-        opener.addheaders = [("User-Agent", "Mozilla/5.0")]
-        try:
-            with opener.open(url, timeout=5) as response:  # noqa: S310
-                html_text = response.read(48000).decode("utf-8", errors="replace")
-        except (OSError, error.URLError, TimeoutError) as exc:
-            return {"query": query, "results": [], "status": "error", "error": str(exc)}
-
-        anchors = list(LOOKUP_RESULT_RE.finditer(html_text))
-        snippets = [match.group("snippet") for match in LOOKUP_SNIPPET_RE.finditer(html_text)]
-        results: list[dict[str, Any]] = []
-        for index, match in enumerate(anchors[:3]):
-            title = _strip_tags(match.group("title"))
-            target_url = _decode_duckduckgo_href(match.group("url"))
-            snippet = _strip_tags(snippets[index] if index < len(snippets) else "")
-            if not title and not snippet:
-                continue
-            results.append(
-                {
-                    "title": title,
-                    "url": target_url,
-                    "snippet": compact_text(snippet, 180),
-                }
-            )
-        return {"query": query, "results": results, "status": "ok" if results else "empty"}
+        result = dict(default_web_search(query))
+        result["query"] = str(result.get("query", "") or query)
+        return result
 
     def _preview_urls(self, text: str) -> list[dict[str, Any]]:
         urls = []

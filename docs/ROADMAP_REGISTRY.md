@@ -527,6 +527,12 @@ Post-Stage218 engineering-agent prompt hardening
 - The agent kernel must stay depersonalized: engineering assistant identity, evidence status, action trace, failure report, and grounded final output override deployment-local persona/style memory.
 - Stage160R prompt policy and Stage156 stable-prefix context now repeat the same engineering-agent contract before provider generation.
 
+Post-Stage218 live web-search hardening
+- `CapabilityBroker.external_lookup` now delegates to the Stage151 web-search implementation instead of carrying a stale DuckDuckGo-only scraper path.
+- Stage151 web search now falls back from DuckDuckGo HTML to Bing HTML and records provider attempts for diagnosis.
+- Failed web-search observations now map to `tool_failure_report`, failed visible web replies are repaired into attempted-failure language, and Stage153 suppresses empty market trace rows when no market report exists.
+- Verification on `2026-05-28`: targeted search/CLI stack `63 passed`; runtime/topology stack `92 passed`; Stage151/162 proxy/fallback stack `27 passed`; full suite `1068 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only. Direct probes returned `ok duckduckgo_html` on Windows and `ok bing_html` on WSL.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

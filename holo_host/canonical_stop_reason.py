@@ -32,6 +32,8 @@ _REASON_MAP = {
     "permission_denied": "boundary_or_permission",
     "boundary_or_permission": "boundary_or_permission",
     "tool_error": "tool_failure_report",
+    "error": "tool_failure_report",
+    "failed": "tool_failure_report",
     "tool_failure": "tool_failure_report",
     "ungrounded_web_claim": "evidence_exhausted",
     "evidence_exhausted": "evidence_exhausted",
@@ -72,6 +74,10 @@ def map_canonical_stop_reason(
             rows = list(payload.get("web_observation_ledger", []) or []) if isinstance(payload.get("web_observation_ledger", []), list) else []
             if any(isinstance(row, dict) and str(row.get("status", "")) == "rejected_network_disabled" for row in rows):
                 raw_reason = "rejected_network_disabled"
+                source = source_name
+                break
+            if any(isinstance(row, dict) and str(row.get("status", "")) in {"error", "failed"} for row in rows):
+                raw_reason = "tool_error"
                 source = source_name
                 break
     canonical = canonicalize_stop_reason(raw_reason)

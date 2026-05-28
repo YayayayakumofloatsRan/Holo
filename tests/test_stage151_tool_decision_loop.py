@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from unittest import mock
+from urllib import error
 
 from holo_host.capabilities import CapabilityBroker
 from holo_host.config import load_config
@@ -20,6 +21,34 @@ from holo_host.stage151_tool_decision_loop import (
     maybe_ground_visible_web_reply,
     repair_tool_decision_grounding,
 )
+
+
+class _FakeSearchResponse:
+    def __init__(self, body: str):
+        self._body = body.encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, _limit: int = -1) -> bytes:
+        return self._body
+
+
+class _FakeFallbackOpener:
+    def __init__(self):
+        self.urls: list[str] = []
+
+    def open(self, url: str, timeout: int = 0):  # noqa: ANN001
+        self.urls.append(url)
+        if "duckduckgo" in url:
+            raise error.URLError("ssl eof")
+        return _FakeSearchResponse(
+            '<li class="b_algo"><h2><a href="https://example.com/source">Example Source</a></h2>'
+            "<p>Fallback source snippet.</p></li>"
+        )
 
 
 def test_time_observation_is_present_every_turn() -> None:
@@ -81,6 +110,42 @@ def test_web_search_mocked_provider_records_ok_observation_with_source_urls() ->
     assert observation["provider"] == "mock_search"
     assert observation["source_urls"] == ["https://developers.openai.com/codex/cli"]
     assert payload["tool_requests"][0]["name"] == "web_search"
+
+
+def test_capability_external_lookup_uses_stage151_default_web_search() -> None:
+    config = load_config(repo_root="D:/Holo/holo")
+    broker = CapabilityBroker(config)
+
+    with mock.patch(
+        "holo_host.capabilities.default_web_search",
+        return_value={
+            "query": "a share sources",
+            "status": "ok",
+            "provider": "stage151_mock",
+            "results": [{"title": "A-share source", "url": "https://example.com/a-share", "snippet": "source"}],
+        },
+        create=True,
+    ) as search:
+        result = broker._external_lookup("a share sources")
+
+    search.assert_called_once_with("a share sources")
+    assert result["status"] == "ok"
+    assert result["provider"] == "stage151_mock"
+    assert result["results"][0]["url"] == "https://example.com/a-share"
+
+
+def test_default_web_search_falls_back_to_bing_when_duckduckgo_errors() -> None:
+    from holo_host import stage151_tool_decision_loop as stage151
+
+    opener = _FakeFallbackOpener()
+    with mock.patch.object(stage151.request, "build_opener", return_value=opener):
+        result = stage151.default_web_search("a share sources")
+
+    assert result["status"] == "ok"
+    assert result["provider"] == "bing_html"
+    assert result["results"][0]["url"] == "https://example.com/source"
+    assert any("duckduckgo" in url for url in opener.urls)
+    assert any("bing.com" in url for url in opener.urls)
 
 
 def test_url_input_triggers_open_page_candidate() -> None:
@@ -150,6 +215,29 @@ def test_grounded_web_observation_replaces_unresolved_visible_lookup_reply() -> 
     assert "我已完成联网检索" in repaired
     assert "https://developers.openai.com/codex/cli" in repaired
     assert "没有可核验的联网观察" not in repaired
+
+
+def test_failed_web_observation_replaces_persona_failure_text() -> None:
+    repaired = maybe_ground_visible_web_reply(
+        user_text="search for a share sources",
+        text="The web is like a disconnected antenna, so I can only hum.",
+        web_observation_ledger=[
+            {
+                "schema": WEB_OBSERVATION_SCHEMA,
+                "observation_id": "web:error",
+                "action_type": "web_search",
+                "query": "a share sources",
+                "status": "error",
+                "provider": "duckduckgo_html",
+                "results": [],
+                "source_urls": [],
+                "error": "ssl eof",
+            }
+        ],
+        time_observation=build_time_observation(),
+    )
+
+    assert repaired == "web_search was attempted but failed: ssl eof. I cannot treat this as current web evidence."
 
 
 def test_cli_trace_shows_purpose_tool_call_observation_grounding_final() -> None:
