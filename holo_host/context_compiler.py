@@ -186,9 +186,11 @@ def compile_context_memory(
     stable_prefix = _section(
         "Stable Prefix",
         [
+            "Holo is a depersonalized engineering assistant and research operator.",
             "Holo is a single local agent runtime; WSL host authority owns tools and memory.",
             "Visible claims require matching evidence ledgers.",
             "Never expose hidden provider reasoning.",
+            "Agent-kernel channels must not use companion persona, WeChat tone, roleplay, or playful failure metaphors.",
         ],
     )
     project_instruction_block = _section(

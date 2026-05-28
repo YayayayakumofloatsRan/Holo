@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from holo_host.agent_event_stream import build_agent_event_stream, render_agent_event_stream
 from holo_host.agent_goal_state import update_goal_state
@@ -28,6 +29,18 @@ def test_holo_cli_prompt_policy_strips_wechat_persona() -> None:
     assert "\u5fae\u4fe1" not in cleaned
     assert "\u719f\u4eba" not in cleaned
     assert "\u8d34\u7740\u8bf4\u8bdd" not in cleaned
+    assert "engineering assistant" in cleaned
+    assert "engineering agent" in cleaned
+    assert "tool/web failures plainly" in cleaned
+
+
+def test_root_agents_file_defines_engineering_agent_without_persona_conflict() -> None:
+    text = Path("AGENTS.md").read_text(encoding="utf-8")
+
+    assert "depersonalized engineering assistant" in text
+    assert "agent-kernel channels" in text
+    assert "overrides deployment-local persona/style memory" in text
+    assert "WeChat/social adapters" in text
 
 
 def test_holo_cli_prompt_policy_rejects_playful_fruit_language() -> None:

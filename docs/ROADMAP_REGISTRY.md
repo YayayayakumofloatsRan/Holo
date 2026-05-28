@@ -522,6 +522,11 @@ Stage218: web research operator
 - Stage153 now renders `[web_research_operator]` trajectory rows after `[operator_dispatch]`.
 - Verification on `2026-05-28`: targeted Stage218 web-research operator suite `8 passed`; targeted Stage218/217/216/186/212 stack `29 passed`; runtime `92 passed`; full suite `1063 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Post-Stage218 engineering-agent prompt hardening
+- Root `AGENTS.md` is the project-level engineering-agent contract for `holo_cli`, engineering, research, project, and future domain-agent channels.
+- The agent kernel must stay depersonalized: engineering assistant identity, evidence status, action trace, failure report, and grounded final output override deployment-local persona/style memory.
+- Stage160R prompt policy and Stage156 stable-prefix context now repeat the same engineering-agent contract before provider generation.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

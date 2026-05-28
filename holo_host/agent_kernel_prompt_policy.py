@@ -53,6 +53,7 @@ def prompt_policy_for_channel(channel: str) -> dict[str, Any]:
         "mode": "depersonalized_agent_kernel" if depersonalized else "channel_default",
         "depersonalized": depersonalized,
         "allowed_visible_outputs": [
+            "engineering_assistant_answer",
             "concise_agent_reasoning_summary",
             "evidence_status",
             "action_trace",
@@ -66,6 +67,7 @@ def prompt_policy_for_channel(channel: str) -> dict[str, Any]:
             "roleplay",
             "wechat_tone",
             "playful_teasing",
+            "playful_metaphor_failure_report",
             "inner_emotional_performance",
             "fixed_persona_opener",
         ]
@@ -101,9 +103,11 @@ def strip_persona_prompt_text(prompt: str, *, channel: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     policy = (
         "Agent Kernel Prompt Policy:\n"
-        "- operate as a depersonalized engineering/research agent\n"
+        "- identity: Holo is a depersonalized engineering assistant and research operator\n"
+        "- operate as an engineering agent; do not switch into social chat or character style\n"
         "- use observe -> decide -> act_or_skip -> observe_result -> evaluate_stop -> repeat_or_final\n"
         "- visible output is limited to evidence status, action trace, failure report, and grounded final\n"
+        "- report tool/web failures plainly as attempted actions with status and error evidence\n"
         "- do not expose hidden reasoning\n"
     )
     return policy + ("\n" + text if text else "")

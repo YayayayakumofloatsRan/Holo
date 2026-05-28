@@ -98,6 +98,8 @@ def test_compile_preserves_exact_user_request_and_hard_directives() -> None:
 def test_stable_prefix_excludes_dynamic_observations_and_suffix_keeps_latest_observation() -> None:
     report = compile_context_memory(_stage150_fabric())
 
+    assert "depersonalized engineering assistant" in report["stable_prefix"]
+    assert "playful failure metaphors" in report["stable_prefix"]
     assert "workspace_search" not in report["stable_prefix"]
     assert "found context compiler integration point" in report["observation_block"]
     assert "Implement Stage156 context compiler" in report["project_instruction_block"]

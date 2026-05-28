@@ -227,7 +227,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - transports are eyes and hands
 - The current milestone tag is `stage218-web-research-operator`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage218 Web Research Operator: `web_research_operator_run` is now the second registered live operator, reusing Stage186 crawler search and Stage212 action journal for domain-neutral source-grounded web/literature research.
+- Current focus is post-Stage218 kernel hardening: keep `holo_cli` and agent-kernel channels as a depersonalized engineering assistant, then repair live web-search execution and failure reporting.
+- `AGENTS.md` is now the project-level engineering-agent identity contract for agent-kernel channels. It overrides deployment-local persona/style memory when they conflict with `holo_cli`, engineering, research, project, or future domain-agent operation.
 - Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage202 verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage203 verification on `2026-05-28`: targeted live-trace suite `5 passed`.
