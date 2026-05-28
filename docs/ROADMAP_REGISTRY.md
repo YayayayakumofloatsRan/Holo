@@ -503,6 +503,12 @@ Stage215: market research operator live action
 - Stage153 renders `[market_operator]` rows for the operator action and every Stage214 phase while keeping raw hidden reasoning/provider internals private.
 - Verification on `2026-05-28`: targeted Stage215/214/153 suite `13 passed`; runtime `92 passed`; full suite `1045 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage216: model-first market operator action
+- Added `market_research_operator_run` to the Stage161 action space with `stage214_market_research_operator_run` as the required observation ledger.
+- Stage152-derived model tool calls and Stage161 model arbitration can now select the complete Stage214 operator; reply runtime executes Stage215/214 before FSM finalization.
+- The Stage160R FSM treats a ready Stage214 operator run as executed evidence and closes with `final_answer_ready` instead of `needs_user_clarification`.
+- Verification on `2026-05-28`: targeted Stage216 unit/reply-path suite `5 passed`; targeted Stage216/215/161 stack `23 passed`; runtime `92 passed`; full suite `1050 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

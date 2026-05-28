@@ -42,6 +42,8 @@ def should_run_market_research_operator(
     meta = dict(metadata or {})
     if meta.get("stage215_market_research_operator_disabled"):
         return False
+    if meta.get("stage215_market_research_operator_force"):
+        return True
     if meta.get("stage215_market_research_operator_dry_run") or meta.get("stage215_market_research_operator_fixture"):
         return True
     if channel and channel not in _AGENT_CHANNELS:

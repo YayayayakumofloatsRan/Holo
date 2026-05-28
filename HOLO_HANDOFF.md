@@ -225,9 +225,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage215-market-research-operator-live-action`.
+- The current milestone tag is `stage216-model-first-market-operator-action`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage215 Market Research Operator Live Action: the Stage214 operator run is connected to the live `holo_cli` reply path, so actionable financial/market-research prompts can execute the full operator trajectory and render `[market_operator]` trace rows.
+- Current focus is Stage216 Model-First Market Operator Action: `market_research_operator_run` is now a Stage161 action-space affordance, model-selected operator actions execute Stage215/214 before FSM finalization, and the FSM can close on the Stage214 ready ledger instead of treating the action as unimplemented.
 - Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage202 verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage203 verification on `2026-05-28`: targeted live-trace suite `5 passed`.
@@ -243,6 +243,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Stage213 verification on `2026-05-28`: targeted market-research action-journal smoke `2 passed`; neighbor Stage213/212/209 stack `7 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1041 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage214 verification on `2026-05-28`: targeted market-research operator run `2 passed`; neighbor Stage214/213/212/205 stack `12 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1043 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage215 verification on `2026-05-28`: targeted Stage215/214/153 suite `13 passed`; runtime `92 passed`; full suite `1045 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+- Stage216 verification on `2026-05-28`: targeted Stage216 unit/reply-path suite `5 passed`; targeted Stage216/215/161 stack `23 passed`; runtime `92 passed`; full suite `1050 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

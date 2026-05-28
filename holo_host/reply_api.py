@@ -9605,6 +9605,8 @@ class HoloReplyService:
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             memory_observation_ledger=stage160r_memory_observation_ledger,
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+            stage215_market_research_operator_action=stage215_market_research_operator_action,
+            stage214_market_research_operator_run=stage214_market_research_operator_run,
             market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
             stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
             stage178_evidence_action_remediation=stage178_evidence_action_remediation,
@@ -9928,6 +9930,49 @@ class HoloReplyService:
         capability_context["stage161_tool_decision_validation"] = stage161_tool_decision_validation
         reply_debug["stage161_model_tool_arbitration"] = stage161_model_tool_arbitration
         reply_debug["stage161_tool_decision_validation"] = stage161_tool_decision_validation
+        if (
+            turn.channel in {"holo_cli", "engineering", "research", "project"}
+            and not stage214_market_research_operator_run
+            and str(stage161_model_tool_arbitration.get("selected_action", "") or "") == "market_research_operator_run"
+        ):
+            operator_args = (
+                dict(stage161_model_tool_arbitration.get("action_arguments", {}))
+                if isinstance(stage161_model_tool_arbitration.get("action_arguments", {}), dict)
+                else {}
+            )
+            operator_meta = dict(turn.metadata or {})
+            operator_meta["stage215_market_research_operator_force"] = True
+            if operator_meta.get("stage216_market_research_operator_dry_run") or operator_args.get("dry_run"):
+                operator_meta["stage215_market_research_operator_dry_run"] = True
+            if operator_args.get("query") and not operator_meta.get("stage215_market_research_operator_query"):
+                operator_meta["stage215_market_research_operator_query"] = str(operator_args.get("query", "") or "")
+            stage215_market_research_operator_action = run_market_research_operator_live_action(
+                user_text=turn.text,
+                metadata=operator_meta,
+                channel=turn.channel,
+                network_enabled=bool(getattr(self.config.runtime, "network_enabled", False)),
+                web_search_fn=self.capabilities._external_lookup,
+                open_page_fn=self.capabilities._open_page_for_crawler,
+            )
+            stage214_market_research_operator_run = (
+                dict(stage215_market_research_operator_action.get("stage214_market_research_operator_run", {}))
+                if isinstance(stage215_market_research_operator_action.get("stage214_market_research_operator_run", {}), dict)
+                else {}
+            )
+            if stage214_market_research_operator_run:
+                sidecar["stage215_market_research_operator_action"] = stage215_market_research_operator_action
+                sidecar["stage214_market_research_operator_run"] = stage214_market_research_operator_run
+                capability_context["stage215_market_research_operator_action"] = stage215_market_research_operator_action
+                capability_context["stage214_market_research_operator_run"] = stage214_market_research_operator_run
+                if isinstance(stage214_market_research_operator_run.get("stage186_live_crawler_search", {}), dict):
+                    capability_context["stage186_live_crawler_search"] = dict(stage214_market_research_operator_run.get("stage186_live_crawler_search", {}))
+                    capability_context["web_observation_ledger"] = [
+                        dict(row)
+                        for row in list(capability_context["stage186_live_crawler_search"].get("web_observation_ledger", []) or [])
+                        if isinstance(row, dict)
+                    ]
+                    sidecar["stage186_live_crawler_search"] = capability_context["stage186_live_crawler_search"]
+                    sidecar["web_observation_ledger"] = capability_context["web_observation_ledger"]
         grounding_repaired = False
         repaired_text = maybe_ground_visible_web_reply(
             user_text=turn.text,
@@ -10046,6 +10091,8 @@ class HoloReplyService:
             web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
             memory_observation_ledger=memory_observation_ledger,
             market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+            stage215_market_research_operator_action=stage215_market_research_operator_action,
+            stage214_market_research_operator_run=stage214_market_research_operator_run,
             market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
             stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
             stage178_evidence_action_remediation=stage178_evidence_action_remediation,
@@ -10135,6 +10182,8 @@ class HoloReplyService:
                 web_observation_ledger=capability_context.get("web_observation_ledger", sidecar.get("web_observation_ledger", [])),
                 memory_observation_ledger=memory_observation_ledger,
                 market_research_pack_ledger=capability_context.get("market_research_pack_ledger", sidecar.get("market_research_pack_ledger", [])),
+                stage215_market_research_operator_action=stage215_market_research_operator_action,
+                stage214_market_research_operator_run=stage214_market_research_operator_run,
                 market_research_dossier_resume_ledger=capability_context.get("market_research_dossier_resume_ledger", sidecar.get("market_research_dossier_resume_ledger", [])),
                 stage201_market_research_dossier_registry=capability_context.get("stage201_market_research_dossier_registry", sidecar.get("stage201_market_research_dossier_registry", {})),
                 stage178_evidence_action_remediation=stage178_evidence_action_remediation,

@@ -211,6 +211,8 @@ def derive_arbitration_from_stage152(
         required = ["market_research_report_ledger"]
     elif selected == "market_research_dossier_resume":
         required = ["market_research_dossier_resume_ledger"]
+    elif selected == "market_research_operator_run":
+        required = ["stage214_market_research_operator_run"]
     return sanitize_public_metadata(
         {
             "schema": MODEL_TOOL_ARBITRATION_SCHEMA,

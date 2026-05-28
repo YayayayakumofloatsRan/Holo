@@ -224,6 +224,28 @@ def build_tool_action_space(*, include_write_actions: bool = True) -> list[dict[
             ],
         ),
         _action(
+            "market_research_operator_run",
+            description="Run the complete market-research operator trajectory: crawl, source promotion, evidence pack, report, finalization, and action journal.",
+            input_schema={
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "entity": {"type": "string"},
+                    "filing_type": {"type": "string"},
+                    "dry_run": {"type": "boolean"},
+                },
+            },
+            observation_schema={"ledger": "stage214_market_research_operator_run"},
+            requires_network=True,
+            examples=[
+                {
+                    "when": "user asks the agent to choose and execute a complete filing-grounded fundamental research task",
+                    "arguments": {"query": "NVIDIA AI infrastructure official SEC 10-K filing", "filing_type": "10-K"},
+                }
+            ],
+        ),
+        _action(
             "defer",
             description="Do not act now; report why the host should stop or wait.",
             input_schema={"type": "object", "properties": {"reason": {"type": "string"}}},
