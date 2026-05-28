@@ -485,6 +485,12 @@ Stage212: persistent action journal
 - Keeps the journal observational: no provider calls, tool execution, memory writes, WeChat start, or hidden reasoning exposure.
 - Verification on `2026-05-28`: targeted Stage212/211/153 suite `16 passed`; runtime `92 passed`; full suite `1039 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage213: market research action journal smoke
+- Added `holo.stage213.market_research_action_journal_smoke.v1` to bind Stage186 live crawler behavior, Stage212 action-journal rendering, and a grounded financial-research mini report.
+- The deterministic dry-run fixture forces a weak first source before an official SEC filing, requiring multi-step continuation, authority promotion, and weak-source rejection.
+- Added `run-market-research-action-journal-smoke` CLI to write `.html`, `.json`, and `.jsonl` artifacts under `artifacts/stage213`.
+- Verification on `2026-05-28`: targeted `2 passed`; neighbor Stage213/212/209 stack `7 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1041 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.
