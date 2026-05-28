@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from holo_agent.agent import AgentConfig, HoloAgent
 from holo_agent.schema import Decision
+from holo_agent.source_authority import classify_source_url
 from holo_agent.tools import OpenPageTool, ToolRegistry, WebClient, WebSearchTool
 from holo_agent.web_providers import SourcePolicyProvider
+from holo_agent.web_research_kernel import build_crawl_report, build_search_goal
 
 
 def test_source_policy_provider_returns_openai_codex_docs_candidate() -> None:
@@ -32,6 +34,61 @@ def test_source_policy_provider_returns_deepseek_tool_docs_candidate() -> None:
     assert attempt.status == "ok"
     assert "api-docs.deepseek.com" in attempt.results[0]["url"]
     assert attempt.results[0]["source_family"] == "official_docs"
+
+
+def test_deepseek_api_docs_are_classified_as_primary_official_docs() -> None:
+    classified = classify_source_url("https://api-docs.deepseek.com/guides/function_calling")
+
+    assert classified["primary"] is True
+    assert classified["authority"] == "official"
+
+
+def test_deepseek_open_page_makes_crawl_report_sufficient() -> None:
+    goal = build_search_goal("Find official DeepSeek tool calling docs and cite sources")
+    report = build_crawl_report(
+        goal,
+        [
+            {
+                "tool": "web_search",
+                "status": "ok",
+                "data": {
+                    "results": [
+                        {
+                            "title": "DeepSeek Function Calling - API Docs",
+                            "url": "https://api-docs.deepseek.com/guides/function_calling",
+                            "source_family": "official_docs",
+                        }
+                    ]
+                },
+            },
+            {
+                "tool": "open_page",
+                "status": "ok",
+                "data": {
+                    "url": "https://api-docs.deepseek.com/guides/function_calling",
+                    "text": "Function Calling allows the model to call external tools to enhance its capabilities.",
+                },
+            },
+        ],
+    )
+
+    assert report.status == "sufficient"
+    assert report.source_graph["cited_sources"] == ["https://api-docs.deepseek.com/guides/function_calling"]
+
+
+def test_deepseek_docs_smoke_stops_after_open_page(tmp_path) -> None:
+    class Client(WebClient):
+        def fetch_text(self, url: str) -> str:
+            return "Function Calling allows the model to call external tools to enhance its capabilities."
+
+    result = HoloAgent(
+        tools=ToolRegistry.default(root=tmp_path, client=Client()),
+        config=AgentConfig(log_path=tmp_path / "events.jsonl", workspace_root=tmp_path),
+    ).run("Find official DeepSeek tool calling docs and cite sources")
+
+    assert result.status == "ok"
+    assert result.stop_reason == "final_answer_ready"
+    assert [obs.tool for obs in result.observations] == ["web_search", "open_page"]
 
 
 def test_web_client_default_uses_source_policy_provider_before_html_search() -> None:

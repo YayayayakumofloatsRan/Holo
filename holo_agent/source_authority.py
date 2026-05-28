@@ -22,7 +22,7 @@ def classify_source_url(url: str) -> dict[str, Any]:
         authority = "company_official"
         primary = True
         reason = "company investor-relations source"
-    elif host.endswith("developers.openai.com") or host.endswith("openai.com"):
+    elif host.endswith("developers.openai.com") or host.endswith("openai.com") or host.endswith("api-docs.deepseek.com") or host.endswith("deepseek.com"):
         authority = "official"
         primary = True
         reason = "official organization domain"
