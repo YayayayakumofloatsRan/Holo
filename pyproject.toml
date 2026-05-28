@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "holo-agent-kernel"
+version = "2.1.0"
+description = "Holo Agent Kernel: depersonalized tool-first engineering and research agent substrate"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+holo-agent = "holo_agent.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
