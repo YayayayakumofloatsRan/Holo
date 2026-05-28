@@ -29,6 +29,11 @@ class Journal:
         step_id: str | None,
         kind: str,
         data: JsonObject,
+        event_ref: str | None = None,
+        action_ref: str | None = None,
+        observation_ref: str | None = None,
+        feedback_ref: str | None = None,
+        state_delta: JsonObject | None = None,
     ) -> LedgerRecord:
         record = LedgerRecord(
             record_id=f"ledger-{len(self._records) + 1}",
@@ -38,6 +43,11 @@ class Journal:
             kind=kind,
             data=data,
             recorded_at_ms=len(self._records) + 1,
+            event_ref=event_ref,
+            action_ref=action_ref,
+            observation_ref=observation_ref,
+            feedback_ref=feedback_ref,
+            state_delta=state_delta or {},
         )
         self._records.append(record)
         if self.path is not None:

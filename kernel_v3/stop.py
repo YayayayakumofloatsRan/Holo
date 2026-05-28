@@ -5,4 +5,4 @@ from kernel_v3.contracts import Feedback
 
 class StopController:
     def should_stop(self, feedback: Feedback) -> bool:
-        return feedback.status in {"final_answer_ready", "blocked", "needs_user_input"}
+        return feedback.status in {"final_answer_ready", "blocked", "needs_user_input", "failed"}

@@ -179,3 +179,8 @@ class LedgerRecord(Contract):
     kind: str
     data: JsonObject
     recorded_at_ms: int
+    event_ref: str | None
+    action_ref: str | None
+    observation_ref: str | None
+    feedback_ref: str | None
+    state_delta: JsonObject

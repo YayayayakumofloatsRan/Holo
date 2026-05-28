@@ -141,6 +141,11 @@ SCHEMA_EXAMPLES = [
         kind="decision",
         data={"decision_id": "decision-1"},
         recorded_at_ms=1_700_000_000_004,
+        event_ref="evt-1",
+        action_ref="act-1",
+        observation_ref="obs-1",
+        feedback_ref="fb-1",
+        state_delta={"status": "completed"},
     ),
 ]
 
