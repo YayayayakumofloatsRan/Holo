@@ -172,6 +172,7 @@ class MemoryWriteProposal(Contract):
 
 @dataclass(frozen=True, kw_only=True)
 class LedgerRecord(Contract):
+    schema_version: int
     record_id: str
     task_id: str | None
     run_id: str
@@ -184,3 +185,5 @@ class LedgerRecord(Contract):
     observation_ref: str | None
     feedback_ref: str | None
     state_delta: JsonObject
+    artifact_refs: list[str]
+    payload_hash: str

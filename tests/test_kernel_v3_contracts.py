@@ -134,6 +134,7 @@ SCHEMA_EXAMPLES = [
         confidence=0.9,
     ),
     LedgerRecord(
+        schema_version=1,
         record_id="ledger-1",
         task_id="task-1",
         run_id="run-1",
@@ -146,6 +147,8 @@ SCHEMA_EXAMPLES = [
         observation_ref="obs-1",
         feedback_ref="fb-1",
         state_delta={"status": "completed"},
+        artifact_refs=["artifact://ledger-1"],
+        payload_hash="hash-1",
     ),
 ]
 

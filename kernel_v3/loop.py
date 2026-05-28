@@ -32,17 +32,17 @@ class LoopControllerV3:
         self.tool_registry = tool_registry
         self.evaluator = evaluator
         self.stop_controller = stop_controller or StopController()
-        self.session_engine = session_engine or SessionEngine()
+        self.session_engine = session_engine or SessionEngine.from_journal(journal)
 
     def run(self, input_text: str) -> AgentResult:
-        task = self.session_engine.start(input_text)
+        task = self.session_engine.start(input_text, record_state=False)
         self._record_start(task, input_text=input_text)
         return self._drive(task, feedback=None)
 
     def run_event(self, event: Event) -> AgentResult:
         input_text = str(event.payload.get("text", ""))
         thread_id = str(event.payload.get("thread_id", "local:default"))
-        task = self.session_engine.start(input_text, thread_id=thread_id)
+        task = self.session_engine.start(input_text, thread_id=thread_id, record_state=False)
         self._record_start_event(task, event)
         return self._drive(task, feedback=None)
 
@@ -56,7 +56,13 @@ class LoopControllerV3:
         if task_threads and thread_id not in task_threads:
             raise ValueError(f"thread_id {thread_id!r} does not match task_id {task_id!r}")
         run_index = 1 + len({record.run_id for record in records})
-        task = self.session_engine.resume(task_id, user_input, run_index, thread_id=thread_id)
+        task = self.session_engine.resume(
+            task_id,
+            user_input,
+            run_index,
+            thread_id=thread_id,
+            record_state=False,
+        )
         event = Event(
             event_id=f"evt-{task.run_id}-resume",
             run_id=task.run_id,
