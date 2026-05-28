@@ -142,9 +142,10 @@ class HoloAgent:
                     break
                 has_success_observation = any(obs.status == "ok" for obs in observations)
                 has_failed_observation = any(obs.status != "ok" for obs in observations)
+                last_observation_failed = bool(observations and observations[-1].status != "ok")
                 stop_reason = (
                     "tool_failure_report"
-                    if has_failed_observation and not has_success_observation
+                    if last_observation_failed or (has_failed_observation and not has_success_observation)
                     else "final_answer_ready"
                     if observations or decision.can_answer
                     else "evidence_exhausted"

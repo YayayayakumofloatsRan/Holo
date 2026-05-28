@@ -33,6 +33,8 @@ Initial Stage219 goal:
   `docs/STAGE226_WEB_RESEARCH_KERNEL_V2.md`.
 - Web provider registry and health are tracked in
   `docs/STAGE227_WEB_PROVIDER_REGISTRY.md`.
+- Source-policy provider candidates are tracked in
+  `docs/STAGE228_SOURCE_POLICY_PROVIDER.md`.
 
 Run:
 

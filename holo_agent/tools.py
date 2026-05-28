@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .schema import Observation
-from .web_providers import SearchAttempt, SearchProviderRegistry, filter_results_by_domain
+from .web_providers import SearchAttempt, SearchProviderRegistry, SourcePolicyProvider, filter_results_by_domain
 
 
 def _safe_relative_path(root: Path, value: str) -> tuple[Path | None, str]:
@@ -206,7 +206,7 @@ class WebClient:
 
     def _provider_registry(self) -> SearchProviderRegistry:
         if self._registry is None:
-            providers = self.providers if self.providers is not None else [_LegacySearchProvider(self)]
+            providers = self.providers if self.providers is not None else [SourcePolicyProvider(), _LegacySearchProvider(self)]
             self._registry = SearchProviderRegistry(
                 providers,
                 provider_timeout_seconds=self.provider_timeout_seconds,

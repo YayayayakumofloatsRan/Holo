@@ -37,6 +37,60 @@ class SearchProvider(Protocol):
         ...
 
 
+@dataclass(slots=True)
+class SourcePolicyProvider:
+    name: str = "source_policy"
+
+    def search(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+        allowed_domains: list[str] | None = None,
+        blocked_domains: list[str] | None = None,
+        region: str | None = None,
+    ) -> SearchAttempt:
+        started = time.perf_counter()
+        lowered = str(query or "").lower()
+        candidates: list[dict[str, str]] = []
+        if ("openai" in lowered or "codex" in lowered) and domain_allowed(
+            "https://developers.openai.com/codex/cli",
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        ):
+            candidates.append(
+                {
+                    "title": "Codex CLI - OpenAI Developers",
+                    "url": "https://developers.openai.com/codex/cli",
+                    "snippet": "Official OpenAI Codex CLI documentation.",
+                    "provider": self.name,
+                    "source_family": "official_docs",
+                }
+            )
+        if ("deepseek" in lowered and ("tool" in lowered or "function" in lowered or "calling" in lowered or "docs" in lowered)) and domain_allowed(
+            "https://api-docs.deepseek.com/guides/function_calling",
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        ):
+            candidates.append(
+                {
+                    "title": "DeepSeek Function Calling - API Docs",
+                    "url": "https://api-docs.deepseek.com/guides/function_calling",
+                    "snippet": "Official DeepSeek API documentation for function/tool calling.",
+                    "provider": self.name,
+                    "source_family": "official_docs",
+                }
+            )
+        return SearchAttempt(
+            provider=self.name,
+            query=query,
+            status="ok" if candidates else "empty",
+            results=candidates[:max_results],
+            error="" if candidates else "no source-policy candidate",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+
+
 def domain_allowed(url: str, *, allowed_domains: list[str] | None = None, blocked_domains: list[str] | None = None) -> bool:
     domain = urlparse(str(url or "")).netloc.lower().removeprefix("www.")
     if not domain:
