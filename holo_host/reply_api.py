@@ -130,6 +130,7 @@ from .stage151_tool_decision_loop import (
     maybe_ground_visible_web_reply,
     repair_tool_decision_grounding,
 )
+from .stage211_persistent_action_recall import build_persistent_action_recall_reply
 from .agent_event_stream import build_agent_event_stream
 from .public_thought_stream import build_public_thought_stream
 from .interactive_cli import INTERACTIVE_CLI_SESSION_SCHEMA
@@ -8697,6 +8698,64 @@ class HoloReplyService:
                 "thread_key": incoming.thread_key,
                 "message_id": incoming.message_id,
             }
+
+        persistent_action_reply = build_persistent_action_recall_reply(
+            turn.text,
+            recent_messages=history,
+            thread_key=incoming.thread_key,
+            chat_name=turn.chat_name,
+            channel=turn.channel,
+        )
+        if persistent_action_reply:
+            stage153_agent_event_stream = build_agent_event_stream(
+                persistent_action_reply,
+                user_text=turn.text,
+                thread_key=incoming.thread_key,
+                chat_name=turn.chat_name,
+                channel=turn.channel,
+                transport="stage211_persistent_action_recall",
+            )
+            stage191_public_thought_stream = build_public_thought_stream(
+                persistent_action_reply,
+                user_text=turn.text,
+                event_stream=stage153_agent_event_stream,
+                thread_key=incoming.thread_key,
+                chat_name=turn.chat_name,
+                channel=turn.channel,
+                transport="stage211_persistent_action_recall",
+            )
+            result = self._stage23_finalize_result_contract(
+                {
+                    **persistent_action_reply,
+                    "message_id": incoming.message_id,
+                    "stage153_agent_event_stream": stage153_agent_event_stream,
+                    "stage191_public_thought_stream": stage191_public_thought_stream,
+                }
+            )
+            outbound_metadata = sanitize_public_metadata(
+                {
+                    "stage210_last_action_recall": result.get("stage210_last_action_recall", {}),
+                    "stage211_persistent_action_recall": result.get("stage211_persistent_action_recall", {}),
+                    "stage153_agent_event_stream": stage153_agent_event_stream,
+                    "stage191_public_thought_stream": stage191_public_thought_stream,
+                    "canonical_stop_reason": result.get("canonical_stop_reason", "final_answer_ready"),
+                    "canonical_stop_source": result.get("canonical_stop_source", "stage211_persistent_action_recall"),
+                }
+            )
+            self.store.record_outbound(
+                thread_id=int(record["thread"]["id"]),
+                contact_id=int(record["contact"]["id"]),
+                remote_message_id="stage211-" + stable_digest(incoming.message_id, turn.text, limit=16),
+                outgoing=OutgoingMessage(
+                    recipient_email=str(record["contact"].get("email", incoming.sender_email) or incoming.sender_email),
+                    subject=turn.chat_name,
+                    body_text=str(result.get("text", "") or ""),
+                    thread_key=incoming.thread_key,
+                    channel=turn.channel,
+                    metadata=outbound_metadata,
+                ),
+            )
+            return result
 
         event_info = self._ingest_event(payload=payload, turn=turn, incoming=incoming, history=history)
         event_row_id = int(event_info["event_row_id"])

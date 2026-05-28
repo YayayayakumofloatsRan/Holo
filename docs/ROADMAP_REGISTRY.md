@@ -473,6 +473,12 @@ Stage210: last action ledger recall
 - Stage153 event rendering includes `[last_action]` rows showing action type, query count, promoted source count, weak source count, and stop reason.
 - Verification on `2026-05-28`: targeted last-action recall/Stage209/Stage153 suite `13 passed`; runtime `92 passed`; full suite `1032 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage211: persistent action ledger recall
+- Added `holo.stage211.persistent_action_recall.v1` so direct `/reply` and restarted CLI sessions can answer last-action questions from persisted same-thread outbound metadata.
+- Reuses Stage210 rendering after reconstructing the previous action payload from `QueueStore` message metadata.
+- Stage191 public thought cards now include last-action recall as `working_memory`, while raw hidden reasoning and provider internals remain redacted.
+- Verification on `2026-05-28`: targeted Stage211/210/153 suite `15 passed`; runtime `92 passed`; full suite `1036 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

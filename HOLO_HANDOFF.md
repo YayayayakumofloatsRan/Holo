@@ -201,6 +201,8 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 196. `docs/ENGINEERING_HANDOFF_STAGE209.md`
 197. `docs/STAGE210_LAST_ACTION_LEDGER_RECALL.md`
 198. `docs/ENGINEERING_HANDOFF_STAGE210.md`
+199. `docs/STAGE211_PERSISTENT_ACTION_LEDGER_RECALL.md`
+200. `docs/ENGINEERING_HANDOFF_STAGE211.md`
 
 ## What This Document Must Cover
 - current live state
@@ -215,9 +217,9 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
   - memory is the durable self
   - the processor is replaceable compute
   - transports are eyes and hands
-- The current milestone tag is `stage210-last-action-ledger-recall`.
+- The current milestone tag is `stage211-persistent-action-ledger-recall`.
 - The current processor fabric milestone is `processor-fabric-standardized`.
-- Current focus is Stage210 Last Action Ledger Recall: ordinary CLI follow-up questions about what Holo just searched or did are answered from the previous turn's crawler/web ledgers instead of provider memory or guesswork.
+- Current focus is Stage211 Persistent Action Ledger Recall: direct `/reply` and restarted CLI follow-up questions about what Holo just searched or did are answered from persisted same-thread outbound crawler/web ledgers instead of provider memory or guesswork.
 - Stage201 verification on `2026-05-28`: targeted `7 passed`; neighbor market stack `41 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `997 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage202 verification on `2026-05-28`: targeted `8 passed`; neighbor stack `47 passed`; runtime `92 passed`; full suite `1005 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage203 verification on `2026-05-28`: targeted live-trace suite `5 passed`.
@@ -228,6 +230,7 @@ This is the single entrypoint for a new thread that needs to continue Holo work 
 - Stage208 verification on `2026-05-28`: targeted agent-console live-smoke suite `3 passed`; neighbor console/crawler stack `10 passed`; runtime `92 passed`; CLI artifact smoke passed; full suite `1028 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage209 verification on `2026-05-28`: targeted multi-step search-loop/console/crawler stack `16 passed`; runtime `92 passed`; web-grounding neighbor stack `32 passed`; CLI artifact smoke passed; full suite `1030 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - Stage210 verification on `2026-05-28`: targeted last-action recall/Stage209/Stage153 suite `13 passed`; runtime `92 passed`; full suite `1032 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+- Stage211 verification on `2026-05-28`: targeted Stage211/210/153 suite `15 passed`; runtime `92 passed`; full suite `1036 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 - The current subject-runtime arc is:
   - Stage18: dual-speed reflex and predictive continuity inside `ActiveThreadState` is implemented
   - Stage19: bounded background continuity and attention frontier is implemented using only `maintenance_stream`, `association_stream`, `social_stream`, and `deep_dream_cycle`

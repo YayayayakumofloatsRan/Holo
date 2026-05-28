@@ -30,7 +30,23 @@ def _rows(value: Any) -> list[dict[str, Any]]:
 
 def is_last_action_recall_query(text: str) -> bool:
     current = str(text or "").strip()
-    return bool(current and _LAST_ACTION_RE.search(current))
+    if not current:
+        return False
+    if _LAST_ACTION_RE.search(current):
+        return True
+    lowered = current.lower()
+    if re.search(r"what\s+(exactly\s+)?did\s+you\s+(search|look\s+up|lookup|do)", lowered):
+        return True
+    if re.search(r"what\s+(exactly\s+)?was\s+(searched|looked\s+up|done)", lowered):
+        return True
+    action_markers = ("外网", "联网", "web", "search", "searched", "搜索", "搜", "检索", "查询", "查找", "爬取")
+    question_markers = ("什么", "啥", "哪个", "哪些", "what", "which")
+    previous_action_markers = ("你", "刚才", "上次", "上轮", "上一轮", "外网", "联网", "web")
+    return (
+        any(marker in current for marker in action_markers)
+        and any(marker in current for marker in question_markers)
+        and any(marker in current for marker in previous_action_markers)
+    )
 
 
 def _crawler_from_payload(previous_payload: dict[str, Any]) -> dict[str, Any]:

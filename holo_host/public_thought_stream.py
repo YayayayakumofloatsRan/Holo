@@ -146,6 +146,13 @@ def _card_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
         return _card("grounding", f"status={event.get('status', '')}; missing={missing}", source_event=kind, confidence=0.8)
     if kind == "stop":
         return _card("stop", f"reason={event.get('reason', '')}; source={event.get('source', '')}", source_event=kind, confidence=0.86)
+    if kind == "last_action":
+        summary = (
+            f"last_action={event.get('action_type', '')}; status={event.get('status', '')}; "
+            f"queries={event.get('query_count', 0)}; promoted={event.get('promoted_source_count', 0)}; "
+            f"weak={event.get('weak_source_count', 0)}; stop={event.get('stop_reason', '')}"
+        )
+        return _card("working_memory", summary, source_event=kind, confidence=0.86)
     if kind == "final":
         return _card("final", str(event.get("summary", "") or ""), source_event=kind, confidence=0.72)
     return None
