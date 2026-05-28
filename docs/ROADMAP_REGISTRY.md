@@ -479,6 +479,12 @@ Stage211: persistent action ledger recall
 - Stage191 public thought cards now include last-action recall as `working_memory`, while raw hidden reasoning and provider internals remain redacted.
 - Verification on `2026-05-28`: targeted Stage211/210/153 suite `15 passed`; runtime `92 passed`; full suite `1036 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
 
+Stage212: persistent action journal
+- Added `holo.stage212.action_journal.v1` so recent tool/search/crawler loops can be inspected from persisted same-thread outbound metadata.
+- Added standalone `action-journal` CLI and interactive `/actions` rendering for public action/crawl/self-feedback rows.
+- Keeps the journal observational: no provider calls, tool execution, memory writes, WeChat start, or hidden reasoning exposure.
+- Verification on `2026-05-28`: targeted Stage212/211/153 suite `16 passed`; runtime `92 passed`; full suite `1039 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

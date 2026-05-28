@@ -76,6 +76,7 @@ from .live_crawler_search import write_live_crawler_search_artifacts
 from .stage151_tool_decision_loop import format_stage151_live_trace
 from .stage152_deepseek_tool_loop import format_stage152_live_trace
 from .stage210_last_action_recall import maybe_build_last_action_recall_reply
+from .stage212_action_journal import build_action_journal_from_messages, render_action_journal
 from .interactive_cli import InteractiveCliSession
 from .engineering_action_fabric import evaluate_engineering_claim_grounding
 from .project_state_graph import ProjectStateGraph, render_project_state_cli
@@ -9685,6 +9686,7 @@ CHAT_HELP = """Commands:
   /thoughts              show public thought stream for the last turn
   /json                  print last turn JSON metadata
   /tools                 show last turn tool observations
+  /actions               show last turn action journal
   /eng search <query> [glob]  repo-scoped search with Stage154 ledger
   /eng read <path> [start] [end]  read workspace file lines
   /eng patch <patch-file>     apply a unified patch file inside the repo
@@ -9891,6 +9893,35 @@ def command_agent_kernel_readiness(config_path: str | None, *, json_output: bool
     return 0 if report.get("status") == "passed" else 1
 
 
+def command_action_journal(
+    config_path: str | None,
+    *,
+    thread_key: str,
+    chat_name: str,
+    channel: str,
+    limit: int,
+    json_output: bool,
+) -> int:
+    _ = chat_name
+    config = load_config(config_path=config_path)
+    store = QueueStore(config.runtime.db_path)
+    store.initialize()
+    try:
+        thread = store.find_thread(channel=channel, thread_key=thread_key)
+        if not thread:
+            journal = build_action_journal_from_messages([], limit=limit)
+        else:
+            history = list(store.recent_thread_messages(int(thread["id"]), limit=max(12, int(limit or 1) * 8)))
+            journal = build_action_journal_from_messages(history, limit=limit)
+    finally:
+        store.close()
+    if json_output:
+        print(_json_dumps_utf8_safe(journal, ensure_ascii=False, indent=2))
+    else:
+        print(render_action_journal(journal))
+    return 0
+
+
 def command_chat(
     config_path: str | None,
     *,
@@ -10047,6 +10078,9 @@ def command_chat(
             return True
         if command == "/tools":
             print(cli_session.render_tools())
+            return True
+        if command == "/actions":
+            print(cli_session.render_actions())
             return True
         if command in {"/thoughts", "/think"}:
             print(cli_session.render_thoughts())
@@ -11093,6 +11127,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Print the Stage158 Agent Kernel v1 readiness report",
     )
     agent_kernel_parser.add_argument("--text", action="store_true", help="Print a compact text report instead of JSON")
+    action_journal_parser = subparsers.add_parser(
+        "action-journal",
+        help="Inspect the Stage212 persisted action/tool/search journal for a thread",
+    )
+    action_journal_parser.add_argument("--thread-key", default="holo_cli:default")
+    action_journal_parser.add_argument("--chat-name", default="HoloCLI")
+    action_journal_parser.add_argument("--channel", default="holo_cli")
+    action_journal_parser.add_argument("--limit", type=int, default=8)
+    action_journal_parser.add_argument("--json", action="store_true")
     reply_probe_parser = subparsers.add_parser("reply-probe", help="Compare graph, hybrid, and legacy reply drafts without sending anything")
     reply_probe_parser.add_argument("--query", required=True)
     reply_probe_parser.add_argument("--thread-key", default=None)
@@ -12276,6 +12319,15 @@ def main(argv: list[str] | None = None) -> int:
         return command_agent_kernel_readiness(
             args.config,
             json_output=not bool(args.text),
+        )
+    if args.command == "action-journal":
+        return command_action_journal(
+            args.config,
+            thread_key=args.thread_key,
+            chat_name=args.chat_name,
+            channel=args.channel,
+            limit=args.limit,
+            json_output=bool(args.json),
         )
     if args.command == "reply-probe":
         return command_reply_probe(

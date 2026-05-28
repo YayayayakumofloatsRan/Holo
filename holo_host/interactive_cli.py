@@ -13,6 +13,7 @@ from .agent_event_stream import (
 )
 from .context_compiler import render_context_cache_status, render_context_compiler_report
 from .public_thought_stream import build_public_thought_stream, render_public_thought_stream
+from .stage212_action_journal import build_action_journal_from_payload, render_action_journal
 
 INTERACTIVE_CLI_SESSION_SCHEMA = "holo.stage153.interactive_cli_session.v1"
 
@@ -86,6 +87,9 @@ class InteractiveCliSession:
     def render_tools(self) -> str:
         return render_tool_observations(self.last_payload)
 
+    def render_actions(self) -> str:
+        return render_action_journal(build_action_journal_from_payload(self.last_payload))
+
     def render_compact(self) -> str:
         return render_compact_status(self.last_payload)
 
@@ -130,6 +134,8 @@ class InteractiveCliSession:
             return self.render_json()
         if command == "/tools":
             return self.render_tools()
+        if command == "/actions":
+            return self.render_actions()
         if command == "/compact":
             return self.render_compact()
         if command == "/context":
