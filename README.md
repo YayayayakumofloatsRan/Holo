@@ -35,6 +35,8 @@ Initial Stage219 goal:
   `docs/STAGE227_WEB_PROVIDER_REGISTRY.md`.
 - Source-policy provider candidates are tracked in
   `docs/STAGE228_SOURCE_POLICY_PROVIDER.md`.
+- Page fetcher diagnostics and extraction are tracked in
+  `docs/STAGE229_PAGE_FETCHER_EXTRACTION.md`.
 
 Run:
 

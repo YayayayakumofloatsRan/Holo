@@ -111,6 +111,11 @@ def _next_planned_query(context: dict[str, Any]) -> str:
     return ""
 
 
+def _first_url(text: str) -> str:
+    match = re.search(r"https?://[^\s\]\)>'\"]+", str(text or ""))
+    return match.group(0).rstrip(".,;:!?") if match else ""
+
+
 @dataclass(slots=True)
 class RuleFallbackModel:
     """Explicit offline fallback for local development.
@@ -166,6 +171,14 @@ class RuleFallbackModel:
                         required_observations=["web_search"],
                     )
             if last.get("tool") in {"open_page", "web_research"} and last.get("status") == "ok":
+                if last.get("tool") == "open_page" and _first_url(user_text):
+                    return Decision(
+                        action="answer_direct",
+                        arguments={},
+                        reason="fallback opened the explicit URL requested by the user and can summarize it",
+                        confidence=0.7,
+                        can_answer=True,
+                    )
                 crawl_report = context.get("crawl_report", {}) if isinstance(context.get("crawl_report", {}), dict) else {}
                 if last.get("tool") == "open_page" and crawl_report.get("status") not in {"sufficient", None}:
                     next_query = _next_planned_query(context)
@@ -184,6 +197,16 @@ class RuleFallbackModel:
                     confidence=0.6,
                     can_answer=True,
                 )
+
+        explicit_url = _first_url(user_text)
+        if explicit_url:
+            return Decision(
+                action="open_page",
+                arguments={"url": explicit_url},
+                reason="fallback detected an explicit URL and opens it directly",
+                confidence=0.7,
+                required_observations=["open_page"],
+            )
 
         next_query = _next_planned_query(context)
         search_goal = context.get("search_goal", {}) if isinstance(context.get("search_goal", {}), dict) else {}

@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
 
+from .page_fetcher import PageFetchResult, PageFetcher, extract_page_text
 from .schema import Observation
 from .web_providers import SearchAttempt, SearchProviderRegistry, SourcePolicyProvider, filter_results_by_domain
 
@@ -195,14 +196,40 @@ class WebClient:
     providers: list[Any] | None = None
     provider_timeout_seconds: float = 8.0
     network_enabled: bool = True
+    page_fetcher: PageFetcher | None = None
     _registry: SearchProviderRegistry | None = None
 
     def fetch_text(self, url: str) -> str:
-        request = Request(url, headers={"User-Agent": self.user_agent})
-        with urlopen(request, timeout=self.timeout) as response:  # nosec B310 - URL is an explicit tool argument.
-            charset = response.headers.get_content_charset() or "utf-8"
-            raw = response.read()
-        return raw.decode(charset, errors="replace")
+        result = (self.page_fetcher or PageFetcher(user_agent=self.user_agent)).fetch(url, timeout=self.timeout)
+        if result.status != "ok":
+            raise RuntimeError(result.error or result.status)
+        return result.text
+
+    def fetch_page(self, url: str) -> PageFetchResult:
+        if type(self).fetch_text is not WebClient.fetch_text:
+            started = time.time()
+            try:
+                raw = self.fetch_text(url)
+            except Exception as exc:  # noqa: BLE001
+                return PageFetchResult(
+                    url=url,
+                    final_url=url,
+                    status="error",
+                    error=str(exc),
+                    error_type=exc.__class__.__name__,
+                    elapsed_ms=int((time.time() - started) * 1000),
+                )
+            return PageFetchResult(
+                url=url,
+                final_url=url,
+                status="ok",
+                status_code=200,
+                content_type="text/html",
+                text=raw,
+                bytes_read=len(raw.encode("utf-8", errors="replace")),
+                elapsed_ms=int((time.time() - started) * 1000),
+            )
+        return (self.page_fetcher or PageFetcher(user_agent=self.user_agent)).fetch(url, timeout=self.timeout)
 
     def _provider_registry(self) -> SearchProviderRegistry:
         if self._registry is None:
@@ -344,12 +371,16 @@ class OpenPageTool:
         url = str(kwargs.get("url", "") or "").strip()
         if not url.startswith(("http://", "https://")):
             return Observation(tool=self.name, status="error", summary="invalid url", data={"url": url})
-        try:
-            raw = self.client.fetch_text(url)
-        except Exception as exc:  # noqa: BLE001
-            return Observation(tool=self.name, status="error", summary=str(exc), data={"url": url})
-        text = strip_html(raw)
-        return Observation(tool=self.name, status="ok", summary=compact(text, 240), data={"url": url, "text": text})
+        fetch = self.client.fetch_page(url) if hasattr(self.client, "fetch_page") else PageFetchResult(url=url, final_url=url, status="ok", text=self.client.fetch_text(url))
+        if fetch.status != "ok":
+            return Observation(tool=self.name, status="error", summary=fetch.error or fetch.status, data={"url": url, "fetch": fetch.to_dict()})
+        extracted = extract_page_text(fetch.text, url=fetch.final_url or url, content_type=fetch.content_type)
+        return Observation(
+            tool=self.name,
+            status="ok",
+            summary=compact(extracted.text, 240),
+            data={"url": fetch.final_url or url, "text": extracted.text, "fetch": fetch.to_dict(), "extracted_page": extracted.to_dict()},
+        )
 
 
 @dataclass(slots=True)

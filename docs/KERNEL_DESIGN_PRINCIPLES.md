@@ -52,6 +52,28 @@ observe -> compile context -> expose action space -> model_decide
 The host can reject unsafe or invalid actions. The model decides the next
 meaningful action within that bounded action space.
 
+## Action Feedback Invariant
+
+Every action must feed a self-feedback step before finalization or the next
+action. The feedback step answers:
+
+- what observation changed
+- whether the required evidence is now sufficient
+- whether the failure is recoverable
+- what gap remains
+- whether another action has positive marginal value
+- which canonical stop reason applies
+
+The action loop is not complete when a tool returns. It is complete only when
+the observation has been evaluated and either the model continues with a
+grounded next action or the host stops with an auditable reason.
+
+Self-feedback is a first-class reliability surface. It should consume structured
+observations such as fetch diagnostics, source authority, crawl reports,
+engineering ledgers, project state, and final claim grounding reports. It must
+not be replaced by persona text, social filler, or hidden state that is absent
+from the event stream.
+
 ## Web Research Loop
 
 For research tasks, the kernel must not be just a single `web_research()`
@@ -94,6 +116,11 @@ Search provider health should be inspectable from metadata and CLI status:
 ```text
 provider -> attempt status -> elapsed/error -> fallback provider -> final result
 ```
+
+Page fetch and extraction are separate from search. `open_page` observations
+must expose fetch diagnostics and extraction quality so the self-feedback step
+can distinguish a bad search result from an HTTP block, timeout, unsupported
+content type, or weak extracted page.
 
 ## Failure Rule
 
