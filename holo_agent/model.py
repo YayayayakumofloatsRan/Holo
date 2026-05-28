@@ -126,6 +126,17 @@ class RuleFallbackModel:
             if not isinstance(last, dict):
                 last = {}
             if last.get("tool") in {"web_search", "open_page", "web_research"} and last.get("status") != "ok":
+                next_query = _next_planned_query(context)
+                failure_summary = str(last.get("summary", "") or last.get("data", {}).get("provider_health", {}).get("last_status", ""))
+                can_refine_query = failure_summary in {"empty_results", "empty", "no search results"}
+                if last.get("tool") == "web_search" and next_query and can_refine_query:
+                    return Decision(
+                        action="web_search",
+                        arguments={"query": next_query, "max_results": 5},
+                        reason="fallback web search failed; trying the next structured search plan query",
+                        confidence=0.45,
+                        required_observations=["web_search"],
+                    )
                 return Decision(
                     action="answer_direct",
                     arguments={},

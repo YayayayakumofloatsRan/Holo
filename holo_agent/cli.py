@@ -89,6 +89,9 @@ def command_chat(args: argparse.Namespace) -> int:
             memory = MemoryStore(Path(".holo_kernel/memory.json")).snapshot()
             print(json.dumps(sanitize(memory), ensure_ascii=False, indent=2))
             continue
+        if text == "/web":
+            print(json.dumps(sanitize(agent.tools.web_provider_health()), ensure_ascii=False, indent=2))
+            continue
         if text == "/logs":
             log_path = Path(getattr(args, "log", ".holo_kernel/events.jsonl"))
             if not log_path.exists():
@@ -103,10 +106,12 @@ def command_chat(args: argparse.Namespace) -> int:
 
 def command_status(args: argparse.Namespace) -> int:
     workspace = load_workspace_context(Path.cwd())
+    tools = ToolRegistry.default(root=Path.cwd())
     payload = {
         "kernel_version": __version__,
         "workspace": workspace.to_dict(),
         "log": str(Path(getattr(args, "log", ".holo_kernel/events.jsonl"))),
+        "web_provider_health": tools.web_provider_health(),
     }
     print(json.dumps(sanitize(payload), ensure_ascii=False, indent=2))
     return 0

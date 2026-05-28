@@ -65,6 +65,18 @@ class HoloAgent:
         EventLog(self.config.log_path).append(event)
         self.hooks.emit(kind, **event_to_hook_payload(event))
 
+    def _enrich_web_search_arguments(self, arguments: dict[str, Any], crawl_report: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(arguments or {})
+        query = str(enriched.get("query", "") or "")
+        for planned in crawl_report.get("plan", {}).get("queries", []) or []:
+            if query and query == planned.get("query"):
+                if "allowed_domains" not in enriched and planned.get("allowed_domains"):
+                    enriched["allowed_domains"] = list(planned.get("allowed_domains", []))
+                if "blocked_domains" not in enriched and planned.get("blocked_domains"):
+                    enriched["blocked_domains"] = list(planned.get("blocked_domains", []))
+                break
+        return enriched
+
     def run(self, user_text: str) -> AgentResult:
         events: list[Event] = []
         observations: list[Observation] = []
@@ -148,6 +160,9 @@ class HoloAgent:
                 self._emit(events, "evaluate", f"stop={stop_reason}", observation_count=len(observations))
                 break
 
+            if decision.action == "web_search":
+                decision.arguments = self._enrich_web_search_arguments(decision.arguments, context.get("crawl_report", {}))
+
             self._emit(events, "tool_call", decision.action, arguments=decision.arguments)
             obs = self.tools.run(decision.action, decision.arguments)
             observations.append(obs)
@@ -211,5 +226,6 @@ class HoloAgent:
                 "search_goal": search_goal.to_dict(),
                 "crawl_report": build_crawl_report(search_goal, [obs.to_dict() for obs in observations]).to_dict(),
                 "source_authority": build_source_authority_report([obs.to_dict() for obs in observations]),
+                "web_provider_health": self.tools.web_provider_health(),
             },
         )

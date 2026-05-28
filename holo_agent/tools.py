@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .schema import Observation
+from .web_providers import SearchAttempt, SearchProviderRegistry, filter_results_by_domain
 
 
 def _safe_relative_path(root: Path, value: str) -> tuple[Path | None, str]:
@@ -191,6 +192,10 @@ class TimeTool:
 class WebClient:
     timeout: int = 15
     user_agent: str = "HoloAgentKernel/2.1.0"
+    providers: list[Any] | None = None
+    provider_timeout_seconds: float = 8.0
+    network_enabled: bool = True
+    _registry: SearchProviderRegistry | None = None
 
     def fetch_text(self, url: str) -> str:
         request = Request(url, headers={"User-Agent": self.user_agent})
@@ -199,7 +204,40 @@ class WebClient:
             raw = response.read()
         return raw.decode(charset, errors="replace")
 
-    def search(self, query: str, *, max_results: int = 5) -> list[dict[str, str]]:
+    def _provider_registry(self) -> SearchProviderRegistry:
+        if self._registry is None:
+            providers = self.providers if self.providers is not None else [_LegacySearchProvider(self)]
+            self._registry = SearchProviderRegistry(
+                providers,
+                provider_timeout_seconds=self.provider_timeout_seconds,
+                network_enabled=self.network_enabled,
+            )
+        return self._registry
+
+    def search(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+        allowed_domains: list[str] | None = None,
+        blocked_domains: list[str] | None = None,
+        region: str | None = None,
+    ) -> list[dict[str, str]]:
+        attempt = self._provider_registry().search(
+            query,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            region=region,
+        )
+        if attempt.status != "ok":
+            raise RuntimeError(attempt.error or attempt.status)
+        return [dict(item, provider=item.get("provider", attempt.provider)) for item in attempt.results]
+
+    def health(self) -> dict[str, Any]:
+        return self._provider_registry().health()
+
+    def _legacy_search(self, query: str, *, max_results: int = 5) -> list[dict[str, str]]:
         urls = [
             f"https://duckduckgo.com/html/?q={quote_plus(query)}",
             f"https://www.bing.com/search?q={quote_plus(query)}",
@@ -234,6 +272,26 @@ class WebClient:
 
 
 @dataclass(slots=True)
+class _LegacySearchProvider:
+    client: WebClient
+    name: str = "legacy_html"
+
+    def search(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+        allowed_domains: list[str] | None = None,
+        blocked_domains: list[str] | None = None,
+        region: str | None = None,
+    ) -> SearchAttempt:
+        started = time.time()
+        results = self.client._legacy_search(query, max_results=max_results)
+        results = [{**item, "provider": self.name} for item in filter_results_by_domain(results, allowed_domains=allowed_domains, blocked_domains=blocked_domains)]
+        return SearchAttempt(provider=self.name, query=query, status="ok", results=results, elapsed_ms=int((time.time() - started) * 1000))
+
+
+@dataclass(slots=True)
 class WebSearchTool:
     client: WebClient
     name: str = "web_search"
@@ -246,11 +304,32 @@ class WebSearchTool:
         if not query:
             return Observation(tool=self.name, status="error", summary="missing query", data={"query": query})
         try:
-            results = self.client.search(query, max_results=int(kwargs.get("max_results", 5) or 5))
+            try:
+                results = self.client.search(
+                    query,
+                    max_results=int(kwargs.get("max_results", 5) or 5),
+                    allowed_domains=[str(item) for item in kwargs.get("allowed_domains", [])] if isinstance(kwargs.get("allowed_domains"), list) else None,
+                    blocked_domains=[str(item) for item in kwargs.get("blocked_domains", [])] if isinstance(kwargs.get("blocked_domains"), list) else None,
+                    region=str(kwargs.get("region", "") or "") or None,
+                )
+            except TypeError as exc:
+                if "unexpected keyword" not in str(exc):
+                    raise
+                results = self.client.search(query, max_results=int(kwargs.get("max_results", 5) or 5))
         except Exception as exc:  # noqa: BLE001
-            return Observation(tool=self.name, status="error", summary=str(exc), data={"query": query, "results": []})
+            return Observation(
+                tool=self.name,
+                status="error",
+                summary=str(exc),
+                data={"query": query, "results": [], "provider_health": self.client.health()},
+            )
         results = [{**item, "url": normalize_result_url(item.get("url", ""))} for item in results]
-        return Observation(tool=self.name, status="ok", summary=f"{len(results)} search results", data={"query": query, "results": results})
+        return Observation(
+            tool=self.name,
+            status="ok",
+            summary=f"{len(results)} search results",
+            data={"query": query, "results": results, "provider_health": self.client.health()},
+        )
 
 
 @dataclass(slots=True)
@@ -631,6 +710,13 @@ class ToolRegistry:
         if not tool:
             return Observation(tool=name, status="rejected", summary="unknown tool", data={"arguments": arguments})
         return tool.run(**dict(arguments or {}))
+
+    def web_provider_health(self) -> dict[str, Any]:
+        search_tool = self._tools.get("web_search")
+        client = getattr(search_tool, "client", None)
+        if client is not None and hasattr(client, "health"):
+            return client.health()
+        return {"schema": "holo.web_provider_health.v1", "last_status": "unavailable", "providers": [], "attempts": []}
 
     @classmethod
     def default(cls, *, root: Path | None = None, client: WebClient | None = None, source_evaluator: SourceEvaluator | None = None) -> "ToolRegistry":

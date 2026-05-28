@@ -66,6 +66,12 @@ The model still decides meaningful next actions. The host records the research
 state in structured objects so the model can see source policy, evidence gaps,
 consulted sources, rejected sources, and citations without inventing them.
 
+The search provider layer is pluggable. Bing or DuckDuckGo HTML can be fallback
+providers, but the kernel must not treat any single public search page as the
+architecture. Provider attempts are bounded by timeout and recorded in provider
+health so a WSL/network failure is diagnosable instead of becoming a vague
+"network is broken" claim.
+
 The interactive path is:
 
 ```text
@@ -82,6 +88,12 @@ regulatory filings, company investor-relations pages, official documentation,
 and official repositories must be distinguishable from secondary commentary.
 
 Final citations should be built from evidence items, not free-form model text.
+
+Search provider health should be inspectable from metadata and CLI status:
+
+```text
+provider -> attempt status -> elapsed/error -> fallback provider -> final result
+```
 
 ## Failure Rule
 

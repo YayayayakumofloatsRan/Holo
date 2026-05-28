@@ -31,6 +31,8 @@ Initial Stage219 goal:
   `docs/STAGE225_SOURCE_AUTHORITY_LAYER.md`.
 - Web Research Kernel v2 contracts are tracked in
   `docs/STAGE226_WEB_RESEARCH_KERNEL_V2.md`.
+- Web provider registry and health are tracked in
+  `docs/STAGE227_WEB_PROVIDER_REGISTRY.md`.
 
 Run:
 
@@ -38,6 +40,7 @@ Run:
 cd D:\Holo\holo-agent-kernel
 python -m holo_agent chat --trace
 python -m holo_agent run "search official OpenAI Codex CLI docs and cite sources" --trace
+python -m holo_agent status
 python -m pytest -q
 ```
 
@@ -54,3 +57,10 @@ Model selection:
 - `auto` falls back to the explicit offline fallback when no provider key is
   configured.
 - Use `--model fallback` to force offline fallback during tests.
+
+Interactive commands:
+
+- `/status` shows loaded local instructions and skills.
+- `/web` shows web provider health without starting a live request.
+- `/memory` shows local kernel preferences and notes.
+- `/logs` shows recent JSONL event rows.
