@@ -1,11 +1,12 @@
 import json
 from pathlib import Path
 
-import holo_kernel_v3.contracts as contracts
-from holo_kernel_v3.contracts import (
+import kernel_v3.contracts as contracts
+from kernel_v3.contracts import (
     CandidateAction,
     ContextBundle,
     Event,
+    Feedback,
     LedgerRecord,
     MemoryWriteProposal,
     Observation,
@@ -26,7 +27,7 @@ SCHEMA_EXAMPLES = [
         type="message.received",
         timestamp_ms=1_700_000_000_000,
         payload={"text": "hello"},
-        source="wechat",
+        source="cli",
     ),
     Task(
         task_id="task-1",
@@ -34,7 +35,7 @@ SCHEMA_EXAMPLES = [
         status="pending",
         created_at_ms=1_700_000_000_001,
         priority=5,
-        metadata={"thread_key": "wechat:Alice"},
+        metadata={"thread_key": "local:default"},
     ),
     Run(
         run_id="run-1",
@@ -56,52 +57,64 @@ SCHEMA_EXAMPLES = [
     ),
     ContextBundle(
         context_id="ctx-1",
-        thread_key="wechat:Alice",
+        thread_key="local:default",
         event_ids=["evt-1"],
-        memory_refs=["mem-1"],
-        state={"mood": "neutral"},
+        memory_refs=[],
+        state={"task_id": "task-1"},
         token_budget=4096,
     ),
     CandidateAction(
         action_id="act-1",
-        kind="reply",
+        kind="respond",
         description="send concise answer",
         score=0.8,
         payload={"text": "hi"},
         reasons=["direct user request"],
+        name=None,
+        side_effect_class="none",
     ),
     PolicyDecision(
         decision_id="decision-1",
         run_id="run-1",
-        selected_action_id="act-1",
-        action="reply",
-        confidence=0.74,
-        rationale="user asked a direct question",
-        candidate_action_ids=["act-1", "act-2"],
-        constraints={"send_allowed": True},
+        action_id="act-1",
+        allowed=True,
+        reason="safe",
+        constraints={"permission": "read_write"},
     ),
     ToolCall(
         tool_call_id="tool-1",
         run_id="run-1",
-        name="search_memory",
-        arguments={"query": "last topic"},
+        action_id="act-1",
+        name="workspace.search",
+        arguments={"query": "Holo"},
         status="requested",
     ),
     Observation(
         observation_id="obs-1",
         run_id="run-1",
-        source="tool:search_memory",
+        kind="tool_result",
+        status="ok",
+        source="tool:workspace.search",
         content={"matches": []},
         observed_at_ms=1_700_000_000_003,
+        action_id="act-1",
         tool_call_id="tool-1",
+    ),
+    Feedback(
+        feedback_id="fb-1",
+        run_id="run-1",
+        status="final_answer_ready",
+        stop_reason="completed",
+        answer="hello",
+        missing_evidence=[],
     ),
     ProcessorRequest(
         request_id="preq-1",
         run_id="run-1",
-        processor="default",
+        processor="fake",
         prompt="Answer briefly",
         context_id="ctx-1",
-        parameters={"temperature": 0.2},
+        parameters={"temperature": 0.0},
     ),
     ProcessorResult(
         result_id="pres-1",
@@ -115,15 +128,15 @@ SCHEMA_EXAMPLES = [
         proposal_id="memprop-1",
         run_id="run-1",
         memory_type="episodic",
-        key="wechat:Alice:last_topic",
+        key="local:default:last_topic",
         value={"topic": "kernel"},
         rationale="durable user project context",
         confidence=0.9,
     ),
     LedgerRecord(
         record_id="ledger-1",
+        task_id="task-1",
         run_id="run-1",
-        event_id="evt-1",
         step_id="step-1",
         kind="decision",
         data={"decision_id": "decision-1"},
@@ -153,3 +166,6 @@ def test_contracts_do_not_import_old_holo_host_modules():
     source = Path(contracts.__file__).read_text(encoding="utf-8")
 
     assert "holo_host" not in source
+    assert "reply_api" not in source
+    assert "processors" not in source
+    assert "memory_bridge" not in source

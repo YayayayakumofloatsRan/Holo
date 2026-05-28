@@ -88,21 +88,21 @@ class ContextBundle(Contract):
 class CandidateAction(Contract):
     action_id: str
     kind: str
+    name: str | None
     description: str
     score: float
     payload: JsonObject
     reasons: list[str]
+    side_effect_class: str = "none"
 
 
 @dataclass(frozen=True, kw_only=True)
 class PolicyDecision(Contract):
     decision_id: str
     run_id: str
-    selected_action_id: str | None
-    action: str
-    confidence: float
-    rationale: str
-    candidate_action_ids: list[str]
+    action_id: str
+    allowed: bool
+    reason: str
     constraints: JsonObject
 
 
@@ -110,6 +110,7 @@ class PolicyDecision(Contract):
 class ToolCall(Contract):
     tool_call_id: str
     run_id: str
+    action_id: str
     name: str
     arguments: JsonObject
     status: str
@@ -119,10 +120,23 @@ class ToolCall(Contract):
 class Observation(Contract):
     observation_id: str
     run_id: str
+    kind: str
+    status: str
     source: str
     content: JsonValue
     observed_at_ms: int
+    action_id: str | None
     tool_call_id: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class Feedback(Contract):
+    feedback_id: str
+    run_id: str
+    status: str
+    stop_reason: str | None
+    answer: str | None
+    missing_evidence: list[str]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -159,8 +173,8 @@ class MemoryWriteProposal(Contract):
 @dataclass(frozen=True, kw_only=True)
 class LedgerRecord(Contract):
     record_id: str
+    task_id: str | None
     run_id: str
-    event_id: str | None
     step_id: str | None
     kind: str
     data: JsonObject
