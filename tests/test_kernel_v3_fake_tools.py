@@ -81,3 +81,84 @@ def test_fake_workspace_tools_cover_phase0_5_simple_tools():
     assert search.content["matches"] == [{"path": "README.md", "text": "Holo is a host-owned agent harness."}]
     assert read.content == {"path": "README.md", "text": "Holo is a host-owned agent harness."}
     assert write.status == "blocked"
+
+
+def test_respond_and_ask_user_normalize_common_model_payload_keys():
+    registry = ToolRegistry.with_builtin_respond()
+
+    answer = registry.execute(
+        CandidateAction(
+            action_id="act-answer",
+            kind="respond",
+            name=None,
+            description="respond",
+            score=1.0,
+            payload={"answer": "model answer"},
+            reasons=[],
+            side_effect_class="none",
+        )
+    )
+    summary = registry.execute(
+        CandidateAction(
+            action_id="act-summary",
+            kind="respond",
+            name=None,
+            description="respond",
+            score=1.0,
+            payload={"summary": "brief reasoning summary"},
+            reasons=[],
+            side_effect_class="none",
+        )
+    )
+    ask = registry.execute(
+        CandidateAction(
+            action_id="act-prompt",
+            kind="ask_user",
+            name=None,
+            description="ask",
+            score=1.0,
+            payload={"prompt": "which market?"},
+            reasons=[],
+            side_effect_class="none",
+        )
+    )
+
+    assert answer.content == {"text": "model answer"}
+    assert summary.content == {"text": "brief reasoning summary"}
+    assert ask.content == {"question": "which market?"}
+
+
+def test_host_execution_context_is_not_visible_to_respond_or_ask_user():
+    registry = ToolRegistry.with_builtin_respond()
+    respond = CandidateAction(
+        action_id="act-empty-respond",
+        kind="respond",
+        name=None,
+        description="fallback answer",
+        score=1.0,
+        payload={},
+        reasons=[],
+        side_effect_class="none",
+    )
+    ask = CandidateAction(
+        action_id="act-empty-ask",
+        kind="ask_user",
+        name=None,
+        description="fallback question",
+        score=1.0,
+        payload={},
+        reasons=[],
+        side_effect_class="none",
+    )
+
+    respond_result = registry.execute_with_artifacts(
+        respond,
+        execution_context={"task_id": "task-secret", "run_id": "run-secret"},
+    )
+    ask_result = registry.execute_with_artifacts(
+        ask,
+        execution_context={"task_id": "task-secret", "run_id": "run-secret"},
+    )
+
+    assert respond_result.observation.content == {"text": "fallback answer"}
+    assert ask_result.observation.content == {"question": "fallback question"}

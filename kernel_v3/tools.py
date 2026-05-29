@@ -188,7 +188,7 @@ def _action_with_execution_context(
     action: CandidateAction,
     execution_context: JsonObject | None,
 ) -> CandidateAction:
-    if not execution_context:
+    if not execution_context or action.kind != "tool":
         return action
     return replace(
         action,
@@ -241,7 +241,7 @@ def _execute_respond(action: CandidateAction) -> Observation:
         kind="respond_result",
         status="ok",
         source="respond",
-        content={"text": action.payload.get("text", "")},
+        content={"text": _response_text(action.payload, fallback=action.description)},
         observed_at_ms=0,
         action_id=action.action_id,
         tool_call_id=None,
@@ -255,11 +255,44 @@ def _execute_ask_user(action: CandidateAction) -> Observation:
         kind="ask_user",
         status="needs_user_input",
         source="ask_user",
-        content={"question": action.payload.get("question", "")},
+        content={"question": _question_text(action.payload, fallback=action.description)},
         observed_at_ms=0,
         action_id=action.action_id,
         tool_call_id=None,
     )
+
+
+def _response_text(payload: JsonObject, *, fallback: str = "") -> str:
+    for key in ("text", "answer", "message", "summary"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    value = payload.get("cwd")
+    if isinstance(value, str) and value.strip():
+        return value
+    user_payload = _user_payload(payload)
+    if user_payload:
+        return json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+    if fallback.strip():
+        return fallback
+    return ""
+
+
+def _question_text(payload: JsonObject, *, fallback: str = "") -> str:
+    for key in ("question", "prompt", "text", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    user_payload = _user_payload(payload)
+    if user_payload:
+        return json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+    if fallback.strip():
+        return fallback
+    return ""
+
+
+def _user_payload(payload: JsonObject) -> JsonObject:
+    return {key: value for key, value in payload.items() if not str(key).startswith("_host_")}
 
 
 def _fake_workspace_search(files: dict[str, str]) -> ToolExecutor:
