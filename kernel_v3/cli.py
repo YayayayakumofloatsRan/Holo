@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+from kernel_v3.agent import AgentRuntime
 from kernel_v3.context import ContextCompiler, ContextPackCompiler
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -40,6 +41,25 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = sub.add_parser("run")
     run_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
     run_parser.add_argument("text")
+
+    agent_parser = sub.add_parser("agent")
+    agent_parser.add_argument("goal")
+    agent_parser.add_argument("--mode", choices=["direct", "retrieval", "workspace", "auto"], default="auto")
+    agent_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
+    agent_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
+    agent_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
+    agent_parser.add_argument("--model", default=None)
+    agent_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    agent_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    agent_parser.add_argument("--citations-required", action="store_true")
+
+    answer_parser = sub.add_parser("answer")
+    answer_parser.add_argument("goal")
+    answer_parser.add_argument("--citations-required", action="store_true")
+
+    inspect_run_parser = sub.add_parser("inspect-run")
+    inspect_run_parser.add_argument("task_id")
 
     retrieve_parser = sub.add_parser("retrieve")
     retrieve_parser.add_argument("query")
@@ -102,6 +122,56 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         result = _loop(journal, answer=f"respond: {args.text}", planner_mode=args.planner).run(args.text)
         print(json.dumps(result.__dict__, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "agent":
+        if _agent_uses_live_model(args) and os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
+            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+            return 1
+        runtime = _agent_runtime(
+            journal,
+            live_model=_agent_uses_live_model(args),
+            model=args.model,
+            profile=args.profile,
+            thinking=_thinking_override(args.thinking),
+            reasoning_effort=args.reasoning_effort,
+        )
+        payload = runtime.run(
+            args.goal,
+            mode=args.mode,
+            planner_mode=args.planner,
+            evaluator_mode=args.evaluator,
+            synthesizer_mode=args.synthesizer,
+            citations_required=True if args.citations_required else None,
+        )
+        print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "answer":
+        runtime = _agent_runtime(journal, live_model=False)
+        payload = runtime.run(
+            args.goal,
+            mode="retrieval" if args.citations_required else "auto",
+            citations_required=True if args.citations_required else None,
+        )
+        print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "inspect-run":
+        renderer = TraceRenderer(journal)
+        print(
+            json.dumps(
+                {
+                    "task_id": args.task_id,
+                    "trace": renderer.render_task(args.task_id, verbose=True),
+                    "evidence": renderer.render_evidence(args.task_id),
+                    "artifacts": renderer.render_artifacts(args.task_id),
+                    "retrieval_trace": renderer.render_retrieval_trace(args.task_id),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
         return 0
 
     if args.command == "retrieve":
@@ -260,6 +330,45 @@ def _loop(journal: JournalStore, *, answer: str, planner_mode: str = "fake") -> 
         policy_gate=PolicyGate(permission="read_write"),
         tool_registry=registry,
         evaluator=FakeEvaluator.final_answer(answer),
+    )
+
+
+def _agent_runtime(
+    journal: JournalStore,
+    *,
+    live_model: bool,
+    model: str | None = None,
+    profile: str = "balanced",
+    thinking: str | None = None,
+    reasoning_effort: str = "high",
+) -> AgentRuntime:
+    fabric = (
+        _live_processor_fabric(
+            "deepseek",
+            journal,
+            model=model,
+            profile=profile,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+        )
+        if live_model
+        else None
+    )
+    return AgentRuntime(
+        journal=journal,
+        processor_fabric=fabric,
+        workspace_root=Path.cwd(),
+    )
+
+
+def _agent_uses_live_model(args) -> bool:
+    return any(
+        value == "model"
+        for value in (
+            getattr(args, "planner", "fake"),
+            getattr(args, "evaluator", "fake"),
+            getattr(args, "synthesizer", "fake"),
+        )
     )
 
 
