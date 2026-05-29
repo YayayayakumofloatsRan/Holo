@@ -43,9 +43,12 @@ class FailureReport(Contract):
     attempted_actions: list[str]
     attempted_sources: list[str]
     missing_evidence: list[str]
+    last_observations: list[JsonObject]
+    user_help_needed: bool
     next_possible_action: str | None
     task_id: str
     run_id: str
+    trace_refs: list[str]
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -53,7 +53,7 @@ def test_phase6_retrieval_answer_refuses_final_when_citations_required_but_absen
     assert result.status == "failed"
     assert result.final_answer is None
     assert result.failure_report is not None
-    assert result.failure_report["reason"] == "retrieval_insufficient_evidence"
+    assert result.failure_report["reason"] == "repeated_no_progress"
     assert "sufficient_retrieval_evidence" in result.failure_report["missing_evidence"]
     assert journal.records(task_id=result.task_id, kind="agent_failure_report")
 
@@ -101,7 +101,7 @@ def test_phase6_failed_retrieval_returns_failure_report_not_invented_answer():
     assert result.status == "failed"
     assert result.final_answer is None
     assert result.failure_report is not None
-    assert result.failure_report["attempted_actions"] == ["retrieval.run"]
+    assert result.failure_report["attempted_actions"] == ["retrieval.run", "retrieval.run"]
     assert result.failure_report["next_possible_action"] == "refine_query_or_add_sources"
 
 
@@ -175,4 +175,3 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=True,
     )
-

@@ -61,6 +61,15 @@ def main(argv: list[str] | None = None) -> int:
     inspect_run_parser = sub.add_parser("inspect-run")
     inspect_run_parser.add_argument("task_id")
 
+    inspect_workloop_parser = sub.add_parser("inspect-workloop")
+    inspect_workloop_parser.add_argument("task_id")
+
+    final_answer_parser = sub.add_parser("final-answer")
+    final_answer_parser.add_argument("task_id")
+
+    failure_report_parser = sub.add_parser("failure-report")
+    failure_report_parser.add_argument("task_id")
+
     retrieve_parser = sub.add_parser("retrieve")
     retrieve_parser.add_argument("query")
     retrieve_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
@@ -173,6 +182,20 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+
+    if args.command == "inspect-workloop":
+        print(json.dumps(_workloop_payload(journal, args.task_id), ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "final-answer":
+        payload = _latest_record_payload(journal, args.task_id, "agent_final_answer")
+        print(json.dumps(payload or {"status": "missing", "task_id": args.task_id}, ensure_ascii=False, sort_keys=True))
+        return 0 if payload else 1
+
+    if args.command == "failure-report":
+        payload = _latest_record_payload(journal, args.task_id, "agent_failure_report")
+        print(json.dumps(payload or {"status": "missing", "task_id": args.task_id}, ensure_ascii=False, sort_keys=True))
+        return 0 if payload else 1
 
     if args.command == "retrieve":
         payload = _run_retrieve(journal, query=args.query, body=args.body, synthesizer_mode=args.synthesizer)
@@ -370,6 +393,31 @@ def _agent_uses_live_model(args) -> bool:
             getattr(args, "synthesizer", "fake"),
         )
     )
+
+
+def _workloop_payload(journal: JournalStore, task_id: str) -> dict[str, object]:
+    return {
+        "task_id": task_id,
+        "progress_assessments": [
+            record.data for record in journal.records(task_id=task_id, kind="progress_assessment")
+        ],
+        "repetition_signals": [
+            record.data for record in journal.records(task_id=task_id, kind="repetition_signal")
+        ],
+        "evidence_sufficiency": [
+            record.data for record in journal.records(task_id=task_id, kind="evidence_sufficiency")
+        ],
+        "termination_decisions": [
+            record.data for record in journal.records(task_id=task_id, kind="termination_decision")
+        ],
+        "final_answer": _latest_record_payload(journal, task_id, "agent_final_answer"),
+        "failure_report": _latest_record_payload(journal, task_id, "agent_failure_report"),
+    }
+
+
+def _latest_record_payload(journal: JournalStore, task_id: str, kind: str):
+    records = journal.records(task_id=task_id, kind=kind)
+    return records[-1].data if records else None
 
 
 def _active_task(journal: JournalStore, task_id: str):

@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from kernel_v3.agent.contracts import AgentRuntimeResult, FailureReport, FinalAnswer, TaskRecipe
+from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
@@ -28,6 +29,7 @@ class AgentRuntime:
         retrieval_operator: RetrievalOperator | None = None,
         workspace_root: Path | str | None = None,
         workspace_files: dict[str, str] | None = None,
+        workloop_config: WorkloopConfig | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.artifact_store = artifact_store or ArtifactStore.in_memory()
@@ -35,6 +37,7 @@ class AgentRuntime:
         self.retrieval_operator = retrieval_operator
         self.workspace_root = Path(workspace_root) if workspace_root is not None else None
         self.workspace_files = dict(workspace_files or {})
+        self.workloop_config = workloop_config or WorkloopConfig()
 
     def run(
         self,
@@ -52,7 +55,12 @@ class AgentRuntime:
         recipe = task_recipe(selected_mode, citations_required=citations_required)
         registry = self._registry(recipe, goal)
         planner = self._planner(goal, recipe, registry, planner_mode)
-        evaluator = self._evaluator(recipe, evaluator_mode)
+        evaluator = WorkloopEvaluator(
+            inner=self._evaluator(recipe, evaluator_mode),
+            journal=self.journal,
+            recipe=recipe,
+            config=self.workloop_config,
+        )
         loop = LoopControllerV3(
             journal=self.journal,
             context_compiler=_AgentContextCompiler(recipe=recipe, tool_manifests=registry.manifests()),
@@ -83,6 +91,7 @@ class AgentRuntime:
             result.run_id,
             recipe=recipe,
             loop_answer=result.answer,
+            loop_stop_reason=result.stop_reason,
             synthesizer_mode=synthesizer_mode,
         )
         status = "completed" if final_answer is not None else "failed"
@@ -143,6 +152,7 @@ class AgentRuntime:
         *,
         recipe: TaskRecipe,
         loop_answer: str | None,
+        loop_stop_reason: str | None,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
         if recipe.mode == "direct_answer":
@@ -170,10 +180,21 @@ class AgentRuntime:
                 )
             ), None
         if recipe.mode == "retrieval_answer":
-            return self._finalize_retrieval(task_id, run_id, recipe=recipe, synthesizer_mode=synthesizer_mode)
+            return self._finalize_retrieval(
+                task_id,
+                run_id,
+                recipe=recipe,
+                loop_stop_reason=loop_stop_reason,
+                synthesizer_mode=synthesizer_mode,
+            )
         if recipe.mode == "workspace_answer":
             return self._finalize_workspace(task_id, run_id, recipe=recipe, synthesizer_mode=synthesizer_mode)
-        return None, self._failure(task_id, run_id, "needs_user_input", next_action="provide_more_detail")
+        return None, self._failure(
+            task_id,
+            run_id,
+            loop_stop_reason or "needs_user_input",
+            next_action="provide_more_detail",
+        )
 
     def _finalize_retrieval(
         self,
@@ -181,6 +202,7 @@ class AgentRuntime:
         run_id: str,
         *,
         recipe: TaskRecipe,
+        loop_stop_reason: str | None,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
         report = _latest_retrieval_report(self.journal, task_id)
@@ -189,10 +211,11 @@ class AgentRuntime:
         if report is None:
             return None, self._failure(task_id, run_id, "missing_retrieval_report", next_action="retry_retrieval")
         if report.status != "sufficient":
+            reason = _latest_termination_failure_reason(self.journal, task_id) or loop_stop_reason or f"retrieval_{report.status}"
             return None, self._failure(
                 task_id,
                 run_id,
-                f"retrieval_{report.status}",
+                reason,
                 missing_evidence=["sufficient_retrieval_evidence"],
                 next_action="refine_query_or_add_sources",
             )
@@ -342,9 +365,12 @@ class AgentRuntime:
             attempted_actions=_attempted_actions(self.journal, task_id),
             attempted_sources=_attempted_sources(self.journal, task_id),
             missing_evidence=list(missing_evidence or _missing_evidence(self.journal, task_id)),
+            last_observations=_last_observations(self.journal, task_id),
+            user_help_needed=reason in {"needs_user_input", "clarification_required"} or next_action in {"ask_user", "provide_more_detail"},
             next_possible_action=next_action,
             task_id=task_id,
             run_id=run_id,
+            trace_refs=_trace_refs(self.journal, task_id),
         )
         self.journal.append(
             task_id=task_id,
@@ -476,7 +502,7 @@ def task_recipe(mode: str, *, citations_required: bool | None = None) -> TaskRec
             recipe_id="recipe-retrieval-answer",
             allowed_tools=["retrieval.run"],
             max_steps=3,
-            max_tool_calls=1,
+            max_tool_calls=2,
             max_network_fetches=0,
             max_total_artifact_bytes=1_000_000,
             permission_profile="read_write",
@@ -554,13 +580,23 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
     if recipe.mode == "retrieval_answer":
         return [
             CandidateAction(
-                action_id="act-agent-retrieval",
+                action_id="act-agent-retrieval-1",
                 kind="tool",
                 name="retrieval.run",
                 description="run retrieval for grounded answer",
                 score=1.0,
                 payload={"goal_id": "goal-agent-retrieval", "query": goal, "max_spans_per_document": 2},
                 reasons=["retrieval_answer recipe"],
+                side_effect_class="read",
+            ),
+            CandidateAction(
+                action_id="act-agent-retrieval-2",
+                kind="tool",
+                name="retrieval.run",
+                description="retry retrieval once if evidence remains insufficient",
+                score=0.6,
+                payload={"goal_id": "goal-agent-retrieval", "query": goal, "max_spans_per_document": 2},
+                reasons=["retrieval_answer retry budget"],
                 side_effect_class="read",
             )
         ]
@@ -849,6 +885,28 @@ def _missing_evidence(journal: JournalStore, task_id: str) -> list[str]:
         if isinstance(missing, list):
             return [str(item) for item in missing]
     return []
+
+
+def _latest_termination_failure_reason(journal: JournalStore, task_id: str) -> str | None:
+    for record in reversed(journal.records(task_id=task_id, kind="termination_decision")):
+        if record.data.get("decision") == "failure_report" and isinstance(record.data.get("reason"), str):
+            return str(record.data["reason"])
+    return None
+
+
+def _last_observations(journal: JournalStore, task_id: str, *, limit: int = 3) -> list[JsonObject]:
+    observations = []
+    for record in journal.records(task_id=task_id, kind="observation")[-limit:]:
+        data = dict(record.data)
+        content = data.get("content")
+        if isinstance(content, dict):
+            compacted = dict(content)
+            text = compacted.get("text")
+            if isinstance(text, str) and len(text) > 240:
+                compacted["text"] = text[:240] + "..."
+            data["content"] = compacted
+        observations.append(data)
+    return observations
 
 
 def _nested(value, *path):
