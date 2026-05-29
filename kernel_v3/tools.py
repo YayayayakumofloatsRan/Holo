@@ -263,7 +263,7 @@ def _execute_ask_user(action: CandidateAction) -> Observation:
 
 
 def _response_text(payload: JsonObject, *, fallback: str = "") -> str:
-    for key in ("text", "answer", "message", "summary"):
+    for key in ("text", "answer", "message", "summary", "response", "content"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value
@@ -279,7 +279,7 @@ def _response_text(payload: JsonObject, *, fallback: str = "") -> str:
 
 
 def _question_text(payload: JsonObject, *, fallback: str = "") -> str:
-    for key in ("question", "prompt", "text", "message"):
+    for key in ("question", "prompt", "text", "message", "content"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value

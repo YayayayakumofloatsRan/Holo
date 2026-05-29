@@ -11,6 +11,7 @@ from kernel_v3.processors import (
     DEEPSEEK_V4_PRO,
     EVALUATOR_SCHEMA,
     PLANNER_SCHEMA,
+    PLANNER_PROMPT_CONTRACT,
     DeepSeekProvider,
     FakeJsonProvider,
     FakeMalformedJsonProvider,
@@ -63,6 +64,15 @@ def test_phase5_fake_provider_produces_valid_candidate_action_and_journals_proce
     assert result.data["task_type"] == "planner.propose"
     assert result.data["usage"]["total_tokens"] > 0
     assert registry.executed_actions == []
+
+
+def test_phase5_planner_contract_requires_explicit_handling_of_constrained_subrequests():
+    lowered = PLANNER_PROMPT_CONTRACT.lower()
+
+    assert "compound user requests" in lowered
+    assert "multiple subrequests" in lowered
+    assert "silently omitting" in lowered
+    assert "never invent tools" in lowered
 
 
 def test_phase5_malformed_planner_json_is_rejected_and_journaled_without_crashing_loop():

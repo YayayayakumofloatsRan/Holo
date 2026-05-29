@@ -126,6 +126,30 @@ def test_respond_and_ask_user_normalize_common_model_payload_keys():
     assert answer.content == {"text": "model answer"}
     assert summary.content == {"text": "brief reasoning summary"}
     assert ask.content == {"question": "which market?"}
+    assert registry.execute(
+        CandidateAction(
+            action_id="act-response",
+            kind="respond",
+            name=None,
+            description="respond",
+            score=1.0,
+            payload={"response": "model response"},
+            reasons=[],
+            side_effect_class="none",
+        )
+    ).content == {"text": "model response"}
+    assert registry.execute(
+        CandidateAction(
+            action_id="act-content",
+            kind="respond",
+            name=None,
+            description="respond",
+            score=1.0,
+            payload={"content": "model content"},
+            reasons=[],
+            side_effect_class="none",
+        )
+    ).content == {"text": "model content"}
 
 
 def test_host_execution_context_is_not_visible_to_respond_or_ask_user():

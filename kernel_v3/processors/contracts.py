@@ -100,14 +100,20 @@ PLANNER_PROMPT_CONTRACT = """Return one JSON object matching planner.propose.
 Fields: action_id string, kind one of respond/tool/ask_user, name string or null,
 description string, payload object, score number 0..1, reasons string array,
 side_effect_class one of none/read/write/destructive/shell/network.
+For user-visible respond/ask_user payload text, match the user's language when it is clear.
+Treat compound user requests as multiple subrequests.
+If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.
+For infeasible physical actions, unavailable tools, or unclear requests, propose respond/ask_user with the limitation; never invent tools.
 The model only proposes. The host validates policy and executes."""
 
 EVALUATOR_PROMPT_CONTRACT = """Return one JSON object matching evaluator.assess.
 Fields: status one of continue/final_answer_ready/needs_user_input/blocked/failed,
 answer string or null, stop_reason string or null, missing_evidence string array.
-Evaluate whether the latest observation is enough and whether the host should continue."""
+Evaluate whether the latest observation is enough and whether the host should continue.
+For any user-visible answer text, match the user's language when it is clear."""
 
 SYNTHESIZER_PROMPT_CONTRACT = """Return one JSON object matching synthesizer.answer.
 Fields: answer string, citation_refs string array, confidence number 0..1,
 limitations string array, used_evidence string array.
-Only cite provided citation ids. Do not invent sources."""
+Only cite provided citation ids. Do not invent sources.
+Match the user's language when it is clear from the context."""
