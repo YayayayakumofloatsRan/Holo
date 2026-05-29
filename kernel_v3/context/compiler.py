@@ -83,8 +83,8 @@ class ContextPackCompiler:
             artifact_ids.extend(record.artifact_refs)
         artifact_ids = _ordered_unique(artifact_ids)
         resolved_artifacts = {artifact.artifact_id: artifact for artifact in self.artifact_store.resolve_many(artifact_ids)}
-        evidence = memory_read.query_observations(task_id=task.task_id, limit=3)
-        citations = memory_read.query_citations(task_id=task.task_id, limit=3)
+        evidence = memory_read.query_observations(task_id=task.task_id, limit=3, order="recent")
+        citations = memory_read.query_citations(task_id=task.task_id, limit=3, order="recent")
         memory_refs = [item.observation_id for item in evidence]
         sections: list[JsonObject] = [
             {"name": "user_event", "records": [_compact_event(record.data) for record in event_records[-1:]]},

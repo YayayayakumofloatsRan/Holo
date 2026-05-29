@@ -134,6 +134,63 @@ def test_context_pack_hash_changes_when_source_journal_changes():
     assert after.source_refs == ["ledger-2", "ledger-3", "ledger-4", "artifact-obs-1"]
 
 
+def test_context_pack_recent_observations_memory_refs_and_citations_use_same_window():
+    journal = JournalStore.in_memory()
+    task = SessionEngine.from_journal(journal).start("inspect sequence", thread_id="thread-a", journal=journal)
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id=task.step_id,
+        kind="event",
+        data={"event_id": "evt-1", "payload": {"text": "inspect sequence"}},
+        event_ref="evt-1",
+    )
+    artifacts = []
+    for index in range(1, 6):
+        observation_id = f"obs-{index}"
+        artifact_id = f"artifact-{index}"
+        journal.append(
+            task_id=task.task_id,
+            run_id=task.run_id,
+            step_id=f"step-{index}",
+            kind="observation",
+            data={
+                "observation_id": observation_id,
+                "kind": "tool_result",
+                "status": "ok",
+                "source": "tool:file.read",
+                "content": {"text": f"observation {index}"},
+            },
+            observation_ref=observation_id,
+            artifact_refs=[artifact_id],
+        )
+        artifacts.append(
+            ArtifactRef(
+                artifact_id=artifact_id,
+                kind="observation_payload",
+                uri=f"journal://observations/{observation_id}",
+                payload_hash=f"hash-{index}",
+                metadata={"observation_id": observation_id},
+            )
+        )
+
+    pack = ContextPackCompiler(
+        artifact_store=ArtifactStore.in_memory(artifacts),
+        memory_read=MemoryRead(journal=journal, artifact_store=ArtifactStore.in_memory(artifacts)),
+        token_budget=1024,
+        section_budget=256,
+    ).compile(task, journal, step_id="step-5")
+
+    recent = next(section for section in pack.sections if section["name"] == "recent_observations")
+    memory_refs = next(section for section in pack.sections if section["name"] == "memory_refs")
+    citations = next(section for section in pack.sections if section["name"] == "citations")
+
+    assert [record["observation_id"] for record in recent["records"]] == ["obs-3", "obs-4", "obs-5"]
+    assert [ref["observation_id"] for ref in memory_refs["refs"]] == ["obs-3", "obs-4", "obs-5"]
+    assert [item["record_ref"] for item in citations["items"]] == ["ledger-5", "ledger-6", "ledger-7"]
+    assert pack.source_refs == ["ledger-2", "ledger-5", "ledger-6", "ledger-7", "artifact-3", "artifact-4", "artifact-5"]
+
+
 def _seed_context_inputs():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("read README", thread_id="thread-a", journal=journal)

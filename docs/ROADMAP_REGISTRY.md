@@ -533,6 +533,12 @@ Post-Stage218 live web-search hardening
 - Failed web-search observations now map to `tool_failure_report`, failed visible web replies are repaired into attempted-failure language, and Stage153 suppresses empty market trace rows when no market report exists.
 - Verification on `2026-05-28`: targeted search/CLI stack `63 passed`; runtime/topology stack `92 passed`; Stage151/162 proxy/fallback stack `27 passed`; full suite `1068 passed`; public hygiene passed; `git diff --check` passed with CRLF normalization warnings only. Direct probes returned `ok duckduckgo_html` on Windows and `ok bing_html` on WSL.
 
+Stage249: kernel v3 foundation review
+- Reviewed `kernel_v3` Phase0 through Phase3 as a host-owned kernel base: typed contracts, durable loop/journal/session substrate, permissioned tool plane, and context/memory read path.
+- Fixed a Phase3 evidence-window consistency defect so `recent_observations`, `memory_refs`, and `citations` in the same ContextPack now derive from the same latest observation window.
+- Added explicit MemoryRead boundary behavior for `limit <= 0` and documented the release boundary in `docs/ENGINEERING_HANDOFF_STAGE249.md`.
+- Verification on `2026-05-29`: kernel v3 suite `45 passed`; compileall passed; kernel dependency/live-provider scans returned no matches; loop concrete-tool-name scan returned no matches; `git diff --check` passed with CRLF normalization warnings only.
+
 ## Next Program Arc (Planned)
 
 This planned arc starts after Stage28. The durable execution sources of truth remain `.agent/PLANS.md` and `.agent/STAGE23_27_PROGRAM.md` until a Stage29+ program replaces them.

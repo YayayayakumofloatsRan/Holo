@@ -137,6 +137,63 @@ def test_memory_read_filters_by_task_and_preserves_journal_order():
     assert [item.record_ref for item in observations] == ["ledger-1", "ledger-3"]
 
 
+def test_memory_read_recent_order_returns_latest_window_in_journal_order():
+    journal = JournalStore.in_memory()
+    for index in range(1, 6):
+        journal.append(
+            task_id="task-a",
+            run_id="run-1",
+            step_id=f"step-{index}",
+            kind="observation",
+            data={
+                "observation_id": f"obs-{index}",
+                "kind": "tool_result",
+                "status": "ok",
+                "content": {"text": f"shared value {index}"},
+            },
+            observation_ref=f"obs-{index}",
+        )
+
+    observations = MemoryRead(journal=journal).query_observations(
+        query="shared",
+        task_id="task-a",
+        limit=3,
+        order="recent",
+    )
+
+    assert [item.observation_id for item in observations] == ["obs-3", "obs-4", "obs-5"]
+    assert [item.record_ref for item in observations] == ["ledger-3", "ledger-4", "ledger-5"]
+
+
+def test_memory_read_zero_limit_returns_empty_result():
+    journal = JournalStore.in_memory()
+    store = ArtifactStore.in_memory(
+        [
+            ArtifactRef(
+                artifact_id="artifact-1",
+                kind="observation_payload",
+                uri="journal://observations/obs-1",
+                payload_hash="hash-1",
+                metadata={},
+            )
+        ]
+    )
+    journal.append(
+        task_id="task-a",
+        run_id="run-1",
+        step_id="step-1",
+        kind="observation",
+        data={"observation_id": "obs-1", "content": {"text": "value"}},
+        observation_ref="obs-1",
+    )
+
+    memory = MemoryRead(journal=journal, artifact_store=store)
+
+    assert memory.query_observations(limit=0) == []
+    assert memory.query_citations(limit=0) == []
+    assert memory.query_artifacts(limit=0) == []
+
+
 def test_artifact_store_roundtrips_jsonl_without_private_file_access():
     path = Path("kernel_v3/.test-phase3-artifacts.jsonl")
     if path.exists():

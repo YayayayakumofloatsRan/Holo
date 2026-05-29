@@ -61,7 +61,12 @@ class MemoryRead:
         query: str = "",
         task_id: str | None = None,
         limit: int = 5,
+        order: str = "journal",
     ) -> list[EvidenceItem]:
+        if limit <= 0:
+            return []
+        if order not in {"journal", "recent"}:
+            raise ValueError(f"unsupported observation order: {order}")
         query_text = query.lower()
         matches: list[EvidenceItem] = []
         for record in self.journal.records(task_id=task_id, kind="observation"):
@@ -80,11 +85,13 @@ class MemoryRead:
                     artifact_refs=list(record.artifact_refs),
                 )
             )
-            if len(matches) >= limit:
-                break
-        return matches
+        if order == "recent":
+            return matches[-limit:]
+        return matches[:limit]
 
     def query_artifacts(self, *, query: str = "", limit: int = 5) -> list[ArtifactRef]:
+        if limit <= 0:
+            return []
         query_text = query.lower()
         matches: list[ArtifactRef] = []
         for artifact in self.artifact_store.list():
@@ -102,9 +109,12 @@ class MemoryRead:
         query: str = "",
         task_id: str | None = None,
         limit: int = 5,
+        order: str = "journal",
     ) -> list[CitationItem]:
+        if limit <= 0:
+            return []
         citations: list[CitationItem] = []
-        for evidence in self.query_observations(query=query, task_id=task_id, limit=limit):
+        for evidence in self.query_observations(query=query, task_id=task_id, limit=limit, order=order):
             if evidence.artifact_refs:
                 for artifact_ref in evidence.artifact_refs:
                     artifact = self.artifact_store.get(artifact_ref)
