@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -130,6 +130,7 @@ class ToolRegistry:
         action: CandidateAction,
         *,
         policy_decision: PolicyDecision | None = None,
+        execution_context: JsonObject | None = None,
     ) -> ToolResult:
         tool_name = _tool_name_for_action(action)
         if tool_name is None or tool_name not in self._tools:
@@ -161,7 +162,7 @@ class ToolRegistry:
                 kind="policy_block",
             )
         self.executed_actions.append(action)
-        raw = self._tools[tool_name].executor(action)
+        raw = self._tools[tool_name].executor(_action_with_execution_context(action, execution_context))
         result = raw if isinstance(raw, ToolResult) else _result_from_observation(raw)
         if result.artifact_refs:
             return result
@@ -177,6 +178,18 @@ def _tool_name_for_action(action: CandidateAction) -> str | None:
     if action.kind == "ask_user":
         return "__ask_user__"
     return action.name
+
+
+def _action_with_execution_context(
+    action: CandidateAction,
+    execution_context: JsonObject | None,
+) -> CandidateAction:
+    if not execution_context:
+        return action
+    return replace(
+        action,
+        payload={**action.payload, "_host_context": dict(execution_context)},
+    )
 
 
 def _requires_policy_decision(action: CandidateAction) -> bool:

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
 .holo_host.toml
 .holo_runtime/
 .subject.local.md

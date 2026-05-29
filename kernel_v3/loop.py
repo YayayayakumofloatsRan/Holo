@@ -197,7 +197,15 @@ class LoopControllerV3:
                 if pre_exec_guard is not None:
                     observation = self._guard_observation(task.run_id, action, pre_exec_guard)
                 else:
-                    tool_result = self.tool_registry.execute_with_artifacts(action, policy_decision=decision)
+                    tool_result = self.tool_registry.execute_with_artifacts(
+                        action,
+                        policy_decision=decision,
+                        execution_context={
+                            "task_id": task.task_id,
+                            "run_id": task.run_id,
+                            "step_id": step_id,
+                        },
+                    )
                     observation = self._bind_observation(task.run_id, action, tool_result.observation)
                     artifact_refs = tool_result.artifact_refs
                     if action.kind == "tool":
