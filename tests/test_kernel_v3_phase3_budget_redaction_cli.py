@@ -100,6 +100,7 @@ def test_holo_v3_context_inspection_commands_and_golden_transcript():
             "recent_observations",
             "artifact_references",
             "memory_refs",
+            "citations",
             "tool_briefs",
             "permission_state",
         ]
@@ -134,16 +135,16 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 def _golden_cli_context(task_id: str) -> dict[str, object]:
     return {
         "budget": {
-            "section_count": 8,
+            "section_count": 9,
             "section_limit": 1024,
-            "section_units": [38, 42, 32, 38, 52, 50, 109, 24],
+            "section_units": [38, 42, 32, 38, 52, 50, 72, 109, 24],
             "token_budget": 4096,
-            "total_units": 385,
+            "total_units": 457,
             "within_budget": True,
         },
         "context_id": f"ctx-{task_id}-run-1-step-1",
         "memory_refs": ["obs-act-respond"],
-        "payload_hash": "33c7d1554c38836f4421435cb5b98272a89847eaae117464853f5e335316475e",
+        "payload_hash": "3836fd565aa186ac05cfe8bcb9e9441fb82a6e89e69bc399f542ae79db97af55",
         "redactions": [],
         "run_id": "run-1",
         "sections": [
@@ -195,6 +196,19 @@ def _golden_cli_context(task_id: str) -> dict[str, object]:
                         "status": "ok",
                     }
                 ],
+            },
+            {
+                "items": [
+                    {
+                        "artifact_ref": "artifact-obs-act-respond",
+                        "citation_id": "cite-ledger-7-artifact-obs-act-respond",
+                        "metadata": {},
+                        "quote": "respond: phase3",
+                        "record_ref": "ledger-7",
+                        "uri": "journal://records/ledger-7",
+                    }
+                ],
+                "name": "citations",
             },
             {
                 "name": "tool_briefs",

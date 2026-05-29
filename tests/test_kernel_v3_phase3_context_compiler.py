@@ -36,6 +36,7 @@ def test_context_pack_reads_journal_artifacts_task_state_memory_and_profile_dete
         "recent_observations",
         "artifact_references",
         "memory_refs",
+        "citations",
         "tool_briefs",
         "permission_state",
     ]
@@ -57,6 +58,17 @@ def test_context_pack_reads_journal_artifacts_task_state_memory_and_profile_dete
     assert pack.budget["within_budget"] is True
     assert pack.source_refs == ["ledger-2", "ledger-3", "artifact-obs-1"]
     assert pack.memory_refs == ["obs-1"]
+    citations = next(section for section in pack.sections if section["name"] == "citations")
+    assert citations["items"] == [
+        {
+            "artifact_ref": "artifact-obs-1",
+            "citation_id": "cite-ledger-3-artifact-obs-1",
+            "metadata": {"observation_id": "obs-1", "path": "README.md"},
+            "quote": "Kernel context from [REDACTED:PRIVATE_PATH]/private.log",
+            "record_ref": "ledger-3",
+            "uri": "journal://observations/obs-1",
+        }
+    ]
     assert "D:/Holo/holo/.holo_runtime" not in json.dumps(pack.to_dict(), ensure_ascii=False)
     assert "[REDACTED:PRIVATE_PATH]" in json.dumps(pack.to_dict(), ensure_ascii=False)
 

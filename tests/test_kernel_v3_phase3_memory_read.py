@@ -67,6 +67,49 @@ def test_memory_read_queries_historical_observations_and_artifacts():
     assert [artifact.artifact_id for artifact in artifacts] == ["artifact-obs-1"]
 
 
+def test_memory_read_maps_observations_and_artifacts_to_citations_without_operator_execution():
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-1",
+        run_id="run-1",
+        step_id="step-1",
+        kind="observation",
+        data={
+            "observation_id": "obs-1",
+            "kind": "tool_result",
+            "status": "ok",
+            "source": "tool:file.read",
+            "content": {"path": "README.md", "text": "Holo is a host-owned kernel."},
+        },
+        observation_ref="obs-1",
+        artifact_refs=["artifact-obs-1"],
+    )
+    store = ArtifactStore.in_memory(
+        [
+            ArtifactRef(
+                artifact_id="artifact-obs-1",
+                kind="observation_payload",
+                uri="journal://observations/obs-1",
+                payload_hash="hash-1",
+                metadata={"path": "README.md", "line_start": 3, "line_end": 5},
+            )
+        ]
+    )
+
+    citations = MemoryRead(journal=journal, artifact_store=store).query_citations(
+        query="host-owned",
+        task_id="task-1",
+        limit=5,
+    )
+
+    assert [citation.citation_id for citation in citations] == ["cite-ledger-1-artifact-obs-1"]
+    assert citations[0].record_ref == "ledger-1"
+    assert citations[0].artifact_ref == "artifact-obs-1"
+    assert citations[0].uri == "journal://observations/obs-1"
+    assert citations[0].quote == "Holo is a host-owned kernel."
+    assert citations[0].metadata == {"line_end": 5, "line_start": 3, "path": "README.md"}
+
+
 def test_memory_read_filters_by_task_and_preserves_journal_order():
     journal = JournalStore.in_memory()
     for index, task_id in enumerate(["task-a", "task-b", "task-a"], start=1):

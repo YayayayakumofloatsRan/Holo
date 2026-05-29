@@ -84,6 +84,7 @@ class ContextPackCompiler:
         artifact_ids = _ordered_unique(artifact_ids)
         resolved_artifacts = {artifact.artifact_id: artifact for artifact in self.artifact_store.resolve_many(artifact_ids)}
         evidence = memory_read.query_observations(task_id=task.task_id, limit=3)
+        citations = memory_read.query_citations(task_id=task.task_id, limit=3)
         memory_refs = [item.observation_id for item in evidence]
         sections: list[JsonObject] = [
             {"name": "user_event", "records": [_compact_event(record.data) for record in event_records[-1:]]},
@@ -101,6 +102,7 @@ class ContextPackCompiler:
                 ],
             },
             {"name": "memory_refs", "refs": [_compact_evidence(item) for item in evidence]},
+            {"name": "citations", "items": [_compact_citation(item) for item in citations]},
             {"name": "tool_briefs", "tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             {"name": "permission_state", "permission": _compact_permission_state(self.permission_state)},
         ]
@@ -115,6 +117,7 @@ class ContextPackCompiler:
                 "artifacts": [_artifact_budget_view(artifact_id, resolved_artifacts.get(artifact_id)) for artifact_id in artifact_ids]
             },
             "memory_refs": {"refs": [_evidence_budget_view(item) for item in evidence]},
+            "citations": {"items": [_citation_budget_view(item) for item in citations]},
             "tool_briefs": {"tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             "permission_state": {"permission": _compact_permission_state(self.permission_state)},
         }
@@ -292,6 +295,17 @@ def _compact_evidence(item) -> JsonObject:
     }
 
 
+def _compact_citation(item) -> JsonObject:
+    return {
+        "citation_id": item.citation_id,
+        "record_ref": item.record_ref,
+        "artifact_ref": item.artifact_ref,
+        "uri": item.uri,
+        "quote": _compact_text(item.quote, limit=256),
+        "metadata": dict(item.metadata),
+    }
+
+
 def _compact_tool_brief(brief: JsonObject) -> JsonObject:
     return {
         "name": brief.get("name"),
@@ -357,4 +371,13 @@ def _evidence_budget_view(item) -> JsonObject:
         "observation_id": item.observation_id,
         "record_ref": item.record_ref,
         "artifact_refs": list(item.artifact_refs),
+    }
+
+
+def _citation_budget_view(item) -> JsonObject:
+    return {
+        "citation_id": item.citation_id,
+        "record_ref": item.record_ref,
+        "artifact_ref": item.artifact_ref,
+        "uri": item.uri,
     }

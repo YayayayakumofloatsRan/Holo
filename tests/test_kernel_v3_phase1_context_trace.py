@@ -38,12 +38,13 @@ def test_context_pack_is_sectioned_bounded_hash_stable_and_roundtrips():
         "recent_observations",
         "artifact_references",
         "memory_refs",
+        "citations",
         "tool_briefs",
         "permission_state",
     ]
     assert pack.source_refs == [event.record_id, observation.record_id]
     assert pack.budget["token_budget"] == 512
-    assert pack.budget["section_count"] == 8
+    assert pack.budget["section_count"] == 9
     assert pack.budget["within_budget"] is True
     assert pack.redactions == []
     assert pack.payload_hash == same_pack.payload_hash
