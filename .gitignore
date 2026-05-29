@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+kernel_v3/.holo-v3-journal.*
 .holo_host.toml
 .holo_runtime/
 .subject.local.md

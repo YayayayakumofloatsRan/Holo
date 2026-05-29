@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -9,6 +10,18 @@ from kernel_v3.context import ContextCompiler, ContextPackCompiler
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.policy import PolicyGate
+from kernel_v3.processors import (
+    PLANNER_SCHEMA,
+    PLANNER_PROMPT_CONTRACT,
+    DeepSeekProvider,
+    FakeJsonProvider,
+    ModelPlanner,
+    OpenAICompatibleProvider,
+    ProcessorFabric,
+    ProcessorRouter,
+    Synthesizer,
+)
+from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
@@ -22,7 +35,13 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_parser = sub.add_parser("run")
+    run_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
     run_parser.add_argument("text")
+
+    retrieve_parser = sub.add_parser("retrieve")
+    retrieve_parser.add_argument("query")
+    retrieve_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
+    retrieve_parser.add_argument("--body", default=None)
 
     trace_parser = sub.add_parser("trace")
     trace_parser.add_argument("task_id")
@@ -52,6 +71,13 @@ def main(argv: list[str] | None = None) -> int:
     context_parser.add_argument("legacy_task_id", nargs="?")
 
     sub.add_parser("tools")
+    sub.add_parser("providers")
+
+    provider_smoke = sub.add_parser("provider-smoke")
+    provider_smoke.add_argument("--fake", action="store_true")
+
+    model_smoke = sub.add_parser("model-smoke")
+    model_smoke.add_argument("--provider", choices=["deepseek", "openai_compatible"], required=True)
 
     journal_parser = sub.add_parser("journal")
     journal_sub = journal_parser.add_subparsers(dest="journal_command", required=True)
@@ -61,8 +87,13 @@ def main(argv: list[str] | None = None) -> int:
     journal = JournalStore(Path(args.journal), index_path=Path(args.index))
 
     if args.command == "run":
-        result = _loop(journal, answer=f"respond: {args.text}").run(args.text)
+        result = _loop(journal, answer=f"respond: {args.text}", planner_mode=args.planner).run(args.text)
         print(json.dumps(result.__dict__, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "retrieve":
+        payload = _run_retrieve(journal, query=args.query, body=args.body, synthesizer_mode=args.synthesizer)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
 
     if args.command == "resume":
@@ -111,6 +142,41 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(tool["name"] for tool in _tool_briefs()))
         return 0
 
+    if args.command == "providers":
+        print(json.dumps(_providers_payload(), ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "provider-smoke":
+        if not args.fake:
+            parser.error("provider-smoke currently requires --fake")
+        outcome = _fake_processor_fabric(journal).run_json(
+            task_type="planner.propose",
+            run_id="run-provider-smoke",
+            context_id="ctx-provider-smoke",
+            prompt="Return a valid planner action.",
+            schema=PLANNER_SCHEMA,
+            task_id=None,
+        )
+        print(json.dumps(_outcome_payload(outcome), ensure_ascii=False, sort_keys=True))
+        return 0 if outcome.result.status == "ok" else 1
+
+    if args.command == "model-smoke":
+        if os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
+            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+            return 1
+        fabric = _live_processor_fabric(args.provider, journal)
+        outcome = fabric.run_json(
+            task_type="planner.propose",
+            run_id="run-model-smoke",
+            context_id="ctx-model-smoke",
+            prompt=_model_smoke_prompt("model smoke ok"),
+            schema=PLANNER_SCHEMA,
+            task_id=None,
+            provider=args.provider,
+        )
+        print(json.dumps(_outcome_payload(outcome), ensure_ascii=False, sort_keys=True))
+        return 0 if outcome.result.status == "ok" else 1
+
     if args.command == "journal" and args.journal_command == "tail":
         for record in journal.records()[-10:]:
             print(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True))
@@ -134,13 +200,20 @@ def _normalize_argv(argv: list[str]) -> list[str]:
     return argv[: index + 1] + ["dump"] + argv[index + 1 :]
 
 
-def _loop(journal: JournalStore, *, answer: str) -> LoopControllerV3:
+def _loop(journal: JournalStore, *, answer: str, planner_mode: str = "fake") -> LoopControllerV3:
+    registry = ToolRegistry.with_fake_workspace_tools(files={"README.md": "Holo local kernel"})
+    planner = FakePlanner.respond_once(answer)
+    if planner_mode == "model":
+        planner = ModelPlanner(
+            fabric=_fake_processor_fabric(journal, answer=answer),
+            allowed_tool_names={manifest.name for manifest in registry.manifests()},
+        )
     return LoopControllerV3(
         journal=journal,
         context_compiler=ContextCompiler(),
-        planner=FakePlanner.respond_once(answer),
+        planner=planner,
         policy_gate=PolicyGate(permission="read_write"),
-        tool_registry=ToolRegistry.with_fake_workspace_tools(files={"README.md": "Holo local kernel"}),
+        tool_registry=registry,
         evaluator=FakeEvaluator.final_answer(answer),
     )
 
@@ -159,6 +232,152 @@ def _tool_briefs() -> list[dict[str, str]]:
         {"name": "file.read", "side_effect": "read"},
         {"name": "blocked_external_write", "side_effect": "destructive"},
     ]
+
+
+def _fake_processor_fabric(journal: JournalStore, *, answer: str = "processor smoke ok") -> ProcessorFabric:
+    return ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "planner.propose": {
+                        "action_id": "act-model-respond",
+                        "kind": "respond",
+                        "name": None,
+                        "description": "respond through host",
+                        "payload": {"text": answer},
+                        "score": 1.0,
+                        "reasons": ["fake processor smoke"],
+                        "side_effect_class": "none",
+                    },
+                    "synthesizer.answer": {
+                        "answer": answer,
+                        "citation_refs": ["cite-evidence-span-doc-goal-cli-1-1"],
+                        "confidence": 1.0,
+                        "limitations": [],
+                        "used_evidence": ["evidence-span-doc-goal-cli-1-1"],
+                    },
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+
+
+def _live_processor_fabric(provider: str, journal: JournalStore) -> ProcessorFabric:
+    providers = {
+        "deepseek": DeepSeekProvider(enabled=True),
+        "openai_compatible": OpenAICompatibleProvider(enabled=True),
+    }
+    return ProcessorFabric(
+        providers=providers,
+        router=ProcessorRouter(default_provider=provider, default_model=providers[provider].model),
+        journal=journal,
+    )
+
+
+def _run_retrieve(
+    journal: JournalStore,
+    *,
+    query: str,
+    body: str | None,
+    synthesizer_mode: str,
+) -> dict[str, object]:
+    from kernel_v3.context import ArtifactStore
+
+    artifacts = ArtifactStore.in_memory()
+    source = SearchSource(
+        source_id="src-cli-1",
+        uri="https://example.test/holo-v3-cli",
+        title="Holo v3 CLI evidence",
+        snippet=query,
+        provider="fake",
+    )
+    retrieval_body = body or f"{query} evidence from a fake bounded retrieval provider."
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({query: [source]}),
+        fetch_provider=FakeFetchProvider({source.uri: retrieval_body}),
+    )
+    report = operator.run(
+        SearchGoal(goal_id="goal-cli", query=query, max_spans_per_document=1),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-cli-retrieve",
+        run_id="run-cli-retrieve",
+        step_id_prefix="cli-retrieve",
+    )
+    payload: dict[str, object] = {"report": report.to_dict()}
+    if synthesizer_mode == "model":
+        evidence = [
+            record.data
+            for record in journal.records(task_id="task-cli-retrieve", kind="retrieval_evidence")
+            if isinstance(record.data, dict)
+        ]
+        citations = [
+            record.data
+            for record in journal.records(task_id="task-cli-retrieve", kind="retrieval_citation")
+            if isinstance(record.data, dict)
+        ]
+        from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem
+
+        answer = Synthesizer(fabric=_fake_processor_fabric(journal, answer=report.preview)).synthesize(
+            task_id="task-cli-retrieve",
+            run_id="run-cli-retrieve",
+            context_id="ctx-cli-retrieve",
+            report=report,
+            evidence=[EvidenceItem.from_dict(item) for item in evidence],
+            citations=[CitationItem.from_dict(item) for item in citations],
+        )
+        payload["synthesis"] = answer.to_dict()
+    return payload
+
+
+def _providers_payload() -> list[dict[str, object]]:
+    return [
+        {"name": "fake_json", "live": False, "enabled_by_default": True},
+        {"name": "fake_malformed_json", "live": False, "enabled_by_default": False},
+        {"name": "fake_timeout", "live": False, "enabled_by_default": False},
+        {"name": "deepseek", "live": True, "enabled_by_default": False, "env_gated_by": "HOLO_V3_LIVE_MODEL"},
+        {
+            "name": "openai_compatible",
+            "live": True,
+            "enabled_by_default": False,
+            "env_gated_by": "HOLO_V3_LIVE_MODEL",
+        },
+    ]
+
+
+def _model_smoke_prompt(text: str) -> str:
+    return json.dumps(
+        {
+            "contract": PLANNER_PROMPT_CONTRACT,
+            "task": "Return exactly one JSON object matching planner.propose.",
+            "required_action": {
+                "action_id": "act-model-smoke",
+                "kind": "respond",
+                "name": None,
+                "description": "respond through host",
+                "payload": {"text": text},
+                "score": 1.0,
+                "reasons": ["live provider smoke"],
+                "side_effect_class": "none",
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _outcome_payload(outcome) -> dict[str, object]:
+    return {
+        "status": outcome.result.status,
+        "provider": outcome.provider,
+        "model": outcome.model,
+        "task_type": outcome.task_type,
+        "duration_ms": outcome.duration_ms,
+        "parsed": outcome.parsed,
+        "error": outcome.result.error,
+    }
 
 
 if __name__ == "__main__":

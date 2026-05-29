@@ -38,13 +38,13 @@ class ToolRegistry:
     def with_builtin_respond(cls) -> "ToolRegistry":
         registry = cls()
         registry.register("__respond__", _execute_respond, manifest=_manifest("__respond__", "host", "respond", "none"))
+        registry.register("__ask_user__", _execute_ask_user, manifest=_manifest("__ask_user__", "host", "ask_user", "none"))
         return registry
 
     @classmethod
     def with_fake_workspace_tools(cls, *, files: dict[str, str] | None = None) -> "ToolRegistry":
         registry = cls.with_builtin_respond()
         fake_files = dict(files or {})
-        registry.register("__ask_user__", _execute_ask_user, manifest=_manifest("__ask_user__", "host", "ask_user", "none"))
         registry.register("workspace.search", _fake_workspace_search(fake_files), manifest=_workspace_manifest("workspace.search", "search", "read"))
         registry.register("file.read", _fake_file_read(fake_files), manifest=_workspace_manifest("file.read", "read", "read"))
         registry.register(
@@ -69,7 +69,6 @@ class ToolRegistry:
     ) -> "ToolRegistry":
         registry = cls.with_builtin_respond()
         workspace = _Workspace(root)
-        registry.register("__ask_user__", _execute_ask_user, manifest=_manifest("__ask_user__", "host", "ask_user", "none"))
         registry.register("workspace.search", workspace.search, manifest=_workspace_manifest("workspace.search", "search", "read"))
         registry.register("file.read", workspace.read, manifest=_workspace_manifest("file.read", "read", "read"))
         registry.register("workspace.write", workspace.write, manifest=_workspace_manifest("workspace.write", "write", "write"))
@@ -134,7 +133,12 @@ class ToolRegistry:
     ) -> ToolResult:
         tool_name = _tool_name_for_action(action)
         if tool_name is None or tool_name not in self._tools:
-            raise ValueError(f"unregistered tool: {tool_name}")
+            return _tool_result(
+                action,
+                "blocked",
+                {"reason": "unregistered_tool", "tool": tool_name or ""},
+                kind="policy_block",
+            )
         manifest = self._tools[tool_name].manifest
         if _requires_policy_decision(action) and policy_decision is None:
             return _tool_result(

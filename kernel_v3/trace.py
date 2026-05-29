@@ -108,6 +108,19 @@ class TraceRenderer:
             ]
         if record.kind == "guard":
             return [f"  guard stop_reason={record.data.get('stop_reason')} data={record.data}"]
+        if record.kind == "processor_request":
+            return [
+                f"  processor_request task_type={record.data.get('task_type')} "
+                f"provider={record.data.get('provider')} model={record.data.get('model')} "
+                f"prompt_hash={_nested(record.data, 'prompt', 'hash')}"
+            ]
+        if record.kind == "processor_result":
+            return [
+                f"  processor_result status={record.data.get('status')} "
+                f"task_type={record.data.get('task_type')} provider={record.data.get('provider')} "
+                f"model={record.data.get('model')} duration_ms={record.data.get('duration_ms')} "
+                f"usage={record.data.get('usage', {})} error={record.data.get('error')}"
+            ]
         return []
 
     def _extract_length(self, content) -> int:
@@ -124,3 +137,12 @@ class TraceRenderer:
                     total += self._extract_length(value)
             return total
         return 0
+
+
+def _nested(data, *path):
+    current = data
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current

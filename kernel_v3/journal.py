@@ -161,10 +161,9 @@ class JournalStore:
     def _rebuild_index(self) -> None:
         conn = self._connect()
         try:
-            conn.execute("DROP TABLE IF EXISTS journal_index")
             conn.execute(
                 """
-                CREATE TABLE journal_index (
+                CREATE TABLE IF NOT EXISTS journal_index (
                     record_id TEXT PRIMARY KEY,
                     task_id TEXT,
                     run_id TEXT NOT NULL,
