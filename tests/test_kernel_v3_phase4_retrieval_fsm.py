@@ -17,6 +17,7 @@ from kernel_v3.retrieval import (
 )
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
+from kernel_v3.trace import TraceRenderer
 
 
 RAW_ONLY_SENTINEL = "RAW_BODY_ONLY_SECRET"
@@ -62,6 +63,15 @@ def test_phase4_retrieval_fsm_journals_all_steps_and_keeps_raw_body_in_artifact_
         [record.to_dict() for record in journal.records(task_id="task-1")],
         ensure_ascii=False,
     )
+    trace = TraceRenderer(journal).render_retrieval_trace("task-1")
+    assert "query_plan=plan-goal-1" in trace
+    assert "search=search-goal-1-1 status=ok" in trace
+    assert "fetch=fetch-goal-1-1 status=ok" in trace
+    assert "evidence=evidence-" in trace
+    assert "citation=cite-" in trace
+    assert "evaluation=eval-goal-1 sufficient=True" in trace
+    assert "report=report-goal-1 status=sufficient" in trace
+    assert RAW_ONLY_SENTINEL not in trace
 
 
 def test_phase4_retrieval_bounds_sources_fetches_and_spans():

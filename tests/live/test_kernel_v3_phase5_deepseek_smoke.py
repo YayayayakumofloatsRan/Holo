@@ -20,9 +20,10 @@ def test_phase5_deepseek_live_smoke_is_explicitly_gated():
         pytest.skip("set DEEPSEEK_API_KEY for live DeepSeek smoke")
 
     journal = JournalStore.in_memory()
+    provider = DeepSeekProvider(enabled=True)
     fabric = ProcessorFabric(
-        providers={"deepseek": DeepSeekProvider(enabled=True)},
-        router=ProcessorRouter(default_provider="deepseek", default_model="deepseek-chat"),
+        providers={"deepseek": provider},
+        router=ProcessorRouter(default_provider="deepseek", default_model=provider.model),
         journal=journal,
     )
 

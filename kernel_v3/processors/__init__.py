@@ -20,10 +20,28 @@ from kernel_v3.processors.providers import (
     FakeTimeoutProvider,
     OpenAICompatibleProvider,
 )
-from kernel_v3.processors.routing import ProcessorRouter
+from kernel_v3.processors.routing import (
+    DEEPSEEK_LEGACY_REASONER,
+    DEEPSEEK_V4_FLASH,
+    DEEPSEEK_V4_PRO,
+    ProcessorRouter,
+    deepseek_v4_router,
+    deepseek_v4_routes,
+)
+from kernel_v3.processors.scenarios import (
+    SemanticScenario,
+    SemanticScenarioResult,
+    deepseek_v4_semantic_scenarios,
+    run_semantic_scenarios,
+    scenario_report_payload,
+    validate_semantic_scenario,
+)
 
 __all__ = [
     "DeepSeekProvider",
+    "DEEPSEEK_LEGACY_REASONER",
+    "DEEPSEEK_V4_FLASH",
+    "DEEPSEEK_V4_PRO",
     "EVALUATOR_PROMPT_CONTRACT",
     "EVALUATOR_SCHEMA",
     "FakeJsonProvider",
@@ -41,7 +59,15 @@ __all__ = [
     "ProcessorProvider",
     "ProcessorRoute",
     "ProcessorRouter",
+    "deepseek_v4_router",
+    "deepseek_v4_routes",
     "SYNTHESIZER_PROMPT_CONTRACT",
     "SYNTHESIZER_SCHEMA",
     "Synthesizer",
+    "SemanticScenario",
+    "SemanticScenarioResult",
+    "deepseek_v4_semantic_scenarios",
+    "run_semantic_scenarios",
+    "scenario_report_payload",
+    "validate_semantic_scenario",
 ]

@@ -114,6 +114,15 @@ class OpenAICompatibleProvider:
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
+        max_tokens = _optional_positive_int(request.parameters.get("max_tokens"))
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        thinking = _thinking_payload(request.parameters.get("thinking"))
+        if thinking is not None:
+            payload["thinking"] = thinking
+        reasoning_effort = request.parameters.get("reasoning_effort")
+        if reasoning_effort in {"high", "max"}:
+            payload["reasoning_effort"] = reasoning_effort
         decoded = self._post_json(self._completion_url(), self._api_key(), payload, _timeout(request, self.timeout_seconds))
         text = _extract_chat_text(decoded)
         return ProcessorResult(
@@ -171,14 +180,14 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         enabled: bool = False,
         base_url: str | None = None,
         api_key_env: str = "DEEPSEEK_API_KEY",
-        model: str = "deepseek-chat",
+        model: str | None = None,
         timeout_seconds: int = 60,
     ) -> None:
         super().__init__(
             enabled=enabled,
             base_url=base_url or os.environ.get("DEEPSEEK_BASE_URL", "") or "https://api.deepseek.com",
             api_key_env=api_key_env,
-            model=model,
+            model=model or os.environ.get("DEEPSEEK_MODEL", "") or "deepseek-v4-flash",
             timeout_seconds=timeout_seconds,
         )
 
@@ -193,6 +202,24 @@ def _timeout(request: ProcessorRequest, default: int) -> int:
         return max(1, int(request.parameters.get("timeout_seconds", default)))
     except (TypeError, ValueError):
         return default
+
+
+def _optional_positive_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _thinking_payload(value: object) -> JsonObject | None:
+    if isinstance(value, dict) and value.get("type") in {"enabled", "disabled"}:
+        return {"type": str(value["type"])}
+    if value in {"enabled", "disabled"}:
+        return {"type": str(value)}
+    return None
 
 
 def _extract_chat_text(decoded: JsonObject) -> str:

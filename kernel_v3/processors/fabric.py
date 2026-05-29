@@ -56,6 +56,7 @@ class ProcessorFabric:
                 route_provider=route.provider,
                 route_model=route.model,
                 timeout_seconds=route.timeout_seconds,
+                route_parameters=route.parameters,
                 parameters=parameters,
             )
             self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
@@ -97,6 +98,7 @@ class ProcessorFabric:
             route_provider=route.provider,
             route_model=provider_model,
             timeout_seconds=route.timeout_seconds,
+            route_parameters=route.parameters,
             parameters=parameters,
         )
         self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
@@ -223,10 +225,12 @@ class ProcessorFabric:
         route_provider: str,
         route_model: str,
         timeout_seconds: int,
+        route_parameters: JsonObject,
         parameters: JsonObject | None,
     ) -> ProcessorRequest:
         self._counter += 1
         merged: JsonObject = {
+            **dict(route_parameters),
             **dict(parameters or {}),
             "task_type": task_type,
             "provider": route_provider,

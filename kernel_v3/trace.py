@@ -57,7 +57,9 @@ class TraceRenderer:
         records = self.journal.records(task_id=task_id)
         lines = [f"Retrieval Trace {task_id}"]
         for record in records:
-            if record.kind == "action":
+            if record.kind.startswith("retrieval_"):
+                lines.extend(self._retrieval_lines(record))
+            elif record.kind == "action":
                 payload = record.data.get("payload", {})
                 if isinstance(payload, dict) and "query" in payload:
                     lines.append(
@@ -86,6 +88,70 @@ class TraceRenderer:
                 if stop_reason:
                     lines.append(f"{record.step_id or '-'} why_stop={stop_reason}")
         return "\n".join(lines)
+
+    def _retrieval_lines(self, record) -> list[str]:
+        data = record.data
+        step = record.step_id or "-"
+        kind = record.kind
+        if kind == "retrieval_query_plan":
+            queries = data.get("queries", [])
+            return [
+                f"{step} query_plan={data.get('plan_id')} goal={data.get('goal_id')} "
+                f"queries={len(queries) if isinstance(queries, list) else 0}"
+            ]
+        if kind == "retrieval_search_attempt":
+            sources = data.get("sources", [])
+            return [
+                f"{step} search={data.get('attempt_id')} status={data.get('status')} "
+                f"query={data.get('query')} sources={len(sources) if isinstance(sources, list) else 0}"
+            ]
+        if kind == "retrieval_rank_sources":
+            ranked = data.get("ranked_sources", [])
+            return [
+                f"{step} rank={data.get('ranking_id')} "
+                f"sources={len(ranked) if isinstance(ranked, list) else 0}"
+            ]
+        if kind == "retrieval_fetch_attempt":
+            return [
+                f"{step} fetch={data.get('fetch_id')} status={data.get('status')} "
+                f"uri={data.get('uri')} artifact={data.get('artifact_id')} "
+                f"hash={data.get('payload_hash')} size={data.get('size_bytes')} "
+                f"preview={_preview(str(data.get('preview', '')), 96)}"
+            ]
+        if kind == "retrieval_extraction":
+            spans = data.get("spans", [])
+            document = data.get("document", {})
+            artifact_id = document.get("artifact_id") if isinstance(document, dict) else None
+            return [
+                f"{step} extraction document={_nested(data, 'document', 'document_id')} "
+                f"artifact={artifact_id} spans={len(spans) if isinstance(spans, list) else 0}"
+            ]
+        if kind == "retrieval_evidence":
+            return [
+                f"{step} evidence={data.get('evidence_id')} source={data.get('source_id')} "
+                f"artifact={data.get('artifact_id')} score={data.get('score')} "
+                f"text={_preview(str(data.get('text', '')), 96)}"
+            ]
+        if kind == "retrieval_citation":
+            return [
+                f"{step} citation={data.get('citation_id')} evidence={data.get('evidence_id')} "
+                f"artifact={data.get('artifact_id')} quote={_preview(str(data.get('quote', '')), 96)}"
+            ]
+        if kind == "retrieval_evaluation_decision":
+            return [
+                f"{step} evaluation={data.get('decision_id') or data.get('evaluation_id')} "
+                f"sufficient={data.get('sufficient')} "
+                f"reason={data.get('reason')}"
+            ]
+        if kind == "retrieval_report":
+            diagnostics = data.get("diagnostics", {})
+            evidence_count = diagnostics.get("evidence_count") if isinstance(diagnostics, dict) else None
+            citation_count = diagnostics.get("citation_count") if isinstance(diagnostics, dict) else None
+            return [
+                f"{step} report={data.get('report_id')} status={data.get('status')} "
+                f"evidence={evidence_count} citations={citation_count} artifacts={record.artifact_refs}"
+            ]
+        return []
 
     def _verbose_lines(self, record) -> list[str]:
         if record.kind == "policy_decision":
@@ -146,3 +212,10 @@ def _nested(data, *path):
             return None
         current = current.get(key)
     return current
+
+
+def _preview(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."

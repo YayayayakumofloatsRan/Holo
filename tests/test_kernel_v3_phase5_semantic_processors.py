@@ -7,6 +7,9 @@ from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import (
+    DEEPSEEK_V4_FLASH,
+    DEEPSEEK_V4_PRO,
+    EVALUATOR_SCHEMA,
     PLANNER_SCHEMA,
     DeepSeekProvider,
     FakeJsonProvider,
@@ -17,6 +20,10 @@ from kernel_v3.processors import (
     ProcessorRoute,
     ProcessorRouter,
     Synthesizer,
+    deepseek_v4_semantic_scenarios,
+    deepseek_v4_router,
+    run_semantic_scenarios,
+    scenario_report_payload,
 )
 from kernel_v3.processors.testing import fake_fabric, timeout_fabric
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
@@ -411,13 +418,140 @@ def test_phase5_request_parameters_cannot_spoof_processor_route_metadata():
     assert request.data["parameters"]["timeout_seconds"] == 30
 
 
+def test_phase5_deepseek_v4_router_profiles_assign_component_models_and_tuning():
+    balanced = deepseek_v4_router(profile="balanced")
+    planner = balanced.route("planner.propose")
+    evaluator = balanced.route("evaluator.assess")
+    synthesizer = balanced.route("synthesizer.answer")
+
+    assert planner.model == DEEPSEEK_V4_FLASH
+    assert planner.parameters["thinking"] == "disabled"
+    assert evaluator.model == DEEPSEEK_V4_PRO
+    assert evaluator.parameters["thinking"] == "enabled"
+    assert evaluator.parameters["reasoning_effort"] == "high"
+    assert synthesizer.model == DEEPSEEK_V4_PRO
+    assert synthesizer.parameters["thinking"] == "disabled"
+
+
+def test_phase5_deepseek_v4_router_exposes_user_reasoning_overrides():
+    router = deepseek_v4_router(profile="balanced", thinking="enabled", reasoning_effort="max")
+
+    planner = router.route("planner.propose")
+    evaluator = router.route("evaluator.assess")
+    synthesizer = router.route("synthesizer.answer")
+
+    assert planner.parameters["thinking"] == "enabled"
+    assert planner.parameters["reasoning_effort"] == "max"
+    assert evaluator.parameters["thinking"] == "enabled"
+    assert evaluator.parameters["reasoning_effort"] == "max"
+    assert synthesizer.parameters["thinking"] == "enabled"
+    assert synthesizer.parameters["reasoning_effort"] == "max"
+
+
+def test_phase5_route_parameters_are_journaled_and_sent_to_provider_request():
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "action_id": "act-route-params",
+                    "kind": "respond",
+                    "name": None,
+                    "description": "respond",
+                    "payload": {"text": "ok"},
+                    "score": 1.0,
+                    "reasons": [],
+                    "side_effect_class": "none",
+                }
+            )
+        },
+        router=ProcessorRouter(
+            routes={
+                "planner.propose": ProcessorRoute(
+                    task_type="planner.propose",
+                    provider="fake_json",
+                    model="route-model",
+                    timeout_seconds=30,
+                    parameters={"thinking": "disabled", "max_tokens": 128},
+                )
+            }
+        ),
+        journal=journal,
+    )
+
+    outcome = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-route-params",
+        run_id="run-route-params",
+        context_id="ctx-route-params",
+        prompt="route params",
+        schema=PLANNER_SCHEMA,
+    )
+
+    request = journal.records(task_id="task-route-params", kind="processor_request")[0]
+    assert outcome.request.parameters["thinking"] == "disabled"
+    assert outcome.request.parameters["max_tokens"] == 128
+    assert request.data["parameters"]["thinking"] == "disabled"
+    assert request.data["parameters"]["max_tokens"] == 128
+
+
+def test_phase5_deepseek_provider_payload_uses_component_route_tuning(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    class CapturingDeepSeekProvider(DeepSeekProvider):
+        def __init__(self):
+            super().__init__(enabled=True)
+            self.payload = None
+
+        def _post_json(self, url, api_key, payload, timeout_seconds):
+            self.payload = dict(payload)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "status": "continue",
+                                    "answer": None,
+                                    "stop_reason": None,
+                                    "missing_evidence": ["more evidence"],
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    provider = CapturingDeepSeekProvider()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=deepseek_v4_router(profile="balanced"),
+    )
+
+    outcome = fabric.run_json(
+        task_type="evaluator.assess",
+        run_id="run-capture",
+        context_id="ctx-capture",
+        prompt="capture",
+        schema=EVALUATOR_SCHEMA,
+    )
+
+    assert outcome.result.status == "ok"
+    assert provider.payload["model"] == DEEPSEEK_V4_PRO
+    assert provider.payload["thinking"] == {"type": "enabled"}
+    assert provider.payload["reasoning_effort"] == "high"
+    assert provider.payload["max_tokens"] == 768
+
+
 def test_phase5_secrets_do_not_appear_in_journal_context_or_trace(monkeypatch):
     secret = "phase5-secret-value"
     monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
     journal = JournalStore.in_memory()
+    provider = DeepSeekProvider(enabled=False)
     fabric = ProcessorFabric(
-        providers={"deepseek": DeepSeekProvider(enabled=False)},
-        router=ProcessorRouter(default_provider="deepseek", default_model="deepseek-chat"),
+        providers={"deepseek": provider},
+        router=ProcessorRouter(default_provider="deepseek", default_model=provider.model),
         journal=journal,
     )
 
@@ -436,6 +570,71 @@ def test_phase5_secrets_do_not_appear_in_journal_context_or_trace(monkeypatch):
     assert "DEEPSEEK_API_KEY" not in encoded
     assert secret not in trace
     assert "DEEPSEEK_API_KEY" not in trace
+
+
+def test_phase5_semantic_scenario_library_validates_fake_outputs():
+    journal = JournalStore.in_memory()
+    responses = {
+        "planner.propose": [
+            {
+                "action_id": "act-live-retrieval",
+                "kind": "tool",
+                "name": "retrieval.run",
+                "description": "retrieve",
+                "payload": {"goal": "DeepSeek V4 API models", "query": "DeepSeek V4 API models"},
+                "score": 0.9,
+                "reasons": ["current evidence is required"],
+                "side_effect_class": "read",
+            },
+            {
+                "action_id": "act-live-clarify",
+                "kind": "ask_user",
+                "name": None,
+                "description": "clarify",
+                "payload": {"question": "Which file?"},
+                "score": 0.9,
+                "reasons": ["missing target"],
+                "side_effect_class": "none",
+            },
+        ],
+        "evaluator.assess": [
+            {
+                "status": "final_answer_ready",
+                "answer": "DeepSeek V4 API exposes deepseek-v4-flash and deepseek-v4-pro.",
+                "stop_reason": "completed",
+                "missing_evidence": [],
+            },
+            {
+                "status": "continue",
+                "answer": None,
+                "stop_reason": None,
+                "missing_evidence": ["cited source"],
+            },
+        ],
+        "synthesizer.answer": {
+            "answer": "DeepSeek V4 API 的模型 ID 是 deepseek-v4-flash 和 deepseek-v4-pro。",
+            "citation_refs": ["cite-v4-models"],
+            "confidence": 0.9,
+            "limitations": [],
+            "used_evidence": ["ev-v4-models"],
+        },
+    }
+    fabric = fake_fabric(responses, journal=journal)
+
+    results = run_semantic_scenarios(
+        fabric,
+        task_id="task-scenarios",
+        run_id="run-scenarios",
+        context_id="ctx-scenarios",
+        scenarios=deepseek_v4_semantic_scenarios(),
+    )
+    report = scenario_report_payload(results)
+
+    assert report["status"] == "ok"
+    assert report["scenario_count"] == 5
+    assert report["passed"] == 5
+    assert len(journal.records(task_id="task-scenarios", kind="processor_request")) == 5
+    assert len(journal.records(task_id="task-scenarios", kind="processor_result")) == 5
 
 
 def test_phase5_loop_controller_remains_tool_name_and_provider_agnostic():

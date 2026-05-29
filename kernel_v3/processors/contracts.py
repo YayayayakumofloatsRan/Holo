@@ -12,6 +12,7 @@ class ProcessorRoute:
     provider: str
     model: str
     timeout_seconds: int = 30
+    parameters: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)

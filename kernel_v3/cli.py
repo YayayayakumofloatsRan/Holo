@@ -20,6 +20,9 @@ from kernel_v3.processors import (
     ProcessorFabric,
     ProcessorRouter,
     Synthesizer,
+    deepseek_v4_router,
+    run_semantic_scenarios,
+    scenario_report_payload,
 )
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
@@ -78,6 +81,16 @@ def main(argv: list[str] | None = None) -> int:
 
     model_smoke = sub.add_parser("model-smoke")
     model_smoke.add_argument("--provider", choices=["deepseek", "openai_compatible"], required=True)
+    model_smoke.add_argument("--model", default=None)
+    model_smoke.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    model_smoke.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+
+    model_scenarios = sub.add_parser("model-scenarios")
+    model_scenarios.add_argument("--provider", choices=["deepseek", "openai_compatible"], required=True)
+    model_scenarios.add_argument("--model", default=None)
+    model_scenarios.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    model_scenarios.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    model_scenarios.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
 
     journal_parser = sub.add_parser("journal")
     journal_sub = journal_parser.add_subparsers(dest="journal_command", required=True)
@@ -164,7 +177,14 @@ def main(argv: list[str] | None = None) -> int:
         if os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
             print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
             return 1
-        fabric = _live_processor_fabric(args.provider, journal)
+        fabric = _live_processor_fabric(
+            args.provider,
+            journal,
+            model=args.model,
+            profile="fast",
+            thinking=_thinking_override(args.thinking),
+            reasoning_effort=args.reasoning_effort,
+        )
         outcome = fabric.run_json(
             task_type="planner.propose",
             run_id="run-model-smoke",
@@ -173,9 +193,34 @@ def main(argv: list[str] | None = None) -> int:
             schema=PLANNER_SCHEMA,
             task_id=None,
             provider=args.provider,
+            model=args.model,
         )
         print(json.dumps(_outcome_payload(outcome), ensure_ascii=False, sort_keys=True))
         return 0 if outcome.result.status == "ok" else 1
+
+    if args.command == "model-scenarios":
+        if os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
+            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+            return 1
+        fabric = _live_processor_fabric(
+            args.provider,
+            journal,
+            model=args.model,
+            profile=args.profile,
+            thinking=_thinking_override(args.thinking),
+            reasoning_effort=args.reasoning_effort,
+        )
+        results = run_semantic_scenarios(
+            fabric,
+            task_id="task-model-scenarios",
+            run_id="run-model-scenarios",
+            context_id="ctx-model-scenarios",
+            provider=args.provider,
+            model=args.model,
+        )
+        payload = scenario_report_payload(results)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload["status"] == "ok" else 1
 
     if args.command == "journal" and args.journal_command == "tail":
         for record in journal.records()[-10:]:
@@ -264,14 +309,26 @@ def _fake_processor_fabric(journal: JournalStore, *, answer: str = "processor sm
     )
 
 
-def _live_processor_fabric(provider: str, journal: JournalStore) -> ProcessorFabric:
+def _live_processor_fabric(
+    provider: str,
+    journal: JournalStore,
+    *,
+    model: str | None = None,
+    profile: str = "balanced",
+    thinking: str | None = None,
+    reasoning_effort: str = "high",
+) -> ProcessorFabric:
     providers = {
-        "deepseek": DeepSeekProvider(enabled=True),
-        "openai_compatible": OpenAICompatibleProvider(enabled=True),
+        "deepseek": DeepSeekProvider(enabled=True, model=model),
+        "openai_compatible": OpenAICompatibleProvider(enabled=True, model=model or "local-model"),
     }
+    if provider == "deepseek":
+        router = deepseek_v4_router(profile=profile, thinking=thinking, reasoning_effort=reasoning_effort)
+    else:
+        router = ProcessorRouter(default_provider=provider, default_model=providers[provider].model)
     return ProcessorFabric(
         providers=providers,
-        router=ProcessorRouter(default_provider=provider, default_model=providers[provider].model),
+        router=router,
         journal=journal,
     )
 
@@ -337,7 +394,32 @@ def _providers_payload() -> list[dict[str, object]]:
         {"name": "fake_json", "live": False, "enabled_by_default": True},
         {"name": "fake_malformed_json", "live": False, "enabled_by_default": False},
         {"name": "fake_timeout", "live": False, "enabled_by_default": False},
-        {"name": "deepseek", "live": True, "enabled_by_default": False, "env_gated_by": "HOLO_V3_LIVE_MODEL"},
+        {
+            "name": "deepseek",
+            "live": True,
+            "enabled_by_default": False,
+            "env_gated_by": "HOLO_V3_LIVE_MODEL",
+            "default_model": DeepSeekProvider().model,
+            "profiles": {
+                "fast": {
+                    "planner.propose": "deepseek-v4-flash",
+                    "evaluator.assess": "deepseek-v4-flash",
+                    "synthesizer.answer": "deepseek-v4-flash",
+                },
+                "balanced": {
+                    "planner.propose": "deepseek-v4-flash",
+                    "evaluator.assess": "deepseek-v4-pro",
+                    "synthesizer.answer": "deepseek-v4-pro",
+                },
+                "quality": {
+                    "planner.propose": "deepseek-v4-pro",
+                    "evaluator.assess": "deepseek-v4-pro",
+                    "synthesizer.answer": "deepseek-v4-pro",
+                },
+            },
+            "thinking": {"default": "auto", "choices": ["auto", "enabled", "disabled"]},
+            "reasoning_effort": {"default": "high", "choices": ["high", "max"]},
+        },
         {
             "name": "openai_compatible",
             "live": True,
@@ -345,6 +427,10 @@ def _providers_payload() -> list[dict[str, object]]:
             "env_gated_by": "HOLO_V3_LIVE_MODEL",
         },
     ]
+
+
+def _thinking_override(value: str) -> str | None:
+    return None if value == "auto" else value
 
 
 def _model_smoke_prompt(text: str) -> str:
