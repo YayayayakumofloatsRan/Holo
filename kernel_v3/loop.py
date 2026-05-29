@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import time
+from collections.abc import Callable
+
 from kernel_v3.context import ContextCompiler
 from kernel_v3.contracts import CandidateAction, Event, Feedback, Observation
 from kernel_v3.evaluator import Evaluator
@@ -24,6 +28,12 @@ class LoopControllerV3:
         evaluator: Evaluator,
         stop_controller: StopController | None = None,
         session_engine: SessionEngine | None = None,
+        max_steps: int | None = None,
+        max_tool_calls: int | None = None,
+        max_duration_ms: int | None = None,
+        max_network_fetches: int | None = None,
+        max_total_artifact_bytes: int | None = None,
+        clock_ms: Callable[[], int] | None = None,
     ) -> None:
         self.journal = journal
         self.context_compiler = context_compiler
@@ -33,6 +43,12 @@ class LoopControllerV3:
         self.evaluator = evaluator
         self.stop_controller = stop_controller or StopController()
         self.session_engine = session_engine or SessionEngine.from_journal(journal)
+        self.max_steps = max_steps
+        self.max_tool_calls = max_tool_calls
+        self.max_duration_ms = max_duration_ms
+        self.max_network_fetches = max_network_fetches
+        self.max_total_artifact_bytes = max_total_artifact_bytes
+        self.clock_ms = clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
 
     def run(self, input_text: str) -> AgentResult:
         task = self.session_engine.start(input_text, record_state=False)
@@ -139,6 +155,10 @@ class LoopControllerV3:
     def _drive(self, task: TaskState, feedback: Feedback | None) -> AgentResult:
         current_feedback = feedback
         step_index = 0
+        tool_calls = 0
+        network_fetches = 0
+        total_artifact_bytes = 0
+        started_at_ms = self.clock_ms()
         while True:
             step_index += 1
             step_id = f"step-{step_index}"
@@ -168,9 +188,23 @@ class LoopControllerV3:
             )
             artifact_refs = []
             if decision.allowed:
-                tool_result = self.tool_registry.execute_with_artifacts(action, policy_decision=decision)
-                observation = self._bind_observation(task.run_id, action, tool_result.observation)
-                artifact_refs = tool_result.artifact_refs
+                pre_exec_guard = self._pre_execution_guard(
+                    action,
+                    manifest=manifest,
+                    tool_calls=tool_calls,
+                    network_fetches=network_fetches,
+                )
+                if pre_exec_guard is not None:
+                    observation = self._guard_observation(task.run_id, action, pre_exec_guard)
+                else:
+                    tool_result = self.tool_registry.execute_with_artifacts(action, policy_decision=decision)
+                    observation = self._bind_observation(task.run_id, action, tool_result.observation)
+                    artifact_refs = tool_result.artifact_refs
+                    if action.kind == "tool":
+                        tool_calls += 1
+                    if self._is_network_action(action, manifest=manifest):
+                        network_fetches += 1
+                    total_artifact_bytes += self._estimate_artifact_bytes(observation, artifact_refs)
             else:
                 observation = self._blocked_observation(task.run_id, action, decision.reason)
             self.journal.append(
@@ -185,20 +219,33 @@ class LoopControllerV3:
                 state_delta={"observation_status": observation.status},
                 artifact_refs=[artifact.artifact_id for artifact in artifact_refs],
             )
+            if observation.status == "blocked" and observation.content == {"reason": "max_tool_calls"}:
+                current_feedback = self._limit_feedback(task.run_id, "max_tool_calls")
+                self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+                self._append_guard(task, "max_tool_calls", step_id=step_id, data={"tool_calls": tool_calls})
+                return self._result(task, current_feedback, step_id=step_id)
+            if observation.status == "blocked" and observation.content == {"reason": "max_network_fetches"}:
+                current_feedback = self._limit_feedback(task.run_id, "max_network_fetches")
+                self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+                self._append_guard(task, "max_network_fetches", step_id=step_id, data={"network_fetches": network_fetches})
+                return self._result(task, current_feedback, step_id=step_id)
             current_feedback = self.evaluator.evaluate(context, observation)
-            self.journal.append(
-                task_id=task.task_id,
-                run_id=task.run_id,
-                step_id=step_id,
-                kind="feedback",
-                data=current_feedback.to_dict(),
-                event_ref=self._last_ref(task.task_id, "event_ref"),
-                action_ref=action.action_id,
-                observation_ref=observation.observation_id,
-                feedback_ref=current_feedback.feedback_id,
-                state_delta={"feedback_status": current_feedback.status},
-            )
+            self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+            resource_guard = self._resource_guard(total_artifact_bytes=total_artifact_bytes)
+            if resource_guard is not None:
+                stop_reason, data = resource_guard
+                current_feedback = self._limit_feedback(task.run_id, stop_reason)
+                self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+                self._append_guard(task, stop_reason, step_id=step_id, data=data)
+                return self._result(task, current_feedback, step_id=step_id)
             if self.stop_controller.should_stop(current_feedback):
+                return self._result(task, current_feedback, step_id=step_id)
+            continuation_guard = self._continuation_guard(step_index=step_index, started_at_ms=started_at_ms)
+            if continuation_guard is not None:
+                stop_reason, data = continuation_guard
+                current_feedback = self._limit_feedback(task.run_id, stop_reason)
+                self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+                self._append_guard(task, stop_reason, step_id=step_id, data=data)
                 return self._result(task, current_feedback, step_id=step_id)
 
     def _record_action(self, task: TaskState, action: CandidateAction, *, step_id: str) -> None:
@@ -243,6 +290,116 @@ class LoopControllerV3:
             action_id=action.action_id,
             tool_call_id=None,
         )
+
+    def _guard_observation(self, run_id: str, action: CandidateAction, reason: str) -> Observation:
+        return Observation(
+            observation_id=f"obs-{action.action_id}-{reason}",
+            run_id=run_id,
+            kind="host_guard",
+            status="blocked",
+            source="loop_guard",
+            content={"reason": reason},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    def _limit_feedback(self, run_id: str, stop_reason: str) -> Feedback:
+        return Feedback(
+            feedback_id=f"fb-{run_id}-{stop_reason}",
+            run_id=run_id,
+            status="step_limit_exceeded",
+            stop_reason=stop_reason,
+            answer=None,
+            missing_evidence=[],
+        )
+
+    def _append_feedback(
+        self,
+        task: TaskState,
+        feedback: Feedback,
+        *,
+        action: CandidateAction,
+        observation: Observation,
+        step_id: str,
+    ) -> None:
+        self.journal.append(
+            task_id=task.task_id,
+            run_id=task.run_id,
+            step_id=step_id,
+            kind="feedback",
+            data=feedback.to_dict(),
+            event_ref=self._last_ref(task.task_id, "event_ref"),
+            action_ref=action.action_id,
+            observation_ref=observation.observation_id,
+            feedback_ref=feedback.feedback_id,
+            state_delta={"feedback_status": feedback.status},
+        )
+
+    def _append_guard(self, task: TaskState, stop_reason: str, *, step_id: str, data: dict[str, object]) -> None:
+        self.journal.append(
+            task_id=task.task_id,
+            run_id=task.run_id,
+            step_id=step_id,
+            kind="guard",
+            data={"stop_reason": stop_reason, **data},
+            event_ref=self._last_ref(task.task_id, "event_ref"),
+            state_delta={"status": "step_limit_exceeded", "stop_reason": stop_reason},
+        )
+
+    def _pre_execution_guard(
+        self,
+        action: CandidateAction,
+        *,
+        manifest,
+        tool_calls: int,
+        network_fetches: int,
+    ) -> str | None:
+        if action.kind == "tool" and self.max_tool_calls is not None and tool_calls >= self.max_tool_calls:
+            return "max_tool_calls"
+        if (
+            action.kind == "tool"
+            and self._is_network_action(action, manifest=manifest)
+            and self.max_network_fetches is not None
+            and network_fetches >= self.max_network_fetches
+        ):
+            return "max_network_fetches"
+        return None
+
+    def _resource_guard(self, *, total_artifact_bytes: int) -> tuple[str, dict[str, object]] | None:
+        if self.max_total_artifact_bytes is not None and total_artifact_bytes > self.max_total_artifact_bytes:
+            return "max_total_artifact_bytes", {"artifact_bytes": total_artifact_bytes}
+        return None
+
+    def _continuation_guard(
+        self,
+        *,
+        step_index: int,
+        started_at_ms: int,
+    ) -> tuple[str, dict[str, object]] | None:
+        if self.max_steps is not None and step_index >= self.max_steps:
+            return "max_steps", {"steps": step_index}
+        if self.max_duration_ms is not None:
+            elapsed_ms = self.clock_ms() - started_at_ms
+            if elapsed_ms > self.max_duration_ms:
+                return "max_duration_ms", {"elapsed_ms": elapsed_ms}
+        return None
+
+    def _is_network_action(self, action: CandidateAction, *, manifest) -> bool:
+        manifest_effect = getattr(manifest, "side_effect_class", None)
+        return action.side_effect_class == "network" or manifest_effect == "network"
+
+    def _estimate_artifact_bytes(self, observation: Observation, artifact_refs: list[object]) -> int:
+        total = 0
+        for artifact in artifact_refs:
+            metadata = getattr(artifact, "metadata", {})
+            size = metadata.get("size_bytes") if isinstance(metadata, dict) else None
+            if isinstance(size, int):
+                total += size
+        if total:
+            return total
+        encoded = json.dumps(observation.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return len(encoded.encode("utf-8"))
 
     def _result(self, task: TaskState, feedback: Feedback, *, step_id: str | None = None) -> AgentResult:
         status = "completed" if feedback.status == "final_answer_ready" else feedback.status

@@ -153,6 +153,13 @@ class ToolRegistry:
                 {"reason": policy_decision.reason, "tool": tool_name},
                 kind="policy_block",
             )
+        if not manifest.enabled:
+            return _tool_result(
+                action,
+                "blocked",
+                {"reason": "tool_disabled", "tool": tool_name},
+                kind="policy_block",
+            )
         self.executed_actions.append(action)
         raw = self._tools[tool_name].executor(action)
         result = raw if isinstance(raw, ToolResult) else _result_from_observation(raw)

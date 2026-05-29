@@ -26,6 +26,16 @@ def main(argv: list[str] | None = None) -> int:
 
     trace_parser = sub.add_parser("trace")
     trace_parser.add_argument("task_id")
+    trace_parser.add_argument("--verbose", action="store_true")
+
+    evidence_parser = sub.add_parser("evidence")
+    evidence_parser.add_argument("task_id")
+
+    artifacts_parser = sub.add_parser("artifacts")
+    artifacts_parser.add_argument("task_id")
+
+    retrieval_trace_parser = sub.add_parser("retrieval-trace")
+    retrieval_trace_parser.add_argument("task_id")
 
     resume_parser = sub.add_parser("resume")
     resume_parser.add_argument("task_id")
@@ -61,7 +71,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "trace":
-        print(TraceRenderer(journal).render_task(args.task_id))
+        print(TraceRenderer(journal).render_task(args.task_id, verbose=args.verbose))
+        return 0
+
+    if args.command == "evidence":
+        print(TraceRenderer(journal).render_evidence(args.task_id))
+        return 0
+
+    if args.command == "artifacts":
+        print(TraceRenderer(journal).render_artifacts(args.task_id))
+        return 0
+
+    if args.command == "retrieval-trace":
+        print(TraceRenderer(journal).render_retrieval_trace(args.task_id))
         return 0
 
     if args.command == "context":

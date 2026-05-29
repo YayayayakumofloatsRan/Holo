@@ -258,7 +258,7 @@ def test_shell_execution_is_restricted_auditable_and_permissioned():
         _remove_dir(root)
 
 
-def test_network_tool_is_manifested_as_contract_without_live_fetch():
+def test_network_tool_is_manifested_as_disabled_contract_and_cannot_execute():
     root = Path("kernel_v3/.test-phase2-network")
     _reset_dir(root)
     try:
@@ -287,9 +287,10 @@ def test_network_tool_is_manifested_as_contract_without_live_fetch():
         )
 
         assert registry.manifest_for_action(action).enabled is False
-        assert result.observation.kind == "network_contract"
-        assert result.observation.status == "not_implemented"
-        assert result.observation.content["url"] == "https://example.invalid/"
+        assert result.observation.kind == "policy_block"
+        assert result.observation.status == "blocked"
+        assert result.observation.content["reason"] == "tool_disabled"
+        assert registry.executed_actions == []
         assert result.artifact_refs
     finally:
         _remove_dir(root)

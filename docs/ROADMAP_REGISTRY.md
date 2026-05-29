@@ -537,7 +537,8 @@ Stage249: kernel v3 foundation review
 - Reviewed `kernel_v3` Phase0 through Phase3 as a host-owned kernel base: typed contracts, durable loop/journal/session substrate, permissioned tool plane, and context/memory read path.
 - Fixed a Phase3 evidence-window consistency defect so `recent_observations`, `memory_refs`, and `citations` in the same ContextPack now derive from the same latest observation window.
 - Added explicit MemoryRead boundary behavior for `limit <= 0` and documented the release boundary in `docs/ENGINEERING_HANDOFF_STAGE249.md`.
-- Verification on `2026-05-29`: kernel v3 suite `45 passed`; compileall passed; kernel dependency/live-provider scans returned no matches; loop concrete-tool-name scan returned no matches; `git diff --check` passed with CRLF normalization warnings only.
+- Phase3.1 retrieval-readiness hardening added full ContextPack sections into the planner/evaluator `ContextBundle.state`, disabled-tool enforcement for `network.fetch`, loop guards for step/tool/duration/network/artifact budgets, payload blob support in `ArtifactStore`, opt-in context truncation, and verbose/evidence/artifact/retrieval trace views.
+- Verification on `2026-05-29`: Phase3.1/Phase2 targeted suite `21 passed`; kernel v3 suite `59 passed`; compileall passed; kernel dependency/live-provider scans returned no matches; loop concrete-tool-name scan returned no matches; `git diff --check` passed with CRLF normalization warnings only.
 
 ## Next Program Arc (Planned)
 

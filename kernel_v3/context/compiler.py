@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 
 from kernel_v3.context.artifacts import ArtifactStore
-from kernel_v3.context.budgeter import validate_section_budget
+from kernel_v3.context.budgeter import BudgetExceeded, measure_units, validate_section_budget
 from kernel_v3.context.memory_read import MemoryRead
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.context.validator import deterministic_hash
@@ -56,7 +57,10 @@ class ContextPackCompiler:
         section_budget: int = 1024,
         permission_state: JsonObject | None = None,
         redactor: Redactor | None = None,
+        budget_mode: str = "fail",
     ) -> None:
+        if budget_mode not in {"fail", "truncate"}:
+            raise ValueError("budget_mode must be 'fail' or 'truncate'")
         self.artifact_store = artifact_store or ArtifactStore.in_memory()
         self.memory_read = memory_read
         self.project_profile = project_profile or ProjectProfile.empty()
@@ -64,6 +68,7 @@ class ContextPackCompiler:
         self.section_budget = section_budget
         self.permission_state = permission_state or {"mode": "read_write"}
         self.redactor = redactor or Redactor(private_path_markers=self.project_profile.redaction_markers)
+        self.budget_mode = budget_mode
 
     def compile(
         self,
@@ -122,15 +127,12 @@ class ContextPackCompiler:
             "permission_state": {"permission": _compact_permission_state(self.permission_state)},
         }
         redacted_sections, redactions = self.redactor.redact(sections)
-        section_units = [
-            validate_section_budget(section["name"], budget_views[section["name"]], self.section_budget)
-            for section in redacted_sections
-        ]
+        section_units, compacted_section_names = self._enforce_section_budgets(redacted_sections, budget_views)
         total_units = sum(section_units)
         if total_units > self.token_budget:
-            from kernel_v3.context.budgeter import BudgetExceeded
-
-            raise BudgetExceeded("bundle", total_units, self.token_budget)
+            if self.budget_mode == "fail":
+                raise BudgetExceeded("bundle", total_units, self.token_budget)
+            total_units = self._truncate_bundle(redacted_sections, section_units, total_units, compacted_section_names)
         source_refs = [record.record_id for record in event_records[-1:] + observation_records]
         source_refs.extend(artifact_ids)
         budget = {
@@ -141,6 +143,12 @@ class ContextPackCompiler:
             "total_units": total_units,
             "within_budget": True,
         }
+        if self.budget_mode == "truncate" or compacted_section_names:
+            budget["compaction"] = {
+                "mode": self.budget_mode,
+                "applied": bool(compacted_section_names),
+                "sections": compacted_section_names,
+            }
         payload = {
             "task_id": task.task_id,
             "run_id": task.run_id,
@@ -163,6 +171,136 @@ class ContextPackCompiler:
             memory_refs=memory_refs,
             payload_hash=deterministic_hash(payload),
         )
+
+    def _enforce_section_budgets(
+        self,
+        redacted_sections: list[JsonObject],
+        budget_views: dict[str, JsonObject],
+    ) -> tuple[list[int], list[str]]:
+        section_units: list[int] = []
+        compacted: list[str] = []
+        for section in redacted_sections:
+            name = str(section["name"])
+            budget_view = budget_views[name]
+            try:
+                validate_section_budget(name, budget_view, self.section_budget)
+                if self.budget_mode == "truncate":
+                    section_units.append(self._compact_section_to_limit(section))
+                else:
+                    section_units.append(measure_units(_section_payload(section)))
+                continue
+            except BudgetExceeded:
+                if self.budget_mode == "fail":
+                    raise
+            self._truncate_section(section)
+            section_units.append(self._compact_section_to_limit(section))
+            compacted.append(name)
+        return section_units, compacted
+
+    def _truncate_bundle(
+        self,
+        redacted_sections: list[JsonObject],
+        section_units: list[int],
+        total_units: int,
+        compacted_section_names: list[str],
+    ) -> int:
+        droppable = ["tool_briefs", "citations", "memory_refs", "recent_observations", "project_profile"]
+        for name in droppable:
+            if total_units <= self.token_budget:
+                break
+            section = next((item for item in redacted_sections if item.get("name") == name), None)
+            if section is None:
+                continue
+            index = redacted_sections.index(section)
+            before = section_units[index]
+            self._truncate_section(section, aggressive=True)
+            after = self._compact_section_to_limit(section, aggressive=True)
+            section_units[index] = after
+            total_units -= max(0, before - after)
+            if name not in compacted_section_names:
+                compacted_section_names.append(name)
+        if total_units > self.token_budget:
+            raise BudgetExceeded("bundle", total_units, self.token_budget)
+        return total_units
+
+    def _truncate_section(self, section: JsonObject, *, aggressive: bool = False) -> None:
+        name = str(section.get("name", ""))
+        text_limit = 24 if aggressive else 64
+        if name == "user_event":
+            _truncate_text_values(section, limit=96)
+            return
+        if name in {"active_task_state", "permission_state"}:
+            return
+        if name == "artifact_references":
+            for artifact in section.get("artifacts", []):
+                if isinstance(artifact, dict) and isinstance(artifact.get("metadata"), dict):
+                    artifact["metadata"] = _truncate_json(artifact["metadata"], limit=24)
+            return
+        _truncate_text_values(section, limit=text_limit)
+
+    def _compact_section_to_limit(self, section: JsonObject, *, aggressive: bool = False) -> int:
+        text_limit = 64 if not aggressive else 24
+        while measure_units(_section_payload(section)) > self.section_budget and text_limit > 8:
+            text_limit = max(8, text_limit // 2)
+            _truncate_text_values(section, limit=text_limit)
+            self._truncate_lists(section, limit=2 if not aggressive else 1)
+        used = measure_units(_section_payload(section))
+        if used <= self.section_budget:
+            return used
+        self._drop_optional_items(section)
+        used = measure_units(_section_payload(section))
+        if used > self.section_budget:
+            raise BudgetExceeded(str(section.get("name", "")), used, self.section_budget)
+        return used
+
+    def _truncate_lists(self, value, *, limit: int) -> None:
+        if isinstance(value, dict):
+            for item in value.values():
+                self._truncate_lists(item, limit=limit)
+            return
+        if isinstance(value, list):
+            del value[limit:]
+            for item in value:
+                self._truncate_lists(item, limit=limit)
+
+    def _drop_optional_items(self, section: JsonObject) -> None:
+        name = str(section.get("name", ""))
+        if name == "recent_observations":
+            records = section.get("records")
+            if isinstance(records, list):
+                del records[1:]
+        elif name == "memory_refs":
+            refs = section.get("refs")
+            if isinstance(refs, list):
+                del refs[1:]
+        elif name == "citations":
+            items = section.get("items")
+            if isinstance(items, list):
+                del items[1:]
+        elif name == "tool_briefs":
+            tools = section.get("tools")
+            if isinstance(tools, list):
+                del tools[1:]
+        _truncate_text_values(section, limit=8)
+        if name == "recent_observations":
+            records = section.get("records")
+            if isinstance(records, list):
+                for record in records:
+                    if not isinstance(record, dict):
+                        continue
+                    record["content"] = {"preview": _compact_text(str(record.get("content", "")), limit=8)}
+        elif name == "memory_refs":
+            refs = section.get("refs")
+            if isinstance(refs, list):
+                for ref in refs:
+                    if isinstance(ref, dict):
+                        ref.pop("artifact_refs", None)
+        elif name == "citations":
+            items = section.get("items")
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        item["quote"] = _compact_text(str(item.get("quote", "")), limit=8)
 
     @staticmethod
     def from_dict(data: JsonObject) -> ContextPack:
@@ -190,6 +328,10 @@ class ContextCompiler:
                 "thread_id": task.thread_id,
                 "input_text": task.input_text,
                 "context_pack_hash": pack.payload_hash,
+                "sections": pack.sections,
+                "source_refs": pack.source_refs,
+                "redactions": pack.redactions,
+                "budget": pack.budget,
             },
             token_budget=int(pack.budget["token_budget"]),
         )
@@ -203,6 +345,27 @@ def _compact_text(text: str, *, limit: int = 256) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 3)] + "..."
+
+
+def _truncate_json(value, *, limit: int):
+    copied = deepcopy(value)
+    _truncate_text_values(copied, limit=limit)
+    return copied
+
+
+def _truncate_text_values(value, *, limit: int) -> None:
+    if isinstance(value, dict):
+        for key, item in list(value.items()):
+            if key == "name":
+                continue
+            if isinstance(item, str):
+                value[key] = _compact_text(item, limit=limit)
+            else:
+                _truncate_text_values(item, limit=limit)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _truncate_text_values(item, limit=limit)
 
 
 def _compact_event(data: JsonObject) -> JsonObject:

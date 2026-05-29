@@ -137,14 +137,14 @@ def _golden_cli_context(task_id: str) -> dict[str, object]:
         "budget": {
             "section_count": 9,
             "section_limit": 1024,
-            "section_units": [38, 42, 32, 38, 52, 50, 72, 109, 24],
+            "section_units": [32, 42, 38, 63, 75, 66, 89, 109, 24],
             "token_budget": 4096,
-            "total_units": 457,
+            "total_units": 538,
             "within_budget": True,
         },
         "context_id": f"ctx-{task_id}-run-1-step-1",
         "memory_refs": ["obs-act-respond"],
-        "payload_hash": "3836fd565aa186ac05cfe8bcb9e9441fb82a6e89e69bc399f542ae79db97af55",
+        "payload_hash": "1e6fae0d5ad9e6c948bb1e99f4b703ab625a5691a21a3be179d5931bff2b2400",
         "redactions": [],
         "run_id": "run-1",
         "sections": [

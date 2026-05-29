@@ -29,7 +29,7 @@ class PolicyGate:
             "shell",
             "network",
         }
-        disabled = manifest is not None and not manifest.enabled and side_effect_class != "network"
+        disabled = manifest is not None and not manifest.enabled
         allowed = not blocked_destructive and not missing_permissions and not disabled
         if blocked_destructive:
             reason = "blocked_side_effect_in_read_only_mode"
