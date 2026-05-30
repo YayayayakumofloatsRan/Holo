@@ -6,7 +6,7 @@ from pathlib import Path
 from kernel_v3.agent.contracts import AgentRuntimeResult, FailureReport, FinalAnswer, TaskRecipe
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
-from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
+from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -43,11 +43,58 @@ class AgentRuntime:
         self,
         goal: str,
         *,
+        thread_id: str = "local:default",
         mode: str = "auto",
         planner_mode: str = "fake",
         evaluator_mode: str = "fake",
         synthesizer_mode: str = "fake",
         citations_required: bool | None = None,
+    ) -> AgentRuntimeResult:
+        return self._execute(
+            goal,
+            thread_id=thread_id,
+            mode=mode,
+            planner_mode=planner_mode,
+            evaluator_mode=evaluator_mode,
+            synthesizer_mode=synthesizer_mode,
+            citations_required=citations_required,
+            task_id=None,
+        )
+
+    def resume(
+        self,
+        task_id: str,
+        user_input: str,
+        *,
+        thread_id: str = "local:default",
+        mode: str = "auto",
+        planner_mode: str = "fake",
+        evaluator_mode: str = "fake",
+        synthesizer_mode: str = "fake",
+        citations_required: bool | None = None,
+    ) -> AgentRuntimeResult:
+        return self._execute(
+            user_input,
+            thread_id=thread_id,
+            mode=mode,
+            planner_mode=planner_mode,
+            evaluator_mode=evaluator_mode,
+            synthesizer_mode=synthesizer_mode,
+            citations_required=citations_required,
+            task_id=task_id,
+        )
+
+    def _execute(
+        self,
+        goal: str,
+        *,
+        thread_id: str,
+        mode: str,
+        planner_mode: str,
+        evaluator_mode: str,
+        synthesizer_mode: str,
+        citations_required: bool | None,
+        task_id: str | None,
     ) -> AgentRuntimeResult:
         selected_mode = _select_mode(goal, mode)
         if selected_mode == "workspace_answer" and not _file_target(goal):
@@ -73,7 +120,19 @@ class AgentRuntime:
             max_network_fetches=recipe.max_network_fetches,
             max_total_artifact_bytes=recipe.max_total_artifact_bytes,
         )
-        result = loop.run(goal)
+        if task_id is None:
+            result = loop.run_event(
+                Event(
+                    event_id=f"evt-chat-{_safe_id(thread_id)}-{len(self.journal.records()) + 1}",
+                    run_id="run-1",
+                    type="input.received",
+                    timestamp_ms=len(self.journal.records()) + 1,
+                    payload={"text": goal, "thread_id": thread_id},
+                    source="chat" if thread_id != "local:default" else "user",
+                )
+            )
+        else:
+            result = loop.resume(task_id, user_input=goal, thread_id=thread_id)
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
         if result.status == "needs_user_input":
             return AgentRuntimeResult(
@@ -927,3 +986,8 @@ def _ordered_unique(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _safe_id(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "-" for ch in value.strip().lower())
+    return safe.strip("-") or "default"

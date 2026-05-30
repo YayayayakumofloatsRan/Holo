@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ContextCompiler, ContextPackCompiler
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -57,6 +58,16 @@ def main(argv: list[str] | None = None) -> int:
     answer_parser = sub.add_parser("answer")
     answer_parser.add_argument("goal")
     answer_parser.add_argument("--citations-required", action="store_true")
+
+    chat_parser = sub.add_parser("chat")
+    chat_parser.add_argument("--thread", default="default")
+    chat_parser.add_argument("--once", default=None)
+
+    chat_status_parser = sub.add_parser("chat-status")
+    chat_status_parser.add_argument("thread_id")
+
+    chat_summary_parser = sub.add_parser("chat-summary")
+    chat_summary_parser.add_argument("thread_id")
 
     inspect_run_parser = sub.add_parser("inspect-run")
     inspect_run_parser.add_argument("task_id")
@@ -164,6 +175,32 @@ def main(argv: list[str] | None = None) -> int:
             citations_required=True if args.citations_required else None,
         )
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "chat":
+        runtime = _chat_runtime(journal)
+        if args.once is not None:
+            payload = runtime.receive(args.once, thread_id=args.thread)
+            print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+            return 0 if payload.status not in {"failed", "blocked"} else 1
+        for line in sys.stdin:
+            text = line.strip()
+            if not text:
+                continue
+            payload = runtime.receive(text, thread_id=args.thread)
+            print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+            sys.stdout.flush()
+        return 0
+
+    if args.command == "chat-status":
+        runtime = _chat_runtime(journal)
+        print(json.dumps(runtime.build_thread_state(args.thread_id).to_dict(), ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "chat-summary":
+        runtime = _chat_runtime(journal)
+        summary = runtime.summarize_thread(args.thread_id)
+        print(json.dumps(summary.to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
 
     if args.command == "inspect-run":
@@ -382,6 +419,10 @@ def _agent_runtime(
         processor_fabric=fabric,
         workspace_root=Path.cwd(),
     )
+
+
+def _chat_runtime(journal: JournalStore) -> ChatRuntime:
+    return ChatRuntime(journal=journal, agent_runtime=_agent_runtime(journal, live_model=False))
 
 
 def _agent_uses_live_model(args) -> bool:

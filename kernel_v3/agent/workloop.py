@@ -570,7 +570,7 @@ def _missing_evidence_values(journal: JournalStore, *, task_id: str, latest: lis
 def _failure_reasons(journal: JournalStore, *, task_id: str) -> list[str]:
     reasons = []
     for record in journal.records(task_id=task_id):
-        reason = record.state_delta.get("reason") or record.data.get("reason") or record.data.get("stop_reason")
+        reason = _failure_reason_from_record(record)
         if isinstance(reason, str) and reason:
             reasons.append(reason)
     return reasons
@@ -579,10 +579,28 @@ def _failure_reasons(journal: JournalStore, *, task_id: str) -> list[str]:
 def _failure_reason_values(journal: JournalStore, *, task_id: str) -> list[tuple[str, str]]:
     values = []
     for record in journal.records(task_id=task_id):
-        reason = record.state_delta.get("reason") or record.data.get("reason") or record.data.get("stop_reason")
+        reason = _failure_reason_from_record(record)
         if isinstance(reason, str) and reason:
             values.append((reason, record.record_id))
     return values
+
+
+def _failure_reason_from_record(record) -> str | None:
+    if record.kind == "agent_failure_report":
+        reason = record.data.get("reason")
+        return str(reason) if isinstance(reason, str) else None
+    if record.kind == "termination_decision":
+        decision = record.data.get("decision")
+        if decision not in {"failure_report", "blocked"}:
+            return None
+        reason = record.data.get("reason")
+        return str(reason) if isinstance(reason, str) else None
+    if record.kind == "feedback":
+        if record.data.get("status") not in {"failed", "blocked", "step_limit_exceeded"}:
+            return None
+        reason = record.data.get("stop_reason")
+        return str(reason) if isinstance(reason, str) else None
+    return None
 
 
 def _repeat_for_values(
