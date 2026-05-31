@@ -225,7 +225,10 @@ with a healthy completed queue.
 Resident queue inspection is bounded at the queue layer. Health issues and
 sample inbox/outbox rows are queried with SQL limits and clamped before
 rendering, so a long-running resident database can be inspected without loading
-or returning every historical message.
+or returning every historical message. Inspection samples are operational
+manifests: message text is exposed only as a bounded preview plus length/hash,
+and metadata/outbox payloads are value-hash manifests rather than raw JSON
+bodies.
 
 Worker exception records also journal the queue state that was actually written
 after containment. `resident_inbox_failed` includes `resulting_status`,

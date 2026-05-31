@@ -1113,6 +1113,47 @@ def test_phase73_resident_queue_inspection_samples_are_bounded(tmp_path: Path):
     assert inspection.samples["sample_limit_clamped"] is True
 
 
+def test_phase73_resident_queue_inspection_samples_are_manifests(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock(start=30_000))
+    marker = "RAW_SAMPLE_MARKER_SHOULD_NOT_APPEAR"
+    inbox_text = ("inbox-prefix-" * 20) + marker
+    outbox_text = ("outbox-prefix-" * 20) + marker
+    queue.enqueue(
+        thread_id="resident-manifest",
+        text=inbox_text,
+        message_id="in-manifest",
+        metadata={"operator_note": marker},
+    )
+    queue.append_outbox(
+        in_reply_to="out-manifest",
+        thread_id="resident-manifest",
+        text=outbox_text,
+        status="ready",
+        task_id="task-manifest",
+        run_id="run-manifest",
+        payload={"raw_result": ("payload-prefix-" * 20) + marker},
+    )
+
+    inspection = queue.inspect(sample_limit=1)
+    serialized_samples = json.dumps(inspection.samples, ensure_ascii=False)
+    inbox_sample = inspection.samples["inbox"][0]
+    outbox_sample = inspection.samples["outbox"][0]
+
+    assert marker not in serialized_samples
+    assert inbox_sample["message_id"] == "in-manifest"
+    assert inbox_sample["text_length"] == len(inbox_text)
+    assert inbox_sample["text_truncated"] is True
+    assert inbox_sample["text_hash"]
+    assert inbox_sample["metadata_manifest"]["redaction"] == {"values": "hash_only"}
+    assert "metadata" not in inbox_sample
+    assert outbox_sample["outbox_id"]
+    assert outbox_sample["text_length"] == len(outbox_text)
+    assert outbox_sample["text_truncated"] is True
+    assert outbox_sample["payload_manifest"]["fields"]["raw_result"]["type"] == "str"
+    assert outbox_sample["payload_manifest"]["redaction"] == {"values": "hash_only"}
+    assert "payload" not in outbox_sample
+
+
 def test_phase73_resident_trace_is_bounded_and_reports_truncation() -> None:
     journal = JournalStore.in_memory()
     for index in range(6):

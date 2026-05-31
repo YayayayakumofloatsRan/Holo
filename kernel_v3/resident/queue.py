@@ -22,6 +22,8 @@ _OUTBOX_STATUSES = {
 }
 
 RESIDENT_QUEUE_SAMPLE_LIMIT_CAP = 20
+RESIDENT_QUEUE_SAMPLE_TEXT_PREVIEW_CHARS = 160
+RESIDENT_QUEUE_SAMPLE_MANIFEST_KEY_CAP = 40
 
 
 class ResidentQueue:
@@ -1093,8 +1095,8 @@ def _inspection_samples(
     effective_sample_limit: int,
 ) -> JsonObject:
     samples: JsonObject = {
-        "inbox": [message.to_dict() for message in inbox],
-        "outbox": [message.to_dict() for message in outbox],
+        "inbox": [_inbox_sample(message) for message in inbox],
+        "outbox": [_outbox_sample(message) for message in outbox],
     }
     if effective_sample_limit != requested_sample_limit:
         samples["requested_sample_limit"] = requested_sample_limit
@@ -1102,6 +1104,89 @@ def _inspection_samples(
         samples["sample_limit_cap"] = RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
         samples["sample_limit_clamped"] = True
     return samples
+
+
+def _inbox_sample(message: InboundMessage) -> JsonObject:
+    return {
+        "message_id": message.message_id,
+        "thread_id": message.thread_id,
+        "source": message.source,
+        "status": message.status,
+        "created_at_ms": message.created_at_ms,
+        "lease_owner": message.lease_owner,
+        "lease_until_ms": message.lease_until_ms,
+        "attempts": message.attempts,
+        "next_attempt_at_ms": message.next_attempt_at_ms,
+        **_text_projection(prefix="text", text=message.text),
+        "metadata_manifest": _json_object_manifest(message.metadata),
+    }
+
+
+def _outbox_sample(message: OutboxMessage) -> JsonObject:
+    return {
+        "outbox_id": message.outbox_id,
+        "in_reply_to": message.in_reply_to,
+        "thread_id": message.thread_id,
+        "status": message.status,
+        "created_at_ms": message.created_at_ms,
+        "task_id": message.task_id,
+        "run_id": message.run_id,
+        **_text_projection(prefix="text", text=message.text),
+        "payload_manifest": _json_object_manifest(message.payload),
+    }
+
+
+def _text_projection(*, prefix: str, text: str) -> JsonObject:
+    return {
+        f"{prefix}_preview": text[:RESIDENT_QUEUE_SAMPLE_TEXT_PREVIEW_CHARS],
+        f"{prefix}_length": len(text),
+        f"{prefix}_hash": _hash(text),
+        f"{prefix}_truncated": len(text) > RESIDENT_QUEUE_SAMPLE_TEXT_PREVIEW_CHARS,
+    }
+
+
+def _json_object_manifest(payload: JsonObject) -> JsonObject:
+    sorted_items = sorted(((str(key), value) for key, value in payload.items()), key=lambda item: item[0])
+    visible_items = sorted_items[:RESIDENT_QUEUE_SAMPLE_MANIFEST_KEY_CAP]
+    return {
+        "key_count": len(sorted_items),
+        "keys": [key for key, _value in visible_items],
+        "keys_truncated": len(sorted_items) > RESIDENT_QUEUE_SAMPLE_MANIFEST_KEY_CAP,
+        "hash": _hash(payload),
+        "fields": {key: _json_value_manifest(value) for key, value in visible_items},
+        "redaction": {"values": "hash_only"},
+    }
+
+
+def _json_value_manifest(value: object) -> JsonObject:
+    if isinstance(value, dict):
+        keys = sorted(str(key) for key in value.keys())
+        return {
+            "type": "object",
+            "key_count": len(keys),
+            "keys": keys[:RESIDENT_QUEUE_SAMPLE_MANIFEST_KEY_CAP],
+            "keys_truncated": len(keys) > RESIDENT_QUEUE_SAMPLE_MANIFEST_KEY_CAP,
+            "hash": _hash(value),
+        }
+    if isinstance(value, list):
+        return {
+            "type": "array",
+            "length": len(value),
+            "item_types": [type(item).__name__ for item in value[:RESIDENT_QUEUE_SAMPLE_MANIFEST_KEY_CAP]],
+            "items_truncated": len(value) > RESIDENT_QUEUE_SAMPLE_MANIFEST_KEY_CAP,
+            "hash": _hash(value),
+        }
+    if isinstance(value, str):
+        return {"type": "str", "length": len(value), "hash": _hash(value)}
+    if value is None:
+        return {"type": "null", "hash": _hash(value)}
+    if isinstance(value, bool):
+        return {"type": "bool", "hash": _hash(value)}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"type": "int", "hash": _hash(value)}
+    if isinstance(value, float):
+        return {"type": "float", "hash": _hash(value)}
+    return {"type": type(value).__name__, "hash": _hash(str(value))}
 
 
 def _next_outbox_status(current: str, *, requested: str) -> str | None:
