@@ -171,10 +171,13 @@ holo-v3 \
   --profile finance_fundamentals
 ```
 
-Repeated observations of the same URI and payload hash are idempotent. The
-corpus records a safe re-observation event instead of raising a conflict or
-duplicating the document record. If the referenced artifact blob is missing,
-corpus-backed retrieval fails closed.
+Repeated observations of the same URI and payload hash are treated as the same
+research document, even if the artifact reference or run provenance changes.
+The corpus records a safe re-observation event, refreshes the document's
+`fetched_at_ms`, updates the SQLite index, and preserves the strongest known
+profile/source assessment instead of duplicating the document or leaving a
+freshly revalidated page marked stale. If the referenced artifact blob is
+missing, corpus-backed retrieval fails closed.
 
 The same persistent stores can be supplied to the main runtime:
 

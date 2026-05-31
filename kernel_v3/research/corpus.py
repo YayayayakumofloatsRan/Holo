@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -89,22 +90,28 @@ class ResearchCorpusStore:
             if existing.to_dict() == document.to_dict():
                 return existing
             if _same_document_identity(existing, document):
+                refreshed = _merge_reobserved_document(existing, document)
+                self._documents[refreshed.document_id] = refreshed
                 self._append_event(
                     "corpus_document_reobserved",
                     {
-                        "document_id": existing.document_id,
-                        "uri": existing.uri,
-                        "payload_hash": existing.payload_hash,
-                        "artifact_id": existing.artifact_id,
+                        "document_id": refreshed.document_id,
+                        "uri": refreshed.uri,
+                        "payload_hash": refreshed.payload_hash,
+                        "artifact_id": refreshed.artifact_id,
+                        "previous_fetched_at_ms": existing.fetched_at_ms,
+                        "observed_fetched_at_ms": document.fetched_at_ms,
+                        "fetched_at_ms": refreshed.fetched_at_ms,
                         "task_id": document.task_id,
                         "run_id": document.run_id,
                         "goal_id": document.goal_id,
-                        "fetched_at_ms": document.fetched_at_ms,
                         "research_profile_id": document.research_profile_id,
                         "metadata": _safe_json(document.metadata),
+                        "document": refreshed.to_dict(),
                     },
                 )
-                return existing
+                self._upsert_document_index(refreshed)
+                return refreshed
             raise ValueError(f"corpus_document_id_conflict:{document.document_id}")
         self._documents[document.document_id] = document
         self._append_event("corpus_document_recorded", document.to_dict())
@@ -335,12 +342,21 @@ class ResearchCorpusStore:
     def _replay_events(self) -> None:
         self._documents = {}
         for event in self._events:
-            if event.get("event_type") != "corpus_document_recorded":
-                continue
+            event_type = event.get("event_type")
             payload = event.get("payload")
-            if isinstance(payload, dict):
+            if event_type == "corpus_document_recorded" and isinstance(payload, dict):
                 document = CorpusDocument.from_dict(payload)
                 self._documents[document.document_id] = document
+            elif event_type == "corpus_document_reobserved" and isinstance(payload, dict):
+                document_payload = payload.get("document")
+                if isinstance(document_payload, dict):
+                    document = CorpusDocument.from_dict(document_payload)
+                    self._documents[document.document_id] = document
+                    continue
+                document_id = payload.get("document_id")
+                existing = self._documents.get(document_id) if isinstance(document_id, str) else None
+                if existing is not None:
+                    self._documents[existing.document_id] = _legacy_reobserved_document(existing, payload)
 
     def _append_event(self, event_type: str, payload: JsonObject) -> None:
         event = {
@@ -433,8 +449,62 @@ def _same_document_identity(left: CorpusDocument, right: CorpusDocument) -> bool
         left.document_id == right.document_id
         and left.uri == right.uri
         and left.payload_hash == right.payload_hash
-        and left.artifact_id == right.artifact_id
     )
+
+
+def _merge_reobserved_document(existing: CorpusDocument, observed: CorpusDocument) -> CorpusDocument:
+    base = observed if observed.fetched_at_ms >= existing.fetched_at_ms else existing
+    metadata = {
+        **dict(existing.metadata),
+        **dict(observed.metadata),
+        "last_reobserved_at_ms": max(existing.fetched_at_ms, observed.fetched_at_ms),
+        "reobservation_count": _metadata_int(existing.metadata, "reobservation_count") + 1,
+    }
+    return replace(
+        base,
+        fetched_at_ms=max(existing.fetched_at_ms, observed.fetched_at_ms),
+        research_profile_id=base.research_profile_id or existing.research_profile_id or observed.research_profile_id,
+        source_assessment=base.source_assessment or existing.source_assessment or observed.source_assessment,
+        metadata=_safe_json(metadata),
+    )
+
+
+def _legacy_reobserved_document(existing: CorpusDocument, payload: JsonObject) -> CorpusDocument:
+    fetched_at_ms = _positive_int(payload.get("fetched_at_ms"), default=existing.fetched_at_ms)
+    fetched_at_ms = max(existing.fetched_at_ms, fetched_at_ms)
+    metadata_value = payload.get("metadata")
+    metadata = {
+        **dict(existing.metadata),
+        **_safe_json(dict(metadata_value) if isinstance(metadata_value, dict) else {}),
+        "last_reobserved_at_ms": fetched_at_ms,
+        "reobservation_count": _metadata_int(existing.metadata, "reobservation_count") + 1,
+    }
+    return replace(
+        existing,
+        fetched_at_ms=fetched_at_ms,
+        task_id=_optional_string(payload.get("task_id"), default=existing.task_id),
+        run_id=_optional_string(payload.get("run_id"), default=existing.run_id) or existing.run_id,
+        goal_id=_optional_string(payload.get("goal_id"), default=existing.goal_id) or existing.goal_id,
+        research_profile_id=_optional_string(payload.get("research_profile_id"), default=existing.research_profile_id),
+        metadata=_safe_json(metadata),
+    )
+
+
+def _metadata_int(metadata: JsonObject, key: str) -> int:
+    value = metadata.get(key)
+    return int(value) if isinstance(value, int) and value >= 0 else 0
+
+
+def _optional_string(value: object, *, default: str | None) -> str | None:
+    return value if isinstance(value, str) and value else default
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, float) and value >= 0:
+        return int(value)
+    return default
 
 
 def _authority_score(document: CorpusDocument) -> float:

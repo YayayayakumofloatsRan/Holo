@@ -92,7 +92,11 @@ def test_phase83_corpus_store_reobserves_same_document_without_conflict(tmp_path
     first = store.record_document(document)
     second = store.record_document(replace(document, task_id="task-2", run_id="run-2", fetched_at_ms=202))
 
-    assert second == first
+    assert second.document_id == first.document_id
+    assert second.fetched_at_ms == 202
+    assert second.task_id == "task-2"
+    assert second.run_id == "run-2"
+    assert second.metadata["reobservation_count"] == 1
     assert len(store.documents()) == 1
     assert [event["event_type"] for event in store.audit_records()] == [
         "corpus_document_recorded",
@@ -100,6 +104,8 @@ def test_phase83_corpus_store_reobserves_same_document_without_conflict(tmp_path
     ]
     reloaded = ResearchCorpusStore(log_path=log_path, index_path=index_path)
     assert len(reloaded.documents()) == 1
+    assert reloaded.get(document.document_id).fetched_at_ms == 202
+    assert reloaded.index_documents()[0]["fetched_at_ms"] == 202
 
 
 def test_phase83_corpus_status_and_inspection_report_authority_health() -> None:
@@ -229,6 +235,67 @@ def test_phase83_profile_search_can_exclude_stale_documents() -> None:
     assert fresh_results.total == 0
     assert freshness["stale_count"] == 1
     assert freshness["document_ids"] == [document.document_id]
+
+
+def test_phase83_reobserved_document_refreshes_freshness_and_artifact_ref(tmp_path) -> None:
+    log_path = tmp_path / "corpus.jsonl"
+    index_path = tmp_path / "corpus.sqlite"
+    source = _source(
+        "src-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    profile = finance_fundamentals_profile()
+    max_age_ms = int(profile.metadata["freshness_max_age_ms"])
+    now_ms = max_age_ms + 10_000
+    old_document = corpus_document_from_retrieval(
+        document=_document(
+            source=source,
+            artifact_id="artifact-sec-old",
+            payload_hash="hash-sec",
+            preview=source.snippet,
+        ),
+        source=source,
+        goal=SearchGoal(
+            goal_id="goal-stale-aapl",
+            query="AAPL revenue",
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        task_id="task-old",
+        run_id="run-old",
+        fetched_at_ms=1,
+        source_assessment=assess_search_source(source, profile=profile),
+    )
+    store = ResearchCorpusStore(log_path=log_path, index_path=index_path, clock_ms=lambda: now_ms)
+    store.record_document(old_document)
+    assert store.search("AAPL revenue", profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID, exclude_stale=True).total == 0
+
+    fresh_document = replace(
+        old_document,
+        artifact_id="artifact-sec-refresh",
+        task_id="task-refresh",
+        run_id="run-refresh",
+        fetched_at_ms=now_ms - 1_000,
+        research_profile_id=None,
+        source_assessment=None,
+    )
+    refreshed = store.record_document(fresh_document)
+
+    assert refreshed.document_id == old_document.document_id
+    assert refreshed.artifact_id == "artifact-sec-refresh"
+    assert refreshed.fetched_at_ms == now_ms - 1_000
+    assert refreshed.research_profile_id == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert store.search("AAPL revenue", profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID, exclude_stale=True).total == 1
+    assert store.freshness_summary(profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID)["stale_count"] == 0
+
+    reloaded = ResearchCorpusStore(log_path=log_path, index_path=index_path, clock_ms=lambda: now_ms)
+    reloaded_document = reloaded.get(old_document.document_id)
+    assert reloaded_document is not None
+    assert reloaded_document.artifact_id == "artifact-sec-refresh"
+    assert reloaded_document.fetched_at_ms == now_ms - 1_000
+    assert reloaded.search("AAPL revenue", profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID, exclude_stale=True).total == 1
+    assert reloaded.index_documents()[0]["artifact_id"] == "artifact-sec-refresh"
 
 
 def test_phase83_empty_or_weak_corpus_inspection_is_actionable() -> None:
