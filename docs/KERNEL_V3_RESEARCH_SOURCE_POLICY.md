@@ -69,3 +69,18 @@ Rules:
 This keeps the future live web path auditable: provider output becomes fetched
 artifact, source-assessed evidence, citation, and corpus metadata instead of an
 untracked page blob.
+
+## Corpus-Backed Retrieval
+
+`CorpusSearchProvider` and `CorpusFetchProvider` let retrieval reuse the local
+web corpus before asking for live web access:
+
+- `CorpusSearchProvider` searches `ResearchCorpusStore` and returns ordinary
+  `SearchSource` objects with `provider="research_corpus"`
+- `CorpusFetchProvider` reads the referenced artifact blob from `ArtifactStore`
+- both providers report `live_network=False`
+- profile filtering is applied at corpus search time
+- missing artifact refs fail closed instead of fabricating a body
+
+This makes the webpage database a first-class retrieval source while preserving
+the existing PolicyGate boundary for future live network providers.
