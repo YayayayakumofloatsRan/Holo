@@ -929,7 +929,16 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
     command = args.memory_command
     if command == "list":
         scope = {"thread_id": args.thread} if args.thread else None
-        result = store.recall(query=args.query, scope=scope)
+        result = store.recall(
+            query=args.query,
+            scope=scope,
+            record_access=True,
+            access_context={
+                "surface": "cli",
+                "command": "memory list",
+                **({"thread_id": args.thread} if args.thread else {}),
+            },
+        )
         return {"status": "ok", "result": result.to_dict()}
     if command == "proposals":
         proposals = [proposal.to_dict() for proposal in store.proposals()]

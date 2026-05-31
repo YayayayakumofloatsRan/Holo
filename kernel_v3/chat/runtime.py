@@ -834,7 +834,17 @@ class ChatRuntime:
             return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="Memory store is not configured.")
         subcommand = args[0].lower() if args else "list"
         if subcommand == "list":
-            payload = self.memory_store.recall(scope={"thread_id": state.thread_id}, limit=20).to_dict()
+            payload = self.memory_store.recall(
+                scope={"thread_id": state.thread_id},
+                limit=20,
+                record_access=True,
+                access_context={
+                    "surface": "chat",
+                    "thread_id": state.thread_id,
+                    "turn_id": turn.turn_id,
+                    "command": "/memory list",
+                },
+            ).to_dict()
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=memory_recall_command_result(payload))
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=memory_list_text(payload))
         if subcommand in {"proposals", "proposal"}:

@@ -224,6 +224,11 @@ def test_phase72_chat_memory_admin_approves_and_lists_pending_proposal():
     assert exported.status == "completed"
     assert deleted.status == "completed"
     assert "中文" in memory_list.answer
+    list_events = [event for event in store.audit_records() if event["event_type"] == "memory_items_recalled"]
+    assert list_events[-1]["payload"]["memory_ids"] == [memory_id]
+    assert list_events[-1]["payload"]["access_context"]["surface"] == "chat"
+    assert list_events[-1]["payload"]["access_context"]["thread_id"] == "thread-memory"
+    assert list_events[-1]["payload"]["access_context"]["command"] == "/memory list"
     export_events = [event for event in store.audit_records() if event["event_type"] == "memory_item_exported"]
     assert export_events[-1]["payload"]["memory_id"] == memory_id
     assert export_events[-1]["payload"]["access_context"]["surface"] == "chat"
@@ -302,6 +307,15 @@ def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
     assert cli.main([*base, "memory", "list", "--thread", "cli-thread"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["result"]["total"] == 1
+    list_events = [
+        event
+        for event in MemoryStore(memory_log, index_path=memory_index).audit_records()
+        if event["event_type"] == "memory_items_recalled"
+    ]
+    assert list_events[-1]["payload"]["memory_ids"] == [memory_id]
+    assert list_events[-1]["payload"]["access_context"]["surface"] == "cli"
+    assert list_events[-1]["payload"]["access_context"]["command"] == "memory list"
+    assert list_events[-1]["payload"]["access_context"]["thread_id"] == "cli-thread"
 
     assert cli.main([*base, "memory", "export", memory_id]) == 0
     exported = json.loads(capsys.readouterr().out)

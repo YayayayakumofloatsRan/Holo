@@ -119,6 +119,10 @@ artifact payloads, or raw task bodies. Access
 context is passed through the shared low-sensitive audit sanitizer: known
 operator identifiers are preserved, secret-like keys are omitted, and unknown
 free-form strings are hash-only.
+Explicit admin recall surfaces are audited the same way: `memory list` and
+`/memory list` append `memory_items_recalled` records with CLI/chat context,
+matched memory ids, scope, filter counts, and redacted query diagnostics. Their
+main journal command records remain previews/manifests only.
 Durable-memory context injection is clamped by a context-owned limit that is
 smaller than generic memory recall. If a larger limit is requested, the
 durable-memory section records the requested limit, effective limit, cap, and
