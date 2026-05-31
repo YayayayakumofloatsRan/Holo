@@ -239,6 +239,22 @@ Tests:
 - needs_user_input creates pending outbox, not self-answer
 - no live network or model required for default tests
 
+Implementation note:
+
+- `kernel_v3.resident` now provides `ResidentQueue`, `ResidentRuntime`, and
+  typed `InboundMessage` / `OutboxMessage` / `WorkerLease` /
+  `ResidentRunResult` contracts.
+- The queue is local SQLite with inbox, outbox, and lease tables. A worker must
+  acquire the single resident lease before claiming a pending message.
+- `ResidentRuntime.run_once()` claims one inbox item, calls `ChatRuntime`, writes
+  exactly one outbox item, marks the inbox item completed, and releases the
+  lease. It does not loop forever and does not become a separate decision layer.
+- `needs_user_input` becomes an outbox item with status `pending_user_input`;
+  the worker does not fabricate the missing user answer or continue the task.
+- `holo-v3 resident enqueue/run-once/inbox/outbox` provides the local dev/admin
+  surface. This is not a live transport integration.
+- Implemented tests live in `tests/test_kernel_v3_phase73_resident_runtime.py`.
+
 ## Acceptance Gate
 
 Before moving beyond Phase7 memory core:

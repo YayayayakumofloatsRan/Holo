@@ -28,6 +28,7 @@ from kernel_v3.processors import (
     scenario_report_payload,
 )
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
+from kernel_v3.resident import ResidentQueue, ResidentRuntime
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
@@ -40,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--index", default="kernel_v3/.holo-v3-journal.sqlite")
     parser.add_argument("--memory-log", default=None)
     parser.add_argument("--memory-index", default=None)
+    parser.add_argument("--resident-db", default=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_parser = sub.add_parser("run")
@@ -91,6 +93,16 @@ def main(argv: list[str] | None = None) -> int:
     memory_delete = memory_sub.add_parser("delete")
     memory_delete.add_argument("memory_id")
     memory_delete.add_argument("--reason", default="user_deleted")
+
+    resident_parser = sub.add_parser("resident")
+    resident_sub = resident_parser.add_subparsers(dest="resident_command", required=True)
+    resident_enqueue = resident_sub.add_parser("enqueue")
+    resident_enqueue.add_argument("text")
+    resident_enqueue.add_argument("--thread", default="default")
+    resident_run_once = resident_sub.add_parser("run-once")
+    resident_run_once.add_argument("--worker-id", default="resident-worker-1")
+    resident_sub.add_parser("inbox")
+    resident_sub.add_parser("outbox")
 
     inspect_run_parser = sub.add_parser("inspect-run")
     inspect_run_parser.add_argument("task_id")
@@ -232,6 +244,11 @@ def main(argv: list[str] | None = None) -> int:
         payload = _memory_command(args, journal)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0 if payload.get("status") != "failed" else 1
+
+    if args.command == "resident":
+        payload = _resident_command(args, journal)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload.get("status") not in {"failed", "blocked"} else 1
 
     if args.command == "inspect-run":
         renderer = TraceRenderer(journal)
@@ -508,6 +525,32 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
         tombstone = store.delete(args.memory_id, reason=args.reason, deleted_by="user")
         return {"status": "ok", "tombstone": tombstone.to_dict()}
     return {"status": "failed", "reason": f"unknown_memory_command:{command}"}
+
+
+def _resident_queue(args) -> ResidentQueue:
+    db_path = Path(getattr(args, "resident_db", None) or "kernel_v3/.holo-v3-resident.sqlite")
+    return ResidentQueue(db_path)
+
+
+def _resident_command(args, journal: JournalStore) -> dict[str, object]:
+    queue = _resident_queue(args)
+    command = args.resident_command
+    if command == "enqueue":
+        message = queue.enqueue(thread_id=args.thread, text=args.text, source="cli")
+        return {"status": "ok", "message": message.to_dict()}
+    if command == "inbox":
+        return {"status": "ok", "messages": [message.to_dict() for message in queue.inbox_messages()]}
+    if command == "outbox":
+        return {"status": "ok", "messages": [message.to_dict() for message in queue.outbox_messages()]}
+    if command == "run-once":
+        memory_store = _memory_store(args, create_default=False)
+        runtime = ResidentRuntime(
+            queue=queue,
+            chat_runtime=_chat_runtime(journal, memory_store=memory_store),
+            worker_id=args.worker_id,
+        )
+        return runtime.run_once().to_dict()
+    return {"status": "failed", "reason": f"unknown_resident_command:{command}"}
 
 
 def _agent_uses_live_model(args) -> bool:
