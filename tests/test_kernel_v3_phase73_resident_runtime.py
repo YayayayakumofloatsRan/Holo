@@ -1329,7 +1329,12 @@ def test_phase73_cli_resident_outbox_admin_journals_manifest(tmp_path: Path, cap
         status="ready",
         task_id="task-cli-ready",
         run_id="run-cli-ready",
-        payload={"command_result": {"result": {"trace": ("trace-admin-" * 20) + marker}}},
+        payload={
+            "command_result": {"result": {"trace": ("trace-admin-" * 20) + marker}},
+            "final_answer": {"answer": ("answer-admin-" * 20) + marker, "citation_refs": []},
+            "pending_question": {"question": ("question-admin-" * 20) + marker},
+            "failure_report": {"reason": ("failure-admin-" * 20) + marker},
+        },
     )
     delivery_failed = queue.append_outbox(
         in_reply_to="in-cli-admin-delivery",

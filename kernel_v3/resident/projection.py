@@ -93,11 +93,14 @@ def _final_answer_manifest(final_answer: JsonObject) -> JsonObject:
 
 
 def _failure_report_manifest(failure_report: JsonObject) -> JsonObject:
+    reason = str(failure_report.get("reason") or "")
     return {
-        "reason": failure_report.get("reason"),
+        "reason_preview": _preview(reason),
+        "reason_hash": _text_hash(reason),
         "missing_evidence": _string_list(failure_report.get("missing_evidence")),
         "trace_refs": _string_list(failure_report.get("trace_refs")),
         "user_help_needed": failure_report.get("user_help_needed"),
+        "redaction": {"reason": "preview_hash_only"},
     }
 
 
@@ -133,11 +136,35 @@ def _outbox_payload_manifest(payload: JsonObject) -> JsonObject:
         "run_id": payload.get("run_id"),
         "trace_refs": _string_list(payload.get("trace_refs")),
         "command_result": _command_result_manifest(payload.get("command_result")),
-        "final_answer": payload.get("final_answer") if isinstance(payload.get("final_answer"), dict) else None,
-        "failure_report": payload.get("failure_report") if isinstance(payload.get("failure_report"), dict) else None,
-        "pending_question": payload.get("pending_question") if isinstance(payload.get("pending_question"), dict) else None,
+        "final_answer": _final_answer_payload_manifest(payload.get("final_answer")),
+        "failure_report": _failure_report_payload_manifest(payload.get("failure_report")),
+        "pending_question": _pending_question_payload_manifest(payload.get("pending_question")),
         "redaction": {"answer": "not_embedded", "summary": "manifest_only", "command_result": "manifest_only"},
     }
+
+
+def _final_answer_payload_manifest(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    if "answer_hash" in value and isinstance(value.get("redaction"), dict):
+        return dict(value)
+    return _final_answer_manifest(value)
+
+
+def _failure_report_payload_manifest(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    if "reason_hash" in value and isinstance(value.get("redaction"), dict):
+        return dict(value)
+    return _failure_report_manifest(value)
+
+
+def _pending_question_payload_manifest(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    if "question_hash" in value and isinstance(value.get("redaction"), dict):
+        return dict(value)
+    return _pending_question_manifest(value)
 
 
 def _metadata_manifest(metadata: JsonObject) -> JsonObject:
