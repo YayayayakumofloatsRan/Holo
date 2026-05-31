@@ -33,6 +33,10 @@ if TYPE_CHECKING:
     from kernel_v3.journal import JournalStore
 
 
+MEMORY_INSPECTION_SAMPLE_LIMIT_CAP = 20
+MEMORY_RECALL_LIMIT_CAP = 50
+
+
 def stable_memory_id(*, kind: str, scope: JsonObject, dedupe_key: str, summary: str = "") -> str:
     payload = {"kind": kind, "scope": scope, "dedupe_key": dedupe_key, "summary": summary}
     return "mem-" + _hash(payload)[:16]
@@ -224,6 +228,7 @@ class MemoryStore:
         rank_query: str | None = None,
     ) -> MemoryRecallResult:
         timestamp = now_ms if now_ms is not None else self._now_ms()
+        effective_limit = _clamp_limit(limit, cap=MEMORY_RECALL_LIMIT_CAP)
         normalized_query = " ".join((query or "").lower().split())
         rank_terms = _query_terms(rank_query if rank_query is not None else query)
         filtered = {"expired": 0, "deleted": 0, "sensitive": 0, "scope": 0, "query": 0}
@@ -253,7 +258,7 @@ class MemoryStore:
                 item.created_at_ms,
                 item.memory_id,
             ),
-        )[: max(0, limit)]
+        )[:effective_limit]
         result = MemoryRecallResult(
             query=query,
             scope=dict(scope or {}),
@@ -267,7 +272,8 @@ class MemoryStore:
                 result,
                 matches=matches,
                 include_sensitive=include_sensitive,
-                limit=limit,
+                requested_limit=limit,
+                effective_limit=effective_limit,
                 accessed_at_ms=timestamp,
                 access_context=access_context,
             )
@@ -294,6 +300,7 @@ class MemoryStore:
         artifact_store: "ArtifactStore | None" = None,
     ) -> MemoryInspection:
         timestamp = now_ms if now_ms is not None else self._now_ms()
+        effective_sample_limit = _clamp_limit(sample_limit, cap=MEMORY_INSPECTION_SAMPLE_LIMIT_CAP)
         active_items: list[MemoryItem] = []
         expired_items: list[MemoryItem] = []
         deleted_items: list[MemoryItem] = []
@@ -328,7 +335,7 @@ class MemoryStore:
             active_items,
             journal=journal,
             artifact_store=artifact_store,
-            sample_limit=sample_limit,
+            sample_limit=effective_sample_limit,
         )
         issues = inspection_issues(consistency)
         recommendations = _unique([*recommendations, *reference_recommendations(issues)])
@@ -345,19 +352,15 @@ class MemoryStore:
             audit_record_count=len(self._events),
             issues=issues,
             provenance_consistency=consistency,
-            samples={
-                "active_items": [_memory_sample(item) for item in _take_sorted_items(active_items, sample_limit)],
-                "pending_proposals": [
-                    _proposal_sample(proposal)
-                    for proposal in _take_sorted_proposals(pending_proposals, sample_limit)
-                ],
-                "conflict_proposals": [
-                    _proposal_sample(proposal)
-                    for proposal in _take_sorted_proposals(conflict_proposals, sample_limit)
-                ],
-                "expired_items": [_memory_sample(item) for item in _take_sorted_items(expired_items, sample_limit)],
-                "deleted_items": [_memory_sample(item) for item in _take_sorted_items(deleted_items, sample_limit)],
-            },
+            samples=_inspection_samples(
+                active_items=active_items,
+                pending_proposals=pending_proposals,
+                conflict_proposals=conflict_proposals,
+                expired_items=expired_items,
+                deleted_items=deleted_items,
+                requested_sample_limit=sample_limit,
+                effective_sample_limit=effective_sample_limit,
+            ),
             recommended_actions=recommendations,
             generated_at_ms=timestamp,
         )
@@ -475,7 +478,8 @@ class MemoryStore:
         *,
         matches: list[MemoryItem],
         include_sensitive: bool,
-        limit: int,
+        requested_limit: int,
+        effective_limit: int,
         accessed_at_ms: int,
         access_context: JsonObject | None,
     ) -> None:
@@ -485,12 +489,16 @@ class MemoryStore:
             "query": _safe_access_text(result.query),
             "scope": dict(result.scope),
             "include_sensitive": include_sensitive,
-            "limit": limit,
+            "limit": effective_limit,
             "total": result.total,
             "filtered": dict(result.filtered),
             "memory_ids": memory_ids,
             "access_context": safe_access_context(dict(access_context or {})),
         }
+        if effective_limit != requested_limit:
+            payload["requested_limit"] = requested_limit
+            payload["limit_cap"] = MEMORY_RECALL_LIMIT_CAP
+            payload["limit_clamped"] = True
         self._append_event("memory_items_recalled", payload)
         for item in matches:
             updated = replace(item, last_accessed_ms=accessed_at_ms)
@@ -788,6 +796,10 @@ def _positive_int(value: object) -> int | None:
     return None
 
 
+def _clamp_limit(value: int, *, cap: int) -> int:
+    return min(max(0, int(value)), cap)
+
+
 def _safe_access_text(value: str | None) -> str | None:
     if value is None:
         return None
@@ -837,6 +849,43 @@ def _proposal_sample(proposal: MemoryProposal) -> JsonObject:
         "summary": str(proposal.proposed_item.get("summary") or ""),
         "risk_flags": list(proposal.risk_flags),
     }
+
+
+def _inspection_samples(
+    *,
+    active_items: list[MemoryItem],
+    pending_proposals: list[MemoryProposal],
+    conflict_proposals: list[MemoryProposal],
+    expired_items: list[MemoryItem],
+    deleted_items: list[MemoryItem],
+    requested_sample_limit: int,
+    effective_sample_limit: int,
+) -> JsonObject:
+    samples: JsonObject = {
+        "active_items": [
+            _memory_sample(item) for item in _take_sorted_items(active_items, effective_sample_limit)
+        ],
+        "pending_proposals": [
+            _proposal_sample(proposal)
+            for proposal in _take_sorted_proposals(pending_proposals, effective_sample_limit)
+        ],
+        "conflict_proposals": [
+            _proposal_sample(proposal)
+            for proposal in _take_sorted_proposals(conflict_proposals, effective_sample_limit)
+        ],
+        "expired_items": [
+            _memory_sample(item) for item in _take_sorted_items(expired_items, effective_sample_limit)
+        ],
+        "deleted_items": [
+            _memory_sample(item) for item in _take_sorted_items(deleted_items, effective_sample_limit)
+        ],
+    }
+    if effective_sample_limit != requested_sample_limit:
+        samples["requested_sample_limit"] = requested_sample_limit
+        samples["sample_limit"] = effective_sample_limit
+        samples["sample_limit_cap"] = MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
+        samples["sample_limit_clamped"] = True
+    return samples
 
 
 def _take_sorted_items(items: list[MemoryItem], limit: int) -> list[MemoryItem]:

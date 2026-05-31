@@ -70,6 +70,10 @@ shadow-candidate, tombstone, and audit-record counts, plus small safe samples
 and recommended operator actions. It does not approve proposals, commit memory,
 delete memory, or expose raw secret-like rejected payloads.
 
+Memory recall and inspection output are clamped by store-owned limits. Large
+CLI, chat, or resident sample/recall limits cannot cause unbounded memory rows
+to be returned or embedded in audit records.
+
 When a journal and artifact store are configured, the same inspection also
 checks committed memory references without reading raw artifact payloads:
 provenance refs must point at existing journal records, and artifact refs must

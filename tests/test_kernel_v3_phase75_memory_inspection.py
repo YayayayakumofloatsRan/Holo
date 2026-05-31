@@ -8,6 +8,7 @@ from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import ArtifactRef
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryProposal, MemoryStore, stable_memory_id, stable_proposal_id
+from kernel_v3.memory.store import MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
 
 
@@ -38,6 +39,27 @@ def test_phase75_memory_store_inspect_reports_reviewable_state() -> None:
     assert "memory export <memory_id>" in inspection.recommended_actions
     assert len(inspection.samples["active_items"]) == 2
     assert inspection.samples["pending_proposals"][0]["proposal_id"] == "memprop-pending"
+
+
+def test_phase75_memory_store_inspection_samples_are_bounded() -> None:
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    for index in range(MEMORY_INSPECTION_SAMPLE_LIMIT_CAP + 5):
+        store.commit(_memory_item(summary=f"bounded active preference {index}", thread_id="thread-bounded"))
+
+    requested_sample_limit = MEMORY_INSPECTION_SAMPLE_LIMIT_CAP + 99
+    inspection = store.inspect(sample_limit=requested_sample_limit)
+
+    assert inspection.active_count == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP + 5
+    assert len(inspection.samples["active_items"]) == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
+    assert inspection.provenance_consistency["active_items_checked"] == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP + 5
+    assert (
+        len(inspection.provenance_consistency["samples"]["items_without_provenance"])
+        == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
+    )
+    assert inspection.samples["requested_sample_limit"] == requested_sample_limit
+    assert inspection.samples["sample_limit"] == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_cap"] == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_clamped"] is True
 
 
 def test_phase75_memory_inspect_checks_provenance_and_artifact_refs() -> None:

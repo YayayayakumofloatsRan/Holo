@@ -15,6 +15,7 @@ from kernel_v3.memory import (
     stable_memory_id,
     stable_proposal_id,
 )
+from kernel_v3.memory.store import MEMORY_RECALL_LIMIT_CAP
 
 
 def test_phase7_memory_store_commits_lists_and_recalls_active_items():
@@ -88,6 +89,25 @@ def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path
 
     assert reloaded.get(item.memory_id, include_inactive=True).last_accessed_ms == 1100
     assert reloaded.index_items()[0]["last_accessed_ms"] == 1100
+
+
+def test_phase7_memory_recall_output_and_audit_limit_are_bounded():
+    store = MemoryStore.in_memory(clock_ms=lambda: 1000)
+    for index in range(MEMORY_RECALL_LIMIT_CAP + 5):
+        store.commit(_memory_item(summary=f"Bounded memory recall preference {index}."))
+
+    requested_limit = MEMORY_RECALL_LIMIT_CAP + 99
+    recalled = store.recall(query="bounded memory", limit=requested_limit, record_access=True)
+    access_event = store.audit_records()[-1]
+    payload = access_event["payload"]
+
+    assert recalled.total == MEMORY_RECALL_LIMIT_CAP
+    assert len(recalled.items) == MEMORY_RECALL_LIMIT_CAP
+    assert payload["limit"] == MEMORY_RECALL_LIMIT_CAP
+    assert payload["requested_limit"] == requested_limit
+    assert payload["limit_cap"] == MEMORY_RECALL_LIMIT_CAP
+    assert payload["limit_clamped"] is True
+    assert len(payload["memory_ids"]) == MEMORY_RECALL_LIMIT_CAP
 
 
 def test_phase7_memory_export_includes_recall_access_for_that_item_only():
