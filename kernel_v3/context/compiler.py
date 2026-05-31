@@ -551,6 +551,7 @@ def _recall_durable_memory(
         include_sensitive=include_sensitive,
         limit=limit,
         record_access=True,
+        rank_query=task.input_text,
         access_context={
             "usage": "context_pack",
             "context_id": context_id,
@@ -558,6 +559,7 @@ def _recall_durable_memory(
             "run_id": task.run_id,
             "thread_id": task.thread_id,
             "step_id": step_id,
+            "rank_query_hash": deterministic_hash({"text": task.input_text}),
         },
     ).to_dict()
 

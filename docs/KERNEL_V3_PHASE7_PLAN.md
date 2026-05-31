@@ -209,6 +209,10 @@ Implementation note:
   across threads without leaking across users. When no real project profile is
   available, recall falls back to user-and-thread scope to preserve the
   narrower pre-Phase7 behavior.
+- Context injection ranks scoped durable memory by the current task input before
+  applying the memory limit. This is a ranking signal only, not a permission or
+  scope bypass. The recall audit records a rank-query hash in access metadata
+  rather than the raw task text.
 - The older `memory_refs` section remains journal-derived episodic evidence and
   is not overloaded with committed durable memory.
 - `AgentRuntime` passes its optional `MemoryStore` into the context compiler, so

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import time
 from dataclasses import replace
@@ -219,9 +220,11 @@ class MemoryStore:
         now_ms: int | None = None,
         record_access: bool = False,
         access_context: JsonObject | None = None,
+        rank_query: str | None = None,
     ) -> MemoryRecallResult:
         timestamp = now_ms if now_ms is not None else self._now_ms()
         normalized_query = " ".join((query or "").lower().split())
+        rank_terms = _query_terms(rank_query if rank_query is not None else query)
         filtered = {"expired": 0, "deleted": 0, "sensitive": 0, "scope": 0, "query": 0}
         matches: list[MemoryItem] = []
         for item in self._items.values():
@@ -241,7 +244,15 @@ class MemoryStore:
                 filtered["query"] += 1
                 continue
             matches.append(item)
-        matches = sorted(matches, key=lambda item: (-item.confidence, item.created_at_ms, item.memory_id))[: max(0, limit)]
+        matches = sorted(
+            matches,
+            key=lambda item: (
+                -_query_hit_count(rank_terms, _search_text(item)),
+                -item.confidence,
+                item.created_at_ms,
+                item.memory_id,
+            ),
+        )[: max(0, limit)]
         result = MemoryRecallResult(
             query=query,
             scope=dict(scope or {}),
@@ -858,6 +869,56 @@ def _search_text(item: MemoryItem) -> str:
             _canonical_json(item.structured),
         ]
     ).lower()
+
+
+_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "for",
+    "how",
+    "in",
+    "is",
+    "of",
+    "please",
+    "should",
+    "the",
+    "to",
+    "use",
+    "what",
+    "you",
+    "your",
+}
+
+
+def _query_terms(value: str | None) -> list[str]:
+    if not value:
+        return []
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"[\w\u4e00-\u9fff]+", value.lower()):
+        for term in _expanded_query_terms(raw):
+            if not term or term in seen or term in _QUERY_STOPWORDS:
+                continue
+            seen.add(term)
+            terms.append(term)
+    return terms
+
+
+def _expanded_query_terms(term: str) -> list[str]:
+    if not re.search(r"[\u4e00-\u9fff]", term):
+        return [term]
+    expanded = [term]
+    if len(term) > 2:
+        expanded.extend(term[index : index + 2] for index in range(0, len(term) - 1))
+    return expanded
+
+
+def _query_hit_count(terms: list[str], search_text: str) -> int:
+    if not terms:
+        return 0
+    return sum(1 for term in terms if term in search_text)
 
 
 def _event_mentions_memory(event: JsonObject, memory_id: str) -> bool:

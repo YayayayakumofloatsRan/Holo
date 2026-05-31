@@ -31,6 +31,23 @@ def test_phase7_memory_store_commits_lists_and_recalls_active_items():
     assert recalled.filtered == {"expired": 0, "deleted": 0, "sensitive": 0, "scope": 0, "query": 0}
 
 
+def test_phase7_memory_recall_rank_query_prefers_relevant_scoped_items():
+    store = MemoryStore.in_memory(clock_ms=lambda: 1000)
+    unrelated = _memory_item(summary="Project prefers verbose English reports.")
+    relevant = _memory_item(summary="User prefers concise Chinese answers.")
+    store.commit(unrelated)
+    store.commit(relevant)
+
+    recalled = store.recall(
+        scope={"user_id": "local:user"},
+        limit=1,
+        rank_query="please answer in Chinese",
+    )
+
+    assert recalled.total == 1
+    assert recalled.items[0]["memory_id"] == relevant.memory_id
+
+
 def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path):
     log_path = tmp_path / "memory_log.jsonl"
     index_path = tmp_path / "memory_index.sqlite3"

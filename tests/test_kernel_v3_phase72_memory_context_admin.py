@@ -75,6 +75,37 @@ def test_phase72_context_fallback_thread_memory_is_user_scoped():
     assert durable["scope"] == {"user_id": "local:user", "thread_id": "thread-1"}
 
 
+def test_phase72_context_ranks_durable_memory_by_task_input():
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    unrelated = _memory_item(summary="Project prefers verbose English reports.", thread_id="thread-old")
+    relevant = _memory_item(summary="Finance research should cite primary filings.", thread_id="thread-old")
+    store.commit(unrelated)
+    store.commit(relevant)
+    profile = ProjectProfile(
+        project_id="holo-kernel-v3",
+        root="",
+        summary="Kernel v3 project.",
+        constraints=[],
+        redaction_markers=[],
+    )
+
+    pack = ContextPackCompiler(
+        durable_memory_store=store,
+        project_profile=profile,
+        durable_memory_limit=1,
+    ).compile(
+        _task(thread_id="thread-new", input_text="continue finance research"),
+        JournalStore.in_memory(),
+    )
+
+    durable = next(section for section in pack.sections if section["name"] == "durable_memory")
+    assert [item["memory_id"] for item in durable["items"]] == [relevant.memory_id]
+    access_event = [event for event in store.audit_records() if event["event_type"] == "memory_items_recalled"][-1]
+    assert access_event["payload"]["memory_ids"] == [relevant.memory_id]
+    assert "rank_query_hash" in access_event["payload"]["access_context"]
+    assert "continue finance research" not in json.dumps(access_event, ensure_ascii=False)
+
+
 def test_phase72_context_injection_audits_memory_access_without_changing_snapshot_hash():
     store = MemoryStore.in_memory(clock_ms=_clock())
     item = _memory_item(summary="偏好中文短答", thread_id="thread-1")
@@ -245,12 +276,12 @@ def test_phase72_cli_memory_admin_unknown_id_is_failed_payload(tmp_path: Path, c
     assert records[-1].data["target_id"] == "missing-memory"
 
 
-def _task(*, thread_id: str) -> TaskState:
+def _task(*, thread_id: str, input_text: str = "what should you remember?") -> TaskState:
     return TaskState(
         task_id="task-1",
         run_id="run-1",
         thread_id=thread_id,
-        input_text="what should you remember?",
+        input_text=input_text,
         status="running",
         step_id="step-1",
     )
