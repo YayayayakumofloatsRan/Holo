@@ -176,11 +176,17 @@ def test_phase73_renew_lease_extends_running_message_claim(tmp_path: Path):
 def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuation(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": _workspace_read_intake()}, journal=journal)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+    )
     queue.enqueue(thread_id="resident-thread", text="read the file", message_id="in-question")
 
     result = ResidentRuntime(
         queue=queue,
-        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        chat_runtime=chat,
         worker_id="worker-1",
     ).run_once()
 
@@ -475,3 +481,27 @@ def _clock(start: int = 1_000):
         return current
 
     return tick
+
+
+def _workspace_read_intake() -> dict:
+    return {
+        "primary_intent": "workspace_read",
+        "suggested_mode": "workspace_answer",
+        "compound": False,
+        "requires_clarification": False,
+        "intents": [
+            {
+                "kind": "workspace_read",
+                "text": "read a workspace target",
+                "sequence_index": 1,
+                "required_capabilities": ["workspace.search", "file.read"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": [],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }

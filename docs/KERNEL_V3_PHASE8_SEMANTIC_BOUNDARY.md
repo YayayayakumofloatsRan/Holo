@@ -38,9 +38,11 @@ The offline `fake` semantic fallback was narrowed after review:
   synthesis, and compound task decomposition;
 - removed connector-based segmentation of multi-step user text from the fake
   path;
+- removed fallback classification for `noop`, `workspace_read`, and
+  `workspace_write`; those are now driven by explicit CLI mode or provider JSON
+  instead of user phrase patterns;
 - kept host-owned boundary checks for private reasoning, shell execution, live
-  transport control, explicit durable-memory writes, local workspace writes,
-  and missing file targets;
+  transport control, and explicit durable-memory writes;
 - kept chat phrase checks only for command-like thread routing such as
   continue/resume and summary requests;
 - changed tests so open-ended semantics are driven by `semantic.intake` JSON
@@ -51,3 +53,23 @@ conservative. Broad intent understanding requires `semantic-intake=model`
 with a configured processor fabric, while explicit `--mode retrieval` or
 `--mode workspace` still exercises those deterministic recipes without asking
 the fake semantic layer to infer intent.
+
+## Iteration 2026-05-31 B
+
+The second review removed the remaining fake fallback routing that behaved like
+content semantics:
+
+- local file/read phrases no longer auto-select `workspace_answer`;
+- local write/report phrases no longer auto-select a write boundary;
+- no-op phrases no longer become a special `noop` intent in fake mode.
+
+Tests that need these behaviors now inject structured `semantic.intake` JSON
+through `FakeJsonProvider`, or call an explicit agent mode such as
+`--mode workspace`. This keeps deterministic tests offline without teaching the
+host a growing list of user utterances.
+
+The only lexical checks left in `analyze_goal()` are host safety overrides:
+private reasoning, shell execution, live transport control, and explicit
+durable-memory write requests. These are not used to answer content; they exist
+to prevent a model or fallback path from hiding a permission boundary under a
+safe-looking direct answer.

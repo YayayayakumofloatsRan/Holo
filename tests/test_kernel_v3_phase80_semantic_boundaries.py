@@ -150,6 +150,9 @@ def test_phase80_fake_intake_does_not_keyword_route_open_semantics():
         "act as a user-defined assistant",
         "tell a math joke",
         "summarize and compare these ideas",
+        "read README.md and explain it",
+        "write a local report",
+        "什么都不要做",
     ]
 
     for text in probes:

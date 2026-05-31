@@ -143,7 +143,37 @@ def test_phase63_roleplay_extracts_role_without_known_role_table():
 
 def test_phase63_noop_request_does_not_execute_tools():
     journal = JournalStore.in_memory()
-    result = AgentRuntime(journal=journal).run("什么都不要做", mode="auto")
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "noop",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "noop",
+                        "text": "do not execute anything",
+                        "sequence_index": 1,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "an unseen no-op instruction",
+        mode="auto",
+        semantic_mode="model",
+    )
 
     assert result.status == "completed"
     assert result.final_answer is not None

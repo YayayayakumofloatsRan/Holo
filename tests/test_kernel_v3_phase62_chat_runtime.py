@@ -24,7 +24,7 @@ def test_phase62_two_turns_share_thread_id():
 
 def test_phase62_ask_user_result_creates_pending_question():
     journal = JournalStore.in_memory()
-    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+    chat = _chat_with_semantic(journal, [_workspace_read_intake()])
 
     result = chat.receive("read the file", thread_id="thread-pending")
     state = chat.build_thread_state("thread-pending")
@@ -38,8 +38,11 @@ def test_phase62_ask_user_result_creates_pending_question():
 
 def test_phase62_next_user_answer_resumes_same_task_and_clears_pending_state():
     journal = JournalStore.in_memory()
-    agent = AgentRuntime(journal=journal, workspace_files={"README.md": "Holo chat resume evidence."})
-    chat = ChatRuntime(journal=journal, agent_runtime=agent)
+    chat = _chat_with_semantic(
+        journal,
+        [_workspace_read_intake(), _workspace_read_intake()],
+        workspace_files={"README.md": "Holo chat resume evidence."},
+    )
 
     pending = chat.receive("read the file", thread_id="thread-resume")
     resumed = chat.receive("README.md", thread_id="thread-resume")
@@ -97,7 +100,7 @@ def test_phase62_cancel_clears_active_task():
 
 def test_phase62_status_command_does_not_clear_pending_question():
     journal = JournalStore.in_memory()
-    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+    chat = _chat_with_semantic(journal, [_workspace_read_intake()])
 
     pending = chat.receive("read the file", thread_id="thread-status")
     status = chat.receive("/status", thread_id="thread-status")
@@ -124,7 +127,7 @@ def test_phase62_summary_query_answers_from_journal_derived_summary():
 
 def test_phase62_thread_summary_includes_last_answer_and_pending_question():
     journal = JournalStore.in_memory()
-    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+    chat = _chat_with_semantic(journal, [_direct_intake(), _workspace_read_intake()])
 
     chat.receive("who are you", thread_id="thread-state")
     chat.receive("read the file", thread_id="thread-state")
@@ -240,3 +243,62 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=True,
     )
+
+
+def _chat_with_semantic(
+    journal: JournalStore,
+    responses: list[dict],
+    *,
+    workspace_files: dict[str, str] | None = None,
+) -> ChatRuntime:
+    fabric = fake_fabric({"semantic.intake": responses}, journal=journal)
+    agent = AgentRuntime(journal=journal, processor_fabric=fabric, workspace_files=workspace_files)
+    return ChatRuntime(journal=journal, agent_runtime=agent, semantic_mode="model")
+
+
+def _workspace_read_intake() -> dict:
+    return {
+        "primary_intent": "workspace_read",
+        "suggested_mode": "workspace_answer",
+        "compound": False,
+        "requires_clarification": False,
+        "intents": [
+            {
+                "kind": "workspace_read",
+                "text": "read a workspace target",
+                "sequence_index": 1,
+                "required_capabilities": ["workspace.search", "file.read"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": [],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }
+
+
+def _direct_intake() -> dict:
+    return {
+        "primary_intent": "direct_answer",
+        "suggested_mode": "direct_answer",
+        "compound": False,
+        "requires_clarification": False,
+        "intents": [
+            {
+                "kind": "direct_answer",
+                "text": "direct current-turn answer",
+                "sequence_index": 1,
+                "required_capabilities": [],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": [],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }

@@ -11,10 +11,6 @@ from kernel_v3.processors.contracts import SEMANTIC_INTAKE_PROMPT_CONTRACT, SEMA
 from kernel_v3.processors.fabric import ProcessorFabric
 
 
-_NOOP_PATTERN = re.compile(
-    r"(?:什么都)?(?:不要|别|不用|无需)\s*(?:做|执行|操作|运行|调用|写|改)|(?:do\s+nothing|don't\s+(?:do|run|execute|write|change))",
-    re.IGNORECASE,
-)
 _MEMORY_WRITE_PATTERN = re.compile(
     r"(?:记住|记下|保存(?:这个)?偏好|不要忘|以后(?:都|请|用|按)|remember\b|save\s+this\s+preference|keep\s+this\s+preference|from\s+now\s+on)",
     re.IGNORECASE,
@@ -28,17 +24,6 @@ _SHELL_EXEC_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _CONTROL_PATTERN = re.compile(r"(?:接管|控制|托管|登录|发送|代发|自动操作|control|take\s+over|login|send|operate)", re.IGNORECASE)
-_FILE_TARGET_PATTERN = re.compile(r"\b\S+\.(?:md|txt|py|json|toml|ya?ml)\b", re.IGNORECASE)
-_AMBIGUOUS_FILE_REQUEST_PATTERN = re.compile(
-    r"(?:读|读取|查看|检查|打开|分析).*(?:文件|代码|目录)|(?:read|open|inspect|check).*(?:file|workspace|readme)",
-    re.IGNORECASE,
-)
-_WORKSPACE_WRITE_PATTERN = re.compile(
-    r"(?:本地|文件|workspace|报告|report).*(?:写|保存|落盘|生成|write|save)|"
-    r"(?:写|保存|落盘|生成).*(?:本地|文件|报告|workspace|report)|"
-    r"(?:write|save|generate).*(?:file|local|report|workspace)",
-    re.IGNORECASE,
-)
 
 
 @dataclass(frozen=True)
@@ -265,30 +250,6 @@ def _classify_goal(text: str) -> list[TaskIntent]:
                 status="needs_review",
             )
         )
-    if _WORKSPACE_WRITE_PATTERN.search(text):
-        intents.append(
-            _intent(
-                len(intents) + 1,
-                "workspace_write",
-                text,
-                capabilities=["workspace:write"],
-                risk="write",
-                status="needs_permission",
-            )
-        )
-    elif _FILE_TARGET_PATTERN.search(text) or _AMBIGUOUS_FILE_REQUEST_PATTERN.search(text):
-        intents.append(
-            _intent(
-                len(intents) + 1,
-                "workspace_read",
-                text,
-                capabilities=["workspace.search", "file.read"],
-                risk="read",
-                status="ready",
-            )
-        )
-    if _NOOP_PATTERN.search(text):
-        intents.append(_intent(len(intents) + 1, "noop", text, risk="none", status="ready"))
     return intents or [_intent(1, "direct_answer", text, risk="none", status="ready")]
 
 
