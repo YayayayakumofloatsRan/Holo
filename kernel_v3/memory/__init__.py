@@ -1,5 +1,6 @@
 from kernel_v3.memory.contracts import (
     MemoryItem,
+    MemoryInspection,
     MemoryPrivacyError,
     MemoryProposal,
     MemoryRecallResult,
@@ -13,6 +14,7 @@ from kernel_v3.memory.store import MemoryStore, stable_candidate_id, stable_memo
 
 __all__ = [
     "MemoryItem",
+    "MemoryInspection",
     "MemoryPipeline",
     "MemoryPipelineResult",
     "MemoryPrivacyDecision",

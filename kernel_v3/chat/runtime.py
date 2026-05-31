@@ -824,6 +824,10 @@ class ChatRuntime:
             payload = {"proposals": [_proposal.to_dict() for _proposal in self.memory_store.proposals() if _proposal.source_thread_id == state.thread_id]}
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_proposal_list_text(payload))
+        if subcommand in {"inspect", "status"}:
+            payload = self.memory_store.inspect().to_dict()
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_memory_inspection_text(payload))
         if subcommand == "approve" and len(args) >= 2:
             result = self.memory_pipeline.approve_proposal(args[1], approved_by="user")
             payload = result.to_dict()
@@ -845,7 +849,7 @@ class ChatRuntime:
             payload = self.memory_store.export_item(args[1])
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Exported {args[1]}.")
-        result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|approve <id>|reject <id> [reason]|delete <id> [reason]|export <id>"}
+        result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|inspect|approve <id>|reject <id> [reason]|delete <id> [reason]|export <id>"}
         command = self._append_command(turn, name="/memory", args=args, status="failed", result=result)
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
 
@@ -1825,6 +1829,23 @@ def _proposal_list_text(payload: JsonObject) -> str:
             continue
         lines.append(f"{proposal.get('proposal_id')}: {proposal.get('approval_status')} {proposal.get('approval_policy')}")
     return "\n".join(lines) or "No pending durable memory proposals for this thread."
+
+
+def _memory_inspection_text(payload: JsonObject) -> str:
+    proposal_counts = payload.get("proposal_counts")
+    proposal_counts = proposal_counts if isinstance(proposal_counts, dict) else {}
+    actions = payload.get("recommended_actions")
+    actions = actions if isinstance(actions, list) else []
+    return "\n".join(
+        [
+            f"Memory status: {payload.get('status')}",
+            f"Active: {payload.get('active_count', 0)}",
+            f"Pending proposals: {proposal_counts.get('pending', 0)}",
+            f"Deleted: {payload.get('deleted_count', 0)}",
+            f"Expired: {payload.get('expired_count', 0)}",
+            "Recommended actions: " + (", ".join(str(action) for action in actions) if actions else "none"),
+        ]
+    )
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

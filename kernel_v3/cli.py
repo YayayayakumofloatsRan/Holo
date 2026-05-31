@@ -104,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     memory_list.add_argument("--query", default=None)
     memory_proposals = memory_sub.add_parser("proposals")
     memory_proposals.add_argument("--thread", default=None)
+    memory_inspect = memory_sub.add_parser("inspect")
+    memory_inspect.add_argument("--sample-limit", type=int, default=5)
     memory_propose = memory_sub.add_parser("propose")
     memory_propose.add_argument("text")
     memory_propose.add_argument("--thread", default="default")
@@ -757,6 +759,9 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
         if args.thread:
             proposals = [proposal for proposal in proposals if proposal.get("source_thread_id") == args.thread]
         return {"status": "ok", "proposals": proposals}
+    if command == "inspect":
+        inspection = store.inspect(sample_limit=args.sample_limit)
+        return {"status": inspection.status, "inspection": inspection.to_dict()}
     pipeline = MemoryPipeline(store=store, journal=journal)
     if command == "propose":
         result = pipeline.propose_from_semantic_intake(

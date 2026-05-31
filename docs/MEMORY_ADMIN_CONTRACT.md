@@ -55,3 +55,27 @@ The mobile Holo module may send user turns to `/reply` with fixed
 `channel=holo_app` and `thread_key=holo_app:HoloSubject`. It must not call or
 offer reset, restore, or subject-setting controls. Continuity belongs to the
 WSL Holo runtime, not to the phone.
+
+## Kernel v3 Inspection
+
+Kernel v3 exposes a read-only durable-memory health surface for resident-agent
+operation:
+
+```bash
+holo-v3 --memory-log .state/kernel_v3/memory.jsonl memory inspect
+```
+
+The command reports active, expired, deleted, sensitive, pending-proposal,
+shadow-candidate, tombstone, and audit-record counts, plus small safe samples
+and recommended operator actions. It does not approve proposals, commit memory,
+delete memory, or expose raw secret-like rejected payloads.
+
+The same surface is available in thread chat:
+
+```text
+/memory inspect
+```
+
+This lets a resident worker or operator see whether memory needs review without
+making transports decision makers. Approval, rejection, delete, and export still
+go through explicit host-owned memory commands.

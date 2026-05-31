@@ -99,3 +99,19 @@ class MemoryRecallResult(Contract):
     total: int
     filtered: JsonObject
     generated_at_ms: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class MemoryInspection(Contract):
+    status: str
+    active_count: int
+    expired_count: int
+    deleted_count: int
+    sensitive_count: int
+    proposal_counts: JsonObject
+    shadow_candidate_count: int
+    tombstone_count: int
+    audit_record_count: int
+    samples: JsonObject
+    recommended_actions: list[str]
+    generated_at_ms: int

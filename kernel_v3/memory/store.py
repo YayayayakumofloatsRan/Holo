@@ -11,6 +11,7 @@ from typing import Callable
 from kernel_v3.contracts import JsonObject
 from kernel_v3.memory.contracts import (
     MemoryItem,
+    MemoryInspection,
     MemoryPrivacyError,
     MemoryProposal,
     MemoryRecallResult,
@@ -247,6 +248,66 @@ class MemoryStore:
 
     def audit_records(self) -> list[JsonObject]:
         return [dict(event) for event in self._events]
+
+    def inspect(self, *, sample_limit: int = 5, now_ms: int | None = None) -> MemoryInspection:
+        timestamp = now_ms if now_ms is not None else self._now_ms()
+        active_items: list[MemoryItem] = []
+        expired_items: list[MemoryItem] = []
+        deleted_items: list[MemoryItem] = []
+        sensitive_items: list[MemoryItem] = []
+        for item in self._items.values():
+            if item.state == "deleted":
+                deleted_items.append(item)
+                continue
+            if self._is_expired(item, now_ms=timestamp):
+                expired_items.append(item)
+                continue
+            if item.state == "active":
+                active_items.append(item)
+                if item.privacy_class == "sensitive":
+                    sensitive_items.append(item)
+        proposal_counts = _proposal_counts(self._proposals.values())
+        conflict_proposals = [
+            proposal
+            for proposal in self._proposals.values()
+            if proposal.approval_status == "pending" and proposal.approval_policy == "conflict_review"
+        ]
+        pending_proposals = [
+            proposal for proposal in self._proposals.values() if proposal.approval_status == "pending"
+        ]
+        recommendations = _inspection_recommendations(
+            pending_count=int(proposal_counts.get("pending", 0)),
+            conflict_count=len(conflict_proposals),
+            expired_count=len(expired_items),
+            sensitive_count=len(sensitive_items),
+        )
+        status = "needs_review" if recommendations else "ok"
+        return MemoryInspection(
+            status=status,
+            active_count=len(active_items),
+            expired_count=len(expired_items),
+            deleted_count=len(deleted_items),
+            sensitive_count=len(sensitive_items),
+            proposal_counts=proposal_counts,
+            shadow_candidate_count=len(self._candidates),
+            tombstone_count=len(self._tombstones),
+            audit_record_count=len(self._events),
+            samples={
+                "active_items": [_memory_sample(item) for item in _take_sorted_items(active_items, sample_limit)],
+                "pending_proposals": [
+                    _proposal_sample(proposal)
+                    for proposal in _take_sorted_proposals(pending_proposals, sample_limit)
+                ],
+                "conflict_proposals": [
+                    _proposal_sample(proposal)
+                    for proposal in _take_sorted_proposals(conflict_proposals, sample_limit)
+                ],
+                "expired_items": [_memory_sample(item) for item in _take_sorted_items(expired_items, sample_limit)],
+                "deleted_items": [_memory_sample(item) for item in _take_sorted_items(deleted_items, sample_limit)],
+            },
+            recommended_actions=recommendations,
+            generated_at_ms=timestamp,
+        )
 
     def export_item(self, memory_id: str) -> JsonObject:
         item = self._items.get(memory_id)
@@ -568,6 +629,77 @@ def _scope_matches(item_scope: JsonObject, requested_scope: JsonObject) -> bool:
         if item_scope.get(key) != value:
             return False
     return True
+
+
+def _proposal_counts(proposals) -> JsonObject:
+    counts: JsonObject = {"pending": 0, "approved": 0, "rejected": 0, "expired": 0, "conflict_review": 0}
+    for proposal in proposals:
+        status = proposal.approval_status
+        counts[status] = int(counts.get(status, 0)) + 1
+        if proposal.approval_status == "pending" and proposal.approval_policy == "conflict_review":
+            counts["conflict_review"] = int(counts.get("conflict_review", 0)) + 1
+    return counts
+
+
+def _inspection_recommendations(
+    *,
+    pending_count: int,
+    conflict_count: int,
+    expired_count: int,
+    sensitive_count: int,
+) -> list[str]:
+    actions: list[str] = []
+    if pending_count:
+        actions.append("memory proposals")
+    if conflict_count:
+        actions.append("memory proposals")
+    if expired_count:
+        actions.append("memory delete <memory_id> --reason expired")
+    if sensitive_count:
+        actions.append("memory export <memory_id>")
+    return _unique(actions)
+
+
+def _memory_sample(item: MemoryItem) -> JsonObject:
+    return {
+        "memory_id": item.memory_id,
+        "kind": item.kind,
+        "summary": item.summary,
+        "privacy_class": item.privacy_class,
+        "state": item.state,
+        "scope": dict(item.scope),
+        "expires_at_ms": item.expires_at_ms,
+    }
+
+
+def _proposal_sample(proposal: MemoryProposal) -> JsonObject:
+    return {
+        "proposal_id": proposal.proposal_id,
+        "approval_policy": proposal.approval_policy,
+        "approval_status": proposal.approval_status,
+        "source_thread_id": proposal.source_thread_id,
+        "summary": str(proposal.proposed_item.get("summary") or ""),
+        "risk_flags": list(proposal.risk_flags),
+    }
+
+
+def _take_sorted_items(items: list[MemoryItem], limit: int) -> list[MemoryItem]:
+    return sorted(items, key=lambda item: (item.created_at_ms, item.memory_id))[: max(0, limit)]
+
+
+def _take_sorted_proposals(items: list[MemoryProposal], limit: int) -> list[MemoryProposal]:
+    return sorted(items, key=lambda item: (item.created_at_ms, item.proposal_id))[: max(0, limit)]
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _search_text(item: MemoryItem) -> str:
