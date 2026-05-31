@@ -39,7 +39,7 @@ from kernel_v3.retrieval import (
     SearchGoal,
     SearchSource,
 )
-from kernel_v3.resident import ResidentQueue, ResidentRuntime, ResidentScheduler
+from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
@@ -167,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--schedule-tick-limit", type=int, default=20)
     resident_inspect = resident_sub.add_parser("inspect")
     resident_inspect.add_argument("--sample-limit", type=int, default=5)
+    resident_doctor = resident_sub.add_parser("doctor")
+    resident_doctor.add_argument("--sample-limit", type=int, default=5)
     resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
@@ -760,6 +762,10 @@ def _corpus_configured(args) -> bool:
     return bool(getattr(args, "corpus_log", None) or getattr(args, "corpus_index", None))
 
 
+def _memory_configured(args) -> bool:
+    return bool(getattr(args, "memory_log", None) or getattr(args, "memory_index", None))
+
+
 def _corpus_command(args) -> dict[str, object]:
     store = _corpus_store(args, create_default=True)
     if store is None:
@@ -899,6 +905,17 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             "inspection": inspection.to_dict(),
             "schedule_inspection": schedule_inspection.to_dict(),
         }
+    if command == "doctor":
+        scheduler = ResidentScheduler(queue=queue, journal=journal)
+        memory_store = _memory_store(args, create_default=_memory_configured(args))
+        corpus_store = _corpus_store(args, create_default=_corpus_configured(args))
+        report = ResidentDoctor(
+            queue=queue,
+            scheduler=scheduler,
+            memory_store=memory_store,
+            corpus_store=corpus_store,
+        ).inspect(sample_limit=args.sample_limit)
+        return {"status": report.status, "doctor": report.to_dict()}
     if command == "schedule-add":
         scheduler = ResidentScheduler(queue=queue, journal=journal)
         schedule = scheduler.add_schedule(

@@ -141,3 +141,16 @@ class ResidentScheduleInspection(Contract):
     recommended_actions: list[str]
     schedule_status: JsonObject
     samples: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResidentDoctorReport(Contract):
+    status: str
+    generated_at_ms: int
+    configured: JsonObject
+    issues: list[JsonObject]
+    recommended_actions: list[str]
+    queue_inspection: JsonObject
+    schedule_inspection: JsonObject
+    memory_inspection: JsonObject | None
+    corpus_inspection: JsonObject | None

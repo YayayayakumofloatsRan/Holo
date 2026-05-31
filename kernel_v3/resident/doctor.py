@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import time
+from typing import Callable
+
+from kernel_v3.contracts import JsonObject
+from kernel_v3.memory import MemoryStore
+from kernel_v3.research import ResearchCorpusStore
+from kernel_v3.resident.contracts import ResidentDoctorReport
+from kernel_v3.resident.queue import ResidentQueue
+from kernel_v3.resident.scheduler import ResidentScheduler
+
+
+class ResidentDoctor:
+    def __init__(
+        self,
+        *,
+        queue: ResidentQueue,
+        scheduler: ResidentScheduler,
+        memory_store: MemoryStore | None = None,
+        corpus_store: ResearchCorpusStore | None = None,
+        clock_ms: Callable[[], int] | None = None,
+    ) -> None:
+        self.queue = queue
+        self.scheduler = scheduler
+        self.memory_store = memory_store
+        self.corpus_store = corpus_store
+        self.clock_ms = clock_ms or queue.clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
+
+    def inspect(self, *, sample_limit: int = 5) -> ResidentDoctorReport:
+        queue_inspection = self.queue.inspect(sample_limit=sample_limit)
+        schedule_inspection = self.scheduler.inspect(sample_limit=sample_limit)
+        memory_inspection = self.memory_store.inspect(sample_limit=sample_limit) if self.memory_store is not None else None
+        corpus_inspection = self.corpus_store.inspect(sample_limit=sample_limit) if self.corpus_store is not None else None
+        configured = {
+            "memory_store": self.memory_store is not None,
+            "corpus_store": self.corpus_store is not None,
+            "resident_db": str(self.queue.db_path),
+        }
+        component_statuses = [
+            queue_inspection.status,
+            schedule_inspection.status,
+            memory_inspection.status if memory_inspection is not None else "ok",
+            corpus_inspection.status if corpus_inspection is not None else "ok",
+        ]
+        issues: list[JsonObject] = []
+        issues.extend(_component_issues("queue", queue_inspection.issues))
+        issues.extend(_component_issues("schedule", schedule_inspection.issues))
+        if memory_inspection is not None:
+            issues.extend(_memory_issues(memory_inspection.to_dict()))
+        if corpus_inspection is not None:
+            issues.extend(_component_issues("corpus", corpus_inspection.issues))
+        return ResidentDoctorReport(
+            status=_combined_health(component_statuses),
+            generated_at_ms=self._now_ms(),
+            configured=configured,
+            issues=issues,
+            recommended_actions=_ordered_unique(
+                [
+                    *queue_inspection.recommended_actions,
+                    *schedule_inspection.recommended_actions,
+                    *(memory_inspection.recommended_actions if memory_inspection is not None else []),
+                    *(corpus_inspection.recommended_actions if corpus_inspection is not None else []),
+                ]
+            ),
+            queue_inspection=queue_inspection.to_dict(),
+            schedule_inspection=schedule_inspection.to_dict(),
+            memory_inspection=memory_inspection.to_dict() if memory_inspection is not None else None,
+            corpus_inspection=corpus_inspection.to_dict() if corpus_inspection is not None else None,
+        )
+
+    def _now_ms(self) -> int:
+        return int(self.clock_ms())
+
+
+def _component_issues(component: str, issues: list[JsonObject]) -> list[JsonObject]:
+    return [{**dict(issue), "component": component} for issue in issues]
+
+
+def _memory_issues(memory_inspection: JsonObject) -> list[JsonObject]:
+    issues: list[JsonObject] = []
+    proposal_counts = memory_inspection.get("proposal_counts")
+    pending = int(proposal_counts.get("pending", 0)) if isinstance(proposal_counts, dict) else 0
+    if pending:
+        issues.append({"component": "memory", "severity": "attention", "code": "pending_memory_proposals", "count": pending})
+    expired = int(memory_inspection.get("expired_count", 0))
+    if expired:
+        issues.append({"component": "memory", "severity": "info", "code": "expired_memory_items", "count": expired})
+    sensitive = int(memory_inspection.get("sensitive_count", 0))
+    if sensitive:
+        issues.append({"component": "memory", "severity": "info", "code": "sensitive_memory_items", "count": sensitive})
+    return issues
+
+
+def _combined_health(statuses: list[str]) -> str:
+    order = {"ok": 0, "attention": 1, "needs_review": 2, "warning": 3, "error": 4}
+    highest = max(statuses, key=lambda status: order.get(status, 1))
+    return highest if highest in order else "attention"
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

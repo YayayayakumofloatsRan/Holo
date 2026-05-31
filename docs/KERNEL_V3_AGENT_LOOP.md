@@ -228,6 +228,12 @@ reports `waiting_for_schedule` instead of plain `idle` if a future active
 schedule is still pending; the loop result includes `schedule_status` so a
 supervisor can see the next due time.
 
+`resident doctor` is the read-only operator snapshot for long-running work. It
+aggregates queue inspection, schedule inspection, and any configured durable
+memory or research corpus inspections into one status, issue list, and action
+list. It does not create memory/corpus stores unless their CLI paths are
+configured, and it does not enqueue, approve memory, retrieve, or execute tools.
+
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that
 reclaims the inbox first checks for the existing `in_reply_to` outbox. When it

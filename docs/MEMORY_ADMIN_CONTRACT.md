@@ -79,3 +79,9 @@ The same surface is available in thread chat:
 This lets a resident worker or operator see whether memory needs review without
 making transports decision makers. Approval, rejection, delete, and export still
 go through explicit host-owned memory commands.
+
+For long-running resident operation, `holo-v3 resident doctor` aggregates the
+read-only memory inspection with resident queue, schedule, and configured
+research-corpus inspections. The doctor report is an operator snapshot only: it
+does not approve proposals, write durable memory, enqueue work, retrieve
+documents, or execute tools.
