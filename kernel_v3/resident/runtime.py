@@ -4,6 +4,7 @@ from kernel_v3.chat import ChatRuntime
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.resident.contracts import ResidentLoopResult, ResidentRunResult
+from kernel_v3.resident.projection import resident_chat_result_payload, resident_outbox_event
 from kernel_v3.resident.queue import ResidentQueue
 from kernel_v3.resident.scheduler import ResidentScheduler
 
@@ -172,7 +173,7 @@ class ResidentRuntime:
             if existing_outbox is not None:
                 self._journal_event(
                     "resident_outbox_recovered",
-                    existing_outbox.to_dict(),
+                    resident_outbox_event(existing_outbox),
                     task_id=existing_outbox.task_id,
                     state_delta={
                         "resident_outbox_status": existing_outbox.status,
@@ -252,11 +253,11 @@ class ResidentRuntime:
                 status=_outbox_status(chat_result.status),
                 task_id=chat_result.task_id,
                 run_id=chat_result.run_id,
-                payload=chat_result.to_dict(),
+                payload=resident_chat_result_payload(chat_result),
             )
             self._journal_event(
                 "resident_outbox_appended",
-                outbox.to_dict(),
+                resident_outbox_event(outbox),
                 task_id=chat_result.task_id,
                 state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
             )
@@ -272,7 +273,7 @@ class ResidentRuntime:
                 for answered in answered_pending:
                     self._journal_event(
                         "resident_pending_outbox_answered",
-                        answered.to_dict(),
+                        resident_outbox_event(answered),
                         task_id=chat_result.task_id,
                         state_delta={
                             "resident_outbox_status": answered.status,

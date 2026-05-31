@@ -281,6 +281,10 @@ Implementation note:
 - `ResidentRuntime.run_once()` claims one inbox item, calls `ChatRuntime`, writes
   exactly one outbox item, marks the inbox item completed, and releases the
   lease. It does not loop forever and does not become a separate decision layer.
+- Resident outbox rows keep the deliverable response text, but their payload is
+  a compact chat-result manifest. Resident journal outbox events store text
+  previews, hashes, refs, statuses, and citation metadata rather than copying
+  full answers, summaries, or failure reports into the trace.
 - Running inbox items are owned by the claiming worker. `complete` and `fail`
   calls can be guarded by worker id, so an old worker cannot complete a message
   after its lease expired and another worker reclaimed the item. The runtime

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from kernel_v3 import cli
 from kernel_v3.agent.runtime import AgentRuntime
+from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
@@ -35,6 +36,32 @@ def test_phase73_resident_worker_processes_inbox_to_outbox(tmp_path: Path):
         "resident_lease_released",
     ]
     assert "resident_outbox_appended" in TraceRenderer(journal).render_resident_trace()
+
+
+def test_phase73_resident_outbox_payload_and_journal_do_not_duplicate_full_answer(tmp_path: Path):
+    marker = "RESIDENT_FULL_ANSWER_MARKER"
+    long_answer = ("a" * 240) + marker
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    queue.enqueue(thread_id="resident-thread", text="long answer", message_id="in-long-answer")
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=_StaticChatRuntime(answer=long_answer),
+        worker_id="worker-long-answer",
+        journal=journal,
+    ).run_once()
+
+    outbox = queue.outbox_messages()[0]
+    appended = journal.records(kind="resident_outbox_appended")[-1].data
+    assert result.status == "processed"
+    assert marker in outbox.text
+    assert marker not in json.dumps(outbox.payload, ensure_ascii=False)
+    assert marker not in json.dumps(appended, ensure_ascii=False)
+    assert outbox.payload["final_answer"]["citation_refs"] == ["cite-1"]
+    assert outbox.payload["final_answer"]["redaction"] == {"answer": "preview_hash_only"}
+    assert appended["text_length"] == len(long_answer)
+    assert appended["redaction"] == {"text": "preview_hash_only", "payload": "manifest_only"}
 
 
 def test_phase73_worker_lease_prevents_duplicate_ownership(tmp_path: Path):
@@ -1191,6 +1218,37 @@ def test_phase73_cli_resident_model_mode_is_live_gated(tmp_path: Path, capsys, m
 class _RaisingChatRuntime:
     def receive(self, text: str, *, thread_id: str):
         raise RuntimeError("simulated failure")
+
+
+class _StaticChatRuntime:
+    def __init__(self, *, answer: str) -> None:
+        self.answer = answer
+
+    def receive(self, text: str, *, thread_id: str):
+        return ChatRuntimeResult(
+            status="completed",
+            thread_id=thread_id,
+            turn_id="turn-static",
+            route="new_task",
+            task_id="task-static",
+            run_id="run-static",
+            answer=self.answer,
+            final_answer={
+                "answer": self.answer,
+                "citation_refs": ["cite-1"],
+                "used_evidence": ["ev-1"],
+                "limitations": [],
+                "confidence": 0.9,
+                "task_id": "task-static",
+                "run_id": "run-static",
+                "trace_refs": ["final-1"],
+            },
+            failure_report=None,
+            pending_question=None,
+            command_result=None,
+            summary=None,
+            trace_refs=["final-1"],
+        )
 
 
 def _clock(start: int = 1_000):
