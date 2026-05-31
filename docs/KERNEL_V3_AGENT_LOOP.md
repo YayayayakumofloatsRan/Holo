@@ -28,6 +28,18 @@ Tool execution is bound to the policy decision for the exact action. A
 before calling the tool executor. This keeps direct registry callers aligned
 with the loop's host-owned validation path.
 
+## Context Redaction Boundary
+
+`ContextPackCompiler` is the last host-owned boundary before planner,
+evaluator, router, or synthesizer processors see task context. Its redactor
+handles project private-path markers, explicit secret keys, bearer/API-token
+patterns, and secret-like URL query values inside ordinary strings. This means
+artifact metadata, citation URIs, observations, and compact context sections
+are rechecked before they can enter model-visible context, even if an upstream
+provider or tool omitted a privacy projection. Raw artifact blobs remain in
+`ArtifactStore`; model context receives bounded refs, previews, hashes, and
+redacted metadata.
+
 ## Semantic Task Graph
 
 Model-backed semantic intake is now normalized into a host-visible

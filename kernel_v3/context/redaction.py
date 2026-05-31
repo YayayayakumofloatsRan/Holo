@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from kernel_v3.privacy import contains_secret_like_content
+
 
 SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password)", re.IGNORECASE)
 SECRET_VALUE_RE = re.compile(r"(?<![A-Za-z0-9_-])(sk-[A-Za-z0-9_-]{8,}|token=[A-Za-z0-9_-]{6,})")
@@ -39,6 +41,9 @@ class Redactor:
             if SECRET_VALUE_RE.search(text):
                 markers.add("SECRET")
                 text = SECRET_VALUE_RE.sub("[REDACTED:SECRET]", text)
+            if contains_secret_like_content(text):
+                markers.add("SECRET")
+                text = "[REDACTED:SECRET]"
             return text
         return payload
 

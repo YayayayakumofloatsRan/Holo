@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kernel_v3.context import BudgetExceeded, ContextPackCompiler, Redactor
+from kernel_v3.context import ArtifactStore, BudgetExceeded, ContextPackCompiler, Redactor
 from kernel_v3.journal import JournalStore
 from kernel_v3.session import SessionEngine
 
@@ -15,13 +15,19 @@ def test_redactor_masks_secret_values_and_private_runtime_paths():
         {
             "api_key": "sk-test-secret",
             "path": "D:/Holo/holo/.holo_runtime/live.json",
-            "nested": ["token=abc123", "safe"],
+            "nested": [
+                "token=abc123",
+                "https://example.test/report?access_token=live-secret-token-1234567890",
+                "safe",
+            ],
         }
     )
 
     encoded = json.dumps(redacted, ensure_ascii=False)
     assert "sk-test-secret" not in encoded
     assert "abc123" not in encoded
+    assert "live-secret-token" not in encoded
+    assert "access_token" not in encoded
     assert "D:/Holo/holo/.holo_runtime" not in encoded
     assert sorted(markers) == ["PRIVATE_PATH", "SECRET"]
 
@@ -75,6 +81,43 @@ def test_context_compiler_redacts_private_paths_inside_sections():
     assert "D:/Holo/holo/.holo_runtime" not in encoded
     assert "[REDACTED:PRIVATE_PATH]" in encoded
     assert pack.redactions == ["PRIVATE_PATH"]
+
+
+def test_context_compiler_redacts_secret_like_artifact_metadata():
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    task = SessionEngine.from_journal(journal).start("inspect artifact", thread_id="thread-a", journal=journal)
+    artifact = artifacts.write_blob(
+        kind="retrieval_fetched_document",
+        payload="artifact payload",
+        metadata={"uri": "https://example.test/report?access_token=live-secret-token-1234567890"},
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="observation",
+        data={
+            "observation_id": "obs-1",
+            "kind": "tool_result",
+            "status": "ok",
+            "content": {"artifact_id": artifact.artifact_id},
+        },
+        observation_ref="obs-1",
+        artifact_refs=[artifact.artifact_id],
+    )
+
+    pack = ContextPackCompiler(
+        artifact_store=artifacts,
+        token_budget=1024,
+        section_budget=256,
+    ).compile(task, journal, step_id="step-1")
+    encoded = json.dumps(pack.to_dict(), ensure_ascii=False)
+
+    assert "live-secret-token" not in encoded
+    assert "access_token" not in encoded
+    assert "[REDACTED:SECRET]" in encoded
+    assert pack.redactions == ["SECRET"]
 
 
 def test_holo_v3_context_inspection_commands_and_golden_transcript():
