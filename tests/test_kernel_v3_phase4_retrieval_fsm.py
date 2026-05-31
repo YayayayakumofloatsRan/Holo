@@ -116,6 +116,10 @@ def test_phase4_retrieval_bounds_sources_fetches_and_spans():
         "max_fetches": 1,
         "max_spans_per_document": 1,
     }
+    capabilities = plan.data["diagnostics"]["provider_capabilities"]
+    assert [capability["provider_kind"] for capability in capabilities] == ["search", "fetch"]
+    assert [capability["provider_id"] for capability in capabilities] == ["fake_search", "fake_fetch"]
+    assert {capability["live_network"] for capability in capabilities} == {False}
     assert len(search.data["sources"]) == 2
     assert len(ranking.data["ranked_sources"]) == 2
     assert len(journal.records(task_id="task-bounds", kind="retrieval_fetch_attempt")) == 1
@@ -123,6 +127,7 @@ def test_phase4_retrieval_bounds_sources_fetches_and_spans():
     assert report.diagnostics["fetch_attempt_count"] == 1
     assert report.diagnostics["network_access"] is False
     assert report.diagnostics["budget"]["max_fetches"] == 1
+    assert report.diagnostics["provider_capabilities"] == capabilities
 
 
 def test_phase4_retrieval_deduplicates_repeated_query_terms():

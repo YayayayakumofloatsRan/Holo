@@ -23,7 +23,7 @@ from kernel_v3.retrieval.contracts import (
 )
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator
 from kernel_v3.retrieval.extract import extract_spans
-from kernel_v3.retrieval.providers import FetchProvider, SearchProvider
+from kernel_v3.retrieval.providers import FetchProvider, SearchProvider, provider_capability
 from kernel_v3.retrieval.rank import plan_queries, rank_sources
 from kernel_v3.tools import ToolRegistry, ToolResult
 
@@ -62,6 +62,12 @@ class RetrievalOperator:
             or getattr(fetch_provider, "live_network", False)
         )
 
+    def provider_capabilities(self) -> list[JsonObject]:
+        return [
+            provider_capability(self.search_provider, provider_kind="search").to_dict(),
+            provider_capability(self.fetch_provider, provider_kind="fetch").to_dict(),
+        ]
+
     def run(
         self,
         goal: SearchGoal,
@@ -85,6 +91,7 @@ class RetrievalOperator:
                 "query_count": len(queries),
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
+                "provider_capabilities": self.provider_capabilities(),
                 **({"research_profile": research_profile.profile_id} if research_profile is not None else {}),
             },
         )
@@ -367,6 +374,7 @@ class RetrievalOperator:
                 "reason": decision.reason,
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
+                "provider_capabilities": self.provider_capabilities(),
                 "search_attempt_count": len(search_attempt_ids),
                 "fetch_attempt_count": len(fetch_attempt_ids),
                 "evidence_count": len(evidence),

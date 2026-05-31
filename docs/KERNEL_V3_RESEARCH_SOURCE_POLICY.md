@@ -81,11 +81,17 @@ web corpus before asking for live web access:
   `SearchSource` objects with `provider="research_corpus"`
 - `CorpusFetchProvider` reads the referenced artifact blob from `ArtifactStore`
 - both providers report `live_network=False`
+- providers expose a bounded `RetrievalProviderCapability` with provider id,
+  provider kind, `live_network`, `default_enabled`, profile awareness, and
+  supported research profiles
 - profile filtering is applied at corpus search time
 - missing artifact refs fail closed instead of fabricating a body
 
 This makes the webpage database a first-class retrieval source while preserving
 the existing PolicyGate boundary for future live network providers.
+Retrieval query-plan and report diagnostics include these provider capabilities,
+so a resident operator can audit whether a run used corpus-only, fake, or
+future live-capable providers.
 
 ## CLI Workflow
 

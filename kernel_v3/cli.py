@@ -1212,6 +1212,7 @@ def _run_retrieve(
         "status": "ok",
         "mode": "corpus" if from_corpus else "fake",
         "network_access": operator.network_access,
+        "provider_capabilities": operator.provider_capabilities(),
         "report": report.to_dict(),
     }
     if corpus_store is not None:

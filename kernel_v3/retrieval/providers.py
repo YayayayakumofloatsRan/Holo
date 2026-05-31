@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
+from kernel_v3.retrieval.contracts import QueryPlan, RetrievalProviderCapability, SearchGoal, SearchSource
 
 
 class SearchProvider(Protocol):
@@ -26,7 +26,11 @@ class FetchResponse:
 
 
 class FakeSearchProvider:
+    provider_id = "fake_search"
     live_network = False
+    default_enabled = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
 
     def __init__(self, results_by_query: dict[str, list[SearchSource | JsonObject]]) -> None:
         self.results_by_query = {
@@ -39,7 +43,11 @@ class FakeSearchProvider:
 
 
 class FakeFetchProvider:
+    provider_id = "fake_fetch"
     live_network = False
+    default_enabled = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
 
     def __init__(self, responses_by_uri: dict[str, str | FetchResponse | JsonObject]) -> None:
         self.responses_by_uri = {
@@ -58,6 +66,39 @@ class FakeFetchProvider:
         return response
 
 
+def provider_capability(provider: object, *, provider_kind: str) -> RetrievalProviderCapability:
+    raw = getattr(provider, "capability", None)
+    if callable(raw):
+        capability = raw(provider_kind=provider_kind)
+        if isinstance(capability, RetrievalProviderCapability):
+            return capability
+        if isinstance(capability, dict):
+            return RetrievalProviderCapability.from_dict(
+                {
+                    "provider_id": _provider_id(provider),
+                    "provider_kind": provider_kind,
+                    "live_network": bool(getattr(provider, "live_network", False)),
+                    "default_enabled": bool(getattr(provider, "default_enabled", True)),
+                    "profile_aware": bool(getattr(provider, "profile_aware", False)),
+                    "supported_research_profiles": _string_list(getattr(provider, "supported_research_profiles", [])),
+                    "diagnostics": {},
+                    **capability,
+                }
+            )
+    return RetrievalProviderCapability(
+        provider_id=_provider_id(provider),
+        provider_kind=provider_kind,
+        live_network=bool(getattr(provider, "live_network", False)),
+        default_enabled=bool(getattr(provider, "default_enabled", True)),
+        profile_aware=bool(getattr(provider, "profile_aware", False)),
+        supported_research_profiles=_string_list(getattr(provider, "supported_research_profiles", [])),
+        diagnostics={
+            "provider_class": provider.__class__.__name__,
+            **_dict_or_empty(getattr(provider, "capability_diagnostics", {})),
+        },
+    )
+
+
 def _coerce_source(source: SearchSource | JsonObject) -> SearchSource:
     if isinstance(source, SearchSource):
         return source
@@ -69,6 +110,23 @@ def _coerce_source(source: SearchSource | JsonObject) -> SearchSource:
         provider=str(source.get("provider", "fake")),
         metadata=dict(source.get("metadata", {})),
     )
+
+
+def _provider_id(provider: object) -> str:
+    value = getattr(provider, "provider_id", "")
+    if isinstance(value, str) and value:
+        return value
+    return provider.__class__.__name__
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _dict_or_empty(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _coerce_fetch_response(response: str | FetchResponse | JsonObject) -> FetchResponse:

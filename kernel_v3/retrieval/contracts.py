@@ -37,6 +37,17 @@ class SearchSource(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class RetrievalProviderCapability(Contract):
+    provider_id: str
+    provider_kind: str
+    live_network: bool
+    default_enabled: bool
+    profile_aware: bool
+    supported_research_profiles: list[str]
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class SearchAttempt(Contract):
     attempt_id: str
     goal_id: str

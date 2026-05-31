@@ -9,10 +9,15 @@ from kernel_v3.retrieval.providers import FetchResponse
 
 class CorpusSearchProvider:
     live_network = False
+    default_enabled = True
+    profile_aware = True
+    supported_research_profiles = ["*"]
 
     def __init__(self, corpus_store: ResearchCorpusStore, *, provider_name: str = "research_corpus") -> None:
         self.corpus_store = corpus_store
         self.provider_name = provider_name
+        self.provider_id = provider_name
+        self.capability_diagnostics = {"source": "research_corpus"}
 
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
         result = self.corpus_store.search(
@@ -25,6 +30,11 @@ class CorpusSearchProvider:
 
 class CorpusFetchProvider:
     live_network = False
+    default_enabled = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+    provider_id = "research_corpus_fetch"
+    capability_diagnostics = {"source": "artifact_store"}
 
     def __init__(self, artifact_store: ArtifactStore) -> None:
         self.artifact_store = artifact_store

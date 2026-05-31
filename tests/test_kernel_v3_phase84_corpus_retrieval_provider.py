@@ -65,6 +65,11 @@ def test_phase84_corpus_backed_retrieval_reuses_indexed_page_without_network() -
 
     assert report.status == "sufficient"
     assert operator.network_access is False
+    capabilities = report.diagnostics["provider_capabilities"]
+    assert capabilities[0]["provider_id"] == "research_corpus"
+    assert capabilities[0]["profile_aware"] is True
+    assert capabilities[0]["supported_research_profiles"] == ["*"]
+    assert capabilities[1]["provider_id"] == "research_corpus_fetch"
     search = journal.records(task_id="task-corpus-reuse", kind="retrieval_search_attempt")[0].data
     assert search["sources"][0]["provider"] == "research_corpus"
     assert search["sources"][0]["metadata"]["corpus_document_id"]
