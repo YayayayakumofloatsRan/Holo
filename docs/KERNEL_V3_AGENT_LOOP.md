@@ -96,7 +96,11 @@ remain non-executable in this path.
 Plan approval is also step-aware. Approved steps are recorded by
 `plan_ref + node_id`, so repeated `/plan approve` calls do not rerun the same
 tool step. A later safe step can run only after its dependency node was
-approved and completed through the same journaled decision path. Dependent
+approved and completed through the same journaled decision path. Completion is
+not inferred from approval alone; the spawned child task must have a journaled
+`agent_final_answer` before it can unlock dependent steps. Failed or
+needs-user-input child tasks stop the plan run instead of allowing downstream
+work to proceed with missing evidence. Dependent
 `respond` or synthesis nodes are not executed as standalone direct answers,
 because they would not carry the prior step's evidence context; those require a
 future explicit plan-level synthesizer/finalizer instead of an implicit direct

@@ -1344,6 +1344,7 @@ def _next_executable_plan_step(journal: JournalStore, plan: JsonObject, *, plan_
         return None
     steps = [dict(step) for step in steps_value if isinstance(step, dict)]
     executed_node_ids = _executed_plan_node_ids(journal, plan_ref)
+    completed_node_ids = _completed_plan_node_ids(journal, plan_ref)
     blocked_nodes = {
         str(step.get("node_id"))
         for step in steps
@@ -1358,7 +1359,7 @@ def _next_executable_plan_step(journal: JournalStore, plan: JsonObject, *, plan_
         dependencies = _string_values(step.get("depends_on"))
         if any(dependency in blocked_nodes for dependency in dependencies):
             continue
-        if dependencies and not all(dependency in executed_node_ids for dependency in dependencies):
+        if dependencies and not all(dependency in completed_node_ids for dependency in dependencies):
             continue
         return step
     return None
@@ -1376,6 +1377,9 @@ def _has_blocked_remaining_plan_steps(journal: JournalStore, plan: JsonObject, *
     if not isinstance(steps_value, list):
         return False
     executed_node_ids = _executed_plan_node_ids(journal, plan_ref)
+    completed_node_ids = _completed_plan_node_ids(journal, plan_ref)
+    if executed_node_ids - completed_node_ids:
+        return True
     finalizer = _ready_plan_finalizer_step(plan)
     finalizer_node_id = str(finalizer.get("node_id") or "") if finalizer is not None else ""
     for raw_step in steps_value:
@@ -1392,6 +1396,9 @@ def _has_blocked_remaining_plan_steps(journal: JournalStore, plan: JsonObject, *
             return True
         if not _safe_plan_capabilities(step):
             return True
+        dependencies = _string_values(step.get("depends_on"))
+        if dependencies and not all(dependency in completed_node_ids for dependency in dependencies):
+            return True
     return False
 
 
@@ -1404,6 +1411,23 @@ def _executed_plan_node_ids(journal: JournalStore, plan_ref: str) -> set[str]:
         if isinstance(step, dict) and isinstance(step.get("node_id"), str):
             executed.add(str(step["node_id"]))
     return executed
+
+
+def _completed_plan_node_ids(journal: JournalStore, plan_ref: str) -> set[str]:
+    completed: set[str] = set()
+    for record in journal.records(kind="semantic_task_plan_decision"):
+        if record.data.get("plan_ref") != plan_ref or record.data.get("decision") != "approved":
+            continue
+        step = record.data.get("executed_step")
+        spawned_task_id = record.data.get("spawned_task_id")
+        if not isinstance(step, dict) or not isinstance(step.get("node_id"), str):
+            continue
+        if not isinstance(spawned_task_id, str) or not spawned_task_id:
+            continue
+        if _latest_final_answer_for_task(journal, spawned_task_id) is None:
+            continue
+        completed.add(str(step["node_id"]))
+    return completed
 
 
 def _approved_plan_decisions(journal: JournalStore, plan_ref: str) -> dict[str, LedgerRecord]:

@@ -1,8 +1,10 @@
 from kernel_v3.agent import AgentRuntime, build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.contracts import SemanticIntake, TaskGraphProposal
 from kernel_v3.chat import ChatRuntime
+from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
+from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
 
 
 def test_phase81_model_semantics_are_journaled_as_validated_task_graph():
@@ -604,6 +606,47 @@ def test_phase81_chat_plan_run_stops_at_blocked_boundary_after_safe_prefix():
     decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
     assert [record.data["decision"] for record in decisions] == ["approved", "blocked"]
     assert not any(record.data.get("name") == "workspace.write" for record in journal.records(kind="tool_call"))
+
+
+def test_phase81_failed_plan_step_does_not_unlock_dependencies_on_next_run():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": _multi_safe_with_finalizer_intake()}, journal=journal)
+    agent = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=RetrievalOperator(
+            search_provider=FakeSearchProvider({}),
+            fetch_provider=FakeFetchProvider({}),
+        ),
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=agent,
+        semantic_mode="model",
+        turn_router_mode="fake",
+    )
+
+    initial = chat.receive("research, read workspace, then synthesize", thread_id="thread-plan-run-failed-dependency")
+    first = chat.receive("/plan run", thread_id="thread-plan-run-failed-dependency")
+    second = chat.receive("/plan run", thread_id="thread-plan-run-failed-dependency")
+    shown = chat.receive("/plan", thread_id="thread-plan-run-failed-dependency")
+
+    assert initial.status == "needs_user_input"
+    assert first.command_result is not None
+    assert first.command_result["decision"] == "run_paused"
+    assert first.command_result["reason"] == "spawned_task_failed"
+    assert first.command_result["executed_steps"][0]["executed_node_id"] == "node-1-retrieval_research"
+    assert second.status == "failed"
+    assert second.command_result is not None
+    assert second.command_result["result"]["decision"] == "run_failed"
+    assert second.command_result["result"]["reason"] == "missing_dependency_output"
+    decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert [record.data["decision"] for record in decisions] == ["approved"]
+    assert not any(record.data.get("name") == "workspace.search" for record in journal.records(kind="action"))
+    assert not journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")
+    progress = shown.command_result["result"]["progress"]
+    assert [step["progress_status"] for step in progress["steps"]] == ["failed", "pending", "pending"]
 
 
 def test_phase81_continue_without_unfinished_plan_still_asks_clarification():
