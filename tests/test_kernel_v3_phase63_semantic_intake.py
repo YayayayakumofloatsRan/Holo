@@ -117,7 +117,37 @@ def test_phase63_compound_task_is_not_flattened_into_single_retrieval():
 
 def test_phase63_transport_control_request_is_refused_without_tool_execution():
     journal = JournalStore.in_memory()
-    result = AgentRuntime(journal=journal).run("接管Holo的wechat，有相关的程序", mode="auto")
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "transport_control",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "transport_control",
+                        "text": "control a live user transport",
+                        "sequence_index": 1,
+                        "required_capabilities": ["live_transport:wechat"],
+                        "risk": "external_control",
+                        "status": "blocked",
+                        "metadata": {"transport": "wechat"},
+                    }
+                ],
+                "blocked_capabilities": ["live_transport:wechat"],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "an unseen live transport control request",
+        mode="auto",
+        semantic_mode="model",
+    )
 
     assert result.status == "completed"
     assert result.mode == "direct_answer"
@@ -367,7 +397,7 @@ def test_phase63_model_semantic_intake_cannot_hide_blocked_capability_under_safe
     )
 
     result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
-        "remember my preference",
+        "a model-smuggled durable memory capability",
         mode="auto",
         semantic_mode="model",
     )

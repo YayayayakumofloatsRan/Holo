@@ -34,7 +34,8 @@ Already present:
 - `AgentRuntime`: direct, retrieval, workspace, clarification, failure flows
 - `WorkloopEvaluator`: host-derived progress, repetition, evidence, stop
 - `ChatRuntime`: thread state, pending user input, resume, summaries
-- semantic intake: detects unavailable `durable_memory:write` capability
+- semantic intake: model/provider JSON can propose unavailable capabilities such
+  as `durable_memory:write`; the host validates and blocks them
 
 Not yet present:
 
@@ -114,7 +115,8 @@ Add:
 
 Pipeline:
 
-1. derive `ShadowCandidate` from explicit user memory intent or semantic intake
+1. derive `ShadowCandidate` from provider-owned semantic intake that declares
+   `durable_memory:write`
 2. validate privacy, scope, and evidence refs
 3. dedupe by `kind + scope + dedupe_key`
 4. detect conflicts instead of overwriting silently
@@ -124,14 +126,14 @@ Pipeline:
 
 Agent integration:
 
-- semantic intake can continue to identify `durable_memory:write`
+- model-backed semantic intake can identify `durable_memory:write`
 - model cannot call a memory commit tool directly
 - finalization may create proposals, not committed memory
 - ask-user can request approval for pending proposals
 
 Tests:
 
-- explicit "remember this" creates proposal, not committed memory
+- model-declared memory write creates proposal, not committed memory
 - approve commits item
 - reject leaves audit but no active recall
 - conflict goes to review
@@ -145,9 +147,9 @@ Implementation note:
   and proposals first; it never commits unless `approve_proposal()` is called by
   host-side code.
 - `AgentRuntime` accepts an optional `MemoryStore`. Without it, the runnable
-  skeleton keeps the old no-durable-memory behavior. With it, explicit
-  `durable_memory:write` semantic intake produces a pending proposal while the
-  task still asks the user for clarification/approval.
+  skeleton keeps the old no-durable-memory behavior. With it, a provider-owned
+  `durable_memory:write` semantic-intake result produces a pending proposal
+  while the task still asks the user for clarification/approval.
 - `MemoryStore.decide_proposal()` records approval/rejection decisions in the
   append-only memory log and replays them on reload. Candidate/proposal writes
   are tolerant of duplicate stable ids so resume and resident retries can stay

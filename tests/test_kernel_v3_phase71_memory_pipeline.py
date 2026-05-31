@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
+from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.agent.runtime import AgentRuntime
-from kernel_v3.agent.semantics import analyze_goal
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryPipeline, MemoryStore, stable_memory_id
 from kernel_v3.processors.testing import fake_fabric
@@ -11,9 +11,13 @@ from kernel_v3.processors.testing import fake_fabric
 def test_phase71_explicit_memory_intent_creates_pending_proposal_without_commit():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())
-    runtime = AgentRuntime(journal=journal, memory_store=store)
+    runtime = AgentRuntime(
+        journal=journal,
+        memory_store=store,
+        processor_fabric=fake_fabric({"semantic.intake": _memory_intake_payload("我偏好中文短答")}, journal=journal),
+    )
 
-    result = runtime.run("记住我偏好中文短答", thread_id="phase71-thread")
+    result = runtime.run("记住我偏好中文短答", thread_id="phase71-thread", semantic_mode="model")
 
     assert result.status == "needs_user_input"
     assert [candidate.status for candidate in store.shadow_candidates()] == ["open"]
@@ -25,7 +29,7 @@ def test_phase71_explicit_memory_intent_creates_pending_proposal_without_commit(
     assert {"memory_shadow_candidate", "memory_proposal"}.issubset({record.kind for record in journal.records()})
 
 
-def test_phase71_model_intake_cannot_hide_explicit_memory_request():
+def test_phase71_model_intake_omitting_memory_write_does_not_create_memory():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())
     fabric = fake_fabric(
@@ -58,6 +62,28 @@ def test_phase71_model_intake_cannot_hide_explicit_memory_request():
 
     result = runtime.run("remember my preference: concise Chinese replies", semantic_mode="model")
 
+    assert result.status == "completed"
+    intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
+    assert intake["primary_intent"] == "direct_answer"
+    assert intake["blocked_capabilities"] == []
+    assert store.proposals() == []
+    assert not {"memory_shadow_candidate", "memory_proposal"}.intersection({record.kind for record in journal.records()})
+
+
+def test_phase71_model_intake_with_durable_memory_capability_creates_proposal():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    runtime = AgentRuntime(
+        journal=journal,
+        memory_store=store,
+        processor_fabric=fake_fabric(
+            {"semantic.intake": _memory_intake_payload("concise Chinese replies")},
+            journal=journal,
+        ),
+    )
+
+    result = runtime.run("remember my preference: concise Chinese replies", semantic_mode="model")
+
     assert result.status == "needs_user_input"
     intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
     assert intake["primary_intent"] == "memory_write"
@@ -70,7 +96,7 @@ def test_phase71_approving_proposal_commits_memory_item():
     store = MemoryStore.in_memory(clock_ms=_clock())
     pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
     result = pipeline.propose_from_semantic_intake(
-        analyze_goal("remember my preference: concise Chinese replies"),
+        _memory_intake("remember my preference: concise Chinese replies"),
         task_id="task-1",
         run_id="run-1",
         thread_id="thread-1",
@@ -90,7 +116,7 @@ def test_phase71_rejecting_proposal_leaves_no_recallable_memory():
     store = MemoryStore.in_memory(clock_ms=_clock())
     pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
     result = pipeline.propose_from_semantic_intake(
-        analyze_goal("记住我偏好中文短答"),
+        _memory_intake("记住我偏好中文短答"),
         task_id="task-1",
         run_id="run-1",
         thread_id="thread-1",
@@ -116,7 +142,7 @@ def test_phase71_conflicting_memory_requires_conflict_review():
     store.commit(existing)
 
     result = pipeline.propose_from_semantic_intake(
-        analyze_goal("记住我偏好英文短答"),
+        _memory_intake("记住我偏好英文短答"),
         task_id="task-1",
         run_id="run-1",
         thread_id="thread-1",
@@ -135,7 +161,7 @@ def test_phase71_secret_like_candidate_is_rejected_without_raw_payload_in_memory
     secret = "remember api_key=sk_12345678901234567890 for later"
 
     result = pipeline.propose_from_semantic_intake(
-        analyze_goal(secret),
+        _memory_intake(secret),
         task_id="task-1",
         run_id="run-1",
         thread_id="thread-1",
@@ -172,7 +198,7 @@ def test_phase71_memory_store_replays_proposal_decisions(tmp_path: Path):
     store = MemoryStore(log_path, clock_ms=_clock())
     pipeline = MemoryPipeline(store=store, clock_ms=_clock())
     result = pipeline.propose_from_semantic_intake(
-        analyze_goal("remember my preference: concise Chinese replies"),
+        _memory_intake("remember my preference: concise Chinese replies"),
         task_id="task-1",
         run_id="run-1",
         thread_id="thread-1",
@@ -183,6 +209,36 @@ def test_phase71_memory_store_replays_proposal_decisions(tmp_path: Path):
     reloaded = MemoryStore(log_path, clock_ms=_clock())
 
     assert reloaded.proposal(result.proposals[0].proposal_id).approval_status == "rejected"
+
+
+def _memory_intake(text: str) -> SemanticIntake:
+    return SemanticIntake.from_dict(_memory_intake_payload(text))
+
+
+def _memory_intake_payload(text: str) -> dict:
+    return {
+        "intake_id": "semantic-intake-1",
+        "goal": text,
+        "primary_intent": "memory_write",
+        "suggested_mode": "clarify_first",
+        "compound": False,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "memory_write",
+                "text": text,
+                "sequence_index": 1,
+                "required_capabilities": ["durable_memory:write"],
+                "risk": "write",
+                "status": "needs_review",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": ["durable_memory:write"],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }
 
 
 def _memory_item(*, summary: str, body: str, dedupe_key: str, scope: dict) -> MemoryItem:

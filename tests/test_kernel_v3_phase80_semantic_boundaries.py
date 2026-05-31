@@ -153,6 +153,8 @@ def test_phase80_fake_intake_does_not_keyword_route_open_semantics():
         "read README.md and explain it",
         "write a local report",
         "什么都不要做",
+        "记住我偏好中文短答",
+        "接管Holo的wechat，有相关的程序",
     ]
 
     for text in probes:

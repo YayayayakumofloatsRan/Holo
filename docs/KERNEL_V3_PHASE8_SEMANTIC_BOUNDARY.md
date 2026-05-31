@@ -41,8 +41,7 @@ The offline `fake` semantic fallback was narrowed after review:
 - removed fallback classification for `noop`, `workspace_read`, and
   `workspace_write`; those are now driven by explicit CLI mode or provider JSON
   instead of user phrase patterns;
-- kept host-owned boundary checks for private reasoning, shell execution, live
-  transport control, and explicit durable-memory writes;
+- kept host-owned boundary checks for private reasoning and shell execution;
 - kept chat phrase checks only for command-like thread routing such as
   continue/resume and summary requests;
 - changed tests so open-ended semantics are driven by `semantic.intake` JSON
@@ -68,8 +67,24 @@ through `FakeJsonProvider`, or call an explicit agent mode such as
 `--mode workspace`. This keeps deterministic tests offline without teaching the
 host a growing list of user utterances.
 
-The only lexical checks left in `analyze_goal()` are host safety overrides:
-private reasoning, shell execution, live transport control, and explicit
-durable-memory write requests. These are not used to answer content; they exist
-to prevent a model or fallback path from hiding a permission boundary under a
-safe-looking direct answer.
+The only lexical checks left in `analyze_goal()` are host safety overrides for
+private reasoning and shell execution. These are not used to answer content; they
+exist to protect private reasoning and machine execution boundaries.
+
+## Iteration 2026-05-31 C
+
+The remaining fake fallback checks for live transport control and explicit
+durable-memory write requests were removed from `analyze_goal()`. Those are now
+provider-owned semantic classifications in model mode. The host still blocks the
+capabilities when they appear in structured model output:
+
+- `live_transport:*` remains a blocked capability and kernel_v3 still does not
+  integrate live WeChat or other live transports;
+- `durable_memory:write` still routes through the memory proposal pipeline and
+  cannot commit without review/approval;
+- if a model omits those capabilities, the host performs no side effect and the
+  direct fallback cannot turn semantic-intake hints into a factual final answer.
+
+Tests for memory writes, live transport control, no-op behavior, roleplay, and
+compound decomposition now inject structured `semantic.intake` JSON through
+`FakeJsonProvider` instead of relying on sample-specific user phrases.

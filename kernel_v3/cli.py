@@ -6,7 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-from kernel_v3.agent import AgentRuntime, analyze_goal
+from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ContextCompiler, ContextPackCompiler
 from kernel_v3.journal import JournalStore
@@ -613,7 +614,7 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
     pipeline = MemoryPipeline(store=store, journal=journal)
     if command == "propose":
         result = pipeline.propose_from_semantic_intake(
-            analyze_goal(args.text),
+            _explicit_memory_intake(args.text),
             task_id="task-cli-memory",
             run_id="run-cli-memory",
             thread_id=args.thread,
@@ -637,6 +638,32 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
         report = migrate_semantic_intake_records(journal=journal, store=store, limit=args.limit)
         return {"status": "ok", "migration": report.to_dict()}
     return {"status": "failed", "reason": f"unknown_memory_command:{command}"}
+
+
+def _explicit_memory_intake(text: str) -> SemanticIntake:
+    return SemanticIntake(
+        intake_id="semantic-intake-cli-memory",
+        goal=text,
+        primary_intent="memory_write",
+        suggested_mode="clarify_first",
+        compound=False,
+        requires_clarification=True,
+        intents=[
+            {
+                "kind": "memory_write",
+                "text": text,
+                "sequence_index": 1,
+                "required_capabilities": ["durable_memory:write"],
+                "risk": "write",
+                "status": "needs_review",
+                "metadata": {"source": "cli_memory_propose"},
+            }
+        ],
+        blocked_capabilities=["durable_memory:write"],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
 
 
 def _resident_queue(args) -> ResidentQueue:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Pattern
 
 from kernel_v3.agent.contracts import SemanticIntake, TaskIntent
@@ -11,10 +11,6 @@ from kernel_v3.processors.contracts import SEMANTIC_INTAKE_PROMPT_CONTRACT, SEMA
 from kernel_v3.processors.fabric import ProcessorFabric
 
 
-_MEMORY_WRITE_PATTERN = re.compile(
-    r"(?:记住|记下|保存(?:这个)?偏好|不要忘|以后(?:都|请|用|按)|remember\b|save\s+this\s+preference|keep\s+this\s+preference|from\s+now\s+on)",
-    re.IGNORECASE,
-)
 _PRIVATE_REASONING_PATTERN = re.compile(
     r"(?:思考过程|思维链|推理过程|内部推理|inner\s+(?:thought|reasoning)|chain[-\s]?of[-\s]?thought|show\s+.*reasoning|show\s+.*thought)",
     re.IGNORECASE,
@@ -23,19 +19,6 @@ _SHELL_EXEC_PATTERN = re.compile(
     r"(?:shell|bash|powershell|cmd\.exe|终端|命令行|执行命令|运行命令|run\s+(?:a\s+)?(?:shell\s+)?command|rm\s+-rf|sudo\b|chmod\b|curl\s+|wget\s+)",
     re.IGNORECASE,
 )
-_CONTROL_PATTERN = re.compile(r"(?:接管|控制|托管|登录|发送|代发|自动操作|control|take\s+over|login|send|operate)", re.IGNORECASE)
-
-
-@dataclass(frozen=True)
-class CapabilityRule:
-    capability: str
-    aliases: tuple[str, ...]
-    risk: str
-    metadata: dict[str, str] = field(default_factory=dict)
-
-    def matches(self, text: str) -> bool:
-        lowered = text.lower()
-        return any(alias.lower() in lowered for alias in self.aliases)
 
 
 @dataclass(frozen=True)
@@ -72,16 +55,17 @@ _HOST_BOUNDARY_RULES = (
     ),
 )
 
-_LIVE_TRANSPORT_RULES = (
-    CapabilityRule("live_transport:wechat", ("wechat", "weixin", "微信"), "external_control", {"transport": "wechat"}),
-    CapabilityRule("live_transport:slack", ("slack",), "external_control", {"transport": "slack"}),
-    CapabilityRule("live_transport:discord", ("discord",), "external_control", {"transport": "discord"}),
-    CapabilityRule("live_transport:email", ("email", "mail", "邮箱", "邮件"), "external_control", {"transport": "email"}),
-)
 _SAFE_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
 
 
 def analyze_goal(goal: str) -> SemanticIntake:
+    """Boundary-only offline intake.
+
+    The fake path intentionally does not keyword-route open-ended user semantics
+    such as roleplay, retrieval, workspace actions, transport control, or memory
+    writes. Model-backed semantic intake must propose those structures; the host
+    then validates capabilities and policy.
+    """
     text = goal.strip()
     intents = _classify_goal(text)
     compound = _is_compound(text, intents)
@@ -169,6 +153,7 @@ def _semantic_prompt(goal: str) -> str:
             "Classify requests for hidden/private reasoning as private_reasoning and do not expose chain-of-thought.",
             "Classify local writing/report generation as workspace_write and needs_permission unless an explicit writable recipe is available.",
             "If a compound task includes blocked capabilities, ask for confirmation or scope reduction before execution.",
+            "If unsure, preserve uncertainty in clarification_question instead of forcing a keyword-style class.",
         ],
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -226,30 +211,6 @@ def _classify_goal(text: str) -> list[TaskIntent]:
                 status=boundary.status,
             )
         )
-    transport = _transport_control_rule(text)
-    if transport is not None:
-        intents.append(
-            _intent(
-                len(intents) + 1,
-                "transport_control",
-                text,
-                capabilities=[transport.capability],
-                risk=transport.risk,
-                status="blocked",
-                metadata=transport.metadata,
-            )
-        )
-    if _MEMORY_WRITE_PATTERN.search(text):
-        intents.append(
-            _intent(
-                len(intents) + 1,
-                "memory_write",
-                text,
-                capabilities=["durable_memory:write"],
-                risk="write",
-                status="needs_review",
-            )
-        )
     return intents or [_intent(1, "direct_answer", text, risk="none", status="ready")]
 
 
@@ -284,54 +245,9 @@ def _model_intents(value: object) -> list[TaskIntent]:
 
 def _apply_hard_capability_overrides(goal: str, intents: list[TaskIntent]) -> list[TaskIntent]:
     result = intents
-    transport = _transport_control_rule(goal)
-    if transport is not None:
-        if any(intent.kind == "transport_control" for intent in result):
-            result = [
-                _merge_capability(intent, transport.capability, risk=transport.risk, status="blocked", metadata=transport.metadata)
-                if intent.kind == "transport_control"
-                else intent
-                for intent in result
-            ]
-        else:
-            result = [
-                _intent(
-                    1,
-                    "transport_control",
-                    goal,
-                    capabilities=[transport.capability],
-                    risk=transport.risk,
-                    status="blocked",
-                    metadata=transport.metadata,
-                ),
-                *_renumber(result, start=2),
-            ]
-    if _MEMORY_WRITE_PATTERN.search(goal):
-        result = _ensure_memory_write_intent(goal, result)
     for rule in _matching_host_boundaries(goal):
         result = _ensure_boundary_intent(goal, result, rule)
     return result
-
-
-def _ensure_memory_write_intent(goal: str, intents: list[TaskIntent]) -> list[TaskIntent]:
-    if any(intent.kind == "memory_write" for intent in intents):
-        return [
-            _merge_capability(intent, "durable_memory:write", risk="write", status="needs_review", metadata={})
-            if intent.kind == "memory_write"
-            else intent
-            for intent in intents
-        ]
-    return [
-        *intents,
-        _intent(
-            len(intents) + 1,
-            "memory_write",
-            goal,
-            capabilities=["durable_memory:write"],
-            risk="write",
-            status="needs_review",
-        ),
-    ]
 
 
 def _ensure_boundary_intent(goal: str, intents: list[TaskIntent], rule: HostBoundaryRule) -> list[TaskIntent]:
@@ -365,45 +281,6 @@ def _host_boundary_for_kind(kind: str) -> HostBoundaryRule | None:
     return None
 
 
-def _merge_capability(
-    intent: TaskIntent,
-    capability: str,
-    *,
-    risk: str,
-    status: str,
-    metadata: JsonObject,
-) -> TaskIntent:
-    merged_metadata = {**dict(intent.metadata), **metadata}
-    return TaskIntent(
-        intent_id=intent.intent_id,
-        kind=intent.kind,
-        text=intent.text,
-        sequence_index=intent.sequence_index,
-        required_capabilities=_ordered_unique([*intent.required_capabilities, capability]),
-        risk=risk,
-        status=status,
-        metadata=merged_metadata,
-    )
-
-
-def _renumber(intents: list[TaskIntent], *, start: int) -> list[TaskIntent]:
-    result: list[TaskIntent] = []
-    for offset, intent in enumerate(intents, start=start):
-        result.append(
-            TaskIntent(
-                intent_id=f"intent-{offset}-{intent.kind}",
-                kind=intent.kind,
-                text=intent.text,
-                sequence_index=offset,
-                required_capabilities=list(intent.required_capabilities),
-                risk=intent.risk,
-                status=intent.status,
-                metadata=dict(intent.metadata),
-            )
-        )
-    return result
-
-
 def _intent(
     index: int,
     kind: str,
@@ -428,17 +305,6 @@ def _intent(
 
 def _clarification_intent(text: str, *, index: int = 1) -> TaskIntent:
     return _intent(index, "clarification", text, risk="none", status="needs_user_input")
-
-
-def _transport_control_rule(text: str) -> CapabilityRule | None:
-    if _CONTROL_PATTERN.search(text) is None:
-        return None
-    for rule in _LIVE_TRANSPORT_RULES:
-        if rule.matches(text):
-            return rule
-    if re.search(r"(?:transport|channel|bot|客户端|账号|程序|应用|app)", text, re.IGNORECASE):
-        return CapabilityRule("live_transport:unknown", ("",), "external_control", {"transport": "unknown"})
-    return None
 
 
 def _first_host_boundary(text: str) -> HostBoundaryRule | None:

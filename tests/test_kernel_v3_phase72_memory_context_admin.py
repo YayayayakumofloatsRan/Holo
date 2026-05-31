@@ -7,6 +7,7 @@ from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.context import ContextPackCompiler
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryStore, stable_memory_id
+from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.session import TaskState
 
 
@@ -55,8 +56,12 @@ def test_phase72_context_excludes_deleted_and_expired_memory():
 def test_phase72_chat_memory_admin_approves_and_lists_pending_proposal():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())
-    runtime = AgentRuntime(journal=journal, memory_store=store)
-    chat = ChatRuntime(journal=journal, agent_runtime=runtime, memory_store=store)
+    runtime = AgentRuntime(
+        journal=journal,
+        memory_store=store,
+        processor_fabric=fake_fabric({"semantic.intake": _memory_intake_payload("我偏好中文短答")}, journal=journal),
+    )
+    chat = ChatRuntime(journal=journal, agent_runtime=runtime, memory_store=store, semantic_mode="model")
 
     first = chat.receive("记住我偏好中文短答", thread_id="thread-memory")
     proposal_id = store.proposals()[0].proposal_id
@@ -135,6 +140,30 @@ def _memory_item(*, summary: str, thread_id: str, expires_at_ms: int | None = No
         last_accessed_ms=None,
         metadata={},
     )
+
+
+def _memory_intake_payload(text: str) -> dict:
+    return {
+        "primary_intent": "memory_write",
+        "suggested_mode": "clarify_first",
+        "compound": False,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "memory_write",
+                "text": text,
+                "sequence_index": 1,
+                "required_capabilities": ["durable_memory:write"],
+                "risk": "write",
+                "status": "needs_review",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": ["durable_memory:write"],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }
 
 
 def _clock(start: int = 1_000):
