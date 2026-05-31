@@ -140,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
     resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
+    resident_requeue = resident_sub.add_parser("requeue")
+    resident_requeue.add_argument("message_id")
+    resident_requeue.add_argument("--reason", default="manual_requeue")
+    resident_requeue.add_argument("--keep-attempts", action="store_true")
     resident_ack = resident_sub.add_parser("ack")
     resident_ack.add_argument("outbox_id")
     resident_ack.add_argument("--status", default="acknowledged")
@@ -658,6 +662,23 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         return {"status": "ok", "messages": [message.to_dict() for message in queue.outbox_messages()]}
     if command == "status":
         return {"status": "ok", "queue": queue.status().to_dict()}
+    if command == "requeue":
+        message = queue.requeue(
+            args.message_id,
+            reason=args.reason,
+            reset_attempts=not args.keep_attempts,
+        )
+        if message is None:
+            return {"status": "failed", "reason": "inbox_not_requeueable_or_missing", "message_id": args.message_id}
+        journal.append(
+            task_id=None,
+            run_id="resident-cli",
+            step_id=None,
+            kind="resident_inbox_requeued",
+            data=message.to_dict(),
+            state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
+        )
+        return {"status": "ok", "message": message.to_dict()}
     if command in {"run-once", "run"}:
         memory_store = _memory_store(args, create_default=False)
         runtime = ResidentRuntime(

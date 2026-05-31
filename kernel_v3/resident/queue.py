@@ -281,6 +281,58 @@ class ResidentQueue:
         finally:
             conn.close()
 
+    def requeue(
+        self,
+        message_id: str,
+        *,
+        reason: str = "manual_requeue",
+        reset_attempts: bool = True,
+    ) -> InboundMessage | None:
+        now = self._now_ms()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _inbox_by_id(conn, message_id)
+            if existing is None or existing.status not in {"retry_wait", "failed", "dead_letter"}:
+                conn.rollback()
+                return None
+            metadata = dict(existing.metadata)
+            metadata["last_requeue_reason"] = reason
+            metadata["last_requeued_at_ms"] = now
+            metadata["requeue_count"] = int(metadata.get("requeue_count") or 0) + 1
+            attempts = 0 if reset_attempts else existing.attempts
+            updated = conn.execute(
+                """
+                UPDATE resident_inbox
+                SET status = 'pending', lease_owner = NULL, lease_until_ms = NULL,
+                    attempts = ?, next_attempt_at_ms = NULL, metadata_json = ?
+                WHERE message_id = ? AND status IN ('retry_wait', 'failed', 'dead_letter')
+                """,
+                (attempts, _json(metadata), message_id),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                return None
+            conn.commit()
+            return InboundMessage(
+                message_id=existing.message_id,
+                thread_id=existing.thread_id,
+                text=existing.text,
+                source=existing.source,
+                status="pending",
+                created_at_ms=existing.created_at_ms,
+                lease_owner=None,
+                lease_until_ms=None,
+                attempts=attempts,
+                next_attempt_at_ms=None,
+                metadata=metadata,
+            )
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def append_outbox(
         self,
         *,

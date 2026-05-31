@@ -286,6 +286,36 @@ def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
     assert not queue.outbox_messages()
 
 
+def test_phase73_dead_letter_can_be_requeued_for_manual_recovery(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="recover me", message_id="in-dead")
+    assert queue.acquire_lease(worker_id="worker-requeue", ttl_ms=30_000) is not None
+    claimed = queue.claim_next(worker_id="worker-requeue")
+    assert claimed is not None
+    assert queue.fail("in-dead", reason="RuntimeError", worker_id="worker-requeue", max_attempts=1)
+
+    requeued = queue.requeue("in-dead", reason="operator_retry")
+
+    assert requeued is not None
+    assert requeued.status == "pending"
+    assert requeued.attempts == 0
+    assert requeued.metadata["last_requeue_reason"] == "operator_retry"
+    assert requeued.metadata["requeue_count"] == 1
+    assert queue.status().claimable_count == 1
+
+
+def test_phase73_completed_message_cannot_be_requeued(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="done", message_id="in-done")
+    assert queue.acquire_lease(worker_id="worker-done", ttl_ms=30_000) is not None
+    claimed = queue.claim_next(worker_id="worker-done")
+    assert claimed is not None
+    assert queue.complete("in-done", worker_id="worker-done") is True
+
+    assert queue.requeue("in-done", reason="operator_retry") is None
+    assert queue.inbox_messages()[0].status == "completed"
+
+
 def test_phase73_queue_status_reports_health_counts(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     queue.enqueue(thread_id="resident-thread", text="retry item", message_id="in-retry")
@@ -377,6 +407,32 @@ def test_phase73_cli_resident_enqueue_can_replay_message_id_idempotently(tmp_pat
     inbox = json.loads(capsys.readouterr().out)
     assert len(inbox["messages"]) == 1
     assert inbox["messages"][0]["message_id"] == "in-cli-same"
+
+
+def test_phase73_cli_resident_requeue_dead_letter_and_journals(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+    queue = ResidentQueue(resident_db, clock_ms=_clock())
+    queue.enqueue(thread_id="resident-cli", text="recover via cli", message_id="in-cli-dead")
+    assert queue.acquire_lease(worker_id="worker-cli-dead", ttl_ms=30_000) is not None
+    claimed = queue.claim_next(worker_id="worker-cli-dead")
+    assert claimed is not None
+    assert queue.fail("in-cli-dead", reason="RuntimeError", worker_id="worker-cli-dead", max_attempts=1)
+
+    assert cli.main([*base, "resident", "requeue", "in-cli-dead", "--reason", "manual_retry"]) == 0
+    requeued = json.loads(capsys.readouterr().out)
+    assert requeued["message"]["status"] == "pending"
+    assert requeued["message"]["attempts"] == 0
+
+    assert cli.main([*base, "resident", "run-once", "--worker-id", "worker-cli-recovered"]) == 0
+    processed = json.loads(capsys.readouterr().out)
+    assert processed["status"] == "processed"
+    assert cli.main([*base, "resident-trace"]) == 0
+    trace = capsys.readouterr().out
+    assert "resident_inbox_requeued" in trace
+    assert "in-cli-dead" in trace
 
 
 def test_phase73_cli_resident_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):

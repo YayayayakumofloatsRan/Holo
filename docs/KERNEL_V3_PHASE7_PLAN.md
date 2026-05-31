@@ -269,6 +269,10 @@ Implementation note:
 - Runtime exceptions move inbox items to `retry_wait` until `max_attempts` is
   reached, then to `dead_letter`. Retry scheduling is local queue metadata, not
   a scheduler or external transport.
+- Dead-lettered, failed, or retry-waiting inbox items can be restored through a
+  host/admin `requeue` action. Requeue sets the item back to `pending`, clears
+  leases and retry timers, records requeue metadata, and is journaled by the
+  CLI. Completed and currently running messages are not requeueable.
 - Outbox writes are idempotent by inbound `in_reply_to`. If a worker crashes
   after writing the outbox but before completing the inbox item, a later retry
   reuses the existing outbox item instead of creating a duplicate outbound
@@ -279,9 +283,10 @@ Implementation note:
   source, or text is rejected as a conflict.
 - `needs_user_input` becomes an outbox item with status `pending_user_input`;
   the worker does not fabricate the missing user answer or continue the task.
-- `holo-v3 resident enqueue/run-once/run/status/inbox/outbox/ack` provides the local
-  dev/admin surface. `resident enqueue --message-id` can replay a gateway
-  delivery id to test idempotency. This is not a live transport integration.
+- `holo-v3 resident enqueue/run-once/run/status/inbox/outbox/requeue/ack` provides
+  the local dev/admin surface. `resident enqueue --message-id` can replay a
+  gateway delivery id to test idempotency. This is not a live transport
+  integration.
 - `holo-v3 resident-trace` renders resident journal records, keeping the SQLite
   queue state auditable through the normal kernel trace path.
 - Implemented tests live in `tests/test_kernel_v3_phase73_resident_runtime.py`.
