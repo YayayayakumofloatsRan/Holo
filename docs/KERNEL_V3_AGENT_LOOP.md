@@ -88,6 +88,12 @@ finalizer when there are no more safe tool steps and all finalizer dependencies
 are complete. A repeated approval after finalization returns the existing
 `semantic_task_plan_final_answer` instead of writing a duplicate.
 
+When the active pending question is a host-generated plan confirmation, a narrow
+confirmation reply such as "yes", "approve", "同意", or "继续" is treated as
+`/plan approve`; a narrow rejection reply such as "no", "reject", "拒绝", or
+"取消" is treated as `/plan reject`. This parser is only for answering the
+host's own confirmation prompt. It is not used for open-ended semantic routing.
+
 ## Stop Semantics
 
 The agent stops when one of these host-visible conditions is reached:

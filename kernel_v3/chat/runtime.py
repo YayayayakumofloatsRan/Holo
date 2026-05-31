@@ -95,17 +95,34 @@ class ChatRuntime:
                 },
                 state_delta={"thread_id": normalized_thread, "pending_answered": pending.pending_id},
             )
-            agent_result = self.agent_runtime.resume(
-                pending.task_id,
-                message,
-                thread_id=normalized_thread,
-                mode=_resume_mode_for_input(self.journal, pending.task_id),
-                planner_mode=self.planner_mode,
-                evaluator_mode=self.evaluator_mode,
-                synthesizer_mode=self.synthesizer_mode,
-                semantic_mode=self.semantic_mode,
-            )
-            result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
+            plan_record = _latest_task_plan_record(self.journal, normalized_thread, task_id=pending.task_id)
+            plan_response = _plan_confirmation_response(message) if _is_pending_plan_confirmation(plan_record) else None
+            if plan_response == "approve":
+                result = self._execute_plan_command(args=["approve"], state=before, turn=turn, decision=decision)
+            elif plan_response == "reject":
+                reject_args = (
+                    ["reject", str(plan_record.data.get("plan_id") or ""), _preview(message, limit=80)]
+                    if plan_record is not None
+                    else ["reject"]
+                )
+                result = self._execute_plan_command(
+                    args=reject_args,
+                    state=before,
+                    turn=turn,
+                    decision=decision,
+                )
+            else:
+                agent_result = self.agent_runtime.resume(
+                    pending.task_id,
+                    message,
+                    thread_id=normalized_thread,
+                    mode=_resume_mode_for_input(self.journal, pending.task_id),
+                    planner_mode=self.planner_mode,
+                    evaluator_mode=self.evaluator_mode,
+                    synthesizer_mode=self.synthesizer_mode,
+                    semantic_mode=self.semantic_mode,
+                )
+                result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         elif decision.route == "continue_task":
             task_id = before.active_task_id or ""
             agent_result = self.agent_runtime.resume(
@@ -784,6 +801,28 @@ def _latest_task_plan_record(journal: JournalStore, thread_id: str, *, task_id: 
         if approval_records:
             return approval_records[-1]
     return records[-1] if records else None
+
+
+def _is_pending_plan_confirmation(plan_record: LedgerRecord | None) -> bool:
+    if plan_record is None:
+        return False
+    if plan_record.data.get("approval_required") is not True:
+        return False
+    prompt = plan_record.data.get("confirmation_prompt")
+    return isinstance(prompt, str) and bool(prompt.strip())
+
+
+def _plan_confirmation_response(text: str) -> str | None:
+    normalized = text.strip().lower().strip(".。!！")
+    if normalized in {"yes", "y", "ok", "okay", "approve", "approved", "confirm", "confirmed", "continue", "go on"}:
+        return "approve"
+    if normalized in {"同意", "批准", "确认", "可以", "继续", "接着", "执行", "开始", "好", "好的"}:
+        return "approve"
+    if normalized in {"no", "n", "reject", "rejected", "cancel", "stop", "abort"}:
+        return "reject"
+    if normalized in {"不同意", "拒绝", "取消", "停止", "不要", "不执行", "先别"}:
+        return "reject"
+    return None
 
 
 def _task_plan_text(plan: JsonObject) -> str:

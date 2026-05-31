@@ -272,6 +272,41 @@ def test_phase81_chat_plan_approve_executes_first_safe_step_only():
     assert len(journal.records(task_id=approved.command_result["spawned_task_id"], kind="retrieval_report")) == 1
 
 
+def test_phase81_pending_plan_confirmation_can_approve_without_slash_command():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+
+    initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-natural-approve")
+    approved = chat.receive("同意", thread_id="thread-plan-natural-approve")
+
+    assert initial.status == "needs_user_input"
+    assert approved.route == "answer_pending_question"
+    assert approved.status == "completed"
+    assert approved.command_result is not None
+    assert approved.command_result["decision"] == "approved"
+    assert approved.command_result["executed_step_id"] == "plan-step-1"
+    assert journal.records(task_id=approved.command_result["spawned_task_id"], kind="retrieval_report")
+    assert not journal.records(task_id=initial.task_id, kind="resume")
+
+
+def test_phase81_pending_plan_confirmation_can_reject_without_resuming_task():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+
+    initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-natural-reject")
+    rejected = chat.receive("拒绝", thread_id="thread-plan-natural-reject")
+
+    assert initial.status == "needs_user_input"
+    assert rejected.route == "answer_pending_question"
+    assert rejected.status == "completed"
+    assert rejected.command_result is not None
+    assert rejected.command_result["result"]["decision"] == "rejected"
+    decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert decisions[-1].data["decision"] == "rejected"
+    assert not journal.records(kind="retrieval_report")
+    assert not journal.records(task_id=initial.task_id, kind="resume")
+
+
 def test_phase81_chat_plan_approve_blocks_plan_without_safe_executable_step():
     journal = JournalStore.in_memory()
     chat = _chat_with_semantic_plan(journal, _shell_only_intake())
