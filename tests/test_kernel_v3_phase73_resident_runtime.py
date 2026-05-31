@@ -9,6 +9,7 @@ from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
+from kernel_v3.resident.queue import RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
 from kernel_v3.trace import TraceRenderer
 
 
@@ -999,6 +1000,38 @@ def test_phase73_queue_inspect_reports_actionable_health(tmp_path: Path):
     assert delivery_failed_issue["outbox_ids"] == [delivery_failed_outbox.outbox_id]
     assert inspection.samples["inbox"]
     assert inspection.samples["outbox"]
+
+
+def test_phase73_resident_queue_inspection_samples_are_bounded(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock(start=20_000))
+    for index in range(RESIDENT_QUEUE_SAMPLE_LIMIT_CAP + 5):
+        queue.enqueue(
+            thread_id="resident-bounded",
+            text=f"pending item {index}",
+            message_id=f"in-bounded-{index}",
+        )
+        queue.append_outbox(
+            in_reply_to=f"out-bounded-{index}",
+            thread_id="resident-bounded",
+            text=f"ready item {index}",
+            status="ready",
+            task_id=None,
+            run_id=None,
+        )
+
+    requested_sample_limit = RESIDENT_QUEUE_SAMPLE_LIMIT_CAP + 99
+    inspection = queue.inspect(sample_limit=requested_sample_limit)
+    pending_issue = next(issue for issue in inspection.issues if issue.get("code") == "pending_inbox")
+    ready_issue = next(issue for issue in inspection.issues if issue.get("code") == "ready_outbox")
+
+    assert len(pending_issue["message_ids"]) == RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
+    assert len(ready_issue["outbox_ids"]) == RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
+    assert len(inspection.samples["inbox"]) == RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
+    assert len(inspection.samples["outbox"]) == RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
+    assert inspection.samples["requested_sample_limit"] == requested_sample_limit
+    assert inspection.samples["sample_limit"] == RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_cap"] == RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_clamped"] is True
 
 
 def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys):

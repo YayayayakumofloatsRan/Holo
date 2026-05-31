@@ -220,6 +220,11 @@ work, and `awaiting_user_input` when the next useful step is a user reply. This
 keeps long-running supervision from confusing "no claimable message right now"
 with a healthy completed queue.
 
+Resident queue inspection is bounded at the queue layer. Health issues and
+sample inbox/outbox rows are queried with SQL limits and clamped before
+rendering, so a long-running resident database can be inspected without loading
+or returning every historical message.
+
 Worker exception records also journal the queue state that was actually written
 after containment. `resident_inbox_failed` includes `resulting_status`,
 `attempts`, and `next_attempt_at_ms`, and its state delta uses `retry_wait`,

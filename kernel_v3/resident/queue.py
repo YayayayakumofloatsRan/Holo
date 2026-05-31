@@ -21,6 +21,8 @@ _OUTBOX_STATUSES = {
     "acknowledged",
 }
 
+RESIDENT_QUEUE_SAMPLE_LIMIT_CAP = 20
+
 
 class ResidentQueue:
     def __init__(self, db_path: Path | str, *, clock_ms: Callable[[], int] | None = None) -> None:
@@ -516,13 +518,12 @@ class ResidentQueue:
 
     def inspect(self, *, sample_limit: int = 5) -> ResidentQueueInspection:
         status = self.status()
-        inbox = self.inbox_messages()
-        outbox = self.outbox_messages()
+        effective_sample_limit = _clamp_limit(sample_limit, cap=RESIDENT_QUEUE_SAMPLE_LIMIT_CAP)
         issues: list[JsonObject] = []
         actions: list[str] = []
 
         if status.dead_letter_count:
-            dead = [message.message_id for message in inbox if message.status == "dead_letter"][:sample_limit]
+            dead = self._sample_inbox_message_ids(statuses=("dead_letter",), limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "error",
@@ -533,15 +534,10 @@ class ResidentQueue:
             )
             actions.append("resident requeue <message_id> --reason manual_review")
         if status.stale_running_count:
-            stale = [
-                message.message_id
-                for message in inbox
-                if (
-                    message.status == "running"
-                    and message.lease_until_ms is not None
-                    and message.lease_until_ms <= status.generated_at_ms
-                )
-            ][:sample_limit]
+            stale = self._sample_stale_running_message_ids(
+                now_ms=status.generated_at_ms,
+                limit=effective_sample_limit,
+            )
             issues.append(
                 {
                     "severity": "warning",
@@ -552,15 +548,7 @@ class ResidentQueue:
             )
             actions.append("resident run-once --worker-id <worker>")
         if status.due_retry_count:
-            due = [
-                message.message_id
-                for message in inbox
-                if (
-                    message.status == "retry_wait"
-                    and message.next_attempt_at_ms is not None
-                    and message.next_attempt_at_ms <= status.generated_at_ms
-                )
-            ][:sample_limit]
+            due = self._sample_due_retry_message_ids(now_ms=status.generated_at_ms, limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "info",
@@ -572,7 +560,7 @@ class ResidentQueue:
             actions.append("resident run-once --worker-id <worker>")
         pending_count = int(status.inbox_counts.get("pending", 0))
         if pending_count:
-            pending = [message.message_id for message in inbox if message.status == "pending"][:sample_limit]
+            pending = self._sample_inbox_message_ids(statuses=("pending",), limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "info",
@@ -584,7 +572,7 @@ class ResidentQueue:
             actions.append("resident run --max-iterations <n>")
         ready_count = int(status.outbox_counts.get("ready", 0))
         if ready_count:
-            ready = [message.outbox_id for message in outbox if message.status == "ready"][:sample_limit]
+            ready = self._sample_outbox_ids(statuses=("ready",), limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "info",
@@ -596,7 +584,7 @@ class ResidentQueue:
             actions.append("resident outbox")
         failed_outbox_count = int(status.outbox_counts.get("failed", 0))
         if failed_outbox_count:
-            failed = [message.outbox_id for message in outbox if message.status == "failed"][:sample_limit]
+            failed = self._sample_outbox_ids(statuses=("failed",), limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "error",
@@ -609,11 +597,7 @@ class ResidentQueue:
             actions.append("resident ack <outbox_id> --status acknowledged")
         delivery_failed_count = int(status.outbox_counts.get("delivery_failed", 0))
         if delivery_failed_count:
-            failed = [
-                message.outbox_id
-                for message in outbox
-                if message.status == "delivery_failed"
-            ][:sample_limit]
+            failed = self._sample_outbox_ids(statuses=("delivery_failed",), limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "warning",
@@ -628,11 +612,10 @@ class ResidentQueue:
             + int(status.outbox_counts.get("pending_user_input_delivered", 0))
         )
         if waiting_count:
-            waiting = [
-                message.outbox_id
-                for message in outbox
-                if message.status in {"pending_user_input", "pending_user_input_delivered"}
-            ][:sample_limit]
+            waiting = self._sample_outbox_ids(
+                statuses=("pending_user_input", "pending_user_input_delivered"),
+                limit=effective_sample_limit,
+            )
             issues.append(
                 {
                     "severity": "info",
@@ -657,11 +640,121 @@ class ResidentQueue:
             issues=issues,
             recommended_actions=_ordered_unique(actions),
             queue_status=status.to_dict(),
-            samples={
-                "inbox": [message.to_dict() for message in inbox[:sample_limit]],
-                "outbox": [message.to_dict() for message in outbox[:sample_limit]],
-            },
+            samples=_inspection_samples(
+                inbox=self._sample_inbox(limit=effective_sample_limit),
+                outbox=self._sample_outbox(limit=effective_sample_limit),
+                requested_sample_limit=sample_limit,
+                effective_sample_limit=effective_sample_limit,
+            ),
         )
+
+    def _sample_inbox_message_ids(self, *, statuses: tuple[str, ...], limit: int) -> list[str]:
+        placeholders = ",".join("?" for _ in statuses)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT message_id
+                FROM resident_inbox
+                WHERE status IN ({placeholders})
+                ORDER BY created_at_ms, message_id
+                LIMIT ?
+                """,
+                (*statuses, limit),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_stale_running_message_ids(self, *, now_ms: int, limit: int) -> list[str]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT message_id
+                FROM resident_inbox
+                WHERE status = 'running'
+                  AND lease_until_ms IS NOT NULL
+                  AND lease_until_ms <= ?
+                ORDER BY created_at_ms, message_id
+                LIMIT ?
+                """,
+                (now_ms, limit),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_due_retry_message_ids(self, *, now_ms: int, limit: int) -> list[str]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT message_id
+                FROM resident_inbox
+                WHERE status = 'retry_wait'
+                  AND next_attempt_at_ms IS NOT NULL
+                  AND next_attempt_at_ms <= ?
+                ORDER BY created_at_ms, message_id
+                LIMIT ?
+                """,
+                (now_ms, limit),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_outbox_ids(self, *, statuses: tuple[str, ...], limit: int) -> list[str]:
+        placeholders = ",".join("?" for _ in statuses)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT outbox_id
+                FROM resident_outbox
+                WHERE status IN ({placeholders})
+                ORDER BY created_at_ms, outbox_id
+                LIMIT ?
+                """,
+                (*statuses, limit),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_inbox(self, *, limit: int) -> list[InboundMessage]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT message_id, thread_id, text, source, status, created_at_ms,
+                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
+                FROM resident_inbox
+                ORDER BY created_at_ms, message_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [_inbox_from_row(row) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_outbox(self, *, limit: int) -> list[OutboxMessage]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
+                       task_id, run_id, payload_json
+                FROM resident_outbox
+                ORDER BY created_at_ms, outbox_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [_outbox_from_row(row) for row in rows]
+        finally:
+            conn.close()
 
     def mark_outbox_status(self, outbox_id: str, *, status: str) -> OutboxMessage | None:
         outbox, _reason = self.transition_outbox_status(outbox_id, status=status)
@@ -986,6 +1079,29 @@ def _status_counts(conn: sqlite3.Connection, table: str) -> dict[str, int]:
 def _count(conn: sqlite3.Connection, query: str, values: tuple[object, ...]) -> int:
     row = conn.execute(query, values).fetchone()
     return int(row[0]) if row is not None else 0
+
+
+def _clamp_limit(value: int, *, cap: int) -> int:
+    return min(max(0, int(value)), cap)
+
+
+def _inspection_samples(
+    *,
+    inbox: list[InboundMessage],
+    outbox: list[OutboxMessage],
+    requested_sample_limit: int,
+    effective_sample_limit: int,
+) -> JsonObject:
+    samples: JsonObject = {
+        "inbox": [message.to_dict() for message in inbox],
+        "outbox": [message.to_dict() for message in outbox],
+    }
+    if effective_sample_limit != requested_sample_limit:
+        samples["requested_sample_limit"] = requested_sample_limit
+        samples["sample_limit"] = effective_sample_limit
+        samples["sample_limit_cap"] = RESIDENT_QUEUE_SAMPLE_LIMIT_CAP
+        samples["sample_limit_clamped"] = True
+    return samples
 
 
 def _next_outbox_status(current: str, *, requested: str) -> str | None:
