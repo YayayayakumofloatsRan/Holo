@@ -316,7 +316,21 @@ def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
 
 
 def _normalize_hosts(hosts: list[str]) -> set[str]:
-    return {host.strip().lower() for host in hosts if host.strip()}
+    normalized: set[str] = set()
+    for raw in hosts:
+        host = _normalize_host(raw)
+        if host:
+            normalized.add(host)
+    return normalized
+
+
+def _normalize_host(value: str) -> str:
+    text = str(value or "").strip().lower().rstrip(".")
+    if not text:
+        return ""
+    parsed = urllib.parse.urlparse(text if "://" in text else f"//{text}")
+    host = parsed.hostname or ""
+    return host.lower().rstrip(".")
 
 
 def _normalize_schemes(schemes: list[str]) -> tuple[str, ...]:

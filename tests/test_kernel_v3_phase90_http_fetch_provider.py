@@ -80,6 +80,21 @@ def test_phase90_http_fetch_provider_allows_explicit_host_and_returns_body() -> 
     assert transport.calls[0]["url"] == "https://www.example.com/report"
 
 
+def test_phase90_http_fetch_provider_normalizes_url_form_allowed_hosts() -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"normalized host evidence"))
+    provider = HttpFetchProvider(
+        enabled=True,
+        allowed_hosts=["https://example.com/research/filings"],
+        transport=transport,
+    )
+
+    response = provider.fetch(_source("https://www.example.com/report"))
+
+    assert response.status == "ok"
+    assert response.body == "normalized host evidence"
+    assert transport.calls[0]["url"] == "https://www.example.com/report"
+
+
 def test_phase90_http_fetch_provider_rejects_oversized_body_without_returning_raw_body() -> None:
     transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"0123456789"))
     provider = HttpFetchProvider(
@@ -231,6 +246,22 @@ def test_phase90_json_http_search_provider_parses_bounded_results() -> None:
     assert "max_results=5" in str(transport.calls[0]["url"])
     dumped_source = json.dumps(sources[0].to_dict(), ensure_ascii=False)
     assert "this raw field" not in dumped_source
+
+
+def test_phase90_json_http_search_provider_normalizes_url_form_allowed_hosts() -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b'{"results": []}'))
+    provider = JsonHttpSearchProvider(
+        endpoint_url="https://api.example.com/search",
+        enabled=True,
+        allowed_hosts=["https://api.example.com/search"],
+        transport=transport,
+    )
+
+    sources = provider.search("DeepSeek API docs", goal=_goal(), plan=_plan())
+
+    assert sources == []
+    assert len(transport.calls) == 1
+    assert str(transport.calls[0]["url"]).startswith("https://api.example.com/search?")
 
 
 def test_phase90_json_http_search_provider_handles_bad_responses_without_raw_body() -> None:

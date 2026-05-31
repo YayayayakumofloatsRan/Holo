@@ -141,6 +141,8 @@ not part of the default CLI or unit-test path:
   disabled
 - it fails closed unless the host explicitly enables it and configures either an
   allowed-host list or `allow_all_hosts=True`
+- allowed-host entries may be bare hosts or URL-form strings; only the hostname
+  is retained for matching
 - it rejects non-allowed URL schemes, URLs without hosts, and URLs with
   embedded credentials
 - it enforces timeout and maximum body-byte bounds before returning a body
@@ -165,6 +167,8 @@ CLI or unit-test path.
   considers it enabled
 - it fails closed unless the endpoint host is explicitly allowed or
   `allow_all_hosts=True`
+- allowed-host entries may be bare hosts or URL-form strings; only the hostname
+  is retained for matching
 - it rejects non-allowed URL schemes, endpoints without hosts, and endpoints
   with embedded credentials
 - it supports env-only API keys through a configured header; API key values and
