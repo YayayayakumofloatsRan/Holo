@@ -292,6 +292,61 @@ def test_phase83_corpus_search_can_audit_access_without_raw_query_or_body() -> N
     assert RAW_ONLY_SENTINEL not in dumped
 
 
+def test_phase83_corpus_metadata_redacts_secret_like_values() -> None:
+    source = _source(
+        "src-sec-secret-metadata",
+        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    secret_value = "sk_12345678901234567890"
+    store = ResearchCorpusStore.in_memory(clock_ms=lambda: 2021)
+    document = corpus_document_from_retrieval(
+        document=replace(
+            _document(
+                source=source,
+                artifact_id="artifact-sec-secret-metadata",
+                payload_hash="hash-sec-secret-metadata",
+                preview="AAPL annual report revenue preview.",
+            ),
+            metadata={
+                "mime_type": "text/plain",
+                "api_key": secret_value,
+                "nested": {"access_token": secret_value, "note": f"token={secret_value}"},
+                "headers": [{"authorization": f"Bearer {secret_value}"}],
+            },
+        ),
+        source=replace(
+            source,
+            metadata={
+                "api_key": secret_value,
+                "nested": {"access_token": secret_value, "note": f"token={secret_value}"},
+                "headers": [{"authorization": f"Bearer {secret_value}"}],
+            },
+        ),
+        goal=SearchGoal(
+            goal_id="goal-corpus-secret-metadata",
+            query="AAPL revenue",
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        task_id="task-corpus-secret-metadata",
+        run_id="run-corpus-secret-metadata",
+        fetched_at_ms=2021,
+        source_assessment=assess_search_source(source, profile=finance_fundamentals_profile()),
+    )
+
+    recorded = store.record_document(document)
+    dumped = json.dumps(store.audit_records(), ensure_ascii=False)
+
+    assert recorded.metadata["source_metadata"]["api_key"] == "[omitted]"
+    assert recorded.metadata["source_metadata"]["nested"]["access_token"] == "[omitted]"
+    assert recorded.metadata["source_metadata"]["nested"]["note"] == "[omitted]"
+    assert recorded.metadata["source_metadata"]["headers"][0]["authorization"] == "[omitted]"
+    assert secret_value not in dumped
+    assert "api_key" in dumped
+    assert "access_token" in dumped
+
+
 def test_phase83_corpus_search_and_inspection_outputs_are_bounded() -> None:
     store = ResearchCorpusStore.in_memory(clock_ms=lambda: 3030)
     profile = finance_fundamentals_profile()

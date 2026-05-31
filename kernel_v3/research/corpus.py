@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from kernel_v3.contracts import JsonObject
+from kernel_v3.memory.privacy import contains_secret_like_content
 from kernel_v3.research.contracts import CorpusDocument, CorpusInspection, CorpusSearchResult, CorpusStatus, SourceAssessment
 from kernel_v3.research.profiles import profile_by_id
 
@@ -89,6 +90,7 @@ class ResearchCorpusStore:
         return cls(clock_ms=clock_ms)
 
     def record_document(self, document: CorpusDocument) -> CorpusDocument:
+        document = replace(document, metadata=_safe_json(dict(document.metadata)))
         existing = self._documents.get(document.document_id)
         if existing is not None:
             if existing.to_dict() == document.to_dict():
@@ -780,10 +782,10 @@ def _safe_json(data: JsonObject) -> JsonObject:
     safe: JsonObject = {}
     for key, value in data.items():
         lowered = key.lower()
-        if "body" in lowered or "raw" in lowered:
+        if _unsafe_metadata_key(lowered):
             safe[key] = "[omitted]"
         elif isinstance(value, str):
-            safe[key] = _preview(value, 160)
+            safe[key] = "[omitted]" if contains_secret_like_content(value) else _preview(value, 160)
         elif isinstance(value, (int, float, bool)) or value is None:
             safe[key] = value
         elif isinstance(value, list):
@@ -797,12 +799,31 @@ def _safe_json(data: JsonObject) -> JsonObject:
 
 def _safe_list_item(value):
     if isinstance(value, str):
-        return _preview(value, 160)
+        return "[omitted]" if contains_secret_like_content(value) else _preview(value, 160)
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, dict):
         return _safe_json(value)
+    if isinstance(value, list):
+        return [_safe_list_item(item) for item in value[:10]]
     return str(value)[:160]
+
+
+def _unsafe_metadata_key(lowered_key: str) -> bool:
+    if "body" in lowered_key or "raw" in lowered_key:
+        return True
+    sensitive_terms = (
+        "api_key",
+        "apikey",
+        "secret",
+        "token",
+        "authorization",
+        "cookie",
+        "password",
+        "private_key",
+        "credential",
+    )
+    return any(term in lowered_key for term in sensitive_terms)
 
 
 def _preview(text: str, limit: int) -> str:

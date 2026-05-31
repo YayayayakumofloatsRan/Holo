@@ -309,8 +309,9 @@ holo-v3 \
 ```
 
 The command above still uses the bounded fake provider unless a host supplies a
-different provider in code. `--index-corpus` only persists safe corpus metadata;
-the raw body is stored in the artifact log.
+different provider in code. `--index-corpus` only persists safe corpus metadata:
+raw/body fields and secret-like metadata keys or values are omitted before a
+document is recorded. The raw body is stored in the artifact log.
 
 The indexed corpus can then be inspected:
 
