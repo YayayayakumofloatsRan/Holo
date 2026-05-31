@@ -82,7 +82,16 @@ class CorpusFetchProvider:
                 diagnostics={"reason": "missing_corpus_artifact_ref", "artifact_id": artifact_id},
             )
         try:
-            payload = self.artifact_store.read_blob(artifact_id)
+            payload = self.artifact_store.read_blob(
+                artifact_id,
+                record_access=True,
+                access_context={
+                    "surface": "corpus_fetch_provider",
+                    "provider_id": self.provider_id,
+                    "source_id": source.source_id,
+                    "corpus_document_id": source.metadata.get("corpus_document_id"),
+                },
+            )
         except KeyError:
             return FetchResponse(
                 status="failed",

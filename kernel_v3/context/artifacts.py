@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 from kernel_v3.contracts import ArtifactRef
 
@@ -44,10 +46,18 @@ class ArtifactBlob:
 
 
 class ArtifactStore:
-    def __init__(self, path: Path | str | None = None, artifacts: list[ArtifactRef] | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | str | None = None,
+        artifacts: list[ArtifactRef] | None = None,
+        *,
+        clock_ms: Callable[[], int] | None = None,
+    ) -> None:
         self.path = Path(path) if path is not None else None
+        self.clock_ms = clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
         self._artifacts: dict[str, ArtifactRef] = {}
         self._blobs: dict[str, ArtifactBlob] = {}
+        self._audit_records: list[dict[str, object]] = []
         if artifacts:
             for artifact in artifacts:
                 self._artifacts[artifact.artifact_id] = artifact
@@ -61,13 +71,21 @@ class ArtifactStore:
                         artifact = ArtifactRef.from_dict(raw["artifact"])
                         self._artifacts[artifact.artifact_id] = artifact
                         continue
+                    if raw.get("record_type") == "artifact_blob_read":
+                        self._audit_records.append(dict(raw))
+                        continue
                     artifact_data = raw.get("artifact", raw)
                     artifact = ArtifactRef.from_dict(artifact_data)
                     self._artifacts[artifact.artifact_id] = artifact
 
     @classmethod
-    def in_memory(cls, artifacts: list[ArtifactRef] | None = None) -> "ArtifactStore":
-        return cls(artifacts=artifacts or [])
+    def in_memory(
+        cls,
+        artifacts: list[ArtifactRef] | None = None,
+        *,
+        clock_ms: Callable[[], int] | None = None,
+    ) -> "ArtifactStore":
+        return cls(artifacts=artifacts or [], clock_ms=clock_ms)
 
     def put(self, artifact: ArtifactRef) -> None:
         self._artifacts[artifact.artifact_id] = artifact
@@ -142,8 +160,16 @@ class ArtifactStore:
                 )
         return ref
 
-    def read_blob(self, artifact_id: str) -> str | bytes:
+    def read_blob(
+        self,
+        artifact_id: str,
+        *,
+        record_access: bool = False,
+        access_context: dict[str, object] | None = None,
+    ) -> str | bytes:
         blob = self._require_blob(artifact_id)
+        if record_access:
+            self._record_blob_read(blob, access_context=access_context)
         if blob.payload_encoding == "utf-8":
             return blob.payload
         return base64.b64decode(blob.payload.encode("ascii"))
@@ -170,6 +196,9 @@ class ArtifactStore:
     def list(self) -> list[ArtifactRef]:
         return [self._artifacts[key] for key in sorted(self._artifacts)]
 
+    def audit_records(self) -> list[dict[str, object]]:
+        return [dict(record) for record in self._audit_records]
+
     def resolve_many(self, artifact_ids: list[str]) -> list[ArtifactRef]:
         return [artifact for artifact_id in artifact_ids if (artifact := self.get(artifact_id)) is not None]
 
@@ -178,6 +207,29 @@ class ArtifactStore:
         if blob is None:
             raise KeyError(f"unknown artifact blob: {artifact_id}")
         return blob
+
+    def _record_blob_read(self, blob: ArtifactBlob, *, access_context: dict[str, object] | None) -> None:
+        event = {
+            "record_type": "artifact_blob_read",
+            "event_type": "artifact_blob_read",
+            "read_at_ms": self.clock_ms(),
+            "artifact_id": blob.artifact_id,
+            "kind": blob.kind,
+            "mime_type": blob.mime_type,
+            "payload_hash": blob.payload_hash,
+            "payload_size_bytes": blob.size_bytes,
+            "redaction_status": blob.redaction_status,
+            "access_context": _safe_access_context(access_context or {}),
+            "redaction": {
+                "blob": "not_embedded",
+                "access_context": "safe_metadata_only",
+            },
+        }
+        self._audit_records.append(event)
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def _encode_payload(payload: str | bytes) -> tuple[bytes, str, str]:
@@ -194,3 +246,68 @@ def _preview_text(text: str, *, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
+
+
+_SAFE_ACCESS_CONTEXT_KEYS = {
+    "command",
+    "corpus_document_id",
+    "document_id",
+    "goal_id",
+    "mode",
+    "plan_id",
+    "profile_id",
+    "provider_id",
+    "run_id",
+    "source_id",
+    "surface",
+    "task_id",
+}
+_SENSITIVE_ACCESS_KEY_FRAGMENTS = (
+    "authorization",
+    "body",
+    "content",
+    "cookie",
+    "env",
+    "key",
+    "password",
+    "payload",
+    "raw",
+    "secret",
+    "text",
+    "token",
+)
+
+
+def _safe_access_context(context: dict[str, object]) -> dict[str, object]:
+    safe: dict[str, object] = {}
+    for key, value in context.items():
+        key_text = str(key)
+        normalized = key_text.lower()
+        if any(fragment in normalized for fragment in _SENSITIVE_ACCESS_KEY_FRAGMENTS):
+            safe[key_text] = "[omitted]"
+        elif normalized in _SAFE_ACCESS_CONTEXT_KEYS:
+            safe[key_text] = _safe_context_value(value, allow_string=True)
+        else:
+            safe[key_text] = _safe_context_value(value, allow_string=False)
+    return safe
+
+
+def _safe_context_value(value: object, *, allow_string: bool) -> object:
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        if allow_string:
+            return value if len(value) <= 128 else value[:125] + "..."
+        return {
+            "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+            "length": len(value),
+            "redacted": True,
+        }
+    if isinstance(value, list):
+        return [_safe_context_value(item, allow_string=allow_string) for item in value[:16]]
+    if isinstance(value, dict):
+        return _safe_access_context({str(key): item for key, item in value.items()})
+    return {
+        "type": value.__class__.__name__,
+        "redacted": True,
+    }

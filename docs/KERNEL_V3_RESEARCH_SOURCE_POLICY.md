@@ -73,6 +73,9 @@ Rules:
 - corpus-backed retrieval records `corpus_documents_searched` audit events with
   query hashes, profile ids, limits, document ids, and access context; raw query
   text and page bodies are not embedded in those audit events
+- corpus fetches that read raw artifact blobs record `artifact_blob_read` audit
+  events with artifact ids, payload hashes, byte counts, and safe access
+  context only; raw page bodies are never embedded in access audit records
 - retrieval journals `retrieval_corpus_document` only when a corpus store is
   configured
 - default tests use fake providers and do not require network access
@@ -89,6 +92,7 @@ web corpus before asking for live web access:
 - `CorpusSearchProvider` searches `ResearchCorpusStore` and returns ordinary
   `SearchSource` objects with `provider="research_corpus"`
 - `CorpusFetchProvider` reads the referenced artifact blob from `ArtifactStore`
+  and requests low-sensitive blob-read audit
 - both providers report `live_network=False`
 - providers expose a bounded `RetrievalProviderCapability` with provider id,
   provider kind, `live_network`, `default_enabled`, profile awareness, and

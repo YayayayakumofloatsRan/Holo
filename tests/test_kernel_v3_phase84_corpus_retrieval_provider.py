@@ -79,6 +79,17 @@ def test_phase84_corpus_backed_retrieval_reuses_indexed_page_without_network() -
     assert search["sources"][0]["metadata"]["source_family"] == "regulatory_filing"
     assert journal.records(task_id="task-corpus-reuse", kind="retrieval_source_assessment")
     assert RAW_ONLY_SENTINEL in str(artifacts.read_blob(report.artifact_refs[0]))
+    artifact_audit = artifacts.audit_records()
+    assert artifact_audit[-1]["event_type"] == "artifact_blob_read"
+    assert artifact_audit[-1]["artifact_id"] == artifact.artifact_id
+    assert artifact_audit[-1]["payload_hash"] == artifact.payload_hash
+    assert artifact_audit[-1]["access_context"] == {
+        "corpus_document_id": search["sources"][0]["metadata"]["corpus_document_id"],
+        "provider_id": "research_corpus_fetch",
+        "source_id": search["sources"][0]["source_id"],
+        "surface": "corpus_fetch_provider",
+    }
+    assert RAW_ONLY_SENTINEL not in json.dumps(artifact_audit, ensure_ascii=False)
     encoded = json.dumps([record.to_dict() for record in journal.records(task_id="task-corpus-reuse")], ensure_ascii=False)
     assert RAW_ONLY_SENTINEL not in encoded
 

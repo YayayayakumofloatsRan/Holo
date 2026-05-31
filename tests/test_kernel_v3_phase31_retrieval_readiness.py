@@ -423,6 +423,51 @@ def test_artifact_store_writes_reads_previews_and_reloads_blob_payload():
         _remove_dir(root)
 
 
+def test_artifact_store_can_audit_blob_reads_without_raw_payload_leakage():
+    root = Path("kernel_v3/.test-phase31-artifacts")
+    _reset_dir(root)
+    store_path = root / "artifacts.jsonl"
+    raw_only_sentinel = "ARTIFACT_RAW_ONLY_SECRET"
+    try:
+        store = ArtifactStore(store_path, clock_ms=lambda: 1234)
+        ref = store.write_blob(
+            kind="retrieval_fetched_document",
+            payload=f"raw page body {raw_only_sentinel}",
+            mime_type="text/plain",
+            metadata={"uri": "https://example.test/doc"},
+        )
+
+        assert store.read_blob(
+            ref.artifact_id,
+            record_access=True,
+            access_context={
+                "surface": "test",
+                "provider_id": "fake",
+                "raw_body": raw_only_sentinel,
+                "operator_note": raw_only_sentinel,
+            },
+        ).endswith(raw_only_sentinel)
+
+        audit = store.audit_records()
+        assert audit[-1]["event_type"] == "artifact_blob_read"
+        assert audit[-1]["artifact_id"] == ref.artifact_id
+        assert audit[-1]["payload_hash"] == ref.payload_hash
+        assert audit[-1]["payload_size_bytes"] == len(f"raw page body {raw_only_sentinel}".encode("utf-8"))
+        assert audit[-1]["redaction"]["blob"] == "not_embedded"
+        assert audit[-1]["access_context"]["raw_body"] == "[omitted]"
+        assert audit[-1]["access_context"]["operator_note"]["redacted"] is True
+
+        encoded_audit = json.dumps(audit, ensure_ascii=False)
+        assert raw_only_sentinel not in encoded_audit
+
+        reloaded = ArtifactStore(store_path)
+        encoded_reloaded_audit = json.dumps(reloaded.audit_records(), ensure_ascii=False)
+        assert raw_only_sentinel not in encoded_reloaded_audit
+        assert reloaded.audit_records()[-1]["artifact_id"] == ref.artifact_id
+    finally:
+        _remove_dir(root)
+
+
 def test_context_compiler_truncates_oversized_sections_when_budget_mode_is_truncate():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("large", thread_id="thread-a", journal=journal)
