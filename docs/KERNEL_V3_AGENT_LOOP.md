@@ -80,6 +80,8 @@ recipe turns them into bounded `CandidateAction` payloads, and `PolicyGate` plus
   `semantic_task_plan_decision` and does not execute anything;
 - `/plan approve [plan_id]` journals approval and runs only the first safe
   executable step through `AgentRuntime`;
+- `/plan run [plan_id]` repeatedly runs safe executable steps through
+  `AgentRuntime` until a host boundary is reached;
 - `/plan finalize [plan_id]` builds a plan-level final answer only from
   journaled outputs of completed approved steps.
 
@@ -108,10 +110,17 @@ their `citation_refs` and `used_evidence`, and journals
 not completed, finalization fails with a journaled command result instead of
 filling the gap.
 
-For resident-style progress, `/plan approve` also converges to the same host
-finalizer when there are no more safe tool steps and all finalizer dependencies
-are complete. A repeated approval after finalization returns the existing
-`semantic_task_plan_final_answer` instead of writing a duplicate.
+For resident-style progress, `/plan run` is the bounded workloop form of plan
+execution. It recomputes the next executable step from journal state after each
+child task, records every approval as `semantic_task_plan_decision`, and stops
+when a child task needs user input, fails, no safe step remains, or the
+plan-level finalizer can produce an answer from completed dependency outputs.
+Blocked write/shell/live-transport/memory capabilities remain boundaries, not
+things to skip silently. `/plan approve` still performs a single-step approval;
+if no more safe tool steps remain and finalizer dependencies are complete, it
+also converges to the same host finalizer. A repeated approval after
+finalization returns the existing `semantic_task_plan_final_answer` instead of
+writing a duplicate.
 
 When the active pending question is a host-generated plan confirmation, natural
 language approval or rejection goes through the same bounded `chat.route`
@@ -219,8 +228,8 @@ as `summary`, `continue_task`, `continue_plan`, `answer_pending_question`, or
 `new_task`; `ChatRuntime` then validates that proposal against the current
 thread state and journal. If the proposal asks to continue a plan, the host only
 routes to `continue_plan` when an unfinished approved plan exists in the thread,
-and it executes the same host-owned `/plan approve` path. Finalized plans are
-not reused.
+and it executes the same host-owned `/plan run` path. Finalized plans are not
+reused.
 
 Live semantic scenario tests must not include answer-key JSON in provider
 prompts. They provide only the contract, task context, host rules, and
@@ -238,8 +247,10 @@ Hardening completed in this iteration:
 - made failure report attempt/observation summaries run-scoped
 - bound recipe action ids to run ids
 - removed answer-key JSON from live semantic scenario prompts
+- added bounded `/plan run` for journal-driven multi-step plan continuation
 - added regression tests for stale retrieval evidence, stale workspace file
-  reads, semantic-intake answer leakage, and scenario prompt leakage
+  reads, semantic-intake answer leakage, scenario prompt leakage, and
+  multi-step plan continuation boundaries
 
 Validation used:
 

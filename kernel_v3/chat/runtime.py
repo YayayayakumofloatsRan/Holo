@@ -84,7 +84,7 @@ class ChatRuntime:
         elif decision.route == "summary":
             result = self._summary_result(state=before, turn=turn, decision=decision)
         elif decision.route == "continue_plan":
-            result = self._execute_plan_command(args=["approve"], state=before, turn=turn, decision=decision)
+            result = self._execute_plan_command(args=["run"], state=before, turn=turn, decision=decision)
         elif decision.route == "answer_pending_question":
             pending = PendingUserInput.from_dict(before.pending_question or {})
             self.journal.append(
@@ -370,7 +370,7 @@ class ChatRuntime:
         subcommand = args[0].lower() if args else "show"
         plan_record = _latest_task_plan_record(self.journal, state.thread_id, task_id=state.active_task_id)
         if plan_record is None:
-            result = {"error": "no_task_plan", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
+            result = {"error": "no_task_plan", "usage": "/plan [show]|approve [plan_id]|run [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
             command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
             return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No task plan for this thread.")
         plan = dict(plan_record.data)
@@ -484,6 +484,20 @@ class ChatRuntime:
             command = self._append_command(turn, name="/plan", args=args, status="ok", result=command_result)
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
             return _replace_command_result(result, command.result)
+        if subcommand in {"run", "continue"}:
+            if requested_plan_id != plan_id:
+                result = {"error": "plan_not_found", "requested_plan_id": requested_plan_id, "latest_plan_id": plan_id}
+                command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+                return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No matching task plan.")
+            return self._run_plan_command(
+                args=args,
+                state=state,
+                plan_record=plan_record,
+                plan=plan,
+                plan_id=plan_id,
+                turn=turn,
+                decision=decision,
+            )
         if subcommand in {"finalize", "finish"}:
             if requested_plan_id != plan_id:
                 result = {"error": "plan_not_found", "requested_plan_id": requested_plan_id, "latest_plan_id": plan_id}
@@ -497,9 +511,186 @@ class ChatRuntime:
                 turn=turn,
                 decision=decision,
             )
-        result = {"error": "invalid_plan_command", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
+        result = {"error": "invalid_plan_command", "usage": "/plan [show]|approve [plan_id]|run [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
         command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
+
+    def _run_plan_command(
+        self,
+        *,
+        args: list[str],
+        state: ThreadState,
+        plan_record: LedgerRecord,
+        plan: JsonObject,
+        plan_id: str,
+        turn: ChatTurn,
+        decision: TurnRoutingDecision,
+    ) -> ChatRuntimeResult:
+        executed_steps: list[JsonObject] = []
+        last_agent_result: AgentRuntimeResult | None = None
+        plan_ref = plan_record.record_id
+        for _ in range(_plan_run_limit(plan)):
+            step = _next_executable_plan_step(self.journal, plan, plan_ref=plan_ref)
+            if step is None:
+                break
+            agent_result = self.agent_runtime.run(
+                str(step.get("goal") or plan.get("goal") or ""),
+                thread_id=state.thread_id,
+                mode=_plan_step_mode(step),
+                planner_mode=self.planner_mode,
+                evaluator_mode=self.evaluator_mode,
+                synthesizer_mode=self.synthesizer_mode,
+                semantic_mode="fake",
+                citations_required=_plan_step_citations_required(step),
+            )
+            decision_record = self._append_plan_decision(
+                turn,
+                plan_record=plan_record,
+                plan=plan,
+                decision="approved",
+                reason="run_next_safe_step",
+                step=step,
+                agent_result=agent_result,
+            )
+            executed_steps.append(
+                {
+                    "decision_ref": decision_record.record_id,
+                    "executed_step_id": step.get("step_id"),
+                    "executed_node_id": step.get("node_id"),
+                    "spawned_task_id": agent_result.task_id,
+                    "spawned_run_id": agent_result.run_id,
+                    "spawned_status": agent_result.status,
+                }
+            )
+            last_agent_result = agent_result
+            if agent_result.status != "completed":
+                command = self._append_command(
+                    turn,
+                    name="/plan",
+                    args=args,
+                    status="ok",
+                    result={
+                        "plan_id": plan_id,
+                        "plan_task_id": plan_record.task_id,
+                        "decision": "run_paused",
+                        "reason": f"spawned_task_{agent_result.status}",
+                        "executed_steps": executed_steps,
+                        **_single_executed_step_fields(executed_steps),
+                    },
+                )
+                result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
+                return _replace_command_result(result, command.result)
+        finalizer = _ready_plan_finalizer_step(plan)
+        if finalizer is not None:
+            final_answer, final_record, failure, already_finalized = self._finalize_plan_result(
+                plan_record=plan_record,
+                plan=plan,
+                turn=turn,
+            )
+            if failure is None and final_answer is not None and final_record is not None:
+                command = self._append_command(
+                    turn,
+                    name="/plan",
+                    args=args,
+                    status="ok",
+                    result={
+                        "plan_id": plan_id,
+                        "plan_task_id": plan_record.task_id,
+                        "decision": "run_finalized",
+                        "executed_steps": executed_steps,
+                        **_single_executed_step_fields(executed_steps),
+                        "final_answer_ref": final_record.record_id,
+                        "citation_refs": list(final_answer.citation_refs),
+                        "already_finalized": already_finalized,
+                    },
+                )
+                return ChatRuntimeResult(
+                    status="completed",
+                    thread_id=turn.thread_id,
+                    turn_id=turn.turn_id,
+                    route=decision.route,
+                    task_id=plan_record.task_id,
+                    run_id=plan_record.run_id,
+                    answer=final_answer.answer,
+                    final_answer=final_answer.to_dict(),
+                    failure_report=None,
+                    pending_question=self.build_thread_state(turn.thread_id).pending_question,
+                    command_result=command.result,
+                    summary=None,
+                    trace_refs=[final_record.record_id, command.command_id],
+                )
+            command = self._append_command(
+                turn,
+                name="/plan",
+                args=args,
+                status="failed",
+                result={
+                    "plan_id": plan_id,
+                    "plan_task_id": plan_record.task_id,
+                    "decision": "run_failed",
+                    "executed_steps": executed_steps,
+                    **_single_executed_step_fields(executed_steps),
+                    **(failure or {"reason": "plan_finalization_failed"}),
+                },
+            )
+            return self._command_result(
+                turn=turn,
+                decision=decision,
+                status="failed",
+                command=command,
+                answer=str((failure or {}).get("reason") or "plan_finalization_failed"),
+            )
+        if _has_blocked_remaining_plan_steps(self.journal, plan, plan_ref=plan_ref):
+            decision_record = self._append_plan_decision(
+                turn,
+                plan_record=plan_record,
+                plan=plan,
+                decision="blocked",
+                reason="no_more_safe_executable_steps",
+                step=None,
+                agent_result=None,
+            )
+            result = {
+                "plan_id": plan_id,
+                "plan_task_id": plan_record.task_id,
+                "decision": "run_blocked",
+                "reason": "no_more_safe_executable_steps",
+                "decision_ref": decision_record.record_id,
+                "executed_steps": executed_steps,
+                **_single_executed_step_fields(executed_steps),
+            }
+            command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+            return self._command_result(
+                turn=turn,
+                decision=decision,
+                status="failed",
+                command=command,
+                answer="No more safe executable steps are available in the latest task plan.",
+            )
+        command = self._append_command(
+            turn,
+            name="/plan",
+            args=args,
+            status="ok",
+            result={
+                "plan_id": plan_id,
+                "plan_task_id": plan_record.task_id,
+                "decision": "run_completed",
+                "executed_steps": executed_steps,
+                **_single_executed_step_fields(executed_steps),
+                "reason": "no_remaining_executable_steps",
+            },
+        )
+        if last_agent_result is not None:
+            result = self._agent_result(turn=turn, decision=decision, agent_result=last_agent_result)
+            return _replace_command_result(result, command.result)
+        return self._command_result(
+            turn=turn,
+            decision=decision,
+            status="completed",
+            command=command,
+            answer="No remaining executable plan steps.",
+        )
 
     def _finalize_plan_command(
         self,
@@ -511,9 +702,12 @@ class ChatRuntime:
         turn: ChatTurn,
         decision: TurnRoutingDecision,
     ) -> ChatRuntimeResult:
-        existing = _latest_plan_final_answer_record(self.journal, plan_record=plan_record)
-        if existing is not None:
-            final_answer = FinalAnswer.from_dict(existing.data)
+        final_answer, final_record, failure, already_finalized = self._finalize_plan_result(
+            plan_record=plan_record,
+            plan=plan,
+            turn=turn,
+        )
+        if failure is None and final_answer is not None and final_record is not None:
             command = self._append_command(
                 turn,
                 name="/plan",
@@ -522,9 +716,9 @@ class ChatRuntime:
                 result={
                     "plan_id": plan_id,
                     "plan_task_id": plan_record.task_id,
-                    "final_answer_ref": existing.record_id,
+                    "final_answer_ref": final_record.record_id,
                     "citation_refs": list(final_answer.citation_refs),
-                    "already_finalized": True,
+                    "already_finalized": already_finalized,
                 },
             )
             return ChatRuntimeResult(
@@ -540,13 +734,31 @@ class ChatRuntime:
                 pending_question=self.build_thread_state(turn.thread_id).pending_question,
                 command_result=command.to_dict(),
                 summary=None,
-                trace_refs=[existing.record_id, command.command_id],
+                trace_refs=[final_record.record_id, command.command_id],
             )
+        result = {"plan_id": plan_id, "plan_task_id": plan_record.task_id, **(failure or {"reason": "plan_finalization_failed"})}
+        command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+        return self._command_result(
+            turn=turn,
+            decision=decision,
+            status="failed",
+            command=command,
+            answer=str(result["reason"]),
+        )
+
+    def _finalize_plan_result(
+        self,
+        *,
+        plan_record: LedgerRecord,
+        plan: JsonObject,
+        turn: ChatTurn,
+    ):
+        existing = _latest_plan_final_answer_record(self.journal, plan_record=plan_record)
+        if existing is not None:
+            return FinalAnswer.from_dict(existing.data), existing, None, True
         final_answer, failure = _build_plan_final_answer(self.journal, plan_record=plan_record, plan=plan)
         if failure is not None:
-            result = {"plan_id": plan_id, "plan_task_id": plan_record.task_id, **failure}
-            command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
-            return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=str(failure["reason"]))
+            return None, None, failure, False
         assert final_answer is not None
         record = self.journal.append(
             task_id=plan_record.task_id,
@@ -556,33 +768,7 @@ class ChatRuntime:
             data=final_answer.to_dict(),
             state_delta={"thread_id": turn.thread_id, "task_plan_final_answer": "ok"},
         )
-        command = self._append_command(
-            turn,
-            name="/plan",
-            args=args,
-            status="ok",
-            result={
-                "plan_id": plan_id,
-                "plan_task_id": plan_record.task_id,
-                "final_answer_ref": record.record_id,
-                "citation_refs": list(final_answer.citation_refs),
-            },
-        )
-        return ChatRuntimeResult(
-            status="completed",
-            thread_id=turn.thread_id,
-            turn_id=turn.turn_id,
-            route=decision.route,
-            task_id=plan_record.task_id,
-            run_id=plan_record.run_id,
-            answer=final_answer.answer,
-            final_answer=final_answer.to_dict(),
-            failure_report=None,
-            pending_question=self.build_thread_state(turn.thread_id).pending_question,
-            command_result=command.to_dict(),
-            summary=None,
-            trace_refs=[record.record_id, command.command_id],
-        )
+        return final_answer, record, None, False
 
     def _append_plan_decision(
         self,
@@ -1140,6 +1326,18 @@ def _step_progress_status(*, step: JsonObject, decision: LedgerRecord | None, ch
     return decision_value or "unknown"
 
 
+def _single_executed_step_fields(executed_steps: list[JsonObject]) -> JsonObject:
+    if len(executed_steps) != 1:
+        return {}
+    step = executed_steps[0]
+    return {
+        "executed_step_id": step.get("executed_step_id"),
+        "executed_node_id": step.get("executed_node_id"),
+        "spawned_task_id": step.get("spawned_task_id"),
+        "spawned_run_id": step.get("spawned_run_id"),
+    }
+
+
 def _next_executable_plan_step(journal: JournalStore, plan: JsonObject, *, plan_ref: str) -> JsonObject | None:
     steps_value = plan.get("steps")
     if not isinstance(steps_value, list):
@@ -1164,6 +1362,37 @@ def _next_executable_plan_step(journal: JournalStore, plan: JsonObject, *, plan_
             continue
         return step
     return None
+
+
+def _plan_run_limit(plan: JsonObject) -> int:
+    steps_value = plan.get("steps")
+    if not isinstance(steps_value, list):
+        return 1
+    return max(1, len([step for step in steps_value if isinstance(step, dict)]))
+
+
+def _has_blocked_remaining_plan_steps(journal: JournalStore, plan: JsonObject, *, plan_ref: str) -> bool:
+    steps_value = plan.get("steps")
+    if not isinstance(steps_value, list):
+        return False
+    executed_node_ids = _executed_plan_node_ids(journal, plan_ref)
+    finalizer = _ready_plan_finalizer_step(plan)
+    finalizer_node_id = str(finalizer.get("node_id") or "") if finalizer is not None else ""
+    for raw_step in steps_value:
+        if not isinstance(raw_step, dict):
+            continue
+        step = dict(raw_step)
+        node_id = str(step.get("node_id") or "")
+        if node_id and node_id in executed_node_ids:
+            continue
+        if node_id and node_id == finalizer_node_id:
+            continue
+        status = str(step.get("status") or "")
+        if status in {"blocked", "invalid"}:
+            return True
+        if not _safe_plan_capabilities(step):
+            return True
+    return False
 
 
 def _executed_plan_node_ids(journal: JournalStore, plan_ref: str) -> set[str]:
