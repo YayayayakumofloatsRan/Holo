@@ -35,7 +35,6 @@ def inspect_memory_references(
         },
     }
     samples = _sample_buckets(consistency)
-    journal_record_ids = {record.record_id for record in journal.records()} if journal is not None else set()
     for item in sorted(items, key=lambda candidate: (candidate.created_at_ms, candidate.memory_id)):
         if not item.provenance_refs:
             consistency["items_without_provenance"] = int(consistency["items_without_provenance"]) + 1
@@ -47,7 +46,7 @@ def inspect_memory_references(
         if journal is not None:
             consistency["provenance_refs_checked"] = int(consistency["provenance_refs_checked"]) + len(item.provenance_refs)
             for record_ref in item.provenance_refs:
-                if record_ref in journal_record_ids:
+                if _journal_has_record(journal, record_ref):
                     continue
                 consistency["missing_provenance_refs"] = int(consistency["missing_provenance_refs"]) + 1
                 _append_sample(
@@ -151,3 +150,10 @@ def _sample_bucket(samples: JsonObject, name: str) -> list[JsonObject]:
     bucket = []
     samples[name] = bucket
     return bucket
+
+
+def _journal_has_record(journal: "JournalStore", record_id: str) -> bool:
+    has_record = getattr(journal, "has_record", None)
+    if callable(has_record):
+        return bool(has_record(record_id))
+    return any(record.record_id == record_id for record in journal.records())

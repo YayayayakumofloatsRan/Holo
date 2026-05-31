@@ -121,6 +121,25 @@ def test_phase75_memory_inspect_checks_provenance_and_artifact_refs() -> None:
     assert "repair artifact store or delete affected memory" in broken.recommended_actions
 
 
+def test_phase75_memory_inspect_uses_journal_record_lookup_without_full_scan() -> None:
+    journal = _LookupOnlyJournal(existing_record_ids={"ledger-existing"})
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    store.commit(
+        _memory_item(
+            summary="lookup-backed preference",
+            thread_id="thread-memory-lookup",
+            provenance_refs=["ledger-existing", "ledger-missing"],
+        )
+    )
+
+    inspection = store.inspect(journal=journal)
+
+    assert journal.lookups == ["ledger-existing", "ledger-missing"]
+    assert inspection.provenance_consistency["provenance_refs_checked"] == 2
+    assert inspection.provenance_consistency["missing_provenance_refs"] == 1
+    assert inspection.provenance_consistency["samples"]["missing_provenance_refs"][0]["record_ref"] == "ledger-missing"
+
+
 def test_phase75_chat_memory_inspect_returns_auditable_summary() -> None:
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())
@@ -273,3 +292,16 @@ def _clock(start: int = 1_000):
         return current
 
     return tick
+
+
+class _LookupOnlyJournal:
+    def __init__(self, *, existing_record_ids: set[str]):
+        self.existing_record_ids = set(existing_record_ids)
+        self.lookups: list[str] = []
+
+    def has_record(self, record_id: str) -> bool:
+        self.lookups.append(record_id)
+        return record_id in self.existing_record_ids
+
+    def records(self):
+        raise AssertionError("memory inspection should use has_record instead of scanning journal.records()")

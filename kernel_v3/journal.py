@@ -104,6 +104,19 @@ class JournalStore:
             raise ValueError(f"unknown task_id: {task_id}")
         return records
 
+    def has_record(self, record_id: str) -> bool:
+        if self.index_path is not None:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM journal_index WHERE record_id = ? LIMIT 1",
+                    (record_id,),
+                ).fetchone()
+                return row is not None
+            finally:
+                conn.close()
+        return any(record.record_id == record_id for record in self._records)
+
     def index_records(
         self,
         *,
