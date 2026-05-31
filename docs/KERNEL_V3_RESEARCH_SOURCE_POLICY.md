@@ -129,3 +129,25 @@ Repeated observations of the same URI and payload hash are idempotent. The
 corpus records a safe re-observation event instead of raising a conflict or
 duplicating the document record. If the referenced artifact blob is missing,
 corpus-backed retrieval fails closed.
+
+The same persistent stores can be supplied to the main runtime:
+
+```bash
+holo-v3 \
+  --artifact-log .state/kernel_v3/artifacts.jsonl \
+  --corpus-log .state/kernel_v3/corpus.jsonl \
+  agent "AAPL 2024 revenue" --mode retrieval
+
+holo-v3 \
+  --artifact-log .state/kernel_v3/artifacts.jsonl \
+  --corpus-log .state/kernel_v3/corpus.jsonl \
+  resident run-once --worker-id research-worker
+```
+
+When a corpus store is configured, the default retrieval operator first queries
+`research_corpus`. If it finds a matching document, it fetches the body from the
+artifact store and stays offline. If it finds no match, it falls back to the
+bounded fake provider used by tests and indexes the resulting fetched document
+into the corpus. This is the resident-safe skeleton for future live providers:
+live web search can be added behind PolicyGate later without changing the
+agent loop or making unit tests depend on network access.

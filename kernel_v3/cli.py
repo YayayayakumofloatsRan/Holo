@@ -282,7 +282,9 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
+            research_corpus_store=_runtime_corpus_store(args),
         )
         payload = runtime.run(
             args.goal,
@@ -297,7 +299,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "answer":
-        runtime = _agent_runtime(journal, live_model=False, memory_store=_memory_store(args, create_default=False))
+        runtime = _agent_runtime(
+            journal,
+            live_model=False,
+            artifact_store=_runtime_artifact_store(args),
+            memory_store=_memory_store(args, create_default=False),
+            research_corpus_store=_runtime_corpus_store(args),
+        )
         payload = runtime.run(
             args.goal,
             mode="retrieval" if args.citations_required else "auto",
@@ -312,7 +320,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         runtime = _chat_runtime(
             journal,
+            artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
+            research_corpus_store=_runtime_corpus_store(args),
             live_model=_agent_uses_live_model(args),
             model=args.model,
             profile=args.profile,
@@ -600,7 +610,9 @@ def _agent_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    artifact_store: ArtifactStore | None = None,
     memory_store: MemoryStore | None = None,
+    research_corpus_store: ResearchCorpusStore | None = None,
 ) -> AgentRuntime:
     fabric = (
         _live_processor_fabric(
@@ -616,16 +628,20 @@ def _agent_runtime(
     )
     return AgentRuntime(
         journal=journal,
+        artifact_store=artifact_store,
         processor_fabric=fabric,
         workspace_root=Path.cwd(),
         memory_store=memory_store,
+        research_corpus_store=research_corpus_store,
     )
 
 
 def _chat_runtime(
     journal: JournalStore,
     *,
+    artifact_store: ArtifactStore | None = None,
     memory_store: MemoryStore | None = None,
+    research_corpus_store: ResearchCorpusStore | None = None,
     live_model: bool = False,
     model: str | None = None,
     profile: str = "balanced",
@@ -646,7 +662,9 @@ def _chat_runtime(
             profile=profile,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
+            artifact_store=artifact_store,
             memory_store=memory_store,
+            research_corpus_store=research_corpus_store,
         ),
         memory_store=memory_store,
         planner_mode=planner_mode,
@@ -667,6 +685,17 @@ def _memory_store(args, *, create_default: bool) -> MemoryStore | None:
     return MemoryStore(log_path, index_path=index_path)
 
 
+def _runtime_artifact_store(args) -> ArtifactStore | None:
+    return _artifact_store(
+        args,
+        create_default=bool(getattr(args, "artifact_log", None)) or _corpus_configured(args),
+    )
+
+
+def _runtime_corpus_store(args) -> ResearchCorpusStore | None:
+    return _corpus_store(args, create_default=_corpus_configured(args))
+
+
 def _artifact_store(args, *, create_default: bool) -> ArtifactStore | None:
     artifact_log = getattr(args, "artifact_log", None)
     if artifact_log is None and not create_default:
@@ -682,6 +711,10 @@ def _corpus_store(args, *, create_default: bool) -> ResearchCorpusStore | None:
     log_path = Path(corpus_log or "kernel_v3/.holo-v3-corpus.jsonl")
     index_path = Path(corpus_index) if corpus_index is not None else log_path.with_suffix(".sqlite")
     return ResearchCorpusStore(log_path=log_path, index_path=index_path)
+
+
+def _corpus_configured(args) -> bool:
+    return bool(getattr(args, "corpus_log", None) or getattr(args, "corpus_index", None))
 
 
 def _corpus_command(args) -> dict[str, object]:
@@ -830,7 +863,9 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             queue=queue,
             chat_runtime=_chat_runtime(
                 journal,
+                artifact_store=_runtime_artifact_store(args),
                 memory_store=memory_store,
+                research_corpus_store=_runtime_corpus_store(args),
                 live_model=_agent_uses_live_model(args),
                 model=getattr(args, "model", None),
                 profile=getattr(args, "profile", "balanced"),

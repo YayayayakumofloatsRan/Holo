@@ -25,7 +25,17 @@ from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
-from kernel_v3.retrieval import FakeFetchProvider, RetrievalOperator, SearchSource, register_retrieval_tool
+from kernel_v3.research import ResearchCorpusStore
+from kernel_v3.retrieval import (
+    CorpusFetchProvider,
+    CorpusSearchProvider,
+    FakeFetchProvider,
+    FallbackSearchProvider,
+    RetrievalOperator,
+    RoutingFetchProvider,
+    SearchSource,
+    register_retrieval_tool,
+)
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
 from kernel_v3.session import TaskState
 from kernel_v3.tools import ToolManifest, ToolRegistry
@@ -43,6 +53,7 @@ class AgentRuntime:
         workspace_files: dict[str, str] | None = None,
         workloop_config: WorkloopConfig | None = None,
         memory_store: MemoryStore | None = None,
+        research_corpus_store: ResearchCorpusStore | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.artifact_store = artifact_store or ArtifactStore.in_memory()
@@ -53,6 +64,7 @@ class AgentRuntime:
         self.workloop_config = workloop_config or WorkloopConfig()
         self.memory_store = memory_store
         self.memory_pipeline = MemoryPipeline(store=memory_store, journal=self.journal) if memory_store is not None else None
+        self.research_corpus_store = research_corpus_store
 
     def run(
         self,
@@ -228,7 +240,11 @@ class AgentRuntime:
             registry = ToolRegistry.with_builtin_respond()
             register_retrieval_tool(
                 registry,
-                operator=self.retrieval_operator or _default_retrieval_operator(goal),
+                operator=self.retrieval_operator or _default_retrieval_operator(
+                    goal,
+                    artifact_store=self.artifact_store,
+                    corpus_store=self.research_corpus_store,
+                ),
                 journal=self.journal,
                 artifact_store=self.artifact_store,
             )
@@ -1023,7 +1039,12 @@ def _next_run_id(journal: JournalStore, task_id: str) -> str:
     return f"run-{max(run_ids, default=0) + 1}"
 
 
-def _default_retrieval_operator(goal: str) -> RetrievalOperator:
+def _default_retrieval_operator(
+    goal: str,
+    *,
+    artifact_store: ArtifactStore,
+    corpus_store: ResearchCorpusStore | None,
+) -> RetrievalOperator:
     source = SearchSource(
         source_id="src-agent-default",
         uri="https://example.test/holo-v3-agent",
@@ -1032,9 +1053,24 @@ def _default_retrieval_operator(goal: str) -> RetrievalOperator:
         provider="fake",
     )
     body = f"{goal} evidence from bounded fake retrieval for Holo Kernel v3 agent runtime."
+    fake_fetch = FakeFetchProvider({source.uri: body})
+    if corpus_store is not None:
+        return RetrievalOperator(
+            search_provider=FallbackSearchProvider(
+                [
+                    CorpusSearchProvider(corpus_store),
+                    _AnyQuerySearchProvider(source),
+                ]
+            ),
+            fetch_provider=RoutingFetchProvider(
+                routes={"research_corpus": CorpusFetchProvider(artifact_store)},
+                fallback=fake_fetch,
+            ),
+            corpus_store=corpus_store,
+        )
     return RetrievalOperator(
         search_provider=_AnyQuerySearchProvider(source),
-        fetch_provider=FakeFetchProvider({source.uri: body}),
+        fetch_provider=fake_fetch,
     )
 
 
