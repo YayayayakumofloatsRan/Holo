@@ -23,6 +23,7 @@ class PolicyGate:
         side_effect_class = manifest.side_effect_class if manifest is not None else action.side_effect_class
         required = set(manifest.permissions_required if manifest is not None else [])
         tool_name = manifest.name if manifest is not None else action.name
+        unregistered_tool = action.kind == "tool" and manifest is None
         missing_permissions = sorted(required - self._base_permissions(side_effect_class) - self.allowed_permissions)
         blocked_destructive = self.permission == "read_only" and side_effect_class in {
             "destructive",
@@ -31,8 +32,10 @@ class PolicyGate:
             "network",
         }
         disabled = manifest is not None and not manifest.enabled
-        allowed = not blocked_destructive and not missing_permissions and not disabled
-        if blocked_destructive:
+        allowed = not unregistered_tool and not blocked_destructive and not missing_permissions and not disabled
+        if unregistered_tool:
+            reason = "unregistered_tool"
+        elif blocked_destructive:
             reason = "blocked_side_effect_in_read_only_mode"
         elif missing_permissions:
             reason = "missing_permissions:" + ",".join(missing_permissions)

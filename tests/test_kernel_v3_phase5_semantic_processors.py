@@ -195,9 +195,13 @@ def test_phase5_unregistered_model_tool_action_is_blocked_not_executed():
 
     assert result.status == "blocked"
     assert registry.executed_actions == []
+    policy = journal.records(task_id=result.task_id, kind="policy_decision")[0]
+    assert policy.data["allowed"] is False
+    assert policy.data["reason"] == "unregistered_tool"
+    assert policy.data["constraints"]["tool_name"] == "unknown.operator"
     observation = journal.records(task_id=result.task_id, kind="observation")[0]
     assert observation.data["status"] == "blocked"
-    assert observation.data["content"] == {"reason": "unregistered_tool", "tool": "unknown.operator"}
+    assert observation.data["content"] == {"reason": "unregistered_tool"}
 
 
 def test_phase5_model_evaluator_continue_drives_another_loop_step():
