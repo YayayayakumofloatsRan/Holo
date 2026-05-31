@@ -131,6 +131,25 @@ They remain visible in provider capabilities and diagnostics, and inspection
 reports an error when every concrete fallback provider is disabled. This keeps
 future live search providers opt-in even if they are present in the process.
 
+## Optional Live HTTP Fetch Surface
+
+`HttpFetchProvider` is the first live-network retrieval provider surface. It is
+not part of the default CLI or unit-test path:
+
+- it reports `live_network=True` and `default_enabled=False`
+- it fails closed unless the host explicitly enables it and configures either an
+  allowed-host list or `allow_all_hosts=True`
+- it rejects non-allowed URL schemes, URLs without hosts, and URLs with
+  embedded credentials
+- it enforces timeout and maximum body-byte bounds before returning a body
+- diagnostics contain status, byte counts, URL scheme, and host hash only; raw
+  URLs and response bodies are not embedded in diagnostics
+- tests use an injected transport and never perform network access
+
+When wired into a `RetrievalOperator`, the operator reports
+`network_access=True`, so the existing `PolicyGate` `network:fetch` boundary is
+still the execution gate for agent/tool runs.
+
 Provider inspection is also available before a run starts:
 
 ```bash
