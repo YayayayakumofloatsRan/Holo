@@ -1,9 +1,9 @@
 # Kernel v3 Research Source Policy
 
-This note records the first kernel-v3 infrastructure slice for domain-directed
-research. It does not add live web retrieval. It adds a host-owned source policy
-that future live search/fetch providers must pass through before their evidence
-can support a final answer.
+This note records the kernel-v3 infrastructure slice for domain-directed
+research. It does not enable live web retrieval by default. It adds a
+host-owned source policy that optional live search/fetch providers must pass
+through before their evidence can support a final answer.
 
 ## Boundary
 
@@ -149,6 +149,37 @@ not part of the default CLI or unit-test path:
 When wired into a `RetrievalOperator`, the operator reports
 `network_access=True`, so the existing `PolicyGate` `network:fetch` boundary is
 still the execution gate for agent/tool runs.
+
+## Optional Live JSON HTTP Search Surface
+
+`JsonHttpSearchProvider` is the matching live-network search surface for
+HTTP/JSON search APIs. It is infrastructure only; it is not part of the default
+CLI or unit-test path.
+
+- it reports `live_network=True` and `default_enabled=False`
+- it calls no network path unless the host constructs it and the fallback chain
+  considers it enabled
+- it fails closed unless the endpoint host is explicitly allowed or
+  `allow_all_hosts=True`
+- it rejects non-allowed URL schemes, endpoints without hosts, and endpoints
+  with embedded credentials
+- it supports env-only API keys through a configured header; API key values and
+  env var names are not copied into provider diagnostics
+- it accepts a configurable JSON `results_path`, defaults to `["results"]`,
+  and normalizes common result fields such as `url`, `uri`, `link`, `title`,
+  `name`, `snippet`, `description`, and `summary`
+- it drops results without a usable URI and bounds query/result text before
+  returning `SearchSource` objects
+- source metadata contains a result payload hash, not the raw JSON result body
+- diagnostics contain status, counts, URL scheme, host hash, query hash, and
+  plan id only; raw endpoint URLs, raw queries, API keys, and response bodies
+  are not embedded in diagnostics
+- tests use an injected transport and never perform network access
+
+The provider is intentionally generic. A finance fundamentals deployment can
+wrap a regulator, exchange, vendor, or local gateway endpoint behind this
+surface while still letting the retrieval operator apply the same source
+authority policy, corpus indexing, artifact storage, and citation rules.
 
 Provider inspection is also available before a run starts:
 

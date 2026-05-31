@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -8,9 +10,15 @@ from dataclasses import dataclass
 from typing import Callable
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.retrieval.contracts import SearchSource
+from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 from kernel_v3.retrieval.providers import FetchResponse
 
+
+SEARCH_QUERY_TEXT_LIMIT = 1_000
+SEARCH_RESULT_URL_LIMIT = 2_048
+SEARCH_RESULT_TITLE_LIMIT = 240
+SEARCH_RESULT_SNIPPET_LIMIT = 800
+SEARCH_RESULT_ID_LIMIT = 160
 
 HttpTransport = Callable[[str, dict[str, str], int, int], "HttpTransportResponse"]
 
@@ -44,7 +52,7 @@ class HttpFetchProvider:
         self.default_enabled = bool(enabled)
         self.allowed_hosts = _normalize_hosts(allowed_hosts or [])
         self.allow_all_hosts = bool(allow_all_hosts)
-        self.allowed_schemes = tuple(allowed_schemes or ["https"])
+        self.allowed_schemes = _normalize_schemes(allowed_schemes or ["https"])
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.max_bytes = max(1, int(max_bytes))
         self.user_agent = user_agent
@@ -114,6 +122,141 @@ class HttpFetchProvider:
         )
 
 
+class JsonHttpSearchProvider:
+    provider_id = "live_json_http_search"
+    live_network = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+
+    def __init__(
+        self,
+        *,
+        endpoint_url: str,
+        enabled: bool = False,
+        allowed_hosts: list[str] | None = None,
+        allow_all_hosts: bool = False,
+        allowed_schemes: list[str] | None = None,
+        query_param: str = "q",
+        results_path: list[str] | None = None,
+        api_key_env: str | None = None,
+        api_key_header: str | None = None,
+        api_key_prefix: str = "",
+        timeout_seconds: int = 20,
+        max_bytes: int = 1_000_000,
+        user_agent: str = "holo-kernel-v3/1.0",
+        transport: HttpTransport | None = None,
+    ) -> None:
+        self.endpoint_url = endpoint_url
+        self.default_enabled = bool(enabled)
+        self.allowed_hosts = _normalize_hosts(allowed_hosts or [])
+        self.allow_all_hosts = bool(allow_all_hosts)
+        self.allowed_schemes = _normalize_schemes(allowed_schemes or ["https"])
+        self.query_param = query_param or "q"
+        self.results_path = list(results_path or ["results"])
+        self.api_key_env = api_key_env
+        self.api_key_header = api_key_header
+        self.api_key_prefix = api_key_prefix
+        self.timeout_seconds = max(1, int(timeout_seconds))
+        self.max_bytes = max(1, int(max_bytes))
+        self.user_agent = user_agent
+        self.transport = transport or _urllib_transport
+        self._last_search_diagnostics: JsonObject = {}
+        self.capability_diagnostics = {
+            "source": "json_http_search",
+            "enabled": self.default_enabled,
+            "allow_all_hosts": self.allow_all_hosts,
+            "allowed_host_count": len(self.allowed_hosts),
+            "allowed_schemes": list(self.allowed_schemes),
+            "timeout_seconds": self.timeout_seconds,
+            "max_bytes": self.max_bytes,
+            "query_param": self.query_param,
+            "results_path": list(self.results_path),
+            "api_key_env_configured": bool(self.api_key_env),
+            "api_key_header_configured": bool(self.api_key_header),
+            **_safe_url_diagnostics(self.endpoint_url),
+        }
+
+    def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
+        url = _url_with_query(self.endpoint_url, self.query_param, query, max_results=goal.max_sources)
+        validation = _validate_url(
+            url,
+            allowed_schemes=self.allowed_schemes,
+            allowed_hosts=self.allowed_hosts,
+            allow_all_hosts=self.allow_all_hosts,
+        )
+        if validation.get("status") != "ok":
+            self._last_search_diagnostics = {"status": "failed", **validation, "query_hash": _text_hash(query)}
+            return []
+        headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
+        api_key = _api_key_from_env(self.api_key_env)
+        if self.api_key_header:
+            if not api_key:
+                self._last_search_diagnostics = {
+                    "status": "failed",
+                    "reason": "missing_api_key_env",
+                    "api_key_env_configured": bool(self.api_key_env),
+                    **_safe_url_diagnostics(url),
+                    "query_hash": _text_hash(query),
+                }
+                return []
+            headers[self.api_key_header] = f"{self.api_key_prefix}{api_key}"
+        try:
+            response = self.transport(url, headers, self.timeout_seconds, self.max_bytes)
+        except Exception as exc:  # pragma: no cover - urllib transport has concrete containment below.
+            self._last_search_diagnostics = {
+                "status": "failed",
+                "reason": "http_transport_error",
+                "error": type(exc).__name__,
+                **_safe_url_diagnostics(url),
+                "query_hash": _text_hash(query),
+            }
+            return []
+        if response.status_code < 200 or response.status_code >= 300:
+            self._last_search_diagnostics = {
+                "status": "failed",
+                "reason": "http_status_error",
+                "status_code": response.status_code,
+                **_safe_url_diagnostics(url),
+                "query_hash": _text_hash(query),
+            }
+            return []
+        if len(response.body) > self.max_bytes:
+            self._last_search_diagnostics = {
+                "status": "failed",
+                "reason": "http_body_too_large",
+                "max_bytes": self.max_bytes,
+                **_safe_url_diagnostics(url),
+                "query_hash": _text_hash(query),
+            }
+            return []
+        try:
+            payload = json.loads(response.body.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            self._last_search_diagnostics = {
+                "status": "failed",
+                "reason": "malformed_json_response",
+                **_safe_url_diagnostics(url),
+                "query_hash": _text_hash(query),
+            }
+            return []
+        results = _extract_results(payload, path=self.results_path)
+        sources = _sources_from_json_results(results, provider_id=self.provider_id, max_sources=goal.max_sources)
+        self._last_search_diagnostics = {
+            "status": "ok",
+            "returned_count": len(sources),
+            "result_count": len(results),
+            "status_code": response.status_code,
+            "byte_count": len(response.body),
+            **_safe_url_diagnostics(url),
+            "query_hash": _text_hash(query),
+            "plan_id": plan.plan_id,
+        }
+        return sources
+
+    def search_diagnostics(self) -> JsonObject:
+        return dict(self._last_search_diagnostics)
+
+
 def _urllib_transport(url: str, headers: dict[str, str], timeout_seconds: int, max_bytes: int) -> HttpTransportResponse:
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
@@ -157,6 +300,10 @@ def _normalize_hosts(hosts: list[str]) -> set[str]:
     return {host.strip().lower() for host in hosts if host.strip()}
 
 
+def _normalize_schemes(schemes: list[str]) -> tuple[str, ...]:
+    return tuple(scheme.strip().lower() for scheme in schemes if scheme.strip())
+
+
 def _safe_url_diagnostics(uri: str) -> JsonObject:
     parsed = urllib.parse.urlparse(uri)
     host = parsed.hostname or ""
@@ -164,3 +311,88 @@ def _safe_url_diagnostics(uri: str) -> JsonObject:
         "url_scheme": parsed.scheme,
         "host_hash": hashlib.sha256(host.lower().encode("utf-8")).hexdigest() if host else "",
     }
+
+
+def _url_with_query(endpoint_url: str, query_param: str, query: str, *, max_results: int) -> str:
+    parsed = urllib.parse.urlparse(endpoint_url)
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    pairs = [(key, value) for key, value in pairs if key not in {query_param, "limit", "count", "max_results"}]
+    pairs.append((query_param, _bounded_text(query, SEARCH_QUERY_TEXT_LIMIT)))
+    pairs.append(("max_results", str(max(0, int(max_results)))))
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(pairs)))
+
+
+def _api_key_from_env(api_key_env: str | None) -> str | None:
+    if not api_key_env:
+        return None
+    value = os.environ.get(api_key_env)
+    return value if isinstance(value, str) and value else None
+
+
+def _extract_results(payload: object, *, path: list[str]) -> list[JsonObject]:
+    current = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return []
+        current = current.get(key)
+    if not isinstance(current, list):
+        return []
+    return [dict(item) for item in current if isinstance(item, dict)]
+
+
+def _sources_from_json_results(results: list[JsonObject], *, provider_id: str, max_sources: int) -> list[SearchSource]:
+    sources: list[SearchSource] = []
+    for result in results:
+        source = _source_from_json_result(result, index=len(sources) + 1, provider_id=provider_id)
+        if source is None:
+            continue
+        sources.append(source)
+        if len(sources) >= max(0, int(max_sources)):
+            break
+    return sources
+
+
+def _source_from_json_result(result: JsonObject, *, index: int, provider_id: str) -> SearchSource | None:
+    uri = _bounded_text(str(result.get("url") or result.get("uri") or result.get("link") or ""), SEARCH_RESULT_URL_LIMIT)
+    if not uri:
+        return None
+    title = _bounded_text(str(result.get("title") or result.get("name") or uri), SEARCH_RESULT_TITLE_LIMIT)
+    snippet = _bounded_text(
+        str(result.get("snippet") or result.get("description") or result.get("summary") or ""),
+        SEARCH_RESULT_SNIPPET_LIMIT,
+    )
+    source_id = _bounded_text(
+        str(result.get("source_id") or f"{provider_id}-{_text_hash(uri)[:12]}-{index}"),
+        SEARCH_RESULT_ID_LIMIT,
+    )
+    metadata = {
+        "rank": index,
+        "result_payload_hash": _json_hash(result),
+    }
+    source_family = result.get("source_family")
+    if isinstance(source_family, str) and source_family:
+        metadata["source_family"] = _bounded_text(source_family, SEARCH_RESULT_TITLE_LIMIT)
+    return SearchSource(
+        source_id=source_id,
+        uri=uri,
+        title=title,
+        snippet=snippet,
+        provider=provider_id,
+        metadata=metadata,
+    )
+
+
+def _text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _json_hash(payload: JsonObject) -> str:
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _bounded_text(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
