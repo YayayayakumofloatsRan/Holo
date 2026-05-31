@@ -146,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run_once.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    resident_run_once.add_argument("--tick-schedules", action="store_true")
+    resident_run_once.add_argument("--schedule-tick-limit", type=int, default=20)
     resident_run = resident_sub.add_parser("run")
     resident_run.add_argument("--worker-id", default="resident-worker-1")
     resident_run.add_argument("--max-iterations", type=int, default=10)
@@ -161,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    resident_run.add_argument("--tick-schedules", action="store_true")
+    resident_run.add_argument("--schedule-tick-limit", type=int, default=20)
     resident_inspect = resident_sub.add_parser("inspect")
     resident_inspect.add_argument("--sample-limit", type=int, default=5)
     resident_sub.add_parser("status")
@@ -948,6 +952,8 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             max_attempts=args.max_attempts,
             retry_backoff_ms=args.retry_backoff_ms,
             journal=journal,
+            scheduler=ResidentScheduler(queue=queue, journal=journal) if args.tick_schedules else None,
+            schedule_tick_limit=args.schedule_tick_limit,
         )
         if command == "run":
             return runtime.run_loop(max_iterations=args.max_iterations).to_dict()

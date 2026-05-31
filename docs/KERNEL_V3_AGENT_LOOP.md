@@ -217,7 +217,10 @@ messages with deterministic message ids. It does not route chat turns, execute
 tools, call providers, or synthesize answers. Once a scheduled item enters the
 inbox, `ResidentRuntime` handles it through the same `ChatRuntime` and
 `AgentRuntime` path as any other message. The `resident schedule-*` commands
-are local operator surfaces, not live transport integrations.
+are local operator surfaces, not live transport integrations. Long-running
+workers can opt into `resident run --tick-schedules` or `resident run-once
+--tick-schedules`; without that explicit flag, run and run-once preserve normal
+queue-only behavior.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that

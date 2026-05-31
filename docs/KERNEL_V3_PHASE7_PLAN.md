@@ -355,6 +355,8 @@ Rules:
   chat turns
 - worker execution still flows through `ResidentRuntime -> ChatRuntime ->
   AgentRuntime`
+- resident workers only tick schedules when constructed with a scheduler or
+  started through CLI with `--tick-schedules`
 - every schedule add, due enqueue, disable, and tick is journaled
 - enqueue is idempotent by deterministic scheduled message id
 - repeated schedules require a positive interval and bounded `max_runs` unless
@@ -368,8 +370,9 @@ Implementation note:
 - A crash after enqueue but before schedule advancement is safe to retry because
   the scheduled message id is deterministic. `ResidentQueue.enqueue()` returns
   the existing inbox message on identical replay instead of duplicating work.
-- `ResidentRuntime` is unchanged; scheduled work is indistinguishable from
-  other inbox work once it has been enqueued.
+- `ResidentRuntime` can optionally tick schedules before claiming inbox work.
+  Scheduled work is indistinguishable from other inbox work once it has been
+  enqueued.
 - Implemented tests live in
   `tests/test_kernel_v3_phase76_resident_scheduler.py`.
 

@@ -5,6 +5,7 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.resident.contracts import ResidentLoopResult, ResidentRunResult
 from kernel_v3.resident.queue import ResidentQueue
+from kernel_v3.resident.scheduler import ResidentScheduler
 
 
 class ResidentRuntime:
@@ -18,6 +19,8 @@ class ResidentRuntime:
         max_attempts: int = 3,
         retry_backoff_ms: int = 1_000,
         journal: JournalStore | None = None,
+        scheduler: ResidentScheduler | None = None,
+        schedule_tick_limit: int = 20,
     ) -> None:
         self.queue = queue
         self.chat_runtime = chat_runtime
@@ -26,6 +29,8 @@ class ResidentRuntime:
         self.max_attempts = max_attempts
         self.retry_backoff_ms = retry_backoff_ms
         self.journal = journal
+        self.scheduler = scheduler
+        self.schedule_tick_limit = schedule_tick_limit
 
     def run_loop(self, *, max_iterations: int = 10, stop_on_idle: bool = True) -> ResidentLoopResult:
         results: list[ResidentRunResult] = []
@@ -91,11 +96,12 @@ class ResidentRuntime:
         return loop
 
     def run_once(self) -> ResidentRunResult:
+        schedule_tick = self._tick_schedules()
         lease = self.queue.acquire_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
         if lease is None:
             self._journal_event(
                 "resident_worker_blocked",
-                {"worker_id": self.worker_id, "reason": "lease_unavailable"},
+                _with_schedule_tick({"worker_id": self.worker_id, "reason": "lease_unavailable"}, schedule_tick),
                 state_delta={"resident_worker_status": "blocked"},
             )
             return ResidentRunResult(
@@ -104,7 +110,7 @@ class ResidentRuntime:
                 message_id=None,
                 outbox_id=None,
                 reason="lease_unavailable",
-                payload={},
+                payload=_with_schedule_tick({}, schedule_tick),
             )
         self._journal_event(
             "resident_lease_acquired",
@@ -130,7 +136,7 @@ class ResidentRuntime:
                 message_id=None,
                 outbox_id=None,
                 reason="no_pending_inbox",
-                payload={"lease": lease.to_dict()},
+                payload=_with_schedule_tick({"lease": lease.to_dict()}, schedule_tick),
             )
         self._journal_event(
             "resident_inbox_claimed",
@@ -168,7 +174,10 @@ class ResidentRuntime:
                         message_id=message.message_id,
                         outbox_id=existing_outbox.outbox_id,
                         reason="message_ownership_lost_before_recovered_complete",
-                        payload={"outbox_status": existing_outbox.status, "recovered_existing_outbox": True},
+                        payload=_with_schedule_tick(
+                            {"outbox_status": existing_outbox.status, "recovered_existing_outbox": True},
+                            schedule_tick,
+                        ),
                     )
                 self._journal_event(
                     "resident_inbox_completed",
@@ -187,11 +196,14 @@ class ResidentRuntime:
                     message_id=message.message_id,
                     outbox_id=existing_outbox.outbox_id,
                     reason=None,
-                    payload={
-                        "outbox_status": existing_outbox.status,
-                        "recovered_existing_outbox": True,
-                        "chat_status": _chat_status_from_outbox(existing_outbox),
-                    },
+                    payload=_with_schedule_tick(
+                        {
+                            "outbox_status": existing_outbox.status,
+                            "recovered_existing_outbox": True,
+                            "chat_status": _chat_status_from_outbox(existing_outbox),
+                        },
+                        schedule_tick,
+                    ),
                 )
             chat_result = self.chat_runtime.receive(message.text, thread_id=message.thread_id)
             renewed = self.queue.renew_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
@@ -207,7 +219,7 @@ class ResidentRuntime:
                     message_id=message.message_id,
                     outbox_id=None,
                     reason="lease_lost_before_outbox",
-                    payload={},
+                    payload=_with_schedule_tick({}, schedule_tick),
                 )
             outbox = self.queue.append_outbox(
                 in_reply_to=message.message_id,
@@ -263,7 +275,10 @@ class ResidentRuntime:
                     message_id=message.message_id,
                     outbox_id=outbox.outbox_id,
                     reason="message_ownership_lost_before_complete",
-                    payload={"chat_status": chat_result.status, "outbox_status": outbox.status},
+                    payload=_with_schedule_tick(
+                        {"chat_status": chat_result.status, "outbox_status": outbox.status},
+                        schedule_tick,
+                    ),
                 )
             self._journal_event(
                 "resident_inbox_completed",
@@ -277,15 +292,18 @@ class ResidentRuntime:
                 message_id=message.message_id,
                 outbox_id=outbox.outbox_id,
                 reason=None,
-                payload={
-                    "chat_status": chat_result.status,
-                    "chat_route": chat_result.route,
-                    "outbox_status": outbox.status,
-                    "answered_pending_outbox_ids": [item.outbox_id for item in answered_pending],
-                    "command_result": chat_result.command_result,
-                    "pending_question": chat_result.pending_question,
-                    "final_answer_ref": _final_answer_ref(chat_result),
-                },
+                payload=_with_schedule_tick(
+                    {
+                        "chat_status": chat_result.status,
+                        "chat_route": chat_result.route,
+                        "outbox_status": outbox.status,
+                        "answered_pending_outbox_ids": [item.outbox_id for item in answered_pending],
+                        "command_result": chat_result.command_result,
+                        "pending_question": chat_result.pending_question,
+                        "final_answer_ref": _final_answer_ref(chat_result),
+                    },
+                    schedule_tick,
+                ),
             )
         except Exception as exc:  # pragma: no cover - defensive worker containment
             recorded = self.queue.fail(
@@ -313,7 +331,10 @@ class ResidentRuntime:
                 message_id=message.message_id,
                 outbox_id=None,
                 reason=type(exc).__name__,
-                payload={"error": type(exc).__name__, "failure_recorded": recorded},
+                payload=_with_schedule_tick(
+                    {"error": type(exc).__name__, "failure_recorded": recorded},
+                    schedule_tick,
+                ),
             )
         finally:
             self.queue.release_lease(worker_id=self.worker_id)
@@ -322,6 +343,20 @@ class ResidentRuntime:
                 {"worker_id": self.worker_id, "lease_id": lease.lease_id, "message_id": message.message_id},
                 state_delta={"resident_lease_status": "released"},
             )
+
+    def _tick_schedules(self) -> JsonObject | None:
+        if self.scheduler is None:
+            return None
+        try:
+            return self.scheduler.tick(limit=self.schedule_tick_limit).to_dict()
+        except Exception as exc:  # pragma: no cover - defensive scheduler containment
+            payload = {"status": "failed", "reason": type(exc).__name__, "worker_id": self.worker_id}
+            self._journal_event(
+                "resident_schedule_tick_failed",
+                payload,
+                state_delta={"resident_schedule_tick_status": "failed"},
+            )
+            return payload
 
     def _journal_event(
         self,
@@ -387,3 +422,9 @@ def _answered_task_id(chat_result) -> str | None:
             if isinstance(plan_task_id, str) and plan_task_id:
                 return plan_task_id
     return chat_result.task_id
+
+
+def _with_schedule_tick(payload: JsonObject, schedule_tick: JsonObject | None) -> JsonObject:
+    if schedule_tick is None:
+        return payload
+    return {**payload, "schedule_tick": schedule_tick}

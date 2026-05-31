@@ -75,6 +75,38 @@ def test_phase76_recurring_schedule_advances_and_worker_consumes_inbox(tmp_path:
     ]
 
 
+def test_phase76_worker_can_tick_schedules_before_claiming_inbox(tmp_path: Path):
+    clock = _clock(start=30_000)
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
+    journal = JournalStore.in_memory()
+    scheduler = ResidentScheduler(queue=queue, clock_ms=clock, journal=journal)
+    scheduler.add_schedule(
+        schedule_id="sched-worker",
+        thread_id="resident-worker-scheduled",
+        text="worker should tick this schedule",
+        due_in_ms=0,
+    )
+    runtime = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-with-scheduler",
+        journal=journal,
+        scheduler=scheduler,
+    )
+
+    result = runtime.run_once()
+
+    assert result.status == "processed"
+    assert result.payload["schedule_tick"]["enqueued_count"] == 1
+    assert queue.inbox_messages()[0].status == "completed"
+    assert queue.outbox_messages()[0].in_reply_to == "scheduled-sched-worker-30001"
+    assert [record.kind for record in journal.records() if record.kind.startswith("resident_schedule")] == [
+        "resident_schedule_added",
+        "resident_schedule_enqueued",
+        "resident_schedule_tick",
+    ]
+
+
 def test_phase76_disabled_schedule_does_not_enqueue(tmp_path: Path):
     clock = _clock(start=1_000)
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
@@ -149,6 +181,51 @@ def test_phase76_cli_schedule_tick_then_run_worker(tmp_path: Path, capsys):
     assert cli.main([*base, "resident", "schedule-list", "--include-inactive"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["schedules"][0]["status"] == "completed"
+
+
+def test_phase76_cli_run_can_tick_schedules_before_worker_loop(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    assert (
+        cli.main(
+            [
+                *base,
+                "resident",
+                "schedule-add",
+                "scheduled cli run work",
+                "--thread",
+                "resident-cli-run-schedule",
+                "--schedule-id",
+                "sched-cli-run",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        cli.main(
+            [
+                *base,
+                "resident",
+                "run",
+                "--worker-id",
+                "worker-cli-run-schedule",
+                "--max-iterations",
+                "2",
+                "--tick-schedules",
+            ]
+        )
+        == 0
+    )
+    loop = json.loads(capsys.readouterr().out)
+
+    assert loop["processed_count"] == 1
+    assert loop["results"][0]["payload"]["schedule_tick"]["enqueued_count"] == 1
+    assert loop["queue_status"]["inbox_counts"]["completed"] == 1
 
 
 def _clock(start: int = 1_000):
