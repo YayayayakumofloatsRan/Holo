@@ -167,7 +167,10 @@ class AgentRuntime:
                 memory_store=self.memory_store,
             ),
             planner=planner,
-            policy_gate=PolicyGate(permission=recipe.permission_profile),
+            policy_gate=PolicyGate(
+                permission=recipe.permission_profile,
+                allowed_permissions=_recipe_allowed_permissions(recipe),
+            ),
             tool_registry=registry,
             evaluator=evaluator,
             max_steps=recipe.max_steps,
@@ -751,12 +754,15 @@ def task_recipe(
     required = citations_required if citations_required is not None else normalized == "retrieval_answer"
     recipe_metadata = dict(metadata or {})
     if normalized == "retrieval_answer":
+        max_network_fetches = _retrieval_network_fetch_budget(recipe_metadata)
+        if max_network_fetches > 0:
+            recipe_metadata = _with_allowed_permission(recipe_metadata, "network:fetch")
         return TaskRecipe(
             recipe_id="recipe-retrieval-answer",
             allowed_tools=["retrieval.run"],
             max_steps=3,
             max_tool_calls=2,
-            max_network_fetches=0,
+            max_network_fetches=max_network_fetches,
             max_total_artifact_bytes=1_000_000,
             permission_profile="read_write",
             citations_required=bool(required),
@@ -968,6 +974,13 @@ def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _recipe_allowed_permissions(recipe: TaskRecipe) -> set[str]:
+    value = recipe.metadata.get("allowed_permissions")
+    if not isinstance(value, list):
+        return set()
+    return {item for item in value if isinstance(item, str) and item}
+
+
 def _execution_step_metadata(recipe: TaskRecipe) -> JsonObject | None:
     value = _execution_metadata(recipe).get("task_execution_step")
     return dict(value) if isinstance(value, dict) else None
@@ -1108,6 +1121,31 @@ def _retrieval_execution_args(recipe: TaskRecipe) -> JsonObject:
         return direct
     nested = _nested_json(metadata, "retrieval.run") or _nested_json(metadata, "retrieval")
     return _direct_tool_payload(nested, "retrieval.run") if nested else {}
+
+
+def _retrieval_network_fetch_budget(recipe_metadata: JsonObject) -> int:
+    execution = recipe_metadata.get("execution_metadata")
+    if not isinstance(execution, dict):
+        return 0
+    retrieval = execution.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return 0
+    if not bool(retrieval.get("allow_network") or retrieval.get("live_network_enabled")):
+        return 0
+    return _positive_metadata_int(
+        retrieval.get("max_network_fetches", retrieval.get("max_fetches")),
+        default=3,
+    )
+
+
+def _with_allowed_permission(recipe_metadata: JsonObject, permission: str) -> JsonObject:
+    updated = dict(recipe_metadata)
+    current = updated.get("allowed_permissions")
+    values = [item for item in current if isinstance(item, str) and item] if isinstance(current, list) else []
+    if permission not in values:
+        values.append(permission)
+    updated["allowed_permissions"] = values
+    return updated
 
 
 def _merge_retrieval_payload(base: JsonObject, extra: JsonObject) -> JsonObject:
@@ -1256,6 +1294,14 @@ def _string_value(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _positive_metadata_int(value: object, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
 
 
 def _feedback(

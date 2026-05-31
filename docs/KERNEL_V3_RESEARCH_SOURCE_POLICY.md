@@ -206,6 +206,24 @@ provider can still be inspected but reports `default_enabled=false`. API key
 values are read only by the provider at call time, and provider inspection
 reports only booleans, host hashes, counts, and bounds.
 
+Agent execution has a second, separate gate. Even if a host injects a live
+`RetrievalOperator`, `retrieval.run` is registered as a network tool and
+`PolicyGate` blocks it unless host-owned execution metadata grants
+`network:fetch` and a bounded network budget:
+
+```json
+{
+  "retrieval": {
+    "allow_network": true,
+    "max_network_fetches": 1,
+    "max_fetches": 1
+  }
+}
+```
+
+Model planner payloads can request retrieval arguments, but they cannot grant
+`network:fetch`. That permission is derived only from host execution metadata.
+
 Provider inspection is also available before a run starts:
 
 ```bash
