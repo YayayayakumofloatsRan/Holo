@@ -102,6 +102,92 @@ def test_phase83_corpus_store_reobserves_same_document_without_conflict(tmp_path
     assert len(reloaded.documents()) == 1
 
 
+def test_phase83_corpus_status_and_inspection_report_authority_health() -> None:
+    strong_source = _source(
+        "src-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    weak_source = _source(
+        "src-blog",
+        "https://example.com/aapl-opinion",
+        "AAPL Opinion",
+        "Unofficial commentary.",
+    )
+    store = ResearchCorpusStore.in_memory(clock_ms=lambda: 909)
+    for source, artifact_id in ((strong_source, "artifact-sec"), (weak_source, "artifact-blog")):
+        store.record_document(
+            corpus_document_from_retrieval(
+                document=_document(
+                    source=source,
+                    artifact_id=artifact_id,
+                    payload_hash=f"hash-{source.source_id}",
+                    preview=source.snippet,
+                ),
+                source=source,
+                goal=SearchGoal(
+                    goal_id="goal-aapl",
+                    query="AAPL revenue",
+                    metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+                ),
+                task_id="task-1",
+                run_id="run-1",
+                fetched_at_ms=909,
+                source_assessment=assess_search_source(source, profile=finance_fundamentals_profile()),
+            )
+        )
+
+    status = store.status()
+    inspection = store.inspect(sample_limit=1)
+
+    assert status.document_count == 2
+    assert status.profile_counts[FINANCE_FUNDAMENTALS_PROFILE_ID] == 2
+    assert status.source_family_counts["regulatory_filing"] == 1
+    assert status.primary_usable_count == 1
+    assert status.audit_record_count == 2
+    assert inspection.status == "ok"
+    assert inspection.samples["documents"][0]["payload_hash"]
+    assert "preview" not in inspection.samples["documents"][0]
+
+
+def test_phase83_empty_or_weak_corpus_inspection_is_actionable() -> None:
+    empty = ResearchCorpusStore.in_memory(clock_ms=lambda: 1010)
+    empty_inspection = empty.inspect()
+    assert empty_inspection.status == "attention"
+    assert empty_inspection.issues[0]["code"] == "empty_corpus"
+    assert "retrieve <query> --index-corpus" in empty_inspection.recommended_actions
+
+    weak_source = _source(
+        "src-blog",
+        "https://example.com/aapl-opinion",
+        "AAPL Opinion",
+        "Unofficial commentary.",
+    )
+    weak = ResearchCorpusStore.in_memory(clock_ms=lambda: 1011)
+    weak.record_document(
+        corpus_document_from_retrieval(
+            document=_document(
+                source=weak_source,
+                artifact_id="artifact-blog",
+                payload_hash="hash-blog",
+                preview=weak_source.snippet,
+            ),
+            source=weak_source,
+            goal=SearchGoal(goal_id="goal-blog", query="AAPL opinion"),
+            task_id="task-blog",
+            run_id="run-blog",
+            fetched_at_ms=1011,
+            source_assessment=assess_search_source(weak_source, profile=finance_fundamentals_profile()),
+        )
+    )
+    weak_inspection = weak.inspect()
+    codes = [issue["code"] for issue in weak_inspection.issues]
+    assert weak_inspection.status == "warning"
+    assert "no_primary_usable_sources" in codes
+    assert "unprofiled_documents" in codes
+
+
 def test_phase83_retrieval_indexes_fetched_documents_when_corpus_store_is_configured() -> None:
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()

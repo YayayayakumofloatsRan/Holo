@@ -61,3 +61,29 @@ class CorpusSearchResult(Contract):
     documents: list[JsonObject]
     total: int
     generated_at_ms: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class CorpusStatus(Contract):
+    generated_at_ms: int
+    log_path: str | None
+    index_path: str | None
+    document_count: int
+    total_size_bytes: int
+    profile_counts: dict[str, int]
+    provider_counts: dict[str, int]
+    source_family_counts: dict[str, int]
+    authority_level_counts: dict[str, int]
+    primary_usable_count: int
+    audit_record_count: int
+    latest_fetched_at_ms: int | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class CorpusInspection(Contract):
+    status: str
+    generated_at_ms: int
+    issues: list[JsonObject]
+    recommended_actions: list[str]
+    corpus_status: JsonObject
+    samples: JsonObject = field(default_factory=dict)

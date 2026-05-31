@@ -1,4 +1,11 @@
-from kernel_v3.research.contracts import CorpusDocument, CorpusSearchResult, ResearchProfile, SourceAssessment
+from kernel_v3.research.contracts import (
+    CorpusDocument,
+    CorpusInspection,
+    CorpusSearchResult,
+    CorpusStatus,
+    ResearchProfile,
+    SourceAssessment,
+)
 from kernel_v3.research.corpus import (
     ResearchCorpusStore,
     corpus_document_from_retrieval,
@@ -15,7 +22,9 @@ from kernel_v3.research.source_policy import (
 __all__ = [
     "FINANCE_FUNDAMENTALS_PROFILE_ID",
     "CorpusDocument",
+    "CorpusInspection",
     "CorpusSearchResult",
+    "CorpusStatus",
     "ResearchProfile",
     "ResearchCorpusStore",
     "SourceAssessment",

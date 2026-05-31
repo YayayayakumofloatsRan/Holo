@@ -112,7 +112,15 @@ The indexed corpus can then be inspected:
 holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus search "AAPL revenue"
 holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus list --profile finance_fundamentals
 holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus inspect <document_id>
+holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus status
+holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus inspect-store
 ```
+
+`corpus status` and `corpus inspect-store` are store-level health surfaces for
+resident research operation. They report document counts, profile/provider
+coverage, source-family and authority-level distribution, primary-source
+coverage, audit-event counts, and small safe document samples. They do not read
+or print raw fetched bodies; raw content remains in `ArtifactStore`.
 
 And reused as an offline retrieval source:
 

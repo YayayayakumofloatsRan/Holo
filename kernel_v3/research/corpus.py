@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.research.contracts import CorpusDocument, CorpusSearchResult, SourceAssessment
+from kernel_v3.research.contracts import CorpusDocument, CorpusInspection, CorpusSearchResult, CorpusStatus, SourceAssessment
 
 if TYPE_CHECKING:
     from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
@@ -177,6 +177,77 @@ class ResearchCorpusStore:
     def audit_records(self) -> list[JsonObject]:
         return [dict(event) for event in self._events]
 
+    def status(self) -> CorpusStatus:
+        documents = list(self._documents.values())
+        fetched_times = [document.fetched_at_ms for document in documents]
+        return CorpusStatus(
+            generated_at_ms=self._now_ms(),
+            log_path=str(self.log_path) if self.log_path is not None else None,
+            index_path=str(self.index_path) if self.index_path is not None else None,
+            document_count=len(documents),
+            total_size_bytes=sum(max(0, int(document.size_bytes)) for document in documents),
+            profile_counts=_count_by(documents, lambda document: document.research_profile_id or "unprofiled"),
+            provider_counts=_count_by(documents, lambda document: document.provider or "unknown"),
+            source_family_counts=_count_by(documents, lambda document: str(_assessment(document).get("source_family") or "unknown")),
+            authority_level_counts=_count_by(
+                documents,
+                lambda document: str(_assessment(document).get("authority_level") or "unknown"),
+            ),
+            primary_usable_count=sum(1 for document in documents if bool(_assessment(document).get("usable_as_primary"))),
+            audit_record_count=len(self._events),
+            latest_fetched_at_ms=max(fetched_times) if fetched_times else None,
+        )
+
+    def inspect(self, *, sample_limit: int = 5) -> CorpusInspection:
+        status = self.status()
+        documents = self.documents()
+        issues: list[JsonObject] = []
+        actions: list[str] = []
+        if status.document_count == 0:
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "empty_corpus",
+                    "message": "No research corpus documents are indexed.",
+                }
+            )
+            actions.append("retrieve <query> --index-corpus")
+        elif status.primary_usable_count == 0:
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": "no_primary_usable_sources",
+                    "document_count": status.document_count,
+                }
+            )
+            actions.append("retrieve <query> --profile finance_fundamentals --index-corpus")
+        unprofiled_count = int(status.profile_counts.get("unprofiled", 0))
+        if unprofiled_count:
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "unprofiled_documents",
+                    "count": unprofiled_count,
+                }
+            )
+            actions.append("corpus list --profile finance_fundamentals")
+        if any(issue["severity"] == "error" for issue in issues):
+            health = "error"
+        elif any(issue["severity"] == "warning" for issue in issues):
+            health = "warning"
+        elif issues:
+            health = "attention"
+        else:
+            health = "ok"
+        return CorpusInspection(
+            status=health,
+            generated_at_ms=status.generated_at_ms,
+            issues=issues,
+            recommended_actions=_ordered_unique(actions),
+            corpus_status=status.to_dict(),
+            samples={"documents": [_document_sample(document) for document in documents[: max(0, sample_limit)]]},
+        )
+
     def index_documents(self) -> list[JsonObject]:
         if self.index_path is None:
             raise RuntimeError("index_path is not configured")
@@ -344,6 +415,42 @@ def _terms(text: str) -> list[str]:
             continue
         seen.add(term)
         result.append(term)
+    return result
+
+
+def _count_by(documents: list[CorpusDocument], key_fn) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for document in documents:
+        key = str(key_fn(document) or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _document_sample(document: CorpusDocument) -> JsonObject:
+    assessment = _assessment(document)
+    return {
+        "document_id": document.document_id,
+        "uri": document.uri,
+        "title": document.title,
+        "provider": document.provider,
+        "artifact_id": document.artifact_id,
+        "payload_hash": document.payload_hash,
+        "research_profile_id": document.research_profile_id,
+        "source_family": assessment.get("source_family"),
+        "authority_level": assessment.get("authority_level"),
+        "usable_as_primary": bool(assessment.get("usable_as_primary")),
+        "fetched_at_ms": document.fetched_at_ms,
+    }
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
     return result
 
 

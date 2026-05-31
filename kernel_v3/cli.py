@@ -233,6 +233,9 @@ def main(argv: list[str] | None = None) -> int:
     corpus_search.add_argument("--limit", type=int, default=20)
     corpus_inspect = corpus_sub.add_parser("inspect")
     corpus_inspect.add_argument("document_id")
+    corpus_inspect_store = corpus_sub.add_parser("inspect-store")
+    corpus_inspect_store.add_argument("--sample-limit", type=int, default=5)
+    corpus_sub.add_parser("status")
     corpus_audit = corpus_sub.add_parser("audit")
     corpus_audit.add_argument("--limit", type=int, default=20)
     corpus_sub.add_parser("index")
@@ -778,6 +781,11 @@ def _corpus_command(args) -> dict[str, object]:
     if command == "audit":
         records = store.audit_records()[-_positive_limit(args.limit) :]
         return {"status": "ok", "records": records}
+    if command == "status":
+        return {"status": "ok", "corpus": store.status().to_dict()}
+    if command == "inspect-store":
+        inspection = store.inspect(sample_limit=args.sample_limit)
+        return {"status": inspection.status, "inspection": inspection.to_dict()}
     if command == "index":
         return {"status": "ok", "documents": store.index_documents()}
     return {"status": "failed", "reason": f"unknown_corpus_command:{command}"}
