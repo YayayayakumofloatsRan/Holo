@@ -220,7 +220,9 @@ inbox, `ResidentRuntime` handles it through the same `ChatRuntime` and
 are local operator surfaces, not live transport integrations. Long-running
 workers can opt into `resident run --tick-schedules` or `resident run-once
 --tick-schedules`; without that explicit flag, run and run-once preserve normal
-queue-only behavior.
+queue-only behavior. `resident status` and `resident inspect` include schedule
+health, including due schedules and unbounded recurring schedules, so operators
+can see whether a resident loop should run with schedule ticking enabled.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that

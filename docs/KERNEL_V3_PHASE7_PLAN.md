@@ -341,6 +341,8 @@ Add the smallest scheduler surface needed for long-running resident operation:
 - `kernel_v3/resident/scheduler.py`
 - `ResidentSchedule`
 - `ResidentScheduleTickResult`
+- `ResidentScheduleStatus`
+- `ResidentScheduleInspection`
 - CLI commands:
   - `holo-v3 resident schedule-add`
   - `holo-v3 resident schedule-list`
@@ -360,7 +362,10 @@ Rules:
 - every schedule add, due enqueue, disable, and tick is journaled
 - enqueue is idempotent by deterministic scheduled message id
 - repeated schedules require a positive interval and bounded `max_runs` unless
-  the operator explicitly requests an unbounded recurring local schedule
+  the operator explicitly requests an unbounded recurring local schedule with
+  `schedule-add --unbounded`
+- resident status and inspect surfaces report schedule health without merging
+  scheduler state into queue ownership or agent decision logic
 
 Implementation note:
 
@@ -373,6 +378,9 @@ Implementation note:
 - `ResidentRuntime` can optionally tick schedules before claiming inbox work.
   Scheduled work is indistinguishable from other inbox work once it has been
   enqueued.
+- `ResidentScheduler.status()` and `ResidentScheduler.inspect()` report active,
+  due, recurring, and unbounded schedule counts plus recommended operator
+  actions such as running the resident loop with `--tick-schedules`.
 - Implemented tests live in
   `tests/test_kernel_v3_phase76_resident_scheduler.py`.
 

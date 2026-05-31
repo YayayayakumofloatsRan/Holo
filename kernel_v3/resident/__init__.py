@@ -6,6 +6,8 @@ from kernel_v3.resident.contracts import (
     ResidentQueueStatus,
     ResidentRunResult,
     ResidentSchedule,
+    ResidentScheduleInspection,
+    ResidentScheduleStatus,
     ResidentScheduleTickResult,
     WorkerLease,
 )
@@ -23,7 +25,9 @@ __all__ = [
     "ResidentRunResult",
     "ResidentRuntime",
     "ResidentSchedule",
+    "ResidentScheduleInspection",
     "ResidentScheduler",
+    "ResidentScheduleStatus",
     "ResidentScheduleTickResult",
     "WorkerLease",
 ]

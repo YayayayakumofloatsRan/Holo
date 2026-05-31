@@ -188,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_schedule_add.add_argument("--due-in-ms", type=int, default=0)
     resident_schedule_add.add_argument("--interval-ms", type=int, default=None)
     resident_schedule_add.add_argument("--max-runs", type=int, default=1)
+    resident_schedule_add.add_argument("--unbounded", action="store_true")
     resident_schedule_tick = resident_sub.add_parser("schedule-tick")
     resident_schedule_tick.add_argument("--limit", type=int, default=20)
     resident_schedule_list = resident_sub.add_parser("schedule-list")
@@ -878,10 +879,18 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
     if command == "outbox":
         return {"status": "ok", "messages": [message.to_dict() for message in queue.outbox_messages()]}
     if command == "status":
-        return {"status": "ok", "queue": queue.status().to_dict()}
+        scheduler = ResidentScheduler(queue=queue, journal=journal)
+        return {"status": "ok", "queue": queue.status().to_dict(), "schedules": scheduler.status().to_dict()}
     if command == "inspect":
         inspection = queue.inspect(sample_limit=args.sample_limit)
-        return {"status": inspection.status, "inspection": inspection.to_dict()}
+        scheduler = ResidentScheduler(queue=queue, journal=journal)
+        schedule_inspection = scheduler.inspect(sample_limit=args.sample_limit)
+        status = _combined_health(inspection.status, schedule_inspection.status)
+        return {
+            "status": status,
+            "inspection": inspection.to_dict(),
+            "schedule_inspection": schedule_inspection.to_dict(),
+        }
     if command == "schedule-add":
         scheduler = ResidentScheduler(queue=queue, journal=journal)
         schedule = scheduler.add_schedule(
@@ -891,7 +900,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             due_at_ms=args.due_at_ms,
             due_in_ms=args.due_in_ms,
             interval_ms=args.interval_ms,
-            max_runs=args.max_runs,
+            max_runs=None if args.unbounded else args.max_runs,
         )
         return {"status": "ok", "schedule": schedule.to_dict()}
     if command == "schedule-list":
@@ -985,6 +994,12 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         )
         return {"status": "ok", "outbox": outbox.to_dict()}
     return {"status": "failed", "reason": f"unknown_resident_command:{command}"}
+
+
+def _combined_health(*statuses: str) -> str:
+    order = {"ok": 0, "attention": 1, "warning": 2, "error": 3}
+    highest = max(statuses, key=lambda status: order.get(status, 1))
+    return highest if highest in order else "attention"
 
 
 def _agent_uses_live_model(args) -> bool:

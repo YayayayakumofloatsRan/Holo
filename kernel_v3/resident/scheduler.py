@@ -8,7 +8,13 @@ from typing import Callable
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
-from kernel_v3.resident.contracts import InboundMessage, ResidentSchedule, ResidentScheduleTickResult
+from kernel_v3.resident.contracts import (
+    InboundMessage,
+    ResidentSchedule,
+    ResidentScheduleInspection,
+    ResidentScheduleStatus,
+    ResidentScheduleTickResult,
+)
 from kernel_v3.resident.queue import ResidentQueue
 
 
@@ -118,6 +124,113 @@ class ResidentScheduler:
             return [_schedule_from_row(row) for row in rows]
         finally:
             conn.close()
+
+    def status(self) -> ResidentScheduleStatus:
+        now = self._now_ms()
+        conn = self._connect()
+        try:
+            counts = _status_counts(conn)
+            due_count = _count(
+                conn,
+                """
+                SELECT COUNT(*)
+                FROM resident_schedules
+                WHERE status = 'active'
+                  AND next_due_at_ms IS NOT NULL
+                  AND next_due_at_ms <= ?
+                  AND (max_runs IS NULL OR run_count < max_runs)
+                """,
+                (now,),
+            )
+            recurring_count = _count(
+                conn,
+                "SELECT COUNT(*) FROM resident_schedules WHERE status = 'active' AND interval_ms IS NOT NULL",
+                (),
+            )
+            unbounded_count = _count(
+                conn,
+                "SELECT COUNT(*) FROM resident_schedules WHERE status = 'active' AND max_runs IS NULL",
+                (),
+            )
+            next_due_row = conn.execute(
+                """
+                SELECT MIN(next_due_at_ms)
+                FROM resident_schedules
+                WHERE status = 'active'
+                  AND next_due_at_ms IS NOT NULL
+                  AND (max_runs IS NULL OR run_count < max_runs)
+                """
+            ).fetchone()
+            next_due_at_ms = int(next_due_row[0]) if next_due_row is not None and next_due_row[0] is not None else None
+            return ResidentScheduleStatus(
+                generated_at_ms=now,
+                db_path=str(self.db_path),
+                schedule_counts=counts,
+                active_count=int(counts.get("active", 0)),
+                due_count=due_count,
+                recurring_count=recurring_count,
+                unbounded_count=unbounded_count,
+                next_due_at_ms=next_due_at_ms,
+            )
+        finally:
+            conn.close()
+
+    def inspect(self, *, sample_limit: int = 5) -> ResidentScheduleInspection:
+        status = self.status()
+        schedules = self.list_schedules(include_inactive=True)
+        issues: list[JsonObject] = []
+        actions: list[str] = []
+        if status.due_count:
+            due_ids = [
+                schedule.schedule_id
+                for schedule in schedules
+                if (
+                    schedule.status == "active"
+                    and schedule.next_due_at_ms is not None
+                    and schedule.next_due_at_ms <= status.generated_at_ms
+                    and (schedule.max_runs is None or schedule.run_count < schedule.max_runs)
+                )
+            ][:sample_limit]
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "due_schedules",
+                    "count": status.due_count,
+                    "schedule_ids": due_ids,
+                }
+            )
+            actions.append("resident run --tick-schedules --max-iterations <n>")
+        if status.unbounded_count:
+            unbounded_ids = [
+                schedule.schedule_id
+                for schedule in schedules
+                if schedule.status == "active" and schedule.max_runs is None
+            ][:sample_limit]
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "unbounded_recurring_schedules",
+                    "count": status.unbounded_count,
+                    "schedule_ids": unbounded_ids,
+                }
+            )
+            actions.append("resident schedule-list --include-inactive")
+        if any(issue["severity"] == "error" for issue in issues):
+            health = "error"
+        elif any(issue["severity"] == "warning" for issue in issues):
+            health = "warning"
+        elif issues:
+            health = "attention"
+        else:
+            health = "ok"
+        return ResidentScheduleInspection(
+            status=health,
+            generated_at_ms=status.generated_at_ms,
+            issues=issues,
+            recommended_actions=_ordered_unique(actions),
+            schedule_status=status.to_dict(),
+            samples={"schedules": [schedule.to_dict() for schedule in schedules[:sample_limit]]},
+        )
 
     def disable_schedule(self, schedule_id: str, *, reason: str = "manual_disable") -> ResidentSchedule | None:
         now = self._now_ms()
@@ -394,6 +507,16 @@ def _schedule_by_id(conn: sqlite3.Connection, schedule_id: str) -> ResidentSched
     return _schedule_from_row(row) if row is not None else None
 
 
+def _status_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute("SELECT status, COUNT(*) FROM resident_schedules GROUP BY status").fetchall()
+    return {str(status): int(count) for status, count in rows}
+
+
+def _count(conn: sqlite3.Connection, query: str, values: tuple[object, ...]) -> int:
+    row = conn.execute(query, values).fetchone()
+    return int(row[0]) if row is not None else 0
+
+
 def _message_id(schedule: ResidentSchedule) -> str:
     return f"scheduled-{schedule.schedule_id}-{schedule.next_due_at_ms}"
 
@@ -407,3 +530,14 @@ def _json_dict(value: object) -> JsonObject:
         return {}
     loaded = json.loads(value)
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

@@ -128,6 +128,34 @@ def test_phase76_disabled_schedule_does_not_enqueue(tmp_path: Path):
     assert not queue.inbox_messages()
 
 
+def test_phase76_scheduler_status_and_inspect_report_due_and_unbounded(tmp_path: Path):
+    clock = _clock(start=5_000)
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
+    scheduler = ResidentScheduler(queue=queue, clock_ms=clock)
+    scheduler.add_schedule(
+        schedule_id="sched-visible",
+        thread_id="resident-visible",
+        text="visible due schedule",
+        due_in_ms=0,
+        interval_ms=10,
+        max_runs=None,
+    )
+
+    status = scheduler.status()
+    inspection = scheduler.inspect(sample_limit=1)
+
+    assert status.active_count == 1
+    assert status.due_count == 1
+    assert status.recurring_count == 1
+    assert status.unbounded_count == 1
+    assert inspection.status == "attention"
+    assert [issue["code"] for issue in inspection.issues] == [
+        "due_schedules",
+        "unbounded_recurring_schedules",
+    ]
+    assert "resident run --tick-schedules --max-iterations <n>" in inspection.recommended_actions
+
+
 def test_phase76_repeating_schedule_requires_interval(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     scheduler = ResidentScheduler(queue=queue, clock_ms=_clock())
@@ -226,6 +254,50 @@ def test_phase76_cli_run_can_tick_schedules_before_worker_loop(tmp_path: Path, c
     assert loop["processed_count"] == 1
     assert loop["results"][0]["payload"]["schedule_tick"]["enqueued_count"] == 1
     assert loop["queue_status"]["inbox_counts"]["completed"] == 1
+
+
+def test_phase76_cli_status_and_inspect_include_schedule_health(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    assert (
+        cli.main(
+            [
+                *base,
+                "resident",
+                "schedule-add",
+                "unbounded resident work",
+                "--thread",
+                "resident-cli-health",
+                "--schedule-id",
+                "sched-health",
+                "--due-at-ms",
+                "0",
+                "--interval-ms",
+                "1",
+                "--unbounded",
+            ]
+        )
+        == 0
+    )
+    added = json.loads(capsys.readouterr().out)
+    assert added["schedule"]["max_runs"] is None
+
+    assert cli.main([*base, "resident", "status"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["schedules"]["due_count"] == 1
+    assert status["schedules"]["unbounded_count"] == 1
+
+    assert cli.main([*base, "resident", "inspect", "--sample-limit", "1"]) == 0
+    inspected = json.loads(capsys.readouterr().out)
+    assert inspected["status"] == "attention"
+    assert inspected["schedule_inspection"]["issues"][0]["code"] == "due_schedules"
+    assert (
+        "resident run --tick-schedules --max-iterations <n>"
+        in inspected["schedule_inspection"]["recommended_actions"]
+    )
 
 
 def _clock(start: int = 1_000):

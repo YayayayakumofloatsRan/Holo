@@ -118,3 +118,25 @@ class ResidentScheduleTickResult(Contract):
     schedules: list[JsonObject] = field(default_factory=list)
     enqueued_messages: list[JsonObject] = field(default_factory=list)
     failures: list[JsonObject] = field(default_factory=list)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResidentScheduleStatus(Contract):
+    generated_at_ms: int
+    db_path: str
+    schedule_counts: dict[str, int]
+    active_count: int
+    due_count: int
+    recurring_count: int
+    unbounded_count: int
+    next_due_at_ms: int | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResidentScheduleInspection(Contract):
+    status: str
+    generated_at_ms: int
+    issues: list[JsonObject]
+    recommended_actions: list[str]
+    schedule_status: JsonObject
+    samples: JsonObject = field(default_factory=dict)
