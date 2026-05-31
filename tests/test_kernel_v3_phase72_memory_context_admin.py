@@ -53,6 +53,29 @@ def test_phase72_context_excludes_deleted_and_expired_memory():
     assert [item["memory_id"] for item in durable["items"]] == [active.memory_id]
 
 
+def test_phase72_context_excludes_sensitive_memory_unless_explicitly_enabled():
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    sensitive = _memory_item(summary="sensitive memory", thread_id="thread-1", privacy_class="sensitive")
+    store.commit(sensitive)
+
+    default_pack = ContextPackCompiler(durable_memory_store=store).compile(
+        _task(thread_id="thread-1"),
+        JournalStore.in_memory(),
+    )
+    explicit_pack = ContextPackCompiler(
+        durable_memory_store=store,
+        include_sensitive_memory=True,
+    ).compile(
+        _task(thread_id="thread-1"),
+        JournalStore.in_memory(),
+    )
+
+    default_durable = next(section for section in default_pack.sections if section["name"] == "durable_memory")
+    explicit_durable = next(section for section in explicit_pack.sections if section["name"] == "durable_memory")
+    assert default_durable["items"] == []
+    assert explicit_durable["items"][0]["memory_id"] == sensitive.memory_id
+
+
 def test_phase72_chat_memory_admin_approves_and_lists_pending_proposal():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())
@@ -118,7 +141,13 @@ def _task(*, thread_id: str) -> TaskState:
     )
 
 
-def _memory_item(*, summary: str, thread_id: str, expires_at_ms: int | None = None) -> MemoryItem:
+def _memory_item(
+    *,
+    summary: str,
+    thread_id: str,
+    expires_at_ms: int | None = None,
+    privacy_class: str = "project_internal",
+) -> MemoryItem:
     scope = {"user_id": "local:user", "project_id": "holo-kernel-v3", "thread_id": thread_id}
     dedupe_key = f"user_preference:{summary}"
     return MemoryItem(
@@ -129,7 +158,7 @@ def _memory_item(*, summary: str, thread_id: str, expires_at_ms: int | None = No
         body=f"body should not be injected: {summary}",
         structured={"source": "test"},
         scope=scope,
-        privacy_class="project_internal",
+        privacy_class=privacy_class,
         confidence=0.9,
         ttl_policy="expires_at" if expires_at_ms is not None else "forever",
         expires_at_ms=expires_at_ms,

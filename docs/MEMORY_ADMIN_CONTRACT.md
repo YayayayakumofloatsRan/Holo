@@ -91,6 +91,10 @@ only active items with a non-empty `approved_by` value may be committed. Pending
 or unapproved drafts must stay in the proposal/shadow pipeline until the host
 approves or rejects them.
 
+Context injection uses a run/resume snapshot of recallable memory only: deleted
+and expired items are excluded, and `sensitive` memory is withheld unless the
+compiler is explicitly configured with `include_sensitive_memory=True`.
+
 For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured
 research-corpus inspections. The doctor report is an operator snapshot only: it
