@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from kernel_v3.memory import (
@@ -84,6 +86,19 @@ def test_phase7_memory_store_rejects_secret_like_content_without_audit_write():
 
     assert store.audit_records() == []
     assert store.recall(query="credential", now_ms=1000).total == 0
+
+
+def test_phase7_memory_store_only_commits_active_approved_items():
+    store = MemoryStore.in_memory(clock_ms=lambda: 1000)
+    item = _memory_item(summary="Committed memory must be approved.")
+
+    with pytest.raises(ValueError, match="invalid_memory_commit_state"):
+        store.commit(replace(item, state="pending"))
+    with pytest.raises(ValueError, match="memory_commit_requires_approval"):
+        store.commit(replace(item, approved_by=None))
+
+    assert store.audit_records() == []
+    assert store.recall(query="approved", now_ms=1000).total == 0
 
 
 def test_phase7_memory_store_duplicate_stable_id_is_idempotent():

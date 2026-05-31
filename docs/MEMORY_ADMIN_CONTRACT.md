@@ -86,6 +86,11 @@ This lets a resident worker or operator see whether memory needs review without
 making transports decision makers. Approval, rejection, delete, and export still
 go through explicit host-owned memory commands.
 
+The durable store treats `commit` as the final boundary, not a proposal API:
+only active items with a non-empty `approved_by` value may be committed. Pending
+or unapproved drafts must stay in the proposal/shadow pipeline until the host
+approves or rejects them.
+
 For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured
 research-corpus inspections. The doctor report is an operator snapshot only: it

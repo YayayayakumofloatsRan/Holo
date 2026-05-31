@@ -77,6 +77,7 @@ class MemoryStore:
         return cls(clock_ms=clock_ms)
 
     def commit(self, item: MemoryItem) -> MemoryItem:
+        _validate_committable_item(item)
         decision = validate_memory_item(item)
         if not decision.allowed:
             raise MemoryPrivacyError(decision.reason)
@@ -666,6 +667,13 @@ def _proposal_counts(proposals) -> JsonObject:
         if proposal.approval_status == "pending" and proposal.approval_policy == "conflict_review":
             counts["conflict_review"] = int(counts.get("conflict_review", 0)) + 1
     return counts
+
+
+def _validate_committable_item(item: MemoryItem) -> None:
+    if item.state != "active":
+        raise ValueError(f"invalid_memory_commit_state:{item.state}")
+    if item.approved_by is None or not str(item.approved_by).strip():
+        raise ValueError("memory_commit_requires_approval")
 
 
 def _inspection_recommendations(
