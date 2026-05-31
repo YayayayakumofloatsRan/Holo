@@ -156,7 +156,7 @@ class WorkloopEvaluator:
             repetition=repetition,
             evidence=evidence,
             recipe=self.recipe,
-            no_progress_count=_recent_no_progress_count(self.journal, task_id=task_id) + (0 if progress.made_progress else 1),
+            no_progress_count=_recent_no_progress_count(self.journal, task_id=task_id, run_id=run_id) + (0 if progress.made_progress else 1),
             config=self.config,
         )
         _append_workloop_records(
@@ -250,12 +250,12 @@ def detect_repetition(
     latest_missing_evidence: list[str],
 ) -> RepetitionSignal:
     checks = [
-        _repeat_for_values(_retrieval_queries(journal, task_id=task_id), threshold=config.repeated_action_limit, repeat_type="same_retrieval_query"),
-        _repeat_for_values(_action_fingerprints(journal, task_id=task_id), threshold=config.repeated_action_limit, repeat_type="same_action_payload"),
-        _repeat_for_values(_file_paths(journal, task_id=task_id), threshold=config.repeated_action_limit, repeat_type="same_file_path"),
-        _repeat_for_values(_observation_hashes(journal, task_id=task_id), threshold=config.repeated_action_limit, repeat_type="same_observation_hash"),
-        _repeat_for_values(_missing_evidence_values(journal, task_id=task_id, latest=latest_missing_evidence), threshold=config.repeated_missing_evidence_limit, repeat_type="same_missing_evidence"),
-        _repeat_for_values(_failure_reason_values(journal, task_id=task_id), threshold=config.repeated_missing_evidence_limit, repeat_type="same_failure_reason"),
+        _repeat_for_values(_retrieval_queries(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_retrieval_query"),
+        _repeat_for_values(_action_fingerprints(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_action_payload"),
+        _repeat_for_values(_file_paths(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_file_path"),
+        _repeat_for_values(_observation_hashes(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_observation_hash"),
+        _repeat_for_values(_missing_evidence_values(journal, task_id=task_id, run_id=run_id, latest=latest_missing_evidence), threshold=config.repeated_missing_evidence_limit, repeat_type="same_missing_evidence"),
+        _repeat_for_values(_failure_reason_values(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_missing_evidence_limit, repeat_type="same_failure_reason"),
     ]
     repeated = next((item for item in checks if item is not None), None)
     if repeated is None:
@@ -525,40 +525,52 @@ def _strongest_signal(signals: list[ProgressSignal]) -> str:
     return max(signals, key=lambda signal: signal.weight).signal_type
 
 
-def _action_fingerprints(journal: JournalStore, *, task_id: str) -> list[tuple[str, str]]:
+def _action_fingerprints(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
     values = []
     for record in journal.records(task_id=task_id, kind="action"):
+        if record.run_id != run_id:
+            continue
         key = str(record.data.get("name") or record.data.get("kind") or "")
         payload = record.data.get("payload", {})
         values.append((_hash({"key": key, "payload": payload}), record.record_id))
     return values
 
 
-def _retrieval_queries(journal: JournalStore, *, task_id: str) -> list[tuple[str, str]]:
+def _retrieval_queries(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
     values = []
     for record in journal.records(task_id=task_id, kind="retrieval_search_attempt"):
+        if record.run_id != run_id:
+            continue
         query = record.data.get("query")
         if isinstance(query, str):
             values.append((query.lower(), record.record_id))
     return values
 
 
-def _file_paths(journal: JournalStore, *, task_id: str) -> list[tuple[str, str]]:
+def _file_paths(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
     values = []
     for record in journal.records(task_id=task_id, kind="observation"):
+        if record.run_id != run_id:
+            continue
         content = record.data.get("content")
         if isinstance(content, dict) and isinstance(content.get("path"), str):
             values.append((str(content["path"]).lower(), record.record_id))
     return values
 
 
-def _observation_hashes(journal: JournalStore, *, task_id: str) -> list[tuple[str, str]]:
-    return [(_hash(record.data), record.record_id) for record in journal.records(task_id=task_id, kind="observation")]
+def _observation_hashes(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
+    return [
+        (_hash(record.data), record.record_id)
+        for record in journal.records(task_id=task_id, kind="observation")
+        if record.run_id == run_id
+    ]
 
 
-def _missing_evidence_values(journal: JournalStore, *, task_id: str, latest: list[str]) -> list[tuple[str, str]]:
+def _missing_evidence_values(journal: JournalStore, *, task_id: str, run_id: str, latest: list[str]) -> list[tuple[str, str]]:
     values = []
     for record in journal.records(task_id=task_id, kind="feedback"):
+        if record.run_id != run_id:
+            continue
         missing = record.data.get("missing_evidence")
         if isinstance(missing, list) and missing:
             values.append((_hash([str(item) for item in missing]), record.record_id))
@@ -576,9 +588,11 @@ def _failure_reasons(journal: JournalStore, *, task_id: str) -> list[str]:
     return reasons
 
 
-def _failure_reason_values(journal: JournalStore, *, task_id: str) -> list[tuple[str, str]]:
+def _failure_reason_values(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
     values = []
     for record in journal.records(task_id=task_id):
+        if record.run_id != run_id:
+            continue
         reason = _failure_reason_from_record(record)
         if isinstance(reason, str) and reason:
             values.append((reason, record.record_id))
@@ -618,9 +632,11 @@ def _repeat_for_values(
     return None
 
 
-def _recent_no_progress_count(journal: JournalStore, *, task_id: str) -> int:
+def _recent_no_progress_count(journal: JournalStore, *, task_id: str, run_id: str) -> int:
     count = 0
     for record in reversed(journal.records(task_id=task_id, kind="progress_assessment")):
+        if record.run_id != run_id:
+            continue
         if record.data.get("made_progress") is False:
             count += 1
             continue

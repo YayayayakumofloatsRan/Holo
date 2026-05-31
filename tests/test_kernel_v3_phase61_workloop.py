@@ -50,6 +50,36 @@ def test_phase61_retrieval_without_new_evidence_continues_once_then_fails():
     assert decisions[0]["reason"] == "insufficient_evidence_retry"
 
 
+def test_phase61_retrieval_resume_gets_fresh_repetition_budget_and_unique_action_ids():
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        retrieval_operator=RetrievalOperator(
+            search_provider=FakeSearchProvider({"missing": []}),
+            fetch_provider=FakeFetchProvider({}),
+        ),
+    )
+
+    first = runtime.run("missing", mode="retrieval")
+    second = runtime.resume(first.task_id, "still missing", mode="retrieval")
+
+    assert first.status == "failed"
+    assert second.status == "failed"
+    assert second.run_id == "run-2"
+    decisions = [
+        record.data
+        for record in journal.records(task_id=first.task_id, kind="termination_decision")
+        if record.run_id == "run-2"
+    ]
+    assert [item["decision"] for item in decisions] == ["continue", "failure_report"]
+    assert decisions[0]["reason"] == "insufficient_evidence_retry"
+    action_ids = [record.data["action_id"] for record in journal.records(task_id=first.task_id, kind="action")]
+    assert len(action_ids) == len(set(action_ids))
+    assert any(action_id.endswith("-run-1") for action_id in action_ids)
+    assert any(action_id.endswith("-run-2") for action_id in action_ids)
+
+
 def test_phase61_repeated_same_retrieval_query_sets_repetition_signal():
     journal = JournalStore.in_memory()
     runtime = AgentRuntime(

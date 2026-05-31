@@ -171,9 +171,7 @@ def _intake_from_model(goal: str, data: JsonObject, *, fallback: SemanticIntake)
     suggested_mode = _normalize_mode(str(data.get("suggested_mode") or ""), primary=primary, requires_clarification=requires_clarification)
     model_warnings = [str(item) for item in data.get("warnings", [])] if isinstance(data.get("warnings"), list) else []
     warnings = _ordered_unique([*model_warnings, *_warnings(intents, compound=compound)])
-    response_hint = _string_or_none(data.get("response_hint")) or _response_hint(primary, intents=intents, blocked=blocked)
-    if primary in {"transport_control", "noop", "roleplay"}:
-        response_hint = _response_hint(primary, intents=intents, blocked=blocked) or response_hint
+    response_hint = _response_hint(primary, intents=intents, blocked=blocked)
     clarification = _string_or_none(data.get("clarification_question"))
     if requires_clarification and not clarification:
         clarification = _clarification_question(intents, blocked=blocked, compound=compound)

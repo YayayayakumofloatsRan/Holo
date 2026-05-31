@@ -152,6 +152,49 @@ def test_phase63_model_semantic_intake_drives_open_ended_decomposition():
     assert processor_results[0].run_id == result.run_id
 
 
+def test_phase63_model_semantic_intake_response_hint_cannot_become_final_answer():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "direct_answer",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "direct_answer",
+                        "text": "answer a local direct question",
+                        "sequence_index": 1,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": "UNSUPPORTED FACTUAL ANSWER FROM SEMANTIC INTAKE",
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "answer a local direct question",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    assert result.final_answer is not None
+    assert result.final_answer["answer"] == "Direct answer: answer a local direct question"
+    assert result.final_answer["answer"] != "UNSUPPORTED FACTUAL ANSWER FROM SEMANTIC INTAKE"
+    intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
+    assert intake["response_hint"] is None
+
+
 def test_phase63_model_semantic_intake_cannot_hide_blocked_capability_under_safe_kind():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(

@@ -570,7 +570,7 @@ class _RecipePlanner:
                 reasons=["no_planned_action"],
                 side_effect_class="none",
             )
-        return self._actions.pop(0)
+        return _bind_recipe_action_to_run(self._actions.pop(0), context)
 
 
 class _RecipeEvaluator:
@@ -597,6 +597,16 @@ class _RecipeEvaluator:
         if isinstance(observation.content, dict):
             answer = observation.content.get("text")
         return _feedback(run_id, self.calls, "final_answer_ready", "completed", answer if isinstance(answer, str) else None, [])
+
+
+def _bind_recipe_action_to_run(action: CandidateAction, context: ContextBundle) -> CandidateAction:
+    run_id = str(context.state.get("run_id") or "")
+    if not run_id:
+        return action
+    suffix = f"-{run_id}"
+    if action.action_id.endswith(suffix):
+        return action
+    return replace(action, action_id=f"{action.action_id}{suffix}")
 
 
 def task_recipe(
