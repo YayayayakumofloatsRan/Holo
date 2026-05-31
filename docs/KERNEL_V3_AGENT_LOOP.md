@@ -155,6 +155,13 @@ The agent stops when one of these host-visible conditions is reached:
 - loop limits are reached: steps, tool calls, network fetches, artifact bytes,
   or duration
 
+Network fetch limits are costed before execution, not only after a tool returns.
+For `network` side-effect actions, the loop reads a generic cost from payload
+fields such as `max_fetches` / `network_fetch_count`, or from the manifest's
+`default_network_fetch_cost`. The loop does not branch on concrete tool names;
+this lets a future live retrieval/search operator declare bounded page-fetch
+cost without getting a special path in `LoopControllerV3`.
+
 Model feedback is never the only stop authority. It is combined with host
 progress signals, repetition detection, evidence checks, and loop guards.
 

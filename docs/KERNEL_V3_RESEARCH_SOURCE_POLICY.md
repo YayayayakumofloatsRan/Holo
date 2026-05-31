@@ -54,6 +54,10 @@ the retrieval operator:
 - includes source-authority counts in the final `RetrievalReport`
 - records retrieval budgets and `network_access` in both query-plan and report
   diagnostics
+- exposes a generic network cost hint (`default_network_fetch_cost` and the
+  `max_fetches` payload field) through the tool manifest so `LoopControllerV3`
+  can enforce network budgets before live-capable retrieval executes, without
+  dispatching on the concrete `retrieval.run` tool name
 
 This prepares the kernel for future live web/database providers without making
 live retrieval the default.

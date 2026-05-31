@@ -211,7 +211,7 @@ class LoopControllerV3:
                     if action.kind == "tool":
                         tool_calls += 1
                     if self._is_network_action(action, manifest=manifest):
-                        network_fetches += 1
+                        network_fetches += self._network_action_cost(action, manifest=manifest)
                     total_artifact_bytes += self._estimate_artifact_bytes(observation, artifact_refs)
             else:
                 observation = self._blocked_observation(task.run_id, action, decision.reason)
@@ -235,7 +235,18 @@ class LoopControllerV3:
             if observation.status == "blocked" and observation.content == {"reason": "max_network_fetches"}:
                 current_feedback = self._limit_feedback(task.run_id, "max_network_fetches")
                 self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
-                self._append_guard(task, "max_network_fetches", step_id=step_id, data={"network_fetches": network_fetches})
+                requested_network_fetches = self._network_action_cost(action, manifest=manifest)
+                self._append_guard(
+                    task,
+                    "max_network_fetches",
+                    step_id=step_id,
+                    data={
+                        "network_fetches": network_fetches,
+                        "requested_network_fetches": requested_network_fetches,
+                        "projected_network_fetches": network_fetches + requested_network_fetches,
+                        "max_network_fetches": self.max_network_fetches,
+                    },
+                )
                 return self._result(task, current_feedback, step_id=step_id)
             current_feedback = self.evaluator.evaluate(context, observation)
             self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
@@ -369,7 +380,7 @@ class LoopControllerV3:
             action.kind == "tool"
             and self._is_network_action(action, manifest=manifest)
             and self.max_network_fetches is not None
-            and network_fetches >= self.max_network_fetches
+            and network_fetches + self._network_action_cost(action, manifest=manifest) > self.max_network_fetches
         ):
             return "max_network_fetches"
         return None
@@ -396,6 +407,19 @@ class LoopControllerV3:
     def _is_network_action(self, action: CandidateAction, *, manifest) -> bool:
         manifest_effect = getattr(manifest, "side_effect_class", None)
         return action.side_effect_class == "network" or manifest_effect == "network"
+
+    def _network_action_cost(self, action: CandidateAction, *, manifest) -> int:
+        if not self._is_network_action(action, manifest=manifest):
+            return 0
+        payload_cost = _network_cost_from_payload(action.payload)
+        if payload_cost is not None:
+            return max(1, payload_cost)
+        manifest_schema = getattr(manifest, "input_schema", {})
+        if isinstance(manifest_schema, dict):
+            default_cost = _positive_int(manifest_schema.get("default_network_fetch_cost"))
+            if default_cost is not None:
+                return max(1, default_cost)
+        return 1
 
     def _estimate_artifact_bytes(self, observation: Observation, artifact_refs: list[object]) -> int:
         total = 0
@@ -442,3 +466,28 @@ class LoopControllerV3:
             if isinstance(value, str):
                 return value
         return None
+
+
+def _network_cost_from_payload(payload: object) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("network_fetch_count", "max_network_fetches", "max_fetches", "fetch_count"):
+        value = _positive_int(payload.get(key))
+        if value is not None:
+            return value
+    goal = payload.get("goal")
+    if isinstance(goal, dict):
+        return _network_cost_from_payload(goal)
+    return None
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
