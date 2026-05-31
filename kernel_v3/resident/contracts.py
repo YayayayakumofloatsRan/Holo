@@ -43,6 +43,20 @@ class WorkerLease(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ResidentQueueStatus(Contract):
+    generated_at_ms: int
+    db_path: str
+    inbox_counts: dict[str, int]
+    outbox_counts: dict[str, int]
+    active_lease: JsonObject | None
+    claimable_count: int
+    stale_running_count: int
+    due_retry_count: int
+    dead_letter_count: int
+    ready_outbox_count: int
+
+
+@dataclass(frozen=True, kw_only=True)
 class ResidentRunResult(Contract):
     status: str
     worker_id: str

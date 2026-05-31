@@ -243,6 +243,8 @@ Tests:
   transport decision layer
 - resident enqueue, claim, outbox, completion, ack, and loop summaries are
   journaled and renderable through resident trace
+- queue health/status reports inbox/outbox counts, claimable work, stale
+  running items, due retries, active lease, dead letters, and ready outbox
 - no live network or model required for default tests
 
 Implementation note:
@@ -273,7 +275,7 @@ Implementation note:
   response.
 - `needs_user_input` becomes an outbox item with status `pending_user_input`;
   the worker does not fabricate the missing user answer or continue the task.
-- `holo-v3 resident enqueue/run-once/run/inbox/outbox/ack` provides the local
+- `holo-v3 resident enqueue/run-once/run/status/inbox/outbox/ack` provides the local
   dev/admin surface. This is not a live transport integration.
 - `holo-v3 resident-trace` renders resident journal records, keeping the SQLite
   queue state auditable through the normal kernel trace path.

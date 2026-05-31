@@ -215,6 +215,39 @@ def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
     assert not queue.outbox_messages()
 
 
+def test_phase73_queue_status_reports_health_counts(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="retry item", message_id="in-retry")
+    queue.enqueue(thread_id="resident-thread", text="running item", message_id="in-running")
+    queue.enqueue(thread_id="resident-thread", text="pending item", message_id="in-pending")
+    assert queue.acquire_lease(worker_id="worker-status", ttl_ms=10) is not None
+    retry_claim = queue.claim_next(worker_id="worker-status", lease_ttl_ms=1)
+    assert retry_claim is not None
+    queue.fail(retry_claim.message_id, reason="Transient", worker_id="worker-status", max_attempts=3, retry_backoff_ms=5_000)
+    running_claim = queue.claim_next(worker_id="worker-status", lease_ttl_ms=1)
+    assert running_claim is not None
+    queue.append_outbox(
+        in_reply_to="manual-outbox",
+        thread_id="resident-thread",
+        text="ready outbox",
+        status="ready",
+        task_id=None,
+        run_id=None,
+    )
+
+    status = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock(start=10_000)).status()
+
+    assert status.inbox_counts["retry_wait"] == 1
+    assert status.inbox_counts["running"] == 1
+    assert status.inbox_counts["pending"] == 1
+    assert status.outbox_counts["ready"] == 1
+    assert status.claimable_count == 3
+    assert status.due_retry_count == 1
+    assert status.stale_running_count == 1
+    assert status.ready_outbox_count == 1
+    assert status.active_lease is None
+
+
 def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -235,6 +268,11 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     assert "离线 host fallback" in outbox["messages"][0]["text"]
     assert "Direct answer:" not in outbox["messages"][0]["text"]
     outbox_id = outbox["messages"][0]["outbox_id"]
+
+    assert cli.main([*base, "resident", "status"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["queue"]["inbox_counts"]["completed"] == 1
+    assert status["queue"]["outbox_counts"]["ready"] == 1
 
     assert cli.main([*base, "resident", "ack", outbox_id, "--status", "acknowledged"]) == 0
     acked = json.loads(capsys.readouterr().out)

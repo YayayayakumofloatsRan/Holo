@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, WorkerLease
+from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, ResidentQueueStatus, WorkerLease
 
 
 class ResidentQueue:
@@ -347,6 +347,61 @@ class ResidentQueue:
         finally:
             conn.close()
 
+    def status(self) -> ResidentQueueStatus:
+        now = self._now_ms()
+        conn = self._connect()
+        try:
+            inbox_counts = _status_counts(conn, "resident_inbox")
+            outbox_counts = _status_counts(conn, "resident_outbox")
+            lease_row = conn.execute(
+                """
+                SELECT lease_id, worker_id, acquired_at_ms, expires_at_ms, status
+                FROM resident_leases
+                WHERE lease_id = ?
+                """,
+                ("resident",),
+            ).fetchone()
+            active_lease = None
+            if lease_row is not None and int(lease_row[3]) > now:
+                active_lease = WorkerLease(
+                    lease_id=lease_row[0],
+                    worker_id=lease_row[1],
+                    acquired_at_ms=int(lease_row[2]),
+                    expires_at_ms=int(lease_row[3]),
+                    status=lease_row[4],
+                ).to_dict()
+            due_retry_count = _count(
+                conn,
+                "SELECT COUNT(*) FROM resident_inbox WHERE status = 'retry_wait' AND next_attempt_at_ms IS NOT NULL AND next_attempt_at_ms <= ?",
+                (now,),
+            )
+            stale_running_count = _count(
+                conn,
+                "SELECT COUNT(*) FROM resident_inbox WHERE status = 'running' AND lease_until_ms IS NOT NULL AND lease_until_ms <= ?",
+                (now,),
+            )
+            claimable_count = (
+                int(inbox_counts.get("pending", 0))
+                + due_retry_count
+                + stale_running_count
+            )
+            dead_letter_count = int(inbox_counts.get("dead_letter", 0))
+            ready_outbox_count = int(outbox_counts.get("ready", 0))
+            return ResidentQueueStatus(
+                generated_at_ms=now,
+                db_path=str(self.db_path),
+                inbox_counts=inbox_counts,
+                outbox_counts=outbox_counts,
+                active_lease=active_lease,
+                claimable_count=claimable_count,
+                stale_running_count=stale_running_count,
+                due_retry_count=due_retry_count,
+                dead_letter_count=dead_letter_count,
+                ready_outbox_count=ready_outbox_count,
+            )
+        finally:
+            conn.close()
+
     def mark_outbox_status(self, outbox_id: str, *, status: str) -> OutboxMessage | None:
         conn = self._connect()
         try:
@@ -509,6 +564,16 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     if column in {str(row[1]) for row in rows}:
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _status_counts(conn: sqlite3.Connection, table: str) -> dict[str, int]:
+    rows = conn.execute(f"SELECT status, COUNT(*) FROM {table} GROUP BY status").fetchall()
+    return {str(status): int(count) for status, count in rows}
+
+
+def _count(conn: sqlite3.Connection, query: str, values: tuple[object, ...]) -> int:
+    row = conn.execute(query, values).fetchone()
+    return int(row[0]) if row is not None else 0
 
 
 def _lease_is_active(conn: sqlite3.Connection, *, worker_id: str, now_ms: int) -> bool:

@@ -112,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--max-iterations", type=int, default=10)
     resident_run.add_argument("--max-attempts", type=int, default=3)
     resident_run.add_argument("--retry-backoff-ms", type=int, default=1000)
+    resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
     resident_ack = resident_sub.add_parser("ack")
@@ -583,6 +584,8 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         return {"status": "ok", "messages": [message.to_dict() for message in queue.inbox_messages()]}
     if command == "outbox":
         return {"status": "ok", "messages": [message.to_dict() for message in queue.outbox_messages()]}
+    if command == "status":
+        return {"status": "ok", "queue": queue.status().to_dict()}
     if command in {"run-once", "run"}:
         memory_store = _memory_store(args, create_default=False)
         runtime = ResidentRuntime(
