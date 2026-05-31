@@ -169,7 +169,6 @@ def _prompt(case: UserAcceptanceCase) -> str:
                 ],
                 "current_time_context": "The host did not provide an exact clock tool in this planner context. If exact time is required, ask host/tool or say exact time needs host query.",
                 "permission": "read_only",
-                "case_expectation": case.expectation,
                 "network_policy": {
                     "model_provider": "DeepSeek V4 API is available for semantic processing only",
                     "live_web_retrieval_default": False,

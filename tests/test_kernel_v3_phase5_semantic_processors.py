@@ -722,6 +722,19 @@ def test_phase5_semantic_scenario_library_validates_fake_outputs():
     assert len(journal.records(task_id="task-scenarios", kind="processor_result")) == 5
 
 
+def test_phase5_semantic_scenarios_do_not_embed_answer_key_json():
+    for scenario in deepseek_v4_semantic_scenarios():
+        payload = json.loads(scenario.prompt)
+
+        assert "required_output" not in payload
+        assert "acceptance_criteria" in payload
+        assert isinstance(payload["acceptance_criteria"], list)
+        assert payload["acceptance_criteria"]
+        assert "required_output" not in scenario.prompt
+        assert "act-live-retrieval" not in scenario.prompt
+        assert "act-live-clarify" not in scenario.prompt
+
+
 def test_phase5_loop_controller_remains_tool_name_and_provider_agnostic():
     source = Path("kernel_v3/loop.py").read_text(encoding="utf-8")
 

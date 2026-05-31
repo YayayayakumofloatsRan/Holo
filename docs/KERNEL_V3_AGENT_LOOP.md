@@ -222,6 +222,12 @@ routes to `continue_plan` when an unfinished approved plan exists in the thread,
 and it executes the same host-owned `/plan approve` path. Finalized plans are
 not reused.
 
+Live semantic scenario tests must not include answer-key JSON in provider
+prompts. They provide only the contract, task context, host rules, and
+acceptance criteria. The local validator checks the returned JSON afterward.
+This keeps DeepSeek/OpenAI-compatible smokes from becoming prompt-level
+golden-output copying while preserving deterministic fake-provider tests.
+
 ## Iteration 2026-05-31
 
 Hardening completed in this iteration:
@@ -231,8 +237,9 @@ Hardening completed in this iteration:
 - made evidence sufficiency and finalization grounding run-scoped
 - made failure report attempt/observation summaries run-scoped
 - bound recipe action ids to run ids
+- removed answer-key JSON from live semantic scenario prompts
 - added regression tests for stale retrieval evidence, stale workspace file
-  reads, and semantic-intake answer leakage
+  reads, semantic-intake answer leakage, and scenario prompt leakage
 
 Validation used:
 
