@@ -1080,7 +1080,8 @@ def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
         "query": goal,
         "max_spans_per_document": 2,
     }
-    payload.update(_retrieval_capability_args(recipe))
+    payload = _merge_retrieval_payload(payload, _retrieval_capability_args(recipe))
+    payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
     payload.setdefault("goal_id", "goal-agent-retrieval")
     payload.setdefault("query", goal)
     payload.setdefault("max_spans_per_document", 2)
@@ -1098,6 +1099,31 @@ def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
         "retrieval.run",
         capability_markers={"retrieval.run"},
     )
+
+
+def _retrieval_execution_args(recipe: TaskRecipe) -> JsonObject:
+    metadata = _execution_metadata(recipe)
+    direct = _direct_tool_payload(metadata, "retrieval.run")
+    if direct:
+        return direct
+    nested = _nested_json(metadata, "retrieval.run") or _nested_json(metadata, "retrieval")
+    return _direct_tool_payload(nested, "retrieval.run") if nested else {}
+
+
+def _merge_retrieval_payload(base: JsonObject, extra: JsonObject) -> JsonObject:
+    if not extra:
+        return dict(base)
+    merged = dict(base)
+    for key, value in extra.items():
+        if key == "metadata" and isinstance(value, dict):
+            current = merged.get("metadata")
+            merged["metadata"] = {
+                **(dict(current) if isinstance(current, dict) else {}),
+                **dict(value),
+            }
+        else:
+            merged[key] = value
+    return merged
 
 
 class _AnyQuerySearchProvider:
@@ -1203,9 +1229,21 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
             "max_fetches",
             "max_spans_per_document",
             "metadata",
+            "research_profile",
+            "research_profile_id",
         }
         if any(key in capability_args for key in retrieval_keys):
-            return dict(capability_args)
+            result = dict(capability_args)
+            metadata = dict(result.get("metadata")) if isinstance(result.get("metadata"), dict) else {}
+            profile = result.pop("research_profile", None)
+            profile_id = result.pop("research_profile_id", None)
+            if isinstance(profile, str) and profile:
+                metadata["research_profile"] = profile
+            if isinstance(profile_id, str) and profile_id:
+                metadata["research_profile_id"] = profile_id
+            if metadata:
+                result["metadata"] = metadata
+            return result
     return {}
 
 

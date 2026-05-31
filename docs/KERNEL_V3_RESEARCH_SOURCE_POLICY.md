@@ -151,3 +151,29 @@ bounded fake provider used by tests and indexes the resulting fetched document
 into the corpus. This is the resident-safe skeleton for future live providers:
 live web search can be added behind PolicyGate later without changing the
 agent loop or making unit tests depend on network access.
+
+## Agent Research Profile
+
+The agent, chat, and resident CLI paths can pass a host-owned research profile
+into `retrieval.run`:
+
+```bash
+holo-v3 agent "AAPL 2024 revenue" \
+  --mode retrieval \
+  --research-profile finance_fundamentals
+
+holo-v3 chat --thread research-aapl \
+  --once "research AAPL 2024 revenue" \
+  --semantic-intake model \
+  --research-profile finance_fundamentals
+
+holo-v3 resident run-once \
+  --worker-id research-worker \
+  --research-profile finance_fundamentals
+```
+
+The profile is stored as execution metadata and merged into the retrieval goal
+metadata by the host. Models may still propose structured `capability_args`,
+but this flag gives operators a deterministic way to require the finance source
+policy from the main agent/runtime path. It does not enable live web retrieval;
+without a configured live provider, retrieval remains bounded and offline.

@@ -10,6 +10,7 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler
+from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
@@ -73,10 +74,12 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     agent_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     agent_parser.add_argument("--citations-required", action="store_true")
+    agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
 
     answer_parser = sub.add_parser("answer")
     answer_parser.add_argument("goal")
     answer_parser.add_argument("--citations-required", action="store_true")
+    answer_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
 
     chat_parser = sub.add_parser("chat")
     chat_parser.add_argument("--thread", default="default")
@@ -90,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     chat_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
 
     chat_status_parser = sub.add_parser("chat-status")
     chat_status_parser.add_argument("thread_id")
@@ -141,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run_once.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_run = resident_sub.add_parser("run")
     resident_run.add_argument("--worker-id", default="resident-worker-1")
     resident_run.add_argument("--max-iterations", type=int, default=10)
@@ -155,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_inspect = resident_sub.add_parser("inspect")
     resident_inspect.add_argument("--sample-limit", type=int, default=5)
     resident_sub.add_parser("status")
@@ -290,12 +296,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         payload = runtime.run(
             args.goal,
-            mode=args.mode,
+            mode=_agent_mode(args),
             planner_mode=args.planner,
             evaluator_mode=args.evaluator,
             synthesizer_mode=args.synthesizer,
             semantic_mode=args.semantic_intake,
             citations_required=True if args.citations_required else None,
+            execution_metadata=_runtime_execution_metadata(args),
         )
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
@@ -310,8 +317,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         payload = runtime.run(
             args.goal,
-            mode="retrieval" if args.citations_required else "auto",
+            mode="retrieval" if args.citations_required or args.research_profile else "auto",
             citations_required=True if args.citations_required else None,
+            execution_metadata=_runtime_execution_metadata(args),
         )
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
@@ -335,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
             synthesizer_mode=args.synthesizer,
             semantic_mode=args.semantic_intake,
             turn_router_mode=args.turn_router,
+            execution_metadata=_runtime_execution_metadata(args),
         )
         if args.once is not None:
             payload = runtime.receive(args.once, thread_id=args.thread)
@@ -654,6 +663,7 @@ def _chat_runtime(
     synthesizer_mode: str = "fake",
     semantic_mode: str = "fake",
     turn_router_mode: str = "fake",
+    execution_metadata: JsonObject | None = None,
 ) -> ChatRuntime:
     return ChatRuntime(
         journal=journal,
@@ -674,6 +684,7 @@ def _chat_runtime(
         synthesizer_mode=synthesizer_mode,
         semantic_mode=semantic_mode,
         turn_router_mode=turn_router_mode,
+        execution_metadata=execution_metadata,
     )
 
 
@@ -696,6 +707,13 @@ def _runtime_artifact_store(args) -> ArtifactStore | None:
 
 def _runtime_corpus_store(args) -> ResearchCorpusStore | None:
     return _corpus_store(args, create_default=_corpus_configured(args))
+
+
+def _runtime_execution_metadata(args) -> JsonObject | None:
+    research_profile = getattr(args, "research_profile", None)
+    if not isinstance(research_profile, str) or not research_profile:
+        return None
+    return {"retrieval": {"metadata": {"research_profile": research_profile}}}
 
 
 def _artifact_store(args, *, create_default: bool) -> ArtifactStore | None:
@@ -881,6 +899,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 synthesizer_mode=getattr(args, "synthesizer", "fake"),
                 semantic_mode=getattr(args, "semantic_intake", "fake"),
                 turn_router_mode=getattr(args, "turn_router", "fake"),
+                execution_metadata=_runtime_execution_metadata(args),
             ),
             worker_id=args.worker_id,
             max_attempts=args.max_attempts,
@@ -930,6 +949,13 @@ def _agent_uses_live_model(args) -> bool:
             getattr(args, "turn_router", "fake"),
         )
     )
+
+
+def _agent_mode(args) -> str:
+    mode = getattr(args, "mode", "auto")
+    if mode == "auto" and getattr(args, "research_profile", None):
+        return "retrieval"
+    return str(mode)
 
 
 def _workloop_payload(journal: JournalStore, task_id: str) -> dict[str, object]:

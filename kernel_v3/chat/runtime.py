@@ -38,6 +38,7 @@ class ChatRuntime:
         synthesizer_mode: str = "fake",
         semantic_mode: str = "fake",
         turn_router_mode: str = "fake",
+        execution_metadata: JsonObject | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.agent_runtime = agent_runtime or AgentRuntime(journal=self.journal, workspace_root=Path.cwd())
@@ -48,6 +49,7 @@ class ChatRuntime:
         self.synthesizer_mode = synthesizer_mode
         self.semantic_mode = semantic_mode
         self.turn_router_mode = turn_router_mode
+        self.execution_metadata = dict(execution_metadata or {})
 
     def receive(self, message: str, *, thread_id: str = "default") -> ChatRuntimeResult:
         normalized_thread = _normalize_thread_id(thread_id)
@@ -127,6 +129,7 @@ class ChatRuntime:
                     evaluator_mode=self.evaluator_mode,
                     synthesizer_mode=self.synthesizer_mode,
                     semantic_mode=self.semantic_mode,
+                    execution_metadata=self._execution_metadata(),
                 )
                 result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         elif decision.route == "continue_task":
@@ -140,6 +143,7 @@ class ChatRuntime:
                 evaluator_mode=self.evaluator_mode,
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode=self.semantic_mode,
+                execution_metadata=self._execution_metadata(),
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         else:
@@ -152,6 +156,7 @@ class ChatRuntime:
                 evaluator_mode=self.evaluator_mode,
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode=self.semantic_mode,
+                execution_metadata=self._execution_metadata(),
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         self.journal.append(
@@ -324,6 +329,7 @@ class ChatRuntime:
                 evaluator_mode=self.evaluator_mode,
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode=self.semantic_mode,
+                execution_metadata=self._execution_metadata(),
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
             return _replace_command_result(result, command.result)
@@ -460,7 +466,7 @@ class ChatRuntime:
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode="fake",
                 citations_required=_plan_step_citations_required(step),
-                execution_metadata={"task_execution_step": dict(step)},
+                execution_metadata=self._execution_metadata({"task_execution_step": dict(step)}),
             )
             decision_record = self._append_plan_decision(
                 turn,
@@ -543,7 +549,7 @@ class ChatRuntime:
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode="fake",
                 citations_required=_plan_step_citations_required(step),
-                execution_metadata={"task_execution_step": dict(step)},
+                execution_metadata=self._execution_metadata({"task_execution_step": dict(step)}),
             )
             decision_record = self._append_plan_decision(
                 turn,
@@ -852,6 +858,11 @@ class ChatRuntime:
         result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|inspect|approve <id>|reject <id> [reason]|delete <id> [reason]|export <id>"}
         command = self._append_command(turn, name="/memory", args=args, status="failed", result=result)
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
+
+    def _execution_metadata(self, extra: JsonObject | None = None) -> JsonObject:
+        result = dict(self.execution_metadata)
+        result.update(dict(extra or {}))
+        return result
 
     def _agent_result(
         self,
