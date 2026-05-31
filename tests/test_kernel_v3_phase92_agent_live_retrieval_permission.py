@@ -165,6 +165,60 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_endpoint(tmp_path: Path
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
+def test_phase92_cli_chat_live_retrieval_blocks_without_env_gate(tmp_path: Path, capsys, monkeypatch) -> None:
+    _clear_live_env(monkeypatch)
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "chat",
+                "--thread",
+                "live-chat",
+                "--once",
+                "research AAPL revenue",
+                "--live-retrieval",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "live_retrieval_not_enabled"
+    assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
+def test_phase92_cli_resident_live_retrieval_blocks_without_env_gate(tmp_path: Path, capsys, monkeypatch) -> None:
+    _clear_live_env(monkeypatch)
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = [
+        "--journal",
+        str(journal_path),
+        "--index",
+        str(index_path),
+        "--resident-db",
+        str(resident_db),
+    ]
+
+    assert cli.main([*base, "resident", "enqueue", "research AAPL revenue", "--thread", "live-resident"]) == 0
+    capsys.readouterr()
+    assert cli.main([*base, "resident", "run-once", "--worker-id", "worker-live", "--live-retrieval"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "live_retrieval_not_enabled"
+    records = JournalStore(journal_path, index_path=index_path).records()
+    assert [record.kind for record in records] == ["resident_inbox_enqueued"]
+
+
 def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
     tmp_path: Path,
     capsys,

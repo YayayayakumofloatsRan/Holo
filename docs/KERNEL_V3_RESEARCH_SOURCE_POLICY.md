@@ -235,6 +235,20 @@ holo-v3 agent "AAPL 2024 revenue" \
   --research-profile finance_fundamentals
 ```
 
+The same gate is available for thread and resident execution:
+
+```bash
+holo-v3 chat --thread research-aapl \
+  --once "research AAPL 2024 revenue" \
+  --live-retrieval \
+  --live-max-network-fetches 1
+
+holo-v3 resident run-once \
+  --worker-id research-worker \
+  --live-retrieval \
+  --live-max-network-fetches 1
+```
+
 If the env gate or endpoint is missing, the command returns a blocked payload
 before constructing a live retrieval operator or starting the agent loop.
 

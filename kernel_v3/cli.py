@@ -49,6 +49,11 @@ from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
 
 
+def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("--live-retrieval", action="store_true")
+    command_parser.add_argument("--live-max-network-fetches", type=int, default=3)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     parser = argparse.ArgumentParser(prog="holo-v3")
@@ -79,8 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     agent_parser.add_argument("--citations-required", action="store_true")
     agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
-    agent_parser.add_argument("--live-retrieval", action="store_true")
-    agent_parser.add_argument("--live-max-network-fetches", type=int, default=3)
+    _add_live_retrieval_args(agent_parser)
 
     answer_parser = sub.add_parser("answer")
     answer_parser.add_argument("goal")
@@ -100,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     chat_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    _add_live_retrieval_args(chat_parser)
 
     chat_status_parser = sub.add_parser("chat-status")
     chat_status_parser.add_argument("thread_id")
@@ -152,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run_once.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    _add_live_retrieval_args(resident_run_once)
     resident_run_once.add_argument("--tick-schedules", action="store_true")
     resident_run_once.add_argument("--schedule-tick-limit", type=int, default=20)
     resident_run = resident_sub.add_parser("run")
@@ -169,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    _add_live_retrieval_args(resident_run)
     resident_run.add_argument("--tick-schedules", action="store_true")
     resident_run.add_argument("--schedule-tick-limit", type=int, default=20)
     resident_inspect = resident_sub.add_parser("inspect")
@@ -370,11 +377,16 @@ def main(argv: list[str] | None = None) -> int:
         if _agent_uses_live_model(args) and os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
             print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
             return 1
+        live_retrieval = _live_retrieval_config_for_args(args)
+        if isinstance(live_retrieval, dict):
+            print(json.dumps(live_retrieval, ensure_ascii=False, sort_keys=True))
+            return 1
         runtime = _chat_runtime(
             journal,
             artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
             research_corpus_store=_runtime_corpus_store(args),
+            retrieval_operator=live_retrieval.build_operator() if live_retrieval is not None else None,
             live_model=_agent_uses_live_model(args),
             model=args.model,
             profile=args.profile,
@@ -702,6 +714,7 @@ def _chat_runtime(
     artifact_store: ArtifactStore | None = None,
     memory_store: MemoryStore | None = None,
     research_corpus_store: ResearchCorpusStore | None = None,
+    retrieval_operator: RetrievalOperator | None = None,
     live_model: bool = False,
     model: str | None = None,
     profile: str = "balanced",
@@ -726,6 +739,7 @@ def _chat_runtime(
             artifact_store=artifact_store,
             memory_store=memory_store,
             research_corpus_store=research_corpus_store,
+            retrieval_operator=retrieval_operator,
         ),
         memory_store=memory_store,
         planner_mode=planner_mode,
@@ -1088,6 +1102,9 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         )
         return {"status": "ok", "message": message.to_dict()}
     if command in {"run-once", "run"}:
+        live_retrieval = _live_retrieval_config_for_args(args)
+        if isinstance(live_retrieval, dict):
+            return live_retrieval
         memory_store = _memory_store(args, create_default=False)
         runtime = ResidentRuntime(
             queue=queue,
@@ -1096,6 +1113,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 artifact_store=_runtime_artifact_store(args),
                 memory_store=memory_store,
                 research_corpus_store=_runtime_corpus_store(args),
+                retrieval_operator=live_retrieval.build_operator() if live_retrieval is not None else None,
                 live_model=_agent_uses_live_model(args),
                 model=getattr(args, "model", None),
                 profile=getattr(args, "profile", "balanced"),
