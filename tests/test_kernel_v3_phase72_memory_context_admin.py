@@ -31,6 +31,28 @@ def test_phase72_context_injects_durable_memory_as_separate_section():
     assert "ledger-source" in pack.source_refs
 
 
+def test_phase72_context_injection_audits_memory_access_without_changing_snapshot_hash():
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    item = _memory_item(summary="偏好中文短答", thread_id="thread-1")
+    store.commit(item)
+    task = _task(thread_id="thread-1")
+    compiler = ContextPackCompiler(durable_memory_store=store)
+
+    first = compiler.compile(task, JournalStore.in_memory())
+    second = compiler.compile(task, JournalStore.in_memory())
+
+    access_events = [event for event in store.audit_records() if event["event_type"] == "memory_items_recalled"]
+    first_durable = next(section for section in first.sections if section["name"] == "durable_memory")
+    second_durable = next(section for section in second.sections if section["name"] == "durable_memory")
+    assert len(access_events) == 2
+    assert access_events[0]["payload"]["memory_ids"] == [item.memory_id]
+    assert access_events[0]["payload"]["access_context"]["usage"] == "context_pack"
+    assert access_events[0]["payload"]["access_context"]["context_id"] == first.context_id
+    assert store.get(item.memory_id, include_inactive=True).last_accessed_ms == access_events[-1]["payload"]["accessed_at_ms"]
+    assert first_durable["items"][0]["payload_hash"] == second_durable["items"][0]["payload_hash"]
+    assert first.payload_hash == second.payload_hash
+
+
 def test_phase72_context_does_not_add_durable_section_without_store():
     pack = ContextPackCompiler().compile(_task(thread_id="thread-1"), JournalStore.in_memory())
 

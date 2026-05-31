@@ -105,6 +105,12 @@ approves or rejects them.
 Context injection uses a run/resume snapshot of recallable memory only: deleted
 and expired items are excluded, and `sensitive` memory is withheld unless the
 compiler is explicitly configured with `include_sensitive_memory=True`.
+Each durable-memory context injection records a safe `memory_items_recalled`
+event in the memory store and updates `last_accessed_ms` for the recalled
+items. The access record contains memory ids, scope, filter counts, and context
+ids; it does not contain raw artifact payloads or raw task bodies. Access
+auditing is metadata only: it does not approve proposals, commit new memories,
+or let the model write durable state.
 
 For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured

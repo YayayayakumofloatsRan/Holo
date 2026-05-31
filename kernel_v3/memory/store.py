@@ -24,7 +24,7 @@ from kernel_v3.memory.inspection import (
     inspection_status,
     reference_recommendations,
 )
-from kernel_v3.memory.privacy import validate_memory_item
+from kernel_v3.memory.privacy import contains_secret_like_content, validate_memory_item
 
 if TYPE_CHECKING:
     from kernel_v3.context import ArtifactStore
@@ -217,7 +217,10 @@ class MemoryStore:
         include_sensitive: bool = False,
         limit: int = 20,
         now_ms: int | None = None,
+        record_access: bool = False,
+        access_context: JsonObject | None = None,
     ) -> MemoryRecallResult:
+        timestamp = now_ms if now_ms is not None else self._now_ms()
         normalized_query = " ".join((query or "").lower().split())
         filtered = {"expired": 0, "deleted": 0, "sensitive": 0, "scope": 0, "query": 0}
         matches: list[MemoryItem] = []
@@ -225,7 +228,7 @@ class MemoryStore:
             if item.state == "deleted":
                 filtered["deleted"] += 1
                 continue
-            if self._is_expired(item, now_ms=now_ms):
+            if self._is_expired(item, now_ms=timestamp):
                 filtered["expired"] += 1
                 continue
             if scope is not None and not _scope_matches(item.scope, scope):
@@ -239,14 +242,24 @@ class MemoryStore:
                 continue
             matches.append(item)
         matches = sorted(matches, key=lambda item: (-item.confidence, item.created_at_ms, item.memory_id))[: max(0, limit)]
-        return MemoryRecallResult(
+        result = MemoryRecallResult(
             query=query,
             scope=dict(scope or {}),
             items=[item.to_dict() for item in matches],
             total=len(matches),
             filtered=filtered,
-            generated_at_ms=now_ms if now_ms is not None else self._now_ms(),
+            generated_at_ms=timestamp,
         )
+        if record_access:
+            self._record_recall_access(
+                result,
+                matches=matches,
+                include_sensitive=include_sensitive,
+                limit=limit,
+                accessed_at_ms=timestamp,
+                access_context=access_context,
+            )
+        return result
 
     def proposals(self) -> list[MemoryProposal]:
         return sorted(self._proposals.values(), key=lambda item: (item.created_at_ms, item.proposal_id))
@@ -367,7 +380,8 @@ class MemoryStore:
             cursor = conn.execute(
                 """
                 SELECT memory_id, kind, title, summary, scope_json, privacy_class,
-                       state, dedupe_key, expires_at_ms, updated_at_ms
+                       state, dedupe_key, expires_at_ms, updated_at_ms,
+                       last_accessed_ms
                 FROM memory_items
                 ORDER BY created_at_ms, memory_id
                 """
@@ -427,6 +441,55 @@ class MemoryStore:
                 if item is not None:
                     self._items[tombstone.memory_id] = replace(item, state="deleted", updated_at_ms=tombstone.deleted_at_ms)
                 self._tombstones[tombstone.memory_id] = tombstone
+            elif event_type == "memory_items_recalled":
+                self._replay_recall_access(payload)
+
+    def _record_recall_access(
+        self,
+        result: MemoryRecallResult,
+        *,
+        matches: list[MemoryItem],
+        include_sensitive: bool,
+        limit: int,
+        accessed_at_ms: int,
+        access_context: JsonObject | None,
+    ) -> None:
+        memory_ids = [item.memory_id for item in matches]
+        payload = {
+            "accessed_at_ms": accessed_at_ms,
+            "query": _safe_access_text(result.query),
+            "scope": dict(result.scope),
+            "include_sensitive": include_sensitive,
+            "limit": limit,
+            "total": result.total,
+            "filtered": dict(result.filtered),
+            "memory_ids": memory_ids,
+            "access_context": _safe_metadata(dict(access_context or {})),
+        }
+        self._append_event("memory_items_recalled", payload)
+        for item in matches:
+            updated = replace(item, last_accessed_ms=accessed_at_ms)
+            self._items[item.memory_id] = updated
+            self._upsert_item_index(updated)
+
+    def _replay_recall_access(self, payload: JsonObject) -> None:
+        accessed_at_ms = _positive_int(payload.get("accessed_at_ms"))
+        if accessed_at_ms is None:
+            return
+        raw_memory_ids = payload.get("memory_ids")
+        if not isinstance(raw_memory_ids, list):
+            return
+        for raw_memory_id in raw_memory_ids:
+            memory_id = raw_memory_id if isinstance(raw_memory_id, str) else None
+            if not memory_id:
+                continue
+            item = self._items.get(memory_id)
+            if item is None:
+                continue
+            previous = item.last_accessed_ms if item.last_accessed_ms is not None else 0
+            if previous > accessed_at_ms:
+                continue
+            self._items[memory_id] = replace(item, last_accessed_ms=accessed_at_ms)
 
     def _append_event(self, event_type: str, payload: JsonObject) -> None:
         event = {
@@ -674,6 +737,52 @@ def _validate_committable_item(item: MemoryItem) -> None:
         raise ValueError(f"invalid_memory_commit_state:{item.state}")
     if item.approved_by is None or not str(item.approved_by).strip():
         raise ValueError("memory_commit_requires_approval")
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, float) and value >= 0:
+        return int(value)
+    return None
+
+
+def _safe_metadata(data: JsonObject) -> JsonObject:
+    safe: JsonObject = {}
+    secret_markers = ("body", "raw", "secret", "token", "password", "api_key", "credential", "authorization", "cookie")
+    for key, value in data.items():
+        lowered = key.lower()
+        if any(marker in lowered for marker in secret_markers):
+            safe[key] = "[omitted]"
+        elif isinstance(value, str):
+            safe[key] = value[:160]
+        elif isinstance(value, (int, float, bool)) or value is None:
+            safe[key] = value
+        elif isinstance(value, dict):
+            safe[key] = _safe_metadata(value)
+        elif isinstance(value, list):
+            safe[key] = [_safe_metadata_item(item) for item in value[:10]]
+        else:
+            safe[key] = str(value)[:160]
+    return safe
+
+
+def _safe_metadata_item(value: object) -> object:
+    if isinstance(value, str):
+        return value[:160]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return _safe_metadata(value)
+    return str(value)[:160]
+
+
+def _safe_access_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if contains_secret_like_content(value):
+        return "[omitted]"
+    return value[:160]
 
 
 def _inspection_recommendations(

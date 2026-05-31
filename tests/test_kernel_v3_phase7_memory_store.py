@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -28,6 +29,43 @@ def test_phase7_memory_store_commits_lists_and_recalls_active_items():
     assert recalled.total == 1
     assert recalled.items[0]["memory_id"] == item.memory_id
     assert recalled.filtered == {"expired": 0, "deleted": 0, "sensitive": 0, "scope": 0, "query": 0}
+
+
+def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path):
+    log_path = tmp_path / "memory_log.jsonl"
+    index_path = tmp_path / "memory_index.sqlite3"
+    store = MemoryStore(log_path, index_path=index_path, clock_ms=_sequence_clock([1000, 1100, 1200, 1300, 1400]))
+    item = _memory_item(summary="User prefers concise Chinese answers.")
+    store.commit(item)
+
+    recalled = store.recall(
+        query="Chinese",
+        scope={"user_id": "local:user"},
+        record_access=True,
+        access_context={"task_id": "task-memory", "raw_body": "RAW_MEMORY_ACCESS_SECRET"},
+    )
+
+    access_event = store.audit_records()[-1]
+    assert recalled.total == 1
+    assert access_event["event_type"] == "memory_items_recalled"
+    assert access_event["payload"]["memory_ids"] == [item.memory_id]
+    assert access_event["payload"]["accessed_at_ms"] == 1100
+    assert access_event["payload"]["access_context"]["raw_body"] == "[omitted]"
+    assert "RAW_MEMORY_ACCESS_SECRET" not in json.dumps(store.audit_records(), ensure_ascii=False)
+    assert store.get(item.memory_id, include_inactive=True).last_accessed_ms == 1100
+    assert store.index_items()[0]["last_accessed_ms"] == 1100
+
+    store.recall(query="api_key=sk_12345678901234567890", record_access=True)
+    secret_query_event = store.audit_records()[-1]
+    dumped = json.dumps(store.audit_records(), ensure_ascii=False)
+    assert secret_query_event["payload"]["query"] == "[omitted]"
+    assert "sk_12345678901234567890" not in dumped
+    assert "api_key" not in dumped
+
+    reloaded = MemoryStore(log_path, index_path=index_path, clock_ms=lambda: 2000)
+
+    assert reloaded.get(item.memory_id, include_inactive=True).last_accessed_ms == 1100
+    assert reloaded.index_items()[0]["last_accessed_ms"] == 1100
 
 
 def test_phase7_memory_store_rebuilds_index_and_state_from_append_only_log(tmp_path):
@@ -196,3 +234,12 @@ def _memory_item(
         last_accessed_ms=None,
         metadata={},
     )
+
+
+def _sequence_clock(values: list[int]):
+    iterator = iter(values)
+
+    def tick() -> int:
+        return next(iterator)
+
+    return tick

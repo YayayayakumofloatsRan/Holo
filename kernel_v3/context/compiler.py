@@ -107,6 +107,8 @@ class ContextPackCompiler:
                 task=task,
                 limit=self.durable_memory_limit,
                 include_sensitive=self.include_sensitive_memory,
+                context_id=f"ctx-{task.task_id}-{task.run_id}-{target_step}",
+                step_id=target_step,
             )
             durable_memory_items = [
                 _compact_durable_memory_item(item)
@@ -531,6 +533,8 @@ def _recall_durable_memory(
     task: TaskState,
     limit: int,
     include_sensitive: bool,
+    context_id: str,
+    step_id: str,
 ) -> JsonObject:
     if store is None or limit <= 0:
         return {"query": None, "scope": {"thread_id": task.thread_id}, "items": [], "total": 0, "filtered": {}}
@@ -539,10 +543,33 @@ def _recall_durable_memory(
         scope={"thread_id": task.thread_id},
         include_sensitive=include_sensitive,
         limit=limit,
+        record_access=True,
+        access_context={
+            "usage": "context_pack",
+            "context_id": context_id,
+            "task_id": task.task_id,
+            "run_id": task.run_id,
+            "thread_id": task.thread_id,
+            "step_id": step_id,
+        },
     ).to_dict()
 
 
 def _compact_durable_memory_item(item: JsonObject) -> JsonObject:
+    stable_payload = {
+        "memory_id": item.get("memory_id"),
+        "kind": item.get("kind"),
+        "title": item.get("title"),
+        "summary": item.get("summary"),
+        "scope": item.get("scope"),
+        "privacy_class": item.get("privacy_class"),
+        "confidence": item.get("confidence"),
+        "dedupe_key": item.get("dedupe_key"),
+        "provenance_refs": item.get("provenance_refs"),
+        "artifact_refs": item.get("artifact_refs"),
+        "state": item.get("state"),
+        "updated_at_ms": item.get("updated_at_ms"),
+    }
     return {
         "memory_id": item.get("memory_id"),
         "kind": item.get("kind"),
@@ -554,7 +581,7 @@ def _compact_durable_memory_item(item: JsonObject) -> JsonObject:
         "dedupe_key": item.get("dedupe_key"),
         "provenance_refs": list(item.get("provenance_refs", [])) if isinstance(item.get("provenance_refs"), list) else [],
         "artifact_refs": list(item.get("artifact_refs", [])) if isinstance(item.get("artifact_refs"), list) else [],
-        "payload_hash": deterministic_hash(item),
+        "payload_hash": deterministic_hash(stable_payload),
     }
 
 
