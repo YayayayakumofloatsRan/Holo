@@ -1,0 +1,409 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from pathlib import Path
+from typing import Callable
+
+from kernel_v3.contracts import JsonObject
+from kernel_v3.journal import JournalStore
+from kernel_v3.resident.contracts import InboundMessage, ResidentSchedule, ResidentScheduleTickResult
+from kernel_v3.resident.queue import ResidentQueue
+
+
+class ResidentScheduler:
+    def __init__(
+        self,
+        *,
+        queue: ResidentQueue,
+        clock_ms: Callable[[], int] | None = None,
+        journal: JournalStore | None = None,
+    ) -> None:
+        self.queue = queue
+        self.db_path = Path(queue.db_path)
+        self.clock_ms = clock_ms or queue.clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
+        self.journal = journal
+        self._ensure_schema()
+
+    def add_schedule(
+        self,
+        *,
+        thread_id: str,
+        text: str,
+        schedule_id: str | None = None,
+        source: str = "schedule",
+        due_at_ms: int | None = None,
+        due_in_ms: int = 0,
+        interval_ms: int | None = None,
+        max_runs: int | None = 1,
+        metadata: JsonObject | None = None,
+    ) -> ResidentSchedule:
+        now = self._now_ms()
+        due_at = int(due_at_ms) if due_at_ms is not None else now + max(0, int(due_in_ms))
+        _validate_schedule(interval_ms=interval_ms, max_runs=max_runs)
+        schedule = ResidentSchedule(
+            schedule_id=schedule_id or f"schedule-{now}",
+            thread_id=thread_id,
+            text=text,
+            source=source,
+            status="active",
+            created_at_ms=now,
+            next_due_at_ms=due_at,
+            interval_ms=interval_ms,
+            max_runs=max_runs,
+            run_count=0,
+            last_enqueued_at_ms=None,
+            last_message_id=None,
+            metadata=dict(metadata or {}),
+        )
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _schedule_by_id(conn, schedule.schedule_id)
+            if existing is not None:
+                if existing.to_dict() == schedule.to_dict():
+                    conn.rollback()
+                    return existing
+                if (
+                    existing.thread_id == schedule.thread_id
+                    and existing.text == schedule.text
+                    and existing.source == schedule.source
+                    and existing.next_due_at_ms == schedule.next_due_at_ms
+                    and existing.interval_ms == schedule.interval_ms
+                    and existing.max_runs == schedule.max_runs
+                    and existing.metadata == schedule.metadata
+                ):
+                    conn.rollback()
+                    return existing
+                conn.rollback()
+                raise ValueError(f"resident_schedule_id_conflict:{schedule.schedule_id}")
+            conn.execute(
+                """
+                INSERT INTO resident_schedules (
+                    schedule_id, thread_id, text, source, status, created_at_ms,
+                    next_due_at_ms, interval_ms, max_runs, run_count,
+                    last_enqueued_at_ms, last_message_id, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                _schedule_row(schedule),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        self._journal_event(
+            "resident_schedule_added",
+            schedule.to_dict(),
+            state_delta={"resident_schedule_status": schedule.status, "resident_schedule_id": schedule.schedule_id},
+        )
+        return schedule
+
+    def list_schedules(self, *, include_inactive: bool = False) -> list[ResidentSchedule]:
+        conn = self._connect()
+        try:
+            where = "" if include_inactive else "WHERE status = 'active'"
+            rows = conn.execute(
+                """
+                SELECT schedule_id, thread_id, text, source, status, created_at_ms,
+                       next_due_at_ms, interval_ms, max_runs, run_count,
+                       last_enqueued_at_ms, last_message_id, metadata_json
+                FROM resident_schedules
+                """
+                + where
+                + " ORDER BY created_at_ms, schedule_id"
+            ).fetchall()
+            return [_schedule_from_row(row) for row in rows]
+        finally:
+            conn.close()
+
+    def disable_schedule(self, schedule_id: str, *, reason: str = "manual_disable") -> ResidentSchedule | None:
+        now = self._now_ms()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _schedule_by_id(conn, schedule_id)
+            if existing is None:
+                conn.rollback()
+                return None
+            if existing.status != "active":
+                conn.rollback()
+                return existing
+            metadata = dict(existing.metadata)
+            metadata["disabled_reason"] = reason
+            metadata["disabled_at_ms"] = now
+            conn.execute(
+                """
+                UPDATE resident_schedules
+                SET status = 'disabled', metadata_json = ?
+                WHERE schedule_id = ?
+                """,
+                (_json(metadata), schedule_id),
+            )
+            row = _schedule_by_id(conn, schedule_id)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        if row is not None:
+            self._journal_event(
+                "resident_schedule_disabled",
+                row.to_dict(),
+                state_delta={"resident_schedule_status": row.status, "resident_schedule_id": row.schedule_id},
+            )
+        return row
+
+    def tick(self, *, limit: int = 20) -> ResidentScheduleTickResult:
+        now = self._now_ms()
+        due = self._due_schedules(now_ms=now, limit=limit)
+        enqueued: list[InboundMessage] = []
+        updated_schedules: list[ResidentSchedule] = []
+        failures: list[JsonObject] = []
+
+        for schedule in due:
+            if schedule.next_due_at_ms is None:
+                failures.append({"schedule_id": schedule.schedule_id, "reason": "missing_next_due_at_ms"})
+                continue
+            message_id = _message_id(schedule)
+            try:
+                message = self.queue.enqueue(
+                    thread_id=schedule.thread_id,
+                    text=schedule.text,
+                    source=schedule.source,
+                    message_id=message_id,
+                    metadata={
+                        **dict(schedule.metadata),
+                        "schedule_id": schedule.schedule_id,
+                        "scheduled_due_at_ms": schedule.next_due_at_ms,
+                        "schedule_run_index": schedule.run_count + 1,
+                    },
+                )
+                updated = self._advance_schedule(schedule, message=message, ticked_at_ms=now)
+                enqueued.append(message)
+                updated_schedules.append(updated)
+                self._journal_event(
+                    "resident_schedule_enqueued",
+                    {"schedule": updated.to_dict(), "message": message.to_dict()},
+                    state_delta={
+                        "resident_schedule_status": updated.status,
+                        "resident_schedule_id": updated.schedule_id,
+                        "resident_message_id": message.message_id,
+                    },
+                )
+            except Exception as exc:  # pragma: no cover - defensive queue containment
+                failures.append({"schedule_id": schedule.schedule_id, "reason": type(exc).__name__})
+
+        status = "idle"
+        if failures and enqueued:
+            status = "partial_failure"
+        elif failures:
+            status = "failed"
+        elif enqueued:
+            status = "completed"
+        result = ResidentScheduleTickResult(
+            status=status,
+            generated_at_ms=now,
+            due_count=len(due),
+            enqueued_count=len(enqueued),
+            skipped_count=max(0, len(due) - len(enqueued) - len(failures)),
+            failed_count=len(failures),
+            schedules=[schedule.to_dict() for schedule in updated_schedules],
+            enqueued_messages=[message.to_dict() for message in enqueued],
+            failures=failures,
+        )
+        self._journal_event(
+            "resident_schedule_tick",
+            result.to_dict(),
+            state_delta={"resident_schedule_tick_status": result.status, "resident_schedule_due_count": result.due_count},
+        )
+        return result
+
+    def _due_schedules(self, *, now_ms: int, limit: int) -> list[ResidentSchedule]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT schedule_id, thread_id, text, source, status, created_at_ms,
+                       next_due_at_ms, interval_ms, max_runs, run_count,
+                       last_enqueued_at_ms, last_message_id, metadata_json
+                FROM resident_schedules
+                WHERE status = 'active'
+                  AND next_due_at_ms IS NOT NULL
+                  AND next_due_at_ms <= ?
+                  AND (max_runs IS NULL OR run_count < max_runs)
+                ORDER BY next_due_at_ms, created_at_ms, schedule_id
+                LIMIT ?
+                """,
+                (now_ms, max(0, int(limit))),
+            ).fetchall()
+            return [_schedule_from_row(row) for row in rows]
+        finally:
+            conn.close()
+
+    def _advance_schedule(
+        self,
+        schedule: ResidentSchedule,
+        *,
+        message: InboundMessage,
+        ticked_at_ms: int,
+    ) -> ResidentSchedule:
+        run_count = schedule.run_count + 1
+        completed = schedule.max_runs is not None and run_count >= schedule.max_runs
+        if completed:
+            status = "completed"
+            next_due_at_ms = None
+        else:
+            status = "active"
+            next_due_at_ms = (schedule.next_due_at_ms or ticked_at_ms) + int(schedule.interval_ms or 0)
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE resident_schedules
+                SET status = ?, next_due_at_ms = ?, run_count = ?,
+                    last_enqueued_at_ms = ?, last_message_id = ?
+                WHERE schedule_id = ?
+                """,
+                (status, next_due_at_ms, run_count, ticked_at_ms, message.message_id, schedule.schedule_id),
+            )
+            row = _schedule_by_id(conn, schedule.schedule_id)
+            conn.commit()
+            if row is None:  # pragma: no cover - impossible after successful update
+                raise RuntimeError(f"resident_schedule_missing_after_update:{schedule.schedule_id}")
+            return row
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _ensure_schema(self) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS resident_schedules (
+                    schedule_id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    next_due_at_ms INTEGER,
+                    interval_ms INTEGER,
+                    max_runs INTEGER,
+                    run_count INTEGER NOT NULL,
+                    last_enqueued_at_ms INTEGER,
+                    last_message_id TEXT,
+                    metadata_json TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_resident_schedules_due ON resident_schedules(status, next_due_at_ms)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _connect(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        return conn
+
+    def _now_ms(self) -> int:
+        return int(self.clock_ms())
+
+    def _journal_event(self, kind: str, data: JsonObject, *, state_delta: JsonObject | None = None) -> None:
+        if self.journal is None:
+            return
+        self.journal.append(
+            task_id=None,
+            run_id="resident-scheduler",
+            step_id=None,
+            kind=kind,
+            data=data,
+            state_delta=state_delta or {},
+        )
+
+
+def _validate_schedule(*, interval_ms: int | None, max_runs: int | None) -> None:
+    if interval_ms is not None and int(interval_ms) < 0:
+        raise ValueError("resident_schedule_interval_must_be_non_negative")
+    if max_runs is not None and int(max_runs) <= 0:
+        raise ValueError("resident_schedule_max_runs_must_be_positive")
+    if (max_runs is None or max_runs > 1) and not interval_ms:
+        raise ValueError("resident_schedule_repeating_requires_positive_interval")
+
+
+def _schedule_row(schedule: ResidentSchedule) -> tuple[object, ...]:
+    return (
+        schedule.schedule_id,
+        schedule.thread_id,
+        schedule.text,
+        schedule.source,
+        schedule.status,
+        schedule.created_at_ms,
+        schedule.next_due_at_ms,
+        schedule.interval_ms,
+        schedule.max_runs,
+        schedule.run_count,
+        schedule.last_enqueued_at_ms,
+        schedule.last_message_id,
+        _json(schedule.metadata),
+    )
+
+
+def _schedule_from_row(row) -> ResidentSchedule:
+    return ResidentSchedule.from_dict(
+        {
+            "schedule_id": row[0],
+            "thread_id": row[1],
+            "text": row[2],
+            "source": row[3],
+            "status": row[4],
+            "created_at_ms": int(row[5]),
+            "next_due_at_ms": int(row[6]) if row[6] is not None else None,
+            "interval_ms": int(row[7]) if row[7] is not None else None,
+            "max_runs": int(row[8]) if row[8] is not None else None,
+            "run_count": int(row[9]),
+            "last_enqueued_at_ms": int(row[10]) if row[10] is not None else None,
+            "last_message_id": row[11],
+            "metadata": _json_dict(row[12]),
+        }
+    )
+
+
+def _schedule_by_id(conn: sqlite3.Connection, schedule_id: str) -> ResidentSchedule | None:
+    row = conn.execute(
+        """
+        SELECT schedule_id, thread_id, text, source, status, created_at_ms,
+               next_due_at_ms, interval_ms, max_runs, run_count,
+               last_enqueued_at_ms, last_message_id, metadata_json
+        FROM resident_schedules
+        WHERE schedule_id = ?
+        """,
+        (schedule_id,),
+    ).fetchone()
+    return _schedule_from_row(row) if row is not None else None
+
+
+def _message_id(schedule: ResidentSchedule) -> str:
+    return f"scheduled-{schedule.schedule_id}-{schedule.next_due_at_ms}"
+
+
+def _json(payload: JsonObject) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _json_dict(value: object) -> JsonObject:
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    loaded = json.loads(value)
+    return loaded if isinstance(loaded, dict) else {}

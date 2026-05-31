@@ -5,10 +5,13 @@ from kernel_v3.resident.contracts import (
     ResidentQueueInspection,
     ResidentQueueStatus,
     ResidentRunResult,
+    ResidentSchedule,
+    ResidentScheduleTickResult,
     WorkerLease,
 )
 from kernel_v3.resident.queue import ResidentQueue
 from kernel_v3.resident.runtime import ResidentRuntime
+from kernel_v3.resident.scheduler import ResidentScheduler
 
 __all__ = [
     "InboundMessage",
@@ -19,5 +22,8 @@ __all__ = [
     "ResidentQueueStatus",
     "ResidentRunResult",
     "ResidentRuntime",
+    "ResidentSchedule",
+    "ResidentScheduler",
+    "ResidentScheduleTickResult",
     "WorkerLease",
 ]

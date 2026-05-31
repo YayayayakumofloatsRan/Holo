@@ -334,6 +334,45 @@ runs:
   the CLI surfaces for migration and audit export.
 - Implemented tests live in `tests/test_kernel_v3_phase74_memory_migration_trace.py`.
 
+## Phase7.6: Bounded Resident Scheduler
+
+Add the smallest scheduler surface needed for long-running resident operation:
+
+- `kernel_v3/resident/scheduler.py`
+- `ResidentSchedule`
+- `ResidentScheduleTickResult`
+- CLI commands:
+  - `holo-v3 resident schedule-add`
+  - `holo-v3 resident schedule-list`
+  - `holo-v3 resident schedule-tick`
+  - `holo-v3 resident schedule-disable`
+
+Rules:
+
+- scheduler stores local schedule metadata in the resident SQLite database
+- scheduler only enqueues due messages into `ResidentQueue`
+- scheduler does not execute tools, call models, synthesize answers, or route
+  chat turns
+- worker execution still flows through `ResidentRuntime -> ChatRuntime ->
+  AgentRuntime`
+- every schedule add, due enqueue, disable, and tick is journaled
+- enqueue is idempotent by deterministic scheduled message id
+- repeated schedules require a positive interval and bounded `max_runs` unless
+  the operator explicitly requests an unbounded recurring local schedule
+
+Implementation note:
+
+- `ResidentScheduler.tick()` scans active due schedules, enqueues each due item
+  as a normal inbox message with schedule metadata, advances or completes the
+  schedule, and journals both per-schedule enqueue and tick summary records.
+- A crash after enqueue but before schedule advancement is safe to retry because
+  the scheduled message id is deterministic. `ResidentQueue.enqueue()` returns
+  the existing inbox message on identical replay instead of duplicating work.
+- `ResidentRuntime` is unchanged; scheduled work is indistinguishable from
+  other inbox work once it has been enqueued.
+- Implemented tests live in
+  `tests/test_kernel_v3_phase76_resident_scheduler.py`.
+
 ## Acceptance Gate
 
 Before moving beyond Phase7 memory core:

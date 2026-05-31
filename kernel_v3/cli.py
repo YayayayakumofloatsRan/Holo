@@ -39,7 +39,7 @@ from kernel_v3.retrieval import (
     SearchGoal,
     SearchSource,
 )
-from kernel_v3.resident import ResidentQueue, ResidentRuntime
+from kernel_v3.resident import ResidentQueue, ResidentRuntime, ResidentScheduler
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
@@ -176,6 +176,21 @@ def main(argv: list[str] | None = None) -> int:
     resident_retry_outbox = resident_sub.add_parser("retry-outbox")
     resident_retry_outbox.add_argument("outbox_id")
     resident_retry_outbox.add_argument("--reason", default="manual_retry")
+    resident_schedule_add = resident_sub.add_parser("schedule-add")
+    resident_schedule_add.add_argument("text")
+    resident_schedule_add.add_argument("--thread", default="default")
+    resident_schedule_add.add_argument("--schedule-id", default=None)
+    resident_schedule_add.add_argument("--due-at-ms", type=int, default=None)
+    resident_schedule_add.add_argument("--due-in-ms", type=int, default=0)
+    resident_schedule_add.add_argument("--interval-ms", type=int, default=None)
+    resident_schedule_add.add_argument("--max-runs", type=int, default=1)
+    resident_schedule_tick = resident_sub.add_parser("schedule-tick")
+    resident_schedule_tick.add_argument("--limit", type=int, default=20)
+    resident_schedule_list = resident_sub.add_parser("schedule-list")
+    resident_schedule_list.add_argument("--include-inactive", action="store_true")
+    resident_schedule_disable = resident_sub.add_parser("schedule-disable")
+    resident_schedule_disable.add_argument("schedule_id")
+    resident_schedule_disable.add_argument("--reason", default="manual_disable")
 
     inspect_run_parser = sub.add_parser("inspect-run")
     inspect_run_parser.add_argument("task_id")
@@ -863,6 +878,34 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
     if command == "inspect":
         inspection = queue.inspect(sample_limit=args.sample_limit)
         return {"status": inspection.status, "inspection": inspection.to_dict()}
+    if command == "schedule-add":
+        scheduler = ResidentScheduler(queue=queue, journal=journal)
+        schedule = scheduler.add_schedule(
+            thread_id=args.thread,
+            text=args.text,
+            schedule_id=args.schedule_id,
+            due_at_ms=args.due_at_ms,
+            due_in_ms=args.due_in_ms,
+            interval_ms=args.interval_ms,
+            max_runs=args.max_runs,
+        )
+        return {"status": "ok", "schedule": schedule.to_dict()}
+    if command == "schedule-list":
+        scheduler = ResidentScheduler(queue=queue, journal=journal)
+        schedules = scheduler.list_schedules(include_inactive=args.include_inactive)
+        return {
+            "status": "ok",
+            "schedules": [schedule.to_dict() for schedule in schedules],
+        }
+    if command == "schedule-tick":
+        scheduler = ResidentScheduler(queue=queue, journal=journal)
+        return {"status": "ok", "tick": scheduler.tick(limit=args.limit).to_dict()}
+    if command == "schedule-disable":
+        scheduler = ResidentScheduler(queue=queue, journal=journal)
+        schedule = scheduler.disable_schedule(args.schedule_id, reason=args.reason)
+        if schedule is None:
+            return {"status": "failed", "reason": "schedule_not_found", "schedule_id": args.schedule_id}
+        return {"status": "ok", "schedule": schedule.to_dict()}
     if command == "requeue":
         message = queue.requeue(
             args.message_id,

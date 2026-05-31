@@ -211,6 +211,14 @@ work, and `awaiting_user_input` when the next useful step is a user reply. This
 keeps long-running supervision from confusing "no claimable message right now"
 with a healthy completed queue.
 
+The resident scheduler is deliberately below the agent loop. It stores local
+schedule records, ticks due schedules, and enqueues normal resident inbox
+messages with deterministic message ids. It does not route chat turns, execute
+tools, call providers, or synthesize answers. Once a scheduled item enters the
+inbox, `ResidentRuntime` handles it through the same `ChatRuntime` and
+`AgentRuntime` path as any other message. The `resident schedule-*` commands
+are local operator surfaces, not live transport integrations.
+
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that
 reclaims the inbox first checks for the existing `in_reply_to` outbox. When it

@@ -88,3 +88,33 @@ class ResidentLoopResult(Contract):
     reason: str | None
     results: list[JsonObject] = field(default_factory=list)
     queue_status: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResidentSchedule(Contract):
+    schedule_id: str
+    thread_id: str
+    text: str
+    source: str
+    status: str
+    created_at_ms: int
+    next_due_at_ms: int | None
+    interval_ms: int | None
+    max_runs: int | None
+    run_count: int
+    last_enqueued_at_ms: int | None
+    last_message_id: str | None
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResidentScheduleTickResult(Contract):
+    status: str
+    generated_at_ms: int
+    due_count: int
+    enqueued_count: int
+    skipped_count: int
+    failed_count: int
+    schedules: list[JsonObject] = field(default_factory=list)
+    enqueued_messages: list[JsonObject] = field(default_factory=list)
+    failures: list[JsonObject] = field(default_factory=list)
