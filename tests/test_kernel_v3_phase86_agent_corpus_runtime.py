@@ -25,7 +25,9 @@ def test_phase86_agent_runtime_indexes_and_reuses_configured_corpus() -> None:
     assert second.status == "completed"
     assert len(corpus.documents()) == 1
     assert [event["event_type"] for event in corpus.audit_records()] == [
+        "corpus_documents_searched",
         "corpus_document_recorded",
+        "corpus_documents_searched",
         "corpus_document_reobserved",
     ]
     second_search = journal.records(task_id=second.task_id, kind="retrieval_search_attempt")[0].data

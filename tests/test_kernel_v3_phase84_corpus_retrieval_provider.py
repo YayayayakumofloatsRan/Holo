@@ -117,6 +117,12 @@ def test_phase84_corpus_search_provider_filters_by_research_profile() -> None:
     )
 
     assert [source.uri for source in sources] == [finance_source.uri]
+    access_event = corpus.audit_records()[-1]
+    assert access_event["event_type"] == "corpus_documents_searched"
+    assert access_event["payload"]["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert access_event["payload"]["document_ids"]
+    assert access_event["payload"]["access_context"]["surface"] == "retrieval_provider"
+    assert access_event["payload"]["access_context"]["provider_id"] == "research_corpus"
 
 
 def test_phase84_corpus_search_provider_filters_stale_profile_documents_and_journals_reason() -> None:

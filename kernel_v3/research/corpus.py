@@ -159,6 +159,8 @@ class ResearchCorpusStore:
         limit: int = 20,
         exclude_stale: bool = False,
         now_ms: int | None = None,
+        record_access: bool = False,
+        access_context: JsonObject | None = None,
     ) -> CorpusSearchResult:
         terms = _terms(query or "")
         scored: list[tuple[float, CorpusDocument]] = []
@@ -180,13 +182,23 @@ class ResearchCorpusStore:
                 key=lambda item: (-item[0], -_authority_score(item[1]), item[1].fetched_at_ms, item[1].document_id),
             )[: max(0, limit)]
         ]
-        return CorpusSearchResult(
+        result = CorpusSearchResult(
             query=query,
             profile_id=profile_id,
             documents=[document.to_dict() for document in ordered],
             total=len(ordered),
             generated_at_ms=timestamp,
         )
+        if record_access:
+            self._record_search_access(
+                result,
+                terms=terms,
+                limit=limit,
+                exclude_stale=exclude_stale,
+                searched_at_ms=timestamp,
+                access_context=access_context,
+            )
+        return result
 
     def freshness_summary(
         self,
@@ -372,6 +384,39 @@ class ResearchCorpusStore:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.log_path.open("a", encoding="utf-8") as handle:
                 handle.write(_canonical_json(event) + "\n")
+
+    def _record_search_access(
+        self,
+        result: CorpusSearchResult,
+        *,
+        terms: list[str],
+        limit: int,
+        exclude_stale: bool,
+        searched_at_ms: int,
+        access_context: JsonObject | None,
+    ) -> None:
+        documents = [
+            document
+            for document in result.documents
+            if isinstance(document, dict)
+        ]
+        payload = {
+            "searched_at_ms": searched_at_ms,
+            "query_hash": _hash({"query": result.query or ""}),
+            "query_term_count": len(terms),
+            "profile_id": result.profile_id,
+            "limit": limit,
+            "exclude_stale": exclude_stale,
+            "total": result.total,
+            "document_ids": [
+                str(document.get("document_id"))
+                for document in documents
+                if isinstance(document.get("document_id"), str)
+            ],
+            "access_context": _safe_json(dict(access_context or {})),
+            "redaction": {"query": "hash_only", "documents": "ids_only"},
+        }
+        self._append_event("corpus_documents_searched", payload)
 
     def _upsert_document_index(
         self,

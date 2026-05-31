@@ -70,6 +70,9 @@ Rules:
 - corpus records contain document ids, URIs, artifact refs, payload hashes,
   previews, source assessment, profile ids, and retrieval provenance
 - corpus writes are append-only and rebuildable into SQLite
+- corpus-backed retrieval records `corpus_documents_searched` audit events with
+  query hashes, profile ids, limits, document ids, and access context; raw query
+  text and page bodies are not embedded in those audit events
 - retrieval journals `retrieval_corpus_document` only when a corpus store is
   configured
 - default tests use fake providers and do not require network access

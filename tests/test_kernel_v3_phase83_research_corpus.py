@@ -237,6 +237,57 @@ def test_phase83_profile_search_can_exclude_stale_documents() -> None:
     assert freshness["document_ids"] == [document.document_id]
 
 
+def test_phase83_corpus_search_can_audit_access_without_raw_query_or_body() -> None:
+    source = _source(
+        "src-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    secret_query = "AAPL revenue api_key=sk_12345678901234567890"
+    store = ResearchCorpusStore.in_memory(clock_ms=lambda: 2020)
+    document = corpus_document_from_retrieval(
+        document=_document(
+            source=source,
+            artifact_id="artifact-sec",
+            payload_hash="hash-sec",
+            preview="AAPL annual report revenue preview.",
+        ),
+        source=source,
+        goal=SearchGoal(
+            goal_id="goal-audit-corpus",
+            query="AAPL revenue",
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        task_id="task-audit-corpus",
+        run_id="run-audit-corpus",
+        fetched_at_ms=2020,
+        source_assessment=assess_search_source(source, profile=finance_fundamentals_profile()),
+    )
+    store.record_document(document)
+
+    result = store.search(
+        secret_query,
+        profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID,
+        record_access=True,
+        access_context={"surface": "test", "raw_body": RAW_ONLY_SENTINEL},
+    )
+
+    search_event = store.audit_records()[-1]
+    dumped = json.dumps(store.audit_records(), ensure_ascii=False)
+    assert result.total == 1
+    assert search_event["event_type"] == "corpus_documents_searched"
+    assert search_event["payload"]["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert search_event["payload"]["query_hash"]
+    assert search_event["payload"]["query_term_count"] == 3
+    assert search_event["payload"]["document_ids"] == [document.document_id]
+    assert search_event["payload"]["access_context"]["raw_body"] == "[omitted]"
+    assert search_event["payload"]["redaction"] == {"query": "hash_only", "documents": "ids_only"}
+    assert "sk_12345678901234567890" not in dumped
+    assert "api_key" not in dumped
+    assert RAW_ONLY_SENTINEL not in dumped
+
+
 def test_phase83_reobserved_document_refreshes_freshness_and_artifact_ref(tmp_path) -> None:
     log_path = tmp_path / "corpus.jsonl"
     index_path = tmp_path / "corpus.sqlite"

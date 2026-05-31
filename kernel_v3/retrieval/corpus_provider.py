@@ -34,6 +34,13 @@ class CorpusSearchProvider:
             limit=goal.max_sources,
             exclude_stale=profile_id is not None,
             now_ms=freshness_now,
+            record_access=True,
+            access_context={
+                "surface": "retrieval_provider",
+                "provider_id": self.provider_id,
+                "goal_id": goal.goal_id,
+                "plan_id": plan.plan_id,
+            },
         )
         self._last_search_diagnostics = {
             "provider_id": self.provider_id,
