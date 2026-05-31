@@ -119,6 +119,7 @@ class ResidentScheduleTickResult(Contract):
     schedules: list[JsonObject] = field(default_factory=list)
     enqueued_messages: list[JsonObject] = field(default_factory=list)
     failures: list[JsonObject] = field(default_factory=list)
+    diagnostics: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)

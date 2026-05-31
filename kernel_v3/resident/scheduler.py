@@ -18,6 +18,10 @@ from kernel_v3.resident.contracts import (
 from kernel_v3.resident.queue import ResidentQueue
 
 
+RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP = 20
+RESIDENT_SCHEDULE_TICK_LIMIT_CAP = 50
+
+
 class ResidentScheduler:
     def __init__(
         self,
@@ -177,20 +181,11 @@ class ResidentScheduler:
 
     def inspect(self, *, sample_limit: int = 5) -> ResidentScheduleInspection:
         status = self.status()
-        schedules = self.list_schedules(include_inactive=True)
+        effective_sample_limit = _clamp_limit(sample_limit, cap=RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP)
         issues: list[JsonObject] = []
         actions: list[str] = []
         if status.due_count:
-            due_ids = [
-                schedule.schedule_id
-                for schedule in schedules
-                if (
-                    schedule.status == "active"
-                    and schedule.next_due_at_ms is not None
-                    and schedule.next_due_at_ms <= status.generated_at_ms
-                    and (schedule.max_runs is None or schedule.run_count < schedule.max_runs)
-                )
-            ][:sample_limit]
+            due_ids = self._sample_due_schedule_ids(now_ms=status.generated_at_ms, limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "info",
@@ -201,11 +196,7 @@ class ResidentScheduler:
             )
             actions.append("resident run --tick-schedules --max-iterations <n>")
         if status.unbounded_count:
-            unbounded_ids = [
-                schedule.schedule_id
-                for schedule in schedules
-                if schedule.status == "active" and schedule.max_runs is None
-            ][:sample_limit]
+            unbounded_ids = self._sample_unbounded_schedule_ids(limit=effective_sample_limit)
             issues.append(
                 {
                     "severity": "info",
@@ -229,7 +220,11 @@ class ResidentScheduler:
             issues=issues,
             recommended_actions=_ordered_unique(actions),
             schedule_status=status.to_dict(),
-            samples={"schedules": [schedule.to_dict() for schedule in schedules[:sample_limit]]},
+            samples=_inspection_samples(
+                self._sample_schedules(limit=effective_sample_limit),
+                requested_sample_limit=sample_limit,
+                effective_sample_limit=effective_sample_limit,
+            ),
         )
 
     def disable_schedule(self, schedule_id: str, *, reason: str = "manual_disable") -> ResidentSchedule | None:
@@ -272,7 +267,8 @@ class ResidentScheduler:
 
     def tick(self, *, limit: int = 20) -> ResidentScheduleTickResult:
         now = self._now_ms()
-        due = self._due_schedules(now_ms=now, limit=limit)
+        effective_limit = _clamp_limit(limit, cap=RESIDENT_SCHEDULE_TICK_LIMIT_CAP)
+        due = self._due_schedules(now_ms=now, limit=effective_limit)
         enqueued: list[InboundMessage] = []
         updated_schedules: list[ResidentSchedule] = []
         failures: list[JsonObject] = []
@@ -327,6 +323,11 @@ class ResidentScheduler:
             schedules=[schedule.to_dict() for schedule in updated_schedules],
             enqueued_messages=[message.to_dict() for message in enqueued],
             failures=failures,
+            diagnostics=_limit_diagnostics(
+                requested_limit=limit,
+                effective_limit=effective_limit,
+                limit_cap=RESIDENT_SCHEDULE_TICK_LIMIT_CAP,
+            ),
         )
         self._journal_event(
             "resident_schedule_tick",
@@ -352,6 +353,61 @@ class ResidentScheduler:
                 LIMIT ?
                 """,
                 (now_ms, max(0, int(limit))),
+            ).fetchall()
+            return [_schedule_from_row(row) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_due_schedule_ids(self, *, now_ms: int, limit: int) -> list[str]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT schedule_id
+                FROM resident_schedules
+                WHERE status = 'active'
+                  AND next_due_at_ms IS NOT NULL
+                  AND next_due_at_ms <= ?
+                  AND (max_runs IS NULL OR run_count < max_runs)
+                ORDER BY next_due_at_ms, created_at_ms, schedule_id
+                LIMIT ?
+                """,
+                (now_ms, limit),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_unbounded_schedule_ids(self, *, limit: int) -> list[str]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT schedule_id
+                FROM resident_schedules
+                WHERE status = 'active' AND max_runs IS NULL
+                ORDER BY created_at_ms, schedule_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def _sample_schedules(self, *, limit: int) -> list[ResidentSchedule]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT schedule_id, thread_id, text, source, status, created_at_ms,
+                       next_due_at_ms, interval_ms, max_runs, run_count,
+                       last_enqueued_at_ms, last_message_id, metadata_json
+                FROM resident_schedules
+                ORDER BY created_at_ms, schedule_id
+                LIMIT ?
+                """,
+                (limit,),
             ).fetchall()
             return [_schedule_from_row(row) for row in rows]
         finally:
@@ -515,6 +571,34 @@ def _status_counts(conn: sqlite3.Connection) -> dict[str, int]:
 def _count(conn: sqlite3.Connection, query: str, values: tuple[object, ...]) -> int:
     row = conn.execute(query, values).fetchone()
     return int(row[0]) if row is not None else 0
+
+
+def _clamp_limit(value: int, *, cap: int) -> int:
+    return min(max(0, int(value)), cap)
+
+
+def _limit_diagnostics(*, requested_limit: int, effective_limit: int, limit_cap: int) -> JsonObject:
+    diagnostics: JsonObject = {"limit": effective_limit}
+    if effective_limit != requested_limit:
+        diagnostics["requested_limit"] = requested_limit
+        diagnostics["limit_cap"] = limit_cap
+        diagnostics["limit_clamped"] = True
+    return diagnostics
+
+
+def _inspection_samples(
+    schedules: list[ResidentSchedule],
+    *,
+    requested_sample_limit: int,
+    effective_sample_limit: int,
+) -> JsonObject:
+    samples: JsonObject = {"schedules": [schedule.to_dict() for schedule in schedules]}
+    if effective_sample_limit != requested_sample_limit:
+        samples["requested_sample_limit"] = requested_sample_limit
+        samples["sample_limit"] = effective_sample_limit
+        samples["sample_limit_cap"] = RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP
+        samples["sample_limit_clamped"] = True
+    return samples
 
 
 def _message_id(schedule: ResidentSchedule) -> str:

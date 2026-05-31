@@ -235,9 +235,12 @@ inbox, `ResidentRuntime` handles it through the same `ChatRuntime` and
 are local operator surfaces, not live transport integrations. Long-running
 workers can opt into `resident run --tick-schedules` or `resident run-once
 --tick-schedules`; without that explicit flag, run and run-once preserve normal
-queue-only behavior. `resident status` and `resident inspect` include schedule
-health, including due schedules and unbounded recurring schedules, so operators
-can see whether a resident loop should run with schedule ticking enabled. When
+queue-only behavior. Schedule ticks and inspection samples are clamped inside
+`ResidentScheduler`, so a large CLI/runtime limit cannot cause one resident
+iteration to enqueue or render an unbounded number of schedules. `resident
+status` and `resident inspect` include schedule health, including due schedules
+and unbounded recurring schedules, so operators can see whether a resident loop
+should run with schedule ticking enabled. When
 schedule ticking is enabled and no inbox item is claimable, `resident run`
 reports `waiting_for_schedule` instead of plain `idle` if a future active
 schedule is still pending; the loop result includes `schedule_status` so a

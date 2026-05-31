@@ -6,6 +6,10 @@ from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.journal import JournalStore
 from kernel_v3.resident import ResidentQueue, ResidentRuntime, ResidentScheduler
+from kernel_v3.resident.scheduler import (
+    RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP,
+    RESIDENT_SCHEDULE_TICK_LIMIT_CAP,
+)
 from kernel_v3.trace import TraceRenderer
 
 
@@ -154,6 +158,40 @@ def test_phase76_scheduler_status_and_inspect_report_due_and_unbounded(tmp_path:
         "unbounded_recurring_schedules",
     ]
     assert "resident run --tick-schedules --max-iterations <n>" in inspection.recommended_actions
+
+
+def test_phase76_scheduler_tick_and_inspection_limits_are_bounded(tmp_path: Path):
+    clock = _clock(start=90_000)
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
+    scheduler = ResidentScheduler(queue=queue, clock_ms=clock)
+    for index in range(RESIDENT_SCHEDULE_TICK_LIMIT_CAP + 5):
+        scheduler.add_schedule(
+            schedule_id=f"sched-bounded-{index}",
+            thread_id="resident-bounded",
+            text=f"bounded scheduled work {index}",
+            due_at_ms=0,
+        )
+
+    requested_tick_limit = RESIDENT_SCHEDULE_TICK_LIMIT_CAP + 99
+    tick = scheduler.tick(limit=requested_tick_limit)
+
+    assert tick.status == "completed"
+    assert tick.due_count == RESIDENT_SCHEDULE_TICK_LIMIT_CAP
+    assert tick.enqueued_count == RESIDENT_SCHEDULE_TICK_LIMIT_CAP
+    assert len(queue.inbox_messages()) == RESIDENT_SCHEDULE_TICK_LIMIT_CAP
+    assert tick.diagnostics["limit"] == RESIDENT_SCHEDULE_TICK_LIMIT_CAP
+    assert tick.diagnostics["requested_limit"] == requested_tick_limit
+    assert tick.diagnostics["limit_cap"] == RESIDENT_SCHEDULE_TICK_LIMIT_CAP
+    assert tick.diagnostics["limit_clamped"] is True
+
+    requested_sample_limit = RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP + 99
+    inspection = scheduler.inspect(sample_limit=requested_sample_limit)
+
+    assert len(inspection.samples["schedules"]) == RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP
+    assert inspection.samples["requested_sample_limit"] == requested_sample_limit
+    assert inspection.samples["sample_limit"] == RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_cap"] == RESIDENT_SCHEDULE_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_clamped"] is True
 
 
 def test_phase76_repeating_schedule_requires_interval(tmp_path: Path):
