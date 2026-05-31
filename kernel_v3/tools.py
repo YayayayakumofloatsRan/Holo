@@ -180,6 +180,15 @@ class ToolRegistry:
                 },
                 kind="policy_block",
             )
+        if policy_decision is not None:
+            binding_error = _policy_binding_error(
+                policy_decision,
+                tool_name=tool_name,
+                manifest=manifest,
+                execution_context=execution_context,
+            )
+            if binding_error is not None:
+                return _tool_result(action, "blocked", binding_error, kind="policy_block")
         if policy_decision is not None and not policy_decision.allowed:
             return _tool_result(
                 action,
@@ -227,6 +236,40 @@ def _action_with_execution_context(
 
 def _requires_policy_decision(action: CandidateAction) -> bool:
     return action.kind == "tool"
+
+
+def _policy_binding_error(
+    policy_decision: PolicyDecision,
+    *,
+    tool_name: str,
+    manifest: ToolManifest,
+    execution_context: JsonObject | None,
+) -> JsonObject | None:
+    constraints = policy_decision.constraints
+    constrained_tool = constraints.get("tool_name")
+    if constrained_tool != tool_name:
+        return {
+            "reason": "policy_decision_tool_mismatch",
+            "tool": tool_name,
+            "policy_tool": constrained_tool if isinstance(constrained_tool, str) else "",
+        }
+    constrained_side_effect = constraints.get("side_effect_class")
+    if constrained_side_effect != manifest.side_effect_class:
+        return {
+            "reason": "policy_decision_side_effect_mismatch",
+            "tool": tool_name,
+            "side_effect_class": manifest.side_effect_class,
+            "policy_side_effect_class": constrained_side_effect if isinstance(constrained_side_effect, str) else "",
+        }
+    expected_run_id = (execution_context or {}).get("run_id")
+    if isinstance(expected_run_id, str) and expected_run_id and policy_decision.run_id != expected_run_id:
+        return {
+            "reason": "policy_decision_run_mismatch",
+            "tool": tool_name,
+            "policy_run_id": policy_decision.run_id,
+            "run_id": expected_run_id,
+        }
+    return None
 
 
 def _manifest(

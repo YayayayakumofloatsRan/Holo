@@ -165,6 +165,8 @@ def test_loop_passes_policy_decision_before_tool_side_effect_executes():
         observation_record = journal.records(task_id=result.task_id, kind="observation")[0]
         assert (root / "loop.txt").read_text(encoding="utf-8") == "policy-gated"
         assert policy_record.data["allowed"] is True
+        assert policy_record.data["constraints"]["tool_name"] == "workspace.write"
+        assert policy_record.data["constraints"]["side_effect_class"] == "write"
         assert observation_record.action_ref == policy_record.action_ref
         assert observation_record.artifact_refs
     finally:
@@ -248,6 +250,52 @@ def test_registry_refuses_policy_decision_for_different_action():
         _remove_dir(root)
 
 
+def test_registry_refuses_policy_decision_bound_to_different_tool_or_run():
+    root = Path("kernel_v3/.test-phase2-policy-tool-bound")
+    _reset_dir(root)
+    try:
+        registry = ToolRegistry.with_permissioned_workspace(root=root)
+        action = CandidateAction(
+            action_id="act-bound",
+            kind="tool",
+            name="workspace.write",
+            description="write with mismatched policy",
+            score=1.0,
+            payload={"path": "notes.txt", "text": "should-not-write"},
+            reasons=[],
+            side_effect_class="write",
+        )
+
+        wrong_tool = registry.execute_with_artifacts(
+            action,
+            policy_decision=PolicyDecision(
+                decision_id="policy-wrong-tool",
+                run_id="run-1",
+                action_id=action.action_id,
+                allowed=True,
+                reason="allowed",
+                constraints={
+                    "tool_name": "file.read",
+                    "side_effect_class": "read",
+                },
+            ),
+        )
+        wrong_run = registry.execute_with_artifacts(
+            action,
+            policy_decision=_allowed_decision(action),
+            execution_context={"run_id": "run-2"},
+        )
+
+        assert wrong_tool.observation.status == "blocked"
+        assert wrong_tool.observation.content["reason"] == "policy_decision_tool_mismatch"
+        assert wrong_run.observation.status == "blocked"
+        assert wrong_run.observation.content["reason"] == "policy_decision_run_mismatch"
+        assert registry.executed_actions == []
+        assert not (root / "notes.txt").exists()
+    finally:
+        _remove_dir(root)
+
+
 def test_shell_execution_is_restricted_auditable_and_permissioned():
     root = Path("kernel_v3/.test-phase2-shell")
     _reset_dir(root)
@@ -326,7 +374,11 @@ def test_network_tool_is_manifested_as_disabled_contract_and_cannot_execute():
                 action_id=action.action_id,
                 allowed=True,
                 reason="allowed_contract_only",
-                constraints={"permission": "network:fetch"},
+                constraints={
+                    "permission": "network:fetch",
+                    "tool_name": "network.fetch",
+                    "side_effect_class": "network",
+                },
             ),
         )
 
@@ -352,7 +404,11 @@ def _allowed_decision(action: CandidateAction) -> PolicyDecision:
         action_id=action.action_id,
         allowed=True,
         reason="allowed",
-        constraints={"permission": "test"},
+        constraints={
+            "permission": "test",
+            "tool_name": action.name,
+            "side_effect_class": action.side_effect_class,
+        },
     )
 
 

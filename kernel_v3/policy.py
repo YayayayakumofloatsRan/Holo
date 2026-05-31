@@ -22,6 +22,7 @@ class PolicyGate:
     ) -> PolicyDecision:
         side_effect_class = manifest.side_effect_class if manifest is not None else action.side_effect_class
         required = set(manifest.permissions_required if manifest is not None else [])
+        tool_name = manifest.name if manifest is not None else action.name
         missing_permissions = sorted(required - self._base_permissions(side_effect_class) - self.allowed_permissions)
         blocked_destructive = self.permission == "read_only" and side_effect_class in {
             "destructive",
@@ -47,9 +48,11 @@ class PolicyGate:
             reason=reason,
             constraints={
                 "permission": self.permission,
+                "tool_name": tool_name,
                 "side_effect_class": side_effect_class,
                 "required_permissions": sorted(required),
                 "allowed_permissions": sorted(self.allowed_permissions),
+                "manifest_enabled": None if manifest is None else manifest.enabled,
             },
         )
 
