@@ -277,6 +277,12 @@ Implementation note:
   after writing the outbox but before completing the inbox item, a later retry
   reuses the existing outbox item instead of creating a duplicate outbound
   response.
+- Outbox status updates are constrained by a small host-owned lifecycle instead
+  of arbitrary string overwrites. `ready`/`failed` delivery records can be
+  acknowledged; `pending_user_input` acknowledgements become
+  `pending_user_input_delivered` so the prompt is not resent but the system
+  still knows it is waiting for a user answer. Invalid transitions are rejected
+  and reported by CLI.
 - Inbound enqueue is idempotent by `message_id`. A transport/gateway retry of
   the same thread/source/text returns the existing inbox item instead of
   creating a duplicate task. Reusing a `message_id` with different thread,
@@ -285,10 +291,11 @@ Implementation note:
   the worker does not fabricate the missing user answer or continue the task.
 - When a later inbound message in the same thread answers a pending question
   and `ChatRuntime` resumes via `answer_pending_question`, prior
-  `pending_user_input` outbox items for that thread are marked `answered` with
-  the answering inbound `message_id` in payload metadata. This keeps queue
-  status from permanently advertising a question that has already been
-  answered, while preserving the original outbox audit record.
+  `pending_user_input` or `pending_user_input_delivered` outbox items for that
+  thread are marked `answered` with the answering inbound `message_id` in
+  payload metadata. This keeps queue status from permanently advertising a
+  question that has already been answered, while preserving the original
+  outbox audit record.
 - `holo-v3 resident enqueue/run-once/run/status/inbox/outbox/requeue/ack` provides
   the local dev/admin surface. `resident enqueue --message-id` can replay a
   gateway delivery id to test idempotency. This is not a live transport

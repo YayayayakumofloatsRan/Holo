@@ -265,6 +265,93 @@ def test_phase73_answered_marker_does_not_mark_current_pending_outbox(tmp_path: 
     assert statuses[current.outbox_id] == "pending_user_input"
 
 
+def test_phase73_pending_user_input_ack_preserves_waiting_semantics(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-question",
+        thread_id="resident-thread",
+        text="which file?",
+        status="pending_user_input",
+        task_id="task-1",
+        run_id="run-1",
+    )
+
+    acked, reason = queue.transition_outbox_status(outbox.outbox_id, status="acknowledged")
+    second, second_reason = queue.transition_outbox_status(outbox.outbox_id, status="acknowledged")
+
+    assert reason is None
+    assert second_reason is None
+    assert acked is not None
+    assert second is not None
+    assert acked.status == "pending_user_input_delivered"
+    assert second.status == "pending_user_input_delivered"
+    assert second.payload["requested_status"] == "acknowledged"
+    assert second.payload["acknowledged_at_ms"] >= acked.payload["acknowledged_at_ms"]
+
+
+def test_phase73_answered_marker_resolves_delivered_pending_user_input(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-question",
+        thread_id="resident-thread",
+        text="which file?",
+        status="pending_user_input",
+        task_id="task-1",
+        run_id="run-1",
+    )
+    acked, reason = queue.transition_outbox_status(outbox.outbox_id, status="acknowledged")
+    assert reason is None
+    assert acked is not None
+    assert acked.status == "pending_user_input_delivered"
+
+    answered = queue.mark_pending_user_input_answered(
+        thread_id="resident-thread",
+        answered_by_message_id="in-answer",
+        task_id="task-1",
+        run_id="run-2",
+    )
+
+    assert [item.outbox_id for item in answered] == [outbox.outbox_id]
+    assert queue.outbox_messages()[0].status == "answered"
+    assert queue.outbox_messages()[0].payload["answered_by_message_id"] == "in-answer"
+
+
+def test_phase73_invalid_outbox_transition_is_rejected(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-ready",
+        thread_id="resident-thread",
+        text="ready",
+        status="ready",
+        task_id=None,
+        run_id=None,
+    )
+
+    transitioned, reason = queue.transition_outbox_status(outbox.outbox_id, status="answered")
+
+    assert transitioned is None
+    assert reason == "invalid_outbox_status_transition:ready->answered"
+    assert queue.outbox_messages()[0].status == "ready"
+
+
+def test_phase73_append_outbox_rejects_unknown_status(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+
+    try:
+        queue.append_outbox(
+            in_reply_to="in-invalid",
+            thread_id="resident-thread",
+            text="invalid",
+            status="invented",
+            task_id=None,
+            run_id=None,
+        )
+    except ValueError as exc:
+        assert "invalid_resident_outbox_status:invented" in str(exc)
+    else:  # pragma: no cover - regression guard
+        raise AssertionError("invalid outbox status was accepted")
+
+
 def test_phase73_resident_worker_can_use_configured_model_semantic_chat(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
@@ -463,6 +550,29 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     assert "resident_inbox_enqueued" in trace
     assert "resident_outbox_ack" in trace
     assert outbox_id in trace
+
+
+def test_phase73_cli_resident_ack_rejects_invalid_outbox_transition(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    queue = ResidentQueue(resident_db, clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-ready",
+        thread_id="resident-cli",
+        text="ready",
+        status="ready",
+        task_id=None,
+        run_id=None,
+    )
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    status = cli.main([*base, "resident", "ack", outbox.outbox_id, "--status", "answered"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert payload["reason"] == "invalid_outbox_status_transition:ready->answered"
+    assert ResidentQueue(resident_db).outbox_messages()[0].status == "ready"
 
 
 def test_phase73_cli_resident_enqueue_can_replay_message_id_idempotently(tmp_path: Path, capsys):

@@ -10,6 +10,17 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, ResidentQueueStatus, WorkerLease
 
 
+_OUTBOX_STATUSES = {
+    "ready",
+    "pending_user_input",
+    "pending_user_input_delivered",
+    "failed",
+    "delivery_failed",
+    "answered",
+    "acknowledged",
+}
+
+
 class ResidentQueue:
     def __init__(self, db_path: Path | str, *, clock_ms: Callable[[], int] | None = None) -> None:
         self.db_path = Path(db_path)
@@ -344,6 +355,8 @@ class ResidentQueue:
         run_id: str | None,
         payload: JsonObject | None = None,
     ) -> OutboxMessage:
+        if status not in _OUTBOX_STATUSES:
+            raise ValueError(f"invalid_resident_outbox_status:{status}")
         existing = self._outbox_for_reply(in_reply_to)
         if existing is not None:
             return existing
@@ -467,16 +480,48 @@ class ResidentQueue:
             conn.close()
 
     def mark_outbox_status(self, outbox_id: str, *, status: str) -> OutboxMessage | None:
+        outbox, _reason = self.transition_outbox_status(outbox_id, status=status)
+        return outbox
+
+    def transition_outbox_status(self, outbox_id: str, *, status: str) -> tuple[OutboxMessage | None, str | None]:
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            updated = conn.execute(
-                "UPDATE resident_outbox SET status = ? WHERE outbox_id = ?",
-                (status, outbox_id),
-            )
-            if updated.rowcount != 1:
+            row = conn.execute(
+                """
+                SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
+                       task_id, run_id, payload_json
+                FROM resident_outbox
+                WHERE outbox_id = ?
+                """,
+                (outbox_id,),
+            ).fetchone()
+            if row is None:
                 conn.rollback()
-                return None
+                return None, "outbox_not_found"
+            current = _outbox_from_row(row)
+            next_status = _next_outbox_status(current.status, requested=status)
+            if next_status is None:
+                conn.rollback()
+                return None, f"invalid_outbox_status_transition:{current.status}->{status}"
+            payload = dict(current.payload)
+            payload["requested_status"] = status
+            payload["status_updated_at_ms"] = self._now_ms()
+            if status == "acknowledged":
+                payload["acknowledged_at_ms"] = payload["status_updated_at_ms"]
+            if next_status == current.status:
+                if payload == current.payload:
+                    conn.rollback()
+                    return current, None
+                conn.execute(
+                    "UPDATE resident_outbox SET payload_json = ? WHERE outbox_id = ?",
+                    (_json(payload), outbox_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE resident_outbox SET status = ?, payload_json = ? WHERE outbox_id = ?",
+                    (next_status, _json(payload), outbox_id),
+                )
             row = conn.execute(
                 """
                 SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
@@ -487,7 +532,7 @@ class ResidentQueue:
                 (outbox_id,),
             ).fetchone()
             conn.commit()
-            return _outbox_from_row(row) if row is not None else None
+            return (_outbox_from_row(row) if row is not None else None), None
         except Exception:
             conn.rollback()
             raise
@@ -513,7 +558,7 @@ class ResidentQueue:
                        task_id, run_id, payload_json
                 FROM resident_outbox
                 WHERE thread_id = ?
-                  AND status = 'pending_user_input'
+                  AND status IN ('pending_user_input', 'pending_user_input_delivered')
                   AND (? IS NULL OR in_reply_to != ?)
                 ORDER BY created_at_ms, outbox_id
                 """,
@@ -533,7 +578,8 @@ class ResidentQueue:
                     """
                     UPDATE resident_outbox
                     SET status = 'answered', payload_json = ?
-                    WHERE outbox_id = ? AND status = 'pending_user_input'
+                    WHERE outbox_id = ?
+                      AND status IN ('pending_user_input', 'pending_user_input_delivered')
                     """,
                     (_json(payload), existing.outbox_id),
                 )
@@ -704,6 +750,30 @@ def _status_counts(conn: sqlite3.Connection, table: str) -> dict[str, int]:
 def _count(conn: sqlite3.Connection, query: str, values: tuple[object, ...]) -> int:
     row = conn.execute(query, values).fetchone()
     return int(row[0]) if row is not None else 0
+
+
+def _next_outbox_status(current: str, *, requested: str) -> str | None:
+    if current not in _OUTBOX_STATUSES or requested not in _OUTBOX_STATUSES:
+        return None
+    if requested == current:
+        return current
+    if requested == "acknowledged":
+        if current in {"ready", "failed", "delivery_failed"}:
+            return "acknowledged"
+        if current == "pending_user_input":
+            return "pending_user_input_delivered"
+        if current == "pending_user_input_delivered":
+            return "pending_user_input_delivered"
+        if current == "answered":
+            return "answered"
+        return None
+    if current == "delivery_failed" and requested == "ready":
+        return "ready"
+    if current in {"ready", "failed", "pending_user_input", "pending_user_input_delivered"} and requested == "delivery_failed":
+        return "delivery_failed"
+    if current == "pending_user_input" and requested == "pending_user_input_delivered":
+        return "pending_user_input_delivered"
+    return None
 
 
 def _lease_is_active(conn: sqlite3.Connection, *, worker_id: str, now_ms: int) -> bool:

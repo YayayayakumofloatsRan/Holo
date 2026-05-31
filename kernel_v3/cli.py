@@ -705,9 +705,9 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             return runtime.run_loop(max_iterations=args.max_iterations).to_dict()
         return runtime.run_once().to_dict()
     if command == "ack":
-        outbox = queue.mark_outbox_status(args.outbox_id, status=args.status)
+        outbox, reason = queue.transition_outbox_status(args.outbox_id, status=args.status)
         if outbox is None:
-            return {"status": "failed", "reason": "outbox_not_found", "outbox_id": args.outbox_id}
+            return {"status": "failed", "reason": reason or "outbox_not_found", "outbox_id": args.outbox_id}
         journal.append(
             task_id=outbox.task_id,
             run_id="resident-cli",
