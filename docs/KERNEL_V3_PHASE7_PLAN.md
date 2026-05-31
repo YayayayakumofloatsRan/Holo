@@ -1,10 +1,10 @@
 # Kernel v3 Phase7 Plan
 
 Phase7 starts from the current `kernel-v3` baseline, not from the older
-Phase3.1 retrieval-readiness baseline. As of this note, the local and pushed
-branch head is `ef0126c`, after Phase4 retrieval, Phase5 processors, Phase6
-agent runtime, Phase6.1 workloop, Phase6.2 chat runtime, Phase6.3 semantic
-intake, and the run-scoped loop grounding hardening.
+Phase3.1 retrieval-readiness baseline. The Phase7 planning baseline is after
+Phase4 retrieval, Phase5 processors, Phase6 agent runtime, Phase6.1 workloop,
+Phase6.2 chat runtime, Phase6.3 semantic intake, and the run-scoped loop
+grounding hardening.
 
 ## Decision
 
@@ -86,6 +86,23 @@ Tests:
 - tombstone hides item from recall but preserves audit
 - secret-like text is rejected
 - duplicate stable id is idempotent
+
+Implementation note:
+
+- `kernel_v3.memory` now provides the Phase7.0 core surface:
+  `MemoryItem`, `MemoryProposal`, `ShadowCandidate`, `ProvenanceRef`,
+  `MemoryTombstone`, `MemoryRecallResult`, `MemoryStore`, stable id helpers,
+  and privacy validation.
+- The store uses an append-only memory log plus a rebuildable SQLite metadata
+  index. It has no vector database dependency and no live provider dependency.
+- `MemoryStore.commit()` rejects secret-like content before writing an audit
+  event. Duplicate writes with the same stable id and identical payload are
+  idempotent; conflicting payloads for the same id are rejected.
+- Recall skips deleted and expired items by default. Tombstones preserve the
+  audit chain while preventing future default recall.
+- `tests/test_kernel_v3_phase7_memory_store.py` covers core storage, rebuild,
+  TTL, tombstone, privacy rejection, idempotency, shadow candidates, and
+  proposals.
 
 ## Phase7.1: Proposal Pipeline
 
