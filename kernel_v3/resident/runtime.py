@@ -43,6 +43,16 @@ class ResidentRuntime:
             )
         try:
             chat_result = self.chat_runtime.receive(message.text, thread_id=message.thread_id)
+            renewed = self.queue.renew_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
+            if renewed is None:
+                return ResidentRunResult(
+                    status="blocked",
+                    worker_id=self.worker_id,
+                    message_id=message.message_id,
+                    outbox_id=None,
+                    reason="lease_lost_before_outbox",
+                    payload={},
+                )
             outbox = self.queue.append_outbox(
                 in_reply_to=message.message_id,
                 thread_id=message.thread_id,
@@ -52,7 +62,16 @@ class ResidentRuntime:
                 run_id=chat_result.run_id,
                 payload=chat_result.to_dict(),
             )
-            self.queue.complete(message.message_id)
+            completed = self.queue.complete(message.message_id, worker_id=self.worker_id)
+            if not completed:
+                return ResidentRunResult(
+                    status="blocked",
+                    worker_id=self.worker_id,
+                    message_id=message.message_id,
+                    outbox_id=outbox.outbox_id,
+                    reason="message_ownership_lost_before_complete",
+                    payload={"chat_status": chat_result.status, "outbox_status": outbox.status},
+                )
             return ResidentRunResult(
                 status="processed",
                 worker_id=self.worker_id,
@@ -62,7 +81,7 @@ class ResidentRuntime:
                 payload={"chat_status": chat_result.status, "outbox_status": outbox.status},
             )
         except Exception as exc:  # pragma: no cover - defensive worker containment
-            self.queue.fail(message.message_id, reason=type(exc).__name__)
+            self.queue.fail(message.message_id, reason=type(exc).__name__, worker_id=self.worker_id)
             return ResidentRunResult(
                 status="failed",
                 worker_id=self.worker_id,

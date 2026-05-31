@@ -245,10 +245,16 @@ Implementation note:
   typed `InboundMessage` / `OutboxMessage` / `WorkerLease` /
   `ResidentRunResult` contracts.
 - The queue is local SQLite with inbox, outbox, and lease tables. A worker must
-  acquire the single resident lease before claiming a pending message.
+  acquire the single resident lease before claiming a pending message. Lease
+  acquisition and inbox claiming run inside SQLite `BEGIN IMMEDIATE`
+  transactions so competing workers cannot both claim the same item.
 - `ResidentRuntime.run_once()` claims one inbox item, calls `ChatRuntime`, writes
   exactly one outbox item, marks the inbox item completed, and releases the
   lease. It does not loop forever and does not become a separate decision layer.
+- Running inbox items are owned by the claiming worker. `complete` and `fail`
+  calls can be guarded by worker id, so an old worker cannot complete a message
+  after its lease expired and another worker reclaimed the item. The runtime
+  renews its lease before writing outbox to avoid stale external responses.
 - Outbox writes are idempotent by inbound `in_reply_to`. If a worker crashes
   after writing the outbox but before completing the inbox item, a later retry
   reuses the existing outbox item instead of creating a duplicate outbound

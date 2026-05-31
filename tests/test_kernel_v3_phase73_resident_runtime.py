@@ -57,6 +57,7 @@ def test_phase73_restart_after_partial_outbox_write_is_idempotent(tmp_path: Path
     db_path = tmp_path / "resident.sqlite"
     queue = ResidentQueue(db_path, clock_ms=_clock())
     queue.enqueue(thread_id="resident-thread", text="hello after partial crash", message_id="in-partial")
+    assert queue.acquire_lease(worker_id="crashed-worker", ttl_ms=10) is not None
     claimed = queue.claim_next(worker_id="crashed-worker", lease_ttl_ms=1)
     assert claimed is not None
     queue.append_outbox(
@@ -85,6 +86,55 @@ def test_phase73_restart_after_partial_outbox_write_is_idempotent(tmp_path: Path
     assert len(outbox) == 1
     assert outbox[0].in_reply_to == "in-partial"
     assert outbox[0].text == "previous outbox already written"
+
+
+def test_phase73_claim_requires_active_worker_lease(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="hello without lease", message_id="in-no-lease")
+
+    assert queue.claim_next(worker_id="worker-without-lease") is None
+    inbox = queue.inbox_messages()[0]
+    assert inbox.status == "pending"
+    assert inbox.attempts == 0
+
+
+def test_phase73_stale_worker_cannot_complete_message_after_reclaim(tmp_path: Path):
+    db_path = tmp_path / "resident.sqlite"
+    queue = ResidentQueue(db_path, clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="hello reclaim", message_id="in-reclaim")
+    assert queue.acquire_lease(worker_id="worker-old", ttl_ms=10) is not None
+    first = queue.claim_next(worker_id="worker-old", lease_ttl_ms=1)
+    assert first is not None
+
+    restarted = ResidentQueue(db_path, clock_ms=_clock(start=10_000))
+    assert restarted.acquire_lease(worker_id="worker-new", ttl_ms=30_000) is not None
+    second = restarted.claim_next(worker_id="worker-new", lease_ttl_ms=30_000)
+    assert second is not None
+
+    assert restarted.complete("in-reclaim", worker_id="worker-old") is False
+    inbox = restarted.inbox_messages()[0]
+    assert inbox.status == "running"
+    assert inbox.lease_owner == "worker-new"
+
+    assert restarted.complete("in-reclaim", worker_id="worker-new") is True
+    assert restarted.inbox_messages()[0].status == "completed"
+
+
+def test_phase73_renew_lease_extends_running_message_claim(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="hello renew", message_id="in-renew")
+    assert queue.acquire_lease(worker_id="worker-1", ttl_ms=10) is not None
+    claimed = queue.claim_next(worker_id="worker-1", lease_ttl_ms=10)
+    assert claimed is not None
+    before = queue.inbox_messages()[0].lease_until_ms
+
+    renewed = queue.renew_lease(worker_id="worker-1", ttl_ms=50)
+    after = queue.inbox_messages()[0].lease_until_ms
+
+    assert renewed is not None
+    assert before is not None
+    assert after is not None
+    assert after > before
 
 
 def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuation(tmp_path: Path):

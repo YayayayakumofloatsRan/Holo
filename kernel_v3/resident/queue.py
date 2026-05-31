@@ -59,8 +59,10 @@ class ResidentQueue:
         expires = now + ttl_ms
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT worker_id, expires_at_ms FROM resident_leases WHERE lease_id = ?", ("resident",)).fetchone()
             if row is not None and int(row[1]) > now and row[0] != worker_id:
+                conn.rollback()
                 return None
             lease = WorkerLease(
                 lease_id="resident",
@@ -79,17 +81,65 @@ class ResidentQueue:
             )
             conn.commit()
             return lease
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def renew_lease(self, *, worker_id: str, ttl_ms: int = 30_000) -> WorkerLease | None:
+        now = self._now_ms()
+        expires = now + ttl_ms
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT worker_id FROM resident_leases WHERE lease_id = ?", ("resident",)).fetchone()
+            if row is None or row[0] != worker_id:
+                conn.rollback()
+                return None
+            lease = WorkerLease(
+                lease_id="resident",
+                worker_id=worker_id,
+                acquired_at_ms=now,
+                expires_at_ms=expires,
+                status="renewed",
+            )
+            conn.execute(
+                """
+                UPDATE resident_leases
+                SET acquired_at_ms = ?, expires_at_ms = ?, status = ?
+                WHERE lease_id = ? AND worker_id = ?
+                """,
+                (lease.acquired_at_ms, lease.expires_at_ms, lease.status, lease.lease_id, lease.worker_id),
+            )
+            conn.execute(
+                """
+                UPDATE resident_inbox
+                SET lease_until_ms = ?
+                WHERE status = 'running' AND lease_owner = ?
+                """,
+                (expires, worker_id),
+            )
+            conn.commit()
+            return lease
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
     def release_lease(self, *, worker_id: str) -> None:
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "UPDATE resident_leases SET expires_at_ms = ?, status = ? WHERE lease_id = ? AND worker_id = ?",
                 (self._now_ms(), "released", "resident", worker_id),
             )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -98,6 +148,10 @@ class ResidentQueue:
         lease_until = now + lease_ttl_ms
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
+            if not _lease_is_active(conn, worker_id=worker_id, now_ms=now):
+                conn.rollback()
+                return None
             row = conn.execute(
                 """
                 SELECT message_id, thread_id, text, source, status, created_at_ms,
@@ -111,16 +165,24 @@ class ResidentQueue:
                 (now,),
             ).fetchone()
             if row is None:
+                conn.rollback()
                 return None
             attempts = int(row[8]) + 1
-            conn.execute(
+            updated = conn.execute(
                 """
                 UPDATE resident_inbox
                 SET status = 'running', lease_owner = ?, lease_until_ms = ?, attempts = ?
                 WHERE message_id = ?
+                  AND (
+                    status = 'pending'
+                    OR (status = 'running' AND lease_until_ms IS NOT NULL AND lease_until_ms <= ?)
+                  )
                 """,
-                (worker_id, lease_until, attempts, row[0]),
+                (worker_id, lease_until, attempts, row[0], now),
             )
+            if updated.rowcount != 1:
+                conn.rollback()
+                return None
             conn.commit()
             return InboundMessage.from_dict(
                 {
@@ -136,27 +198,45 @@ class ResidentQueue:
                     "metadata": _json_dict(row[9]),
                 }
             )
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
-    def complete(self, message_id: str) -> None:
-        self._set_inbox_status(message_id, "completed")
+    def complete(self, message_id: str, *, worker_id: str | None = None) -> bool:
+        return self._set_inbox_status(message_id, "completed", worker_id=worker_id)
 
-    def fail(self, message_id: str, *, reason: str) -> None:
+    def fail(self, message_id: str, *, reason: str, worker_id: str | None = None) -> bool:
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT metadata_json FROM resident_inbox WHERE message_id = ?", (message_id,)).fetchone()
             metadata = _json_dict(row[0] if row else None)
             metadata["failure_reason"] = reason
-            conn.execute(
-                """
-                UPDATE resident_inbox
-                SET status = 'failed', lease_owner = NULL, lease_until_ms = NULL, metadata_json = ?
-                WHERE message_id = ?
-                """,
-                (_json(metadata), message_id),
-            )
+            if worker_id is None:
+                updated = conn.execute(
+                    """
+                    UPDATE resident_inbox
+                    SET status = 'failed', lease_owner = NULL, lease_until_ms = NULL, metadata_json = ?
+                    WHERE message_id = ?
+                    """,
+                    (_json(metadata), message_id),
+                )
+            else:
+                updated = conn.execute(
+                    """
+                    UPDATE resident_inbox
+                    SET status = 'failed', lease_owner = NULL, lease_until_ms = NULL, metadata_json = ?
+                    WHERE message_id = ? AND lease_owner = ?
+                    """,
+                    (_json(metadata), message_id, worker_id),
+                )
             conn.commit()
+            return updated.rowcount == 1
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -256,18 +336,33 @@ class ResidentQueue:
         finally:
             conn.close()
 
-    def _set_inbox_status(self, message_id: str, status: str) -> None:
+    def _set_inbox_status(self, message_id: str, status: str, *, worker_id: str | None = None) -> bool:
         conn = self._connect()
         try:
-            conn.execute(
-                """
-                UPDATE resident_inbox
-                SET status = ?, lease_owner = NULL, lease_until_ms = NULL
-                WHERE message_id = ?
-                """,
-                (status, message_id),
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            if worker_id is None:
+                updated = conn.execute(
+                    """
+                    UPDATE resident_inbox
+                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL
+                    WHERE message_id = ?
+                    """,
+                    (status, message_id),
+                )
+            else:
+                updated = conn.execute(
+                    """
+                    UPDATE resident_inbox
+                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL
+                    WHERE message_id = ? AND lease_owner = ?
+                    """,
+                    (status, message_id, worker_id),
+                )
             conn.commit()
+            return updated.rowcount == 1
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -281,7 +376,9 @@ class ResidentQueue:
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        return conn
 
     def _now_ms(self) -> int:
         return int(self.clock_ms())
@@ -346,6 +443,14 @@ def _dedupe_outbox_replies(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _lease_is_active(conn: sqlite3.Connection, *, worker_id: str, now_ms: int) -> bool:
+    row = conn.execute(
+        "SELECT expires_at_ms FROM resident_leases WHERE lease_id = ? AND worker_id = ?",
+        ("resident", worker_id),
+    ).fetchone()
+    return row is not None and int(row[0]) > now_ms
 
 
 def _inbox_row(message: InboundMessage) -> tuple[object, ...]:
