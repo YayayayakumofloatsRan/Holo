@@ -17,6 +17,10 @@ if TYPE_CHECKING:
     from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 
 
+CORPUS_SEARCH_LIMIT_CAP = 50
+CORPUS_SAMPLE_LIMIT_CAP = 20
+
+
 def stable_corpus_document_id(*, uri: str, payload_hash: str) -> str:
     return "webdoc-" + _hash({"uri": uri, "payload_hash": payload_hash})[:16]
 
@@ -163,6 +167,7 @@ class ResearchCorpusStore:
         access_context: JsonObject | None = None,
     ) -> CorpusSearchResult:
         terms = _terms(query or "")
+        effective_limit = _clamp_limit(limit, cap=CORPUS_SEARCH_LIMIT_CAP)
         scored: list[tuple[float, CorpusDocument]] = []
         timestamp = self._now_ms() if now_ms is None else now_ms
         for document in self.documents(profile_id=profile_id):
@@ -180,7 +185,7 @@ class ResearchCorpusStore:
             for _, document in sorted(
                 scored,
                 key=lambda item: (-item[0], -_authority_score(item[1]), item[1].fetched_at_ms, item[1].document_id),
-            )[: max(0, limit)]
+            )[:effective_limit]
         ]
         result = CorpusSearchResult(
             query=query,
@@ -193,7 +198,8 @@ class ResearchCorpusStore:
             self._record_search_access(
                 result,
                 terms=terms,
-                limit=limit,
+                requested_limit=limit,
+                effective_limit=effective_limit,
                 exclude_stale=exclude_stale,
                 searched_at_ms=timestamp,
                 access_context=access_context,
@@ -209,10 +215,11 @@ class ResearchCorpusStore:
     ) -> JsonObject:
         documents = self.documents(profile_id=profile_id)
         timestamp = self._now_ms() if now_ms is None else now_ms
+        effective_sample_limit = _clamp_limit(sample_limit, cap=CORPUS_SAMPLE_LIMIT_CAP)
         stale = [document for document in documents if _document_is_stale(document, now_ms=timestamp)]
         stale = sorted(stale, key=lambda document: (document.fetched_at_ms, document.document_id))
         max_ages = _freshness_max_ages(documents)
-        return {
+        summary = {
             "checked": True,
             "generated_at_ms": timestamp,
             "profile_id": profile_id,
@@ -220,8 +227,14 @@ class ResearchCorpusStore:
             "stale_count": len(stale),
             "max_age_ms_by_profile": max_ages,
             "oldest_age_ms": max(0, timestamp - stale[0].fetched_at_ms) if stale else 0,
-            "document_ids": [document.document_id for document in stale[: max(0, sample_limit)]],
+            "document_ids": [document.document_id for document in stale[:effective_sample_limit]],
         }
+        if effective_sample_limit != sample_limit:
+            summary["requested_sample_limit"] = sample_limit
+            summary["sample_limit"] = effective_sample_limit
+            summary["sample_limit_cap"] = CORPUS_SAMPLE_LIMIT_CAP
+            summary["sample_limit_clamped"] = True
+        return summary
 
     def audit_records(self) -> list[JsonObject]:
         return [dict(event) for event in self._events]
@@ -250,10 +263,19 @@ class ResearchCorpusStore:
     def inspect(self, *, sample_limit: int = 5, artifact_store: "ArtifactStore | None" = None) -> CorpusInspection:
         status = self.status()
         documents = self.documents()
+        effective_sample_limit = _clamp_limit(sample_limit, cap=CORPUS_SAMPLE_LIMIT_CAP)
         issues: list[JsonObject] = []
         actions: list[str] = []
-        artifact_consistency = _artifact_consistency(documents, artifact_store=artifact_store, sample_limit=sample_limit)
-        freshness_issues = _freshness_issues(documents, now_ms=status.generated_at_ms, sample_limit=sample_limit)
+        artifact_consistency = _artifact_consistency(
+            documents,
+            artifact_store=artifact_store,
+            sample_limit=effective_sample_limit,
+        )
+        freshness_issues = _freshness_issues(
+            documents,
+            now_ms=status.generated_at_ms,
+            sample_limit=effective_sample_limit,
+        )
         if status.document_count == 0:
             issues.append(
                 {
@@ -315,7 +337,11 @@ class ResearchCorpusStore:
             recommended_actions=_ordered_unique(actions),
             corpus_status=status.to_dict(),
             artifact_consistency=artifact_consistency,
-            samples={"documents": [_document_sample(document) for document in documents[: max(0, sample_limit)]]},
+            samples=_inspection_samples(
+                documents,
+                requested_sample_limit=sample_limit,
+                effective_sample_limit=effective_sample_limit,
+            ),
         )
 
     def index_documents(self) -> list[JsonObject]:
@@ -390,7 +416,8 @@ class ResearchCorpusStore:
         result: CorpusSearchResult,
         *,
         terms: list[str],
-        limit: int,
+        requested_limit: int,
+        effective_limit: int,
         exclude_stale: bool,
         searched_at_ms: int,
         access_context: JsonObject | None,
@@ -405,7 +432,7 @@ class ResearchCorpusStore:
             "query_hash": _hash({"query": result.query or ""}),
             "query_term_count": len(terms),
             "profile_id": result.profile_id,
-            "limit": limit,
+            "limit": effective_limit,
             "exclude_stale": exclude_stale,
             "total": result.total,
             "document_ids": [
@@ -416,6 +443,10 @@ class ResearchCorpusStore:
             "access_context": _safe_json(dict(access_context or {})),
             "redaction": {"query": "hash_only", "documents": "ids_only"},
         }
+        if effective_limit != requested_limit:
+            payload["requested_limit"] = requested_limit
+            payload["limit_cap"] = CORPUS_SEARCH_LIMIT_CAP
+            payload["limit_clamped"] = True
         self._append_event("corpus_documents_searched", payload)
 
     def _upsert_document_index(
@@ -590,6 +621,27 @@ def _count_by(documents: list[CorpusDocument], key_fn) -> dict[str, int]:
         key = str(key_fn(document) or "unknown")
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _clamp_limit(value: int, *, cap: int) -> int:
+    return min(max(0, int(value)), cap)
+
+
+def _inspection_samples(
+    documents: list[CorpusDocument],
+    *,
+    requested_sample_limit: int,
+    effective_sample_limit: int,
+) -> JsonObject:
+    samples: JsonObject = {
+        "documents": [_document_sample(document) for document in documents[:effective_sample_limit]],
+    }
+    if effective_sample_limit != requested_sample_limit:
+        samples["requested_sample_limit"] = requested_sample_limit
+        samples["sample_limit"] = effective_sample_limit
+        samples["sample_limit_cap"] = CORPUS_SAMPLE_LIMIT_CAP
+        samples["sample_limit_clamped"] = True
+    return samples
 
 
 def _document_sample(document: CorpusDocument) -> JsonObject:

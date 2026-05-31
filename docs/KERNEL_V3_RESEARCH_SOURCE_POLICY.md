@@ -81,6 +81,9 @@ Rules:
 - corpus-backed retrieval records `corpus_documents_searched` audit events with
   query hashes, profile ids, limits, document ids, and access context; raw query
   text and page bodies are not embedded in those audit events
+- corpus search results and inspection samples are clamped by host-owned store
+  caps, so CLI, retrieval, and future resident loops cannot request unbounded
+  corpus output through a large limit
 - corpus fetches that read raw artifact blobs record `artifact_blob_read` audit
   events with artifact ids, payload hashes, byte counts, and safe access
   context only; raw page bodies are never embedded in access audit records

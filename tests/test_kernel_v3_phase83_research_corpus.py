@@ -3,7 +3,11 @@ from dataclasses import replace
 
 from kernel_v3.context import ArtifactStore
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, ResearchCorpusStore, finance_fundamentals_profile
-from kernel_v3.research.corpus import corpus_document_from_retrieval
+from kernel_v3.research.corpus import (
+    CORPUS_SAMPLE_LIMIT_CAP,
+    CORPUS_SEARCH_LIMIT_CAP,
+    corpus_document_from_retrieval,
+)
 from kernel_v3.research.source_policy import assess_search_source
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.contracts import FetchedDocument
@@ -286,6 +290,67 @@ def test_phase83_corpus_search_can_audit_access_without_raw_query_or_body() -> N
     assert "sk_12345678901234567890" not in dumped
     assert "api_key" not in dumped
     assert RAW_ONLY_SENTINEL not in dumped
+
+
+def test_phase83_corpus_search_and_inspection_outputs_are_bounded() -> None:
+    store = ResearchCorpusStore.in_memory(clock_ms=lambda: 3030)
+    profile = finance_fundamentals_profile()
+    for index in range(CORPUS_SEARCH_LIMIT_CAP + 5):
+        source = _source(
+            f"src-sec-{index}",
+            f"https://www.sec.gov/Archives/edgar/data/320193/filing-{index}.htm",
+            f"Apple Form 10-K {index}",
+            "AAPL annual report revenue.",
+        )
+        store.record_document(
+            corpus_document_from_retrieval(
+                document=_document(
+                    source=source,
+                    artifact_id=f"artifact-sec-{index}",
+                    payload_hash=f"hash-sec-{index}",
+                    preview="AAPL annual report revenue preview.",
+                ),
+                source=source,
+                goal=SearchGoal(
+                    goal_id=f"goal-audit-corpus-{index}",
+                    query="AAPL revenue",
+                    metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+                ),
+                task_id="task-audit-corpus",
+                run_id=f"run-audit-corpus-{index}",
+                fetched_at_ms=3030 + index,
+                source_assessment=assess_search_source(source, profile=profile),
+            )
+        )
+
+    requested_search_limit = CORPUS_SEARCH_LIMIT_CAP + 99
+    result = store.search(
+        "AAPL revenue",
+        profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID,
+        limit=requested_search_limit,
+        record_access=True,
+        access_context={"surface": "test"},
+    )
+    search_event = store.audit_records()[-1]
+    payload = search_event["payload"]
+
+    assert result.total == CORPUS_SEARCH_LIMIT_CAP
+    assert len(result.documents) == CORPUS_SEARCH_LIMIT_CAP
+    assert search_event["event_type"] == "corpus_documents_searched"
+    assert payload["limit"] == CORPUS_SEARCH_LIMIT_CAP
+    assert payload["requested_limit"] == requested_search_limit
+    assert payload["limit_cap"] == CORPUS_SEARCH_LIMIT_CAP
+    assert payload["limit_clamped"] is True
+    assert len(payload["document_ids"]) == CORPUS_SEARCH_LIMIT_CAP
+
+    requested_sample_limit = CORPUS_SAMPLE_LIMIT_CAP + 99
+    inspection = store.inspect(sample_limit=requested_sample_limit)
+
+    assert len(inspection.samples["documents"]) == CORPUS_SAMPLE_LIMIT_CAP
+    assert inspection.samples["requested_sample_limit"] == requested_sample_limit
+    assert inspection.samples["sample_limit"] == CORPUS_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_cap"] == CORPUS_SAMPLE_LIMIT_CAP
+    assert inspection.samples["sample_limit_clamped"] is True
 
 
 def test_phase83_reobserved_document_refreshes_freshness_and_artifact_ref(tmp_path) -> None:
