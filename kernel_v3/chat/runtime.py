@@ -835,35 +835,69 @@ class ChatRuntime:
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_memory_inspection_text(payload))
         if subcommand == "approve" and len(args) >= 2:
-            result = self.memory_pipeline.approve_proposal(args[1], approved_by="user")
+            try:
+                result = self.memory_pipeline.approve_proposal(args[1], approved_by="user")
+            except (KeyError, ValueError) as exc:
+                return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             payload = result.to_dict()
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Approved {args[1]}.")
         if subcommand == "reject" and len(args) >= 2:
             reason = " ".join(args[2:]) or "user_rejected"
-            result = self.memory_pipeline.reject_proposal(args[1], reason=reason)
+            try:
+                result = self.memory_pipeline.reject_proposal(args[1], reason=reason)
+            except (KeyError, ValueError) as exc:
+                return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             payload = result.to_dict()
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Rejected {args[1]}.")
         if subcommand == "delete" and len(args) >= 2:
             reason = " ".join(args[2:]) or "user_deleted"
-            tombstone = self.memory_pipeline.delete_memory(
-                args[1],
-                reason=reason,
-                deleted_by="user",
-                task_id=turn.task_id,
-                run_id=_chat_run_id(turn.thread_id),
-            )
+            try:
+                tombstone = self.memory_pipeline.delete_memory(
+                    args[1],
+                    reason=reason,
+                    deleted_by="user",
+                    task_id=turn.task_id,
+                    run_id=_chat_run_id(turn.thread_id),
+                )
+            except (KeyError, ValueError) as exc:
+                return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             payload = tombstone.to_dict()
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Deleted {args[1]}.")
         if subcommand == "export" and len(args) >= 2:
-            payload = self.memory_store.export_item(args[1])
+            try:
+                payload = self.memory_store.export_item(args[1])
+            except (KeyError, ValueError) as exc:
+                return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Exported {args[1]}.")
         result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|inspect|approve <id>|reject <id> [reason]|delete <id> [reason]|export <id>"}
         command = self._append_command(turn, name="/memory", args=args, status="failed", result=result)
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
+
+    def _memory_command_failed(
+        self,
+        *,
+        turn: ChatTurn,
+        decision: TurnRoutingDecision,
+        args: list[str],
+        error: str,
+    ) -> ChatRuntimeResult:
+        result = {
+            "error": error,
+            "subcommand": args[0] if args else "",
+            **({"target_id": args[1]} if len(args) >= 2 else {}),
+        }
+        command = self._append_command(turn, name="/memory", args=args, status="failed", result=result)
+        return self._command_result(
+            turn=turn,
+            decision=decision,
+            status="failed",
+            command=command,
+            answer=f"Memory command failed: {error}",
+        )
 
     def _execution_metadata(self, extra: JsonObject | None = None) -> JsonObject:
         result = dict(self.execution_metadata)
@@ -1863,6 +1897,12 @@ def _memory_inspection_text(payload: JsonObject) -> str:
             "Recommended actions: " + (", ".join(str(action) for action in actions) if actions else "none"),
         ]
     )
+
+
+def _exception_reason(exc: Exception) -> str:
+    if isinstance(exc, KeyError) and exc.args:
+        return str(exc.args[0])
+    return str(exc) or type(exc).__name__
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

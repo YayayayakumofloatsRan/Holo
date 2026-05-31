@@ -92,6 +92,10 @@ be visible in the main journal. Kernel-v3 memory delete goes through
 journals either `memory_item_deleted` for the first deletion or
 `memory_item_delete_observed` for an idempotent repeat. The journal record
 contains ids, reason, provenance refs, and metadata, not raw artifact payloads.
+Unknown proposal or memory ids are command failures, not resident worker
+failures: chat journals a failed `chat_command`, the CLI journals
+`memory_command_failed`, and resident inbox processing completes with a failed
+outbox instead of retrying or dead-lettering a bad admin command.
 
 The durable store treats `commit` as the final boundary, not a proposal API:
 only active items with a non-empty `approved_by` value may be committed. Pending

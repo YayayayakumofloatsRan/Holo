@@ -845,28 +845,64 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
         )
         return {"status": "ok", "result": result.to_dict()}
     if command == "approve":
-        result = pipeline.approve_proposal(args.proposal_id, approved_by="user")
-        return {"status": "ok", "result": result.to_dict()}
+        try:
+            result = pipeline.approve_proposal(args.proposal_id, approved_by="user")
+            return {"status": "ok", "result": result.to_dict()}
+        except (KeyError, ValueError) as exc:
+            return _memory_command_failure(journal, command=command, target_id=args.proposal_id, error=_exception_reason(exc))
     if command == "reject":
-        result = pipeline.reject_proposal(args.proposal_id, reason=args.reason)
-        return {"status": "ok", "result": result.to_dict()}
+        try:
+            result = pipeline.reject_proposal(args.proposal_id, reason=args.reason)
+            return {"status": "ok", "result": result.to_dict()}
+        except (KeyError, ValueError) as exc:
+            return _memory_command_failure(journal, command=command, target_id=args.proposal_id, error=_exception_reason(exc))
     if command == "delete":
-        tombstone = pipeline.delete_memory(
-            args.memory_id,
-            reason=args.reason,
-            deleted_by="user",
-            task_id="task-cli-memory",
-            run_id="run-cli-memory",
-        )
-        return {"status": "ok", "tombstone": tombstone.to_dict()}
+        try:
+            tombstone = pipeline.delete_memory(
+                args.memory_id,
+                reason=args.reason,
+                deleted_by="user",
+                task_id="task-cli-memory",
+                run_id="run-cli-memory",
+            )
+            return {"status": "ok", "tombstone": tombstone.to_dict()}
+        except (KeyError, ValueError) as exc:
+            return _memory_command_failure(journal, command=command, target_id=args.memory_id, error=_exception_reason(exc))
     if command == "export":
-        return {"status": "ok", "export": store.export_item(args.memory_id)}
+        try:
+            return {"status": "ok", "export": store.export_item(args.memory_id)}
+        except (KeyError, ValueError) as exc:
+            return _memory_command_failure(journal, command=command, target_id=args.memory_id, error=_exception_reason(exc))
     if command == "migrate-semantic":
         from kernel_v3.memory.migration import migrate_semantic_intake_records
 
         report = migrate_semantic_intake_records(journal=journal, store=store, limit=args.limit)
         return {"status": "ok", "migration": report.to_dict()}
     return {"status": "failed", "reason": f"unknown_memory_command:{command}"}
+
+
+def _memory_command_failure(
+    journal: JournalStore,
+    *,
+    command: str,
+    target_id: str,
+    error: str,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "status": "failed",
+        "reason": error,
+        "command": command,
+        "target_id": target_id,
+    }
+    journal.append(
+        task_id="task-cli-memory",
+        run_id="run-cli-memory",
+        step_id=None,
+        kind="memory_command_failed",
+        data=payload,
+        state_delta={"memory_command": command, "memory_command_status": "failed"},
+    )
+    return payload
 
 
 def _explicit_memory_intake(text: str) -> SemanticIntake:
@@ -1357,6 +1393,12 @@ def _positive_limit(value: int, *, default: int = 20) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, parsed)
+
+
+def _exception_reason(exc: Exception) -> str:
+    if isinstance(exc, KeyError) and exc.args:
+        return str(exc.args[0])
+    return str(exc) or type(exc).__name__
 
 
 def _providers_payload() -> list[dict[str, object]]:

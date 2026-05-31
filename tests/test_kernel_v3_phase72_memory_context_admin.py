@@ -106,6 +106,27 @@ def test_phase72_chat_memory_admin_approves_and_lists_pending_proposal():
     assert delete_records[-1].data["reason"] == "test-delete"
 
 
+def test_phase72_chat_memory_admin_unknown_id_is_command_failure():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, memory_store=store),
+        memory_store=store,
+    )
+
+    result = chat.receive("/memory approve missing-proposal", thread_id="thread-memory")
+
+    assert result.status == "failed"
+    assert result.command_result is not None
+    assert result.command_result["status"] == "failed"
+    assert result.command_result["result"]["error"] == "unknown proposal_id: missing-proposal"
+    assert "Memory command failed" in (result.answer or "")
+    command = journal.records(kind="chat_command")[-1].data
+    assert command["name"] == "/memory"
+    assert command["status"] == "failed"
+
+
 def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -137,6 +158,25 @@ def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
     assert cli.main([*base, "memory", "list", "--thread", "cli-thread"]) == 0
     listed_after_delete = json.loads(capsys.readouterr().out)
     assert listed_after_delete["result"]["total"] == 0
+
+
+def test_phase72_cli_memory_admin_unknown_id_is_failed_payload(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    memory_log = tmp_path / "memory.jsonl"
+    memory_index = tmp_path / "memory.sqlite"
+    base = ["--journal", str(journal), "--index", str(index), "--memory-log", str(memory_log), "--memory-index", str(memory_index)]
+
+    status = cli.main([*base, "memory", "delete", "missing-memory", "--reason", "test"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == 1
+    assert payload["status"] == "failed"
+    assert payload["reason"] == "unknown memory_id: missing-memory"
+    assert payload["target_id"] == "missing-memory"
+    records = JournalStore(journal, index_path=index).records(kind="memory_command_failed")
+    assert records[-1].data["command"] == "delete"
+    assert records[-1].data["target_id"] == "missing-memory"
 
 
 def _task(*, thread_id: str) -> TaskState:

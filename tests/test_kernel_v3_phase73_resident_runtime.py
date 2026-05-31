@@ -5,6 +5,7 @@ from kernel_v3 import cli
 from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.journal import JournalStore
+from kernel_v3.memory import MemoryStore
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
 from kernel_v3.trace import TraceRenderer
@@ -200,6 +201,29 @@ def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuatio
     assert outbox.status == "pending_user_input"
     assert "请明确" in outbox.text
     assert len(queue.outbox_messages()) == 1
+
+
+def test_phase73_invalid_memory_admin_command_does_not_retry_inbox(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    memory = MemoryStore.in_memory(clock_ms=_clock())
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, memory_store=memory),
+        memory_store=memory,
+    )
+    queue.enqueue(thread_id="resident-memory", text="/memory approve missing-proposal", message_id="in-memory-bad")
+
+    result = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-memory", journal=journal).run_once()
+
+    outbox = queue.outbox_messages()[0]
+    assert result.status == "processed"
+    assert result.payload["chat_status"] == "failed"
+    assert queue.inbox_messages()[0].status == "completed"
+    assert outbox.status == "failed"
+    assert outbox.payload["command_result"]["result"]["error"] == "unknown proposal_id: missing-proposal"
+    assert not journal.records(kind="resident_inbox_failed")
+    assert journal.records(kind="chat_command")[-1].data["status"] == "failed"
 
 
 def test_phase73_answering_pending_question_marks_old_outbox_answered(tmp_path: Path):
