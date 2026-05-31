@@ -22,6 +22,12 @@ One agent task runs through this chain:
 retrieval and workspace answering are configured by recipes, registries, and
 operators outside the controller.
 
+Tool execution is bound to the policy decision for the exact action. A
+`PolicyDecision` with `allowed=True` cannot be reused for a different
+`action_id`; `ToolRegistry` blocks that as `policy_decision_action_mismatch`
+before calling the tool executor. This keeps direct registry callers aligned
+with the loop's host-owned validation path.
+
 ## Semantic Task Graph
 
 Model-backed semantic intake is now normalized into a host-visible

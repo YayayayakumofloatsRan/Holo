@@ -168,6 +168,18 @@ class ToolRegistry:
                 },
                 kind="policy_block",
             )
+        if policy_decision is not None and policy_decision.action_id != action.action_id:
+            return _tool_result(
+                action,
+                "blocked",
+                {
+                    "reason": "policy_decision_action_mismatch",
+                    "tool": tool_name,
+                    "policy_action_id": policy_decision.action_id,
+                    "action_id": action.action_id,
+                },
+                kind="policy_block",
+            )
         if policy_decision is not None and not policy_decision.allowed:
             return _tool_result(
                 action,

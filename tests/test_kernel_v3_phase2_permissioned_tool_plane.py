@@ -210,6 +210,44 @@ def test_registry_refuses_tool_execution_without_policy_decision():
         _remove_dir(root)
 
 
+def test_registry_refuses_policy_decision_for_different_action():
+    root = Path("kernel_v3/.test-phase2-policy-bound")
+    _reset_dir(root)
+    try:
+        (root / "README.md").write_text("policy binding", encoding="utf-8")
+        registry = ToolRegistry.with_permissioned_workspace(root=root)
+        action = CandidateAction(
+            action_id="act-read-bound",
+            kind="tool",
+            name="file.read",
+            description="read with mismatched policy",
+            score=1.0,
+            payload={"path": "README.md"},
+            reasons=[],
+            side_effect_class="read",
+        )
+        other = CandidateAction(
+            action_id="act-other",
+            kind="tool",
+            name="file.read",
+            description="other",
+            score=1.0,
+            payload={"path": "README.md"},
+            reasons=[],
+            side_effect_class="read",
+        )
+
+        result = registry.execute_with_artifacts(action, policy_decision=_allowed_decision(other))
+
+        assert result.observation.kind == "policy_block"
+        assert result.observation.status == "blocked"
+        assert result.observation.content["reason"] == "policy_decision_action_mismatch"
+        assert result.observation.content["policy_action_id"] == "act-other"
+        assert registry.executed_actions == []
+    finally:
+        _remove_dir(root)
+
+
 def test_shell_execution_is_restricted_auditable_and_permissioned():
     root = Path("kernel_v3/.test-phase2-shell")
     _reset_dir(root)
