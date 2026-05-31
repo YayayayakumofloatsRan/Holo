@@ -518,6 +518,32 @@ def test_phase73_delivery_failed_outbox_can_be_retried_explicitly(tmp_path: Path
     assert queue.status().outbox_counts["ready"] == 1
 
 
+def test_phase73_retry_preserves_pending_user_input_delivery_semantics(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-question-delivery",
+        thread_id="resident-thread",
+        text="which file?",
+        status="pending_user_input",
+        task_id="task-question",
+        run_id="run-question",
+    )
+    failed, fail_reason = queue.transition_outbox_status(outbox.outbox_id, status="delivery_failed")
+
+    retried, retry_reason = queue.retry_outbox(outbox.outbox_id, reason="question_delivery_retry")
+
+    assert fail_reason is None
+    assert failed is not None
+    assert failed.status == "delivery_failed"
+    assert failed.payload["delivery_failed_from_status"] == "pending_user_input"
+    assert retry_reason is None
+    assert retried is not None
+    assert retried.status == "pending_user_input"
+    assert retried.payload["requested_status"] == "pending_user_input"
+    assert retried.payload["retry_reason"] == "question_delivery_retry"
+    assert queue.status().outbox_counts["pending_user_input"] == 1
+
+
 def test_phase73_delivery_failed_outbox_cannot_bypass_retry_path(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     outbox = queue.append_outbox(

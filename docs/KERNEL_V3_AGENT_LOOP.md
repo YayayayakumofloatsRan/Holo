@@ -261,12 +261,14 @@ does not re-run `ChatRuntime` or the agent loop. This prevents duplicated tool
 work and duplicated agent journal records after a partial worker failure.
 
 Failed delivery recovery is an explicit resident operation. `resident
-retry-outbox <outbox_id>` transitions a `delivery_failed` outbox back to
-`ready`, records retry metadata in the payload, and journals
-`resident_outbox_retried`. Generic `resident ack --status ready` is not a retry
-path for failed delivery, and `resident ack --status acknowledged` cannot clear
-a `delivery_failed` outbox. Operators must retry delivery first, then
-acknowledge the retried outbox after actual delivery. This keeps transport
+retry-outbox <outbox_id>` records retry metadata in the payload and journals
+`resident_outbox_retried`. Ordinary reply outboxes return to `ready`. Pending
+user-input outboxes remember the state they failed from and return to
+`pending_user_input`, so retrying question delivery does not collapse a waiting
+question into an ordinary ready reply. Generic `resident ack --status ready` is
+not a retry path for failed delivery, and `resident ack --status acknowledged`
+cannot clear a `delivery_failed` outbox. Operators must retry delivery first,
+then acknowledge the retried outbox after actual delivery. This keeps transport
 recovery auditable without treating it as a user acknowledgment.
 
 Natural-language turn routing is processor-shaped rather than phrase-table

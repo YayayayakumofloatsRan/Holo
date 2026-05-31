@@ -664,14 +664,15 @@ class ResidentQueue:
                 conn.rollback()
                 return None, f"invalid_outbox_retry_status:{current.status}"
             payload = dict(current.payload)
-            payload["requested_status"] = "ready"
+            next_status = _retry_outbox_status(current)
+            payload["requested_status"] = next_status
             payload["status_updated_at_ms"] = now
             payload["retry_reason"] = reason
             payload["retried_at_ms"] = now
             payload["retry_count"] = int(payload.get("retry_count") or 0) + 1
             conn.execute(
                 "UPDATE resident_outbox SET status = ?, payload_json = ? WHERE outbox_id = ?",
-                ("ready", _json(payload), outbox_id),
+                (next_status, _json(payload), outbox_id),
             )
             row = conn.execute(
                 """
@@ -716,6 +717,8 @@ class ResidentQueue:
             payload["status_updated_at_ms"] = self._now_ms()
             if status == "acknowledged":
                 payload["acknowledged_at_ms"] = payload["status_updated_at_ms"]
+            if next_status == "delivery_failed":
+                payload.setdefault("delivery_failed_from_status", current.status)
             if next_status == current.status:
                 if payload == current.payload:
                     conn.rollback()
@@ -980,6 +983,13 @@ def _next_outbox_status(current: str, *, requested: str) -> str | None:
     if current == "pending_user_input" and requested == "pending_user_input_delivered":
         return "pending_user_input_delivered"
     return None
+
+
+def _retry_outbox_status(current: OutboxMessage) -> str:
+    previous = str(current.payload.get("delivery_failed_from_status") or "")
+    if previous in {"pending_user_input", "pending_user_input_delivered"}:
+        return "pending_user_input"
+    return "ready"
 
 
 def _lease_is_active(conn: sqlite3.Connection, *, worker_id: str, now_ms: int) -> bool:
