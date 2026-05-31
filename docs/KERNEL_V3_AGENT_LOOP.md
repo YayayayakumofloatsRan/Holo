@@ -206,6 +206,9 @@ run results also surface `chat_route`, compact `command_result`,
 message approved, rejected, finalized, or answered a pending plan without
 scraping visible text. Large command payloads such as rendered traces are stored
 as preview/hash manifests in resident payloads and resident journal events.
+Outbox administration events such as `resident_outbox_ack` and
+`resident_outbox_retried` journal the same manifest projection, not the full
+reply body or payload.
 Pending plan-confirmation outboxes are marked `answered` when the user's later
 message approves or rejects the plan. Pending-user-input answer marking is
 scoped to the answered task id, so multiple waiting questions in the same thread

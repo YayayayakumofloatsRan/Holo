@@ -1265,6 +1265,48 @@ def test_phase73_cli_resident_retry_outbox_journals_recovery(tmp_path: Path, cap
     assert outbox.outbox_id in trace
 
 
+def test_phase73_cli_resident_outbox_admin_journals_manifest(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    queue = ResidentQueue(resident_db, clock_ms=_clock())
+    marker = "RAW_OUTBOX_ADMIN_MARKER_SHOULD_NOT_APPEAR"
+    ready = queue.append_outbox(
+        in_reply_to="in-cli-admin-ready",
+        thread_id="resident-cli",
+        text=("ready-admin-" * 20) + marker,
+        status="ready",
+        task_id="task-cli-ready",
+        run_id="run-cli-ready",
+        payload={"command_result": {"result": {"trace": ("trace-admin-" * 20) + marker}}},
+    )
+    delivery_failed = queue.append_outbox(
+        in_reply_to="in-cli-admin-delivery",
+        thread_id="resident-cli",
+        text=("delivery-admin-" * 20) + marker,
+        status="delivery_failed",
+        task_id="task-cli-delivery",
+        run_id="run-cli-delivery",
+        payload={"command_result": {"result": {"trace": ("trace-delivery-" * 20) + marker}}},
+    )
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    assert cli.main([*base, "resident", "ack", ready.outbox_id, "--status", "acknowledged"]) == 0
+    assert cli.main([*base, "resident", "retry-outbox", delivery_failed.outbox_id, "--reason", "manual_delivery_retry"]) == 0
+    _ = capsys.readouterr()
+
+    records = JournalStore(journal, index_path=index).records()
+    admin_events = [record for record in records if record.kind in {"resident_outbox_ack", "resident_outbox_retried"}]
+    serialized_events = json.dumps([record.data for record in admin_events], ensure_ascii=False)
+
+    assert len(admin_events) == 2
+    assert marker not in serialized_events
+    assert admin_events[0].data["redaction"] == {"text": "preview_hash_only", "payload": "manifest_only"}
+    assert admin_events[0].data["text_length"] == len(ready.text)
+    assert admin_events[1].data["redaction"] == {"text": "preview_hash_only", "payload": "manifest_only"}
+    assert admin_events[1].data["text_length"] == len(delivery_failed.text)
+
+
 def test_phase73_cli_resident_ack_cannot_retry_delivery_failed_outbox(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
