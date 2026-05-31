@@ -460,6 +460,7 @@ class ChatRuntime:
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode="fake",
                 citations_required=_plan_step_citations_required(step),
+                execution_metadata={"task_execution_step": dict(step)},
             )
             decision_record = self._append_plan_decision(
                 turn,
@@ -542,6 +543,7 @@ class ChatRuntime:
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode="fake",
                 citations_required=_plan_step_citations_required(step),
+                execution_metadata={"task_execution_step": dict(step)},
             )
             decision_record = self._append_plan_decision(
                 turn,

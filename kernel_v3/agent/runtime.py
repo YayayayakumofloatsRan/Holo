@@ -65,6 +65,7 @@ class AgentRuntime:
         synthesizer_mode: str = "fake",
         semantic_mode: str = "fake",
         citations_required: bool | None = None,
+        execution_metadata: JsonObject | None = None,
     ) -> AgentRuntimeResult:
         return self._execute(
             goal,
@@ -75,6 +76,7 @@ class AgentRuntime:
             synthesizer_mode=synthesizer_mode,
             semantic_mode=semantic_mode,
             citations_required=citations_required,
+            execution_metadata=execution_metadata,
             task_id=None,
         )
 
@@ -90,6 +92,7 @@ class AgentRuntime:
         synthesizer_mode: str = "fake",
         semantic_mode: str = "fake",
         citations_required: bool | None = None,
+        execution_metadata: JsonObject | None = None,
     ) -> AgentRuntimeResult:
         return self._execute(
             user_input,
@@ -100,6 +103,7 @@ class AgentRuntime:
             synthesizer_mode=synthesizer_mode,
             semantic_mode=semantic_mode,
             citations_required=citations_required,
+            execution_metadata=execution_metadata,
             task_id=task_id,
         )
 
@@ -114,6 +118,7 @@ class AgentRuntime:
         synthesizer_mode: str,
         semantic_mode: str,
         citations_required: bool | None,
+        execution_metadata: JsonObject | None,
         task_id: str | None,
     ) -> AgentRuntimeResult:
         intake = self._semantic_intake(goal, semantic_mode=semantic_mode, task_id=task_id)
@@ -131,6 +136,7 @@ class AgentRuntime:
                 "task_graph": task_graph.to_dict(),
                 "task_graph_validation": task_graph_validation.to_dict(),
                 "task_execution_plan": task_plan.to_dict(),
+                "execution_metadata": dict(execution_metadata or {}),
             },
         )
         registry = self._registry(recipe, goal)
@@ -808,6 +814,8 @@ def _select_mode(goal: str, mode: str) -> str:
 
 def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
     if recipe.mode == "retrieval_answer":
+        first_payload = _retrieval_payload(goal, recipe)
+        retry_payload = dict(first_payload)
         return [
             CandidateAction(
                 action_id="act-agent-retrieval-1",
@@ -815,7 +823,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
                 name="retrieval.run",
                 description="run retrieval for grounded answer",
                 score=1.0,
-                payload={"goal_id": "goal-agent-retrieval", "query": goal, "max_spans_per_document": 2},
+                payload=first_payload,
                 reasons=["retrieval_answer recipe"],
                 side_effect_class="read",
             ),
@@ -825,7 +833,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
                 name="retrieval.run",
                 description="retry retrieval once if evidence remains insufficient",
                 score=0.6,
-                payload={"goal_id": "goal-agent-retrieval", "query": goal, "max_spans_per_document": 2},
+                payload=retry_payload,
                 reasons=["retrieval_answer retry budget"],
                 side_effect_class="read",
             )
@@ -939,6 +947,16 @@ def _task_execution_plan_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = recipe.metadata.get("execution_metadata")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _execution_step_metadata(recipe: TaskRecipe) -> JsonObject | None:
+    value = _execution_metadata(recipe).get("task_execution_step")
+    return dict(value) if isinstance(value, dict) else None
+
+
 def _has_memory_write_intent(intake: SemanticIntake) -> bool:
     for intent in intake.intents:
         if not isinstance(intent, dict):
@@ -1020,6 +1038,32 @@ def _default_retrieval_operator(goal: str) -> RetrievalOperator:
     )
 
 
+def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
+    payload: JsonObject = {
+        "goal_id": "goal-agent-retrieval",
+        "query": goal,
+        "max_spans_per_document": 2,
+    }
+    payload.update(_retrieval_capability_args(recipe))
+    payload.setdefault("goal_id", "goal-agent-retrieval")
+    payload.setdefault("query", goal)
+    payload.setdefault("max_spans_per_document", 2)
+    return payload
+
+
+def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
+    step = _execution_step_metadata(recipe)
+    if step is not None:
+        args = _capability_args_from_step(step, "retrieval.run")
+        if args:
+            return args
+    return _capability_args_from_plan(
+        _task_execution_plan_metadata(recipe),
+        "retrieval.run",
+        capability_markers={"retrieval.run"},
+    )
+
+
 class _AnyQuerySearchProvider:
     def __init__(self, source: SearchSource) -> None:
         self.source = source
@@ -1054,6 +1098,19 @@ def _workspace_target(goal: str, plan: TaskExecutionPlan | JsonObject | None) ->
 
 
 def _workspace_capability_args(plan: TaskExecutionPlan | JsonObject | None) -> JsonObject:
+    return _capability_args_from_plan(
+        plan,
+        None,
+        capability_markers={"workspace.search", "file.read", "workspace:read"},
+    )
+
+
+def _capability_args_from_plan(
+    plan: TaskExecutionPlan | JsonObject | None,
+    tool_name: str | None,
+    *,
+    capability_markers: set[str],
+) -> JsonObject:
     if plan is None:
         return {}
     steps: object
@@ -1070,20 +1127,49 @@ def _workspace_capability_args(plan: TaskExecutionPlan | JsonObject | None) -> J
             continue
         capabilities = raw_step.get("required_capabilities")
         if not isinstance(capabilities, list) or not any(
-            capability in {"workspace.search", "file.read", "workspace:read"}
+            capability in capability_markers
             for capability in capabilities
             if isinstance(capability, str)
         ):
             continue
-        metadata = raw_step.get("metadata")
-        if not isinstance(metadata, dict):
-            continue
-        capability_args = metadata.get("capability_args")
-        if isinstance(capability_args, dict):
+        args = _capability_args_from_step(raw_step, tool_name)
+        if args:
+            return args
+    return {}
+
+
+def _capability_args_from_step(raw_step: JsonObject, tool_name: str | None) -> JsonObject:
+    metadata = raw_step.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    capability_args = metadata.get("capability_args")
+    if isinstance(capability_args, dict):
+        if tool_name is None:
             return dict(capability_args)
-        node_metadata = metadata.get("node_metadata")
-        if isinstance(node_metadata, dict) and isinstance(node_metadata.get("capability_args"), dict):
+        nested = _nested_json(capability_args, tool_name)
+        return nested or _direct_tool_payload(capability_args, tool_name)
+    node_metadata = metadata.get("node_metadata")
+    if isinstance(node_metadata, dict) and isinstance(node_metadata.get("capability_args"), dict):
+        if tool_name is None:
             return dict(node_metadata["capability_args"])
+        nested = _nested_json(node_metadata["capability_args"], tool_name)
+        return nested or _direct_tool_payload(node_metadata["capability_args"], tool_name)
+    return {}
+
+
+def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObject:
+    if tool_name == "retrieval.run":
+        retrieval_keys = {
+            "goal_id",
+            "query",
+            "max_queries",
+            "max_sources",
+            "max_fetches",
+            "max_spans_per_document",
+            "metadata",
+        }
+        if any(key in capability_args for key in retrieval_keys):
+            return dict(capability_args)
     return {}
 
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import CandidateAction, JsonObject, Observation, ToolManifest
 from kernel_v3.journal import JournalStore
+from kernel_v3.research import profile_by_id
+from kernel_v3.research.contracts import ResearchProfile, SourceAssessment
+from kernel_v3.research.source_policy import assess_search_source, source_authority_summary
 from kernel_v3.retrieval.citations import citation_from_evidence
 from kernel_v3.retrieval.contracts import (
     EvidenceItem,
@@ -52,6 +55,7 @@ class RetrievalOperator:
         step_id_prefix: str = "retrieval",
         action_ref: str | None = None,
     ) -> RetrievalReport:
+        research_profile = _research_profile_from_goal(goal)
         queries = plan_queries(goal)
         plan = QueryPlan(
             plan_id=f"plan-{goal.goal_id}",
@@ -106,7 +110,26 @@ class RetrievalOperator:
                 action_ref=action_ref,
             )
 
-        ranked = rank_sources(goal, _dedupe_sources(sources))[: goal.max_sources]
+        source_assessments: dict[str, SourceAssessment] = {}
+        if research_profile is not None:
+            for source in _dedupe_sources(sources):
+                source_assessments[source.source_id] = assess_search_source(source, profile=research_profile)
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-source-assessment",
+                "retrieval_source_assessment",
+                {
+                    "goal_id": goal.goal_id,
+                    "research_profile": research_profile.to_dict(),
+                    "assessments": [item.to_dict() for item in source_assessments.values()],
+                    "diagnostics": source_authority_summary(list(source_assessments.values())),
+                },
+                action_ref=action_ref,
+            )
+
+        ranked = rank_sources(goal, _dedupe_sources(sources), research_profile=research_profile)[: goal.max_sources]
         ranking = RankSources(
             ranking_id=f"rank-{goal.goal_id}",
             goal_id=goal.goal_id,
@@ -236,7 +259,15 @@ class RetrievalOperator:
                     text=span.text,
                     score=span.score,
                     payload_hash=document.payload_hash,
-                    diagnostics={"start_offset": span.start_offset, "end_offset": span.end_offset},
+                    diagnostics={
+                        "start_offset": span.start_offset,
+                        "end_offset": span.end_offset,
+                        **(
+                            {"source_assessment": source_assessments[document.source_id].to_dict()}
+                            if document.source_id in source_assessments
+                            else {}
+                        ),
+                    },
                 )
                 evidence.append(item)
                 _append(
@@ -262,7 +293,12 @@ class RetrievalOperator:
                     artifact_refs=[document.artifact_id],
                 )
 
-        decision = self.evaluator.evaluate(goal=goal, evidence=evidence, citations=citations)
+        decision = self.evaluator.evaluate(
+            goal=goal,
+            evidence=evidence,
+            citations=citations,
+            research_profile=research_profile,
+        )
         _append(
             journal,
             task_id,
@@ -291,6 +327,14 @@ class RetrievalOperator:
                 "fetch_attempt_count": len(fetch_attempt_ids),
                 "evidence_count": len(evidence),
                 "citation_count": len(citations),
+                **(
+                    {
+                        "research_profile": research_profile.profile_id,
+                        "source_authority": source_authority_summary(list(source_assessments.values())),
+                    }
+                    if research_profile is not None
+                    else {}
+                ),
             },
         )
         _append(
@@ -332,6 +376,7 @@ def register_retrieval_tool(
                 "max_sources": "int optional",
                 "max_fetches": "int optional",
                 "max_spans_per_document": "int optional",
+                "metadata": "object optional",
             },
         ),
     )
@@ -394,6 +439,13 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
         max_spans_per_document=_positive_int(data.get("max_spans_per_document"), default=2),
         metadata=_dict_or_empty(data.get("metadata")),
     )
+
+
+def _research_profile_from_goal(goal: SearchGoal) -> ResearchProfile | None:
+    raw_profile = goal.metadata.get("research_profile_id", goal.metadata.get("research_profile"))
+    if not isinstance(raw_profile, str):
+        return None
+    return profile_by_id(raw_profile)
 
 
 def _append(

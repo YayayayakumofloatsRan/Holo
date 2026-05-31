@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from kernel_v3.research.contracts import ResearchProfile
+from kernel_v3.research.source_policy import assess_search_source
 from kernel_v3.retrieval.contracts import RankedSource, SearchGoal, SearchSource
 
 
@@ -10,13 +12,27 @@ def plan_queries(goal: SearchGoal) -> list[str]:
     return [query][: max(0, goal.max_queries)]
 
 
-def rank_sources(goal: SearchGoal, sources: list[SearchSource]) -> list[RankedSource]:
+def rank_sources(
+    goal: SearchGoal,
+    sources: list[SearchSource],
+    *,
+    research_profile: ResearchProfile | None = None,
+) -> list[RankedSource]:
     terms = _terms(goal.query)
     ranked: list[RankedSource] = []
     for source in sources:
         haystack = f"{source.title} {source.snippet}".lower()
         hits = sum(1 for term in terms if term in haystack)
-        score = hits / max(1, len(terms))
+        term_score = hits / max(1, len(terms))
+        reasons = ["query_term_match"] if hits else ["provider_result"]
+        metadata = dict(source.metadata)
+        if research_profile is not None:
+            assessment = assess_search_source(source, profile=research_profile)
+            score = (term_score * 0.2) + (assessment.authority_score * 0.8)
+            metadata["source_assessment"] = assessment.to_dict()
+            reasons.append(f"authority:{assessment.authority_level}")
+        else:
+            score = term_score
         ranked.append(
             RankedSource(
                 source_id=source.source_id,
@@ -26,8 +42,8 @@ def rank_sources(goal: SearchGoal, sources: list[SearchSource]) -> list[RankedSo
                 provider=source.provider,
                 score=score,
                 rank=0,
-                reasons=["query_term_match"] if hits else ["provider_result"],
-                metadata=source.metadata,
+                reasons=reasons,
+                metadata=metadata,
             )
         )
     ordered = sorted(ranked, key=lambda item: (-item.score, item.source_id))
