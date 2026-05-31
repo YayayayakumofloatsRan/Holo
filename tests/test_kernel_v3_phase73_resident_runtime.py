@@ -373,6 +373,14 @@ def test_phase73_answered_marker_does_not_mark_current_pending_outbox(tmp_path: 
         task_id="task-1",
         run_id="run-2",
     )
+    unrelated = queue.append_outbox(
+        in_reply_to="in-other-question",
+        thread_id="resident-thread",
+        text="which other file?",
+        status="pending_user_input",
+        task_id="task-2",
+        run_id="run-1",
+    )
 
     answered = queue.mark_pending_user_input_answered(
         thread_id="resident-thread",
@@ -386,6 +394,7 @@ def test_phase73_answered_marker_does_not_mark_current_pending_outbox(tmp_path: 
     assert [item.outbox_id for item in answered] == [old.outbox_id]
     assert statuses[old.outbox_id] == "answered"
     assert statuses[current.outbox_id] == "pending_user_input"
+    assert statuses[unrelated.outbox_id] == "pending_user_input"
 
 
 def test_phase73_pending_user_input_ack_preserves_waiting_semantics(tmp_path: Path):

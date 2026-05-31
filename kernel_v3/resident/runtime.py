@@ -174,7 +174,7 @@ class ResidentRuntime:
                 answered_pending = self.queue.mark_pending_user_input_answered(
                     thread_id=message.thread_id,
                     answered_by_message_id=message.message_id,
-                    task_id=chat_result.task_id,
+                    task_id=_answered_task_id(chat_result),
                     run_id=chat_result.run_id,
                     exclude_in_reply_to=message.message_id,
                 )
@@ -313,3 +313,17 @@ def _final_answer_ref(chat_result) -> str | None:
         if isinstance(result, dict) and isinstance(result.get("final_answer_ref"), str):
             return str(result["final_answer_ref"])
     return None
+
+
+def _answered_task_id(chat_result) -> str | None:
+    command = chat_result.command_result
+    if isinstance(command, dict):
+        plan_task_id = command.get("plan_task_id")
+        if isinstance(plan_task_id, str) and plan_task_id:
+            return plan_task_id
+        result = command.get("result")
+        if isinstance(result, dict):
+            plan_task_id = result.get("plan_task_id")
+            if isinstance(plan_task_id, str) and plan_task_id:
+                return plan_task_id
+    return chat_result.task_id

@@ -402,7 +402,13 @@ class ChatRuntime:
                 step=None,
                 agent_result=None,
             )
-            result = {"plan_id": plan_id, "decision": "rejected", "reason": reason, "decision_ref": decision_record.record_id}
+            result = {
+                "plan_id": plan_id,
+                "plan_task_id": plan_record.task_id,
+                "decision": "rejected",
+                "reason": reason,
+                "decision_ref": decision_record.record_id,
+            }
             command = self._append_command(turn, name="/plan", args=args, status="ok", result=result)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Rejected plan {plan_id}.")
         if subcommand == "approve":
@@ -432,6 +438,7 @@ class ChatRuntime:
                 )
                 result = {
                     "plan_id": plan_id,
+                    "plan_task_id": plan_record.task_id,
                     "decision": "blocked",
                     "reason": "no_safe_executable_step",
                     "decision_ref": decision_record.record_id,
@@ -466,6 +473,7 @@ class ChatRuntime:
             command_result = {
                 "started_new_task": True,
                 "plan_id": plan_id,
+                "plan_task_id": plan_record.task_id,
                 "decision": "approved",
                 "decision_ref": decision_record.record_id,
                 "executed_step_id": step.get("step_id"),
@@ -513,6 +521,7 @@ class ChatRuntime:
                 status="ok",
                 result={
                     "plan_id": plan_id,
+                    "plan_task_id": plan_record.task_id,
                     "final_answer_ref": existing.record_id,
                     "citation_refs": list(final_answer.citation_refs),
                     "already_finalized": True,
@@ -535,7 +544,7 @@ class ChatRuntime:
             )
         final_answer, failure = _build_plan_final_answer(self.journal, plan_record=plan_record, plan=plan)
         if failure is not None:
-            result = {"plan_id": plan_id, **failure}
+            result = {"plan_id": plan_id, "plan_task_id": plan_record.task_id, **failure}
             command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
             return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=str(failure["reason"]))
         assert final_answer is not None
@@ -552,7 +561,12 @@ class ChatRuntime:
             name="/plan",
             args=args,
             status="ok",
-            result={"plan_id": plan_id, "final_answer_ref": record.record_id, "citation_refs": list(final_answer.citation_refs)},
+            result={
+                "plan_id": plan_id,
+                "plan_task_id": plan_record.task_id,
+                "final_answer_ref": record.record_id,
+                "citation_refs": list(final_answer.citation_refs),
+            },
         )
         return ChatRuntimeResult(
             status="completed",

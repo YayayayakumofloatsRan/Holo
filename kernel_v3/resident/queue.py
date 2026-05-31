@@ -695,10 +695,11 @@ class ResidentQueue:
                 FROM resident_outbox
                 WHERE thread_id = ?
                   AND status IN ('pending_user_input', 'pending_user_input_delivered')
+                  AND (? IS NULL OR task_id = ?)
                   AND (? IS NULL OR in_reply_to != ?)
                 ORDER BY created_at_ms, outbox_id
                 """,
-                (thread_id, exclude_in_reply_to, exclude_in_reply_to),
+                (thread_id, task_id, task_id, exclude_in_reply_to, exclude_in_reply_to),
             ).fetchall()
             answered: list[OutboxMessage] = []
             for row in rows:

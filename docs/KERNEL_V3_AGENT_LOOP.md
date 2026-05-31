@@ -160,7 +160,9 @@ results also surface `chat_route`, `command_result`, `pending_question`, and
 `final_answer_ref` so a supervisor can see whether a message approved,
 rejected, finalized, or answered a pending plan without scraping visible text.
 Pending plan-confirmation outboxes are marked `answered` when the user's later
-message approves or rejects the plan.
+message approves or rejects the plan. Pending-user-input answer marking is
+scoped to the answered task id, so multiple waiting questions in the same thread
+do not clear each other.
 
 Resident loop summaries include the queue health snapshot used to decide the
 loop result. A loop no longer reports `completed` when unresolved failed,
