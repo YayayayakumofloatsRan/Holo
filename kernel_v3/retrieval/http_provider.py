@@ -327,6 +327,8 @@ def _validate_url(
         return {"status": "failed", "reason": "missing_url_host", **diagnostics}
     if parsed.username or parsed.password:
         return {"status": "failed", "reason": "url_credentials_not_allowed", **diagnostics}
+    if _parsed_url_has_secret_like_content(parsed):
+        return {"status": "failed", "reason": "url_secret_like_content_not_allowed", **diagnostics}
     host = parsed.hostname.lower()
     if not allow_all_hosts and not _host_allowed(host, allowed_hosts):
         return {"status": "failed", "reason": "host_not_allowed", "allowed_host_count": len(allowed_hosts), **diagnostics}
@@ -442,12 +444,16 @@ def _is_safe_result_uri(uri: str) -> bool:
         return False
     if parsed.username or parsed.password:
         return False
-    if contains_secret_like_content(uri):
-        return False
+    return not _parsed_url_has_secret_like_content(parsed)
+
+
+def _parsed_url_has_secret_like_content(parsed: urllib.parse.ParseResult) -> bool:
+    if contains_secret_like_content(parsed.geturl()):
+        return True
     for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
         if _query_pair_secret_like(key, value):
-            return False
-    return True
+            return True
+    return False
 
 
 def _query_pair_secret_like(key: str, value: str) -> bool:

@@ -144,7 +144,7 @@ not part of the default CLI or unit-test path:
 - allowed-host entries may be bare hosts or URL-form strings; only the hostname
   is retained for matching
 - it rejects non-allowed URL schemes, URLs without hosts, and URLs with
-  embedded credentials
+  embedded credentials or secret-like query values
 - it enforces timeout and maximum body-byte bounds before returning a body
 - diagnostics contain status, byte counts, URL scheme, and host hash only; raw
   URLs and response bodies are not embedded in diagnostics
@@ -170,7 +170,7 @@ CLI or unit-test path.
 - allowed-host entries may be bare hosts or URL-form strings; only the hostname
   is retained for matching
 - it rejects non-allowed URL schemes, endpoints without hosts, and endpoints
-  with embedded credentials
+  with embedded credentials or secret-like query values
 - it supports env-only API keys through a configured header; API key values and
   env var names are not copied into provider diagnostics
 - it accepts a configurable JSON `results_path`, defaults to `["results"]`,

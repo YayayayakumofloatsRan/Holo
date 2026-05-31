@@ -95,6 +95,21 @@ def test_phase90_http_fetch_provider_normalizes_url_form_allowed_hosts() -> None
     assert transport.calls[0]["url"] == "https://www.example.com/report"
 
 
+def test_phase90_http_fetch_provider_rejects_secret_bearing_url_before_transport() -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"should not be fetched"))
+    provider = HttpFetchProvider(enabled=True, allowed_hosts=["example.com"], transport=transport)
+
+    response = provider.fetch(_source("https://example.com/report?access_token=live-secret-token-1234567890"))
+
+    assert response.status == "failed"
+    assert response.body == ""
+    assert response.diagnostics["reason"] == "url_secret_like_content_not_allowed"
+    assert transport.calls == []
+    dumped = json.dumps(response.diagnostics, ensure_ascii=False)
+    assert "live-secret-token" not in dumped
+    assert "access_token" not in dumped
+
+
 def test_phase90_http_fetch_provider_rejects_oversized_body_without_returning_raw_body() -> None:
     transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"0123456789"))
     provider = HttpFetchProvider(
@@ -195,6 +210,27 @@ def test_phase90_json_http_search_provider_fails_closed_when_disabled() -> None:
     dumped = json.dumps(diagnostics, ensure_ascii=False)
     assert "api.example.com" not in dumped
     assert "DeepSeek API docs" not in dumped
+
+
+def test_phase90_json_http_search_provider_rejects_secret_bearing_endpoint_before_transport() -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b'{"results": []}'))
+    provider = JsonHttpSearchProvider(
+        endpoint_url="https://api.example.com/search?api_key=live-secret-token-1234567890",
+        enabled=True,
+        allowed_hosts=["api.example.com"],
+        transport=transport,
+    )
+
+    sources = provider.search("DeepSeek API docs", goal=_goal(), plan=_plan())
+
+    assert sources == []
+    assert transport.calls == []
+    diagnostics = provider.search_diagnostics()
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["reason"] == "url_secret_like_content_not_allowed"
+    dumped = json.dumps(diagnostics, ensure_ascii=False)
+    assert "live-secret-token" not in dumped
+    assert "api_key" not in dumped
 
 
 def test_phase90_json_http_search_provider_parses_bounded_results() -> None:
