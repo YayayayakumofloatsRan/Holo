@@ -94,6 +94,13 @@ confirmation reply such as "yes", "approve", "同意", or "继续" is treated as
 "取消" is treated as `/plan reject`. This parser is only for answering the
 host's own confirmation prompt. It is not used for open-ended semantic routing.
 
+`/plan` also renders journal-derived progress. It reports per-step pending,
+approved, completed, blocked, or finalized state from
+`semantic_task_plan_decision`, spawned task ids, spawned statuses, dependency
+final answer refs, and the plan-level final answer ref when present. This
+progress is computed from journal records, not from model memory or hidden
+state.
+
 ## Stop Semantics
 
 The agent stops when one of these host-visible conditions is reached:

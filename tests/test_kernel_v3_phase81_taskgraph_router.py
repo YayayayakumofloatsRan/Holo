@@ -238,7 +238,10 @@ def test_phase81_chat_plan_show_lists_latest_model_task_plan():
     assert shown.status == "completed"
     assert shown.command_result is not None
     assert shown.command_result["result"]["plan_id"] == "plan-task-graph-1"
+    assert shown.command_result["result"]["progress"]["completed_step_count"] == 0
+    assert shown.command_result["result"]["progress"]["steps"][0]["progress_status"] == "pending"
     assert "plan=plan-task-graph-1" in (shown.answer or "")
+    assert "completed_steps=0/2" in (shown.answer or "")
     assert "retrieval.run" in (shown.answer or "")
     assert "workspace:write" in (shown.answer or "")
 
@@ -346,6 +349,7 @@ def test_phase81_chat_plan_approve_can_continue_next_safe_dependent_tool_step():
     initial = chat.receive("safe multi-step plan requiring confirmation", thread_id="thread-plan-continue")
     first = chat.receive("/plan approve", thread_id="thread-plan-continue")
     second = chat.receive("/plan approve", thread_id="thread-plan-continue")
+    shown = chat.receive("/plan", thread_id="thread-plan-continue")
     third = chat.receive("/plan approve", thread_id="thread-plan-continue")
 
     assert initial.status == "needs_user_input"
@@ -361,6 +365,10 @@ def test_phase81_chat_plan_approve_can_continue_next_safe_dependent_tool_step():
     assert journal.records(task_id=first.command_result["spawned_task_id"], kind="retrieval_report")
     actions = [record.data.get("name") for record in journal.records(task_id=second.command_result["spawned_task_id"], kind="action")]
     assert actions == ["workspace.search", "file.read"]
+    progress = shown.command_result["result"]["progress"]
+    assert progress["completed_step_count"] == 2
+    assert [step["progress_status"] for step in progress["steps"]] == ["completed", "completed"]
+    assert "completed_steps=2/2" in (shown.answer or "")
 
 
 def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_evidence_context():
@@ -393,6 +401,13 @@ def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_eviden
     assert repeated.command_result is not None
     assert repeated.command_result["result"]["already_finalized"] is True
     assert len(journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")) == 1
+    shown = chat.receive("/plan", thread_id="thread-plan-dependent-respond")
+    progress = shown.command_result["result"]["progress"]
+    assert progress["finalized"] is True
+    assert progress["final_answer_ref"] == final_records[0].record_id
+    assert progress["steps"][0]["progress_status"] == "completed"
+    assert progress["steps"][1]["progress_status"] == "pending"
+    assert "finalized=True" in (shown.answer or "")
     summary = chat.receive("/summary", thread_id="thread-plan-dependent-respond")
     assert summary.summary is not None
     assert "synthesize from the collected evidence" in str(summary.summary["last_answer_preview"])

@@ -356,14 +356,16 @@ class ChatRuntime:
         plan_id = str(plan.get("plan_id") or "")
         requested_plan_id = args[1] if len(args) >= 2 else plan_id
         if subcommand in {"show", "status"}:
+            progress = _plan_progress(self.journal, plan_record=plan_record, plan=plan)
             result = {
                 "plan_id": plan_id,
                 "task_id": plan_record.task_id,
                 "run_id": plan_record.run_id,
                 "plan": plan,
+                "progress": progress,
             }
             command = self._append_command(turn, name="/plan", args=args, status="ok", result=result)
-            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_task_plan_text(plan))
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_task_plan_text(plan, progress=progress))
         if subcommand == "reject":
             if requested_plan_id != plan_id:
                 result = {"error": "plan_not_found", "requested_plan_id": requested_plan_id, "latest_plan_id": plan_id}
@@ -825,23 +827,35 @@ def _plan_confirmation_response(text: str) -> str | None:
     return None
 
 
-def _task_plan_text(plan: JsonObject) -> str:
+def _task_plan_text(plan: JsonObject, *, progress: JsonObject | None = None) -> str:
     lines = [
         f"plan={plan.get('plan_id') or 'unknown'} status={plan.get('status') or 'unknown'} "
         f"approval_required={bool(plan.get('approval_required'))}"
     ]
+    if progress is not None:
+        lines.append(
+            f"progress finalized={bool(progress.get('finalized'))} "
+            f"completed_steps={progress.get('completed_step_count') or 0}/{progress.get('step_count') or 0}"
+        )
+        final_ref = progress.get("final_answer_ref")
+        if isinstance(final_ref, str) and final_ref:
+            lines.append(f"final_answer_ref={final_ref}")
     prompt = plan.get("confirmation_prompt")
     if isinstance(prompt, str) and prompt.strip():
         lines.append(f"prompt={prompt}")
+    progress_by_step = _progress_by_step_id(progress)
     steps = plan.get("steps")
     if isinstance(steps, list):
         for raw_step in steps:
             if not isinstance(raw_step, dict):
                 continue
+            step_id = str(raw_step.get("step_id") or "")
+            step_progress = progress_by_step.get(step_id, {})
             lines.append(
                 " ".join(
                     [
                         f"{raw_step.get('step_id') or '?'}:",
+                        f"progress={step_progress.get('progress_status') or 'pending'}",
                         str(raw_step.get("status") or "unknown"),
                         str(raw_step.get("kind") or "step"),
                         f"mode={raw_step.get('mode') or 'unknown'}",
@@ -856,7 +870,91 @@ def _task_plan_text(plan: JsonObject) -> str:
             capabilities = raw_step.get("required_capabilities")
             if isinstance(capabilities, list) and capabilities:
                 lines.append("  capabilities=" + ", ".join(str(item) for item in capabilities))
+            spawned_task_id = step_progress.get("spawned_task_id")
+            if isinstance(spawned_task_id, str) and spawned_task_id:
+                lines.append(
+                    "  spawned="
+                    + spawned_task_id
+                    + " status="
+                    + str(step_progress.get("spawned_status") or "unknown")
+                )
     return "\n".join(lines)
+
+
+def _progress_by_step_id(progress: JsonObject | None) -> dict[str, JsonObject]:
+    if progress is None:
+        return {}
+    steps = progress.get("steps")
+    if not isinstance(steps, list):
+        return {}
+    return {
+        str(step.get("step_id")): dict(step)
+        for step in steps
+        if isinstance(step, dict) and isinstance(step.get("step_id"), str)
+    }
+
+
+def _plan_progress(journal: JournalStore, *, plan_record: LedgerRecord, plan: JsonObject) -> JsonObject:
+    plan_ref = plan_record.record_id
+    decisions = _latest_plan_decisions_by_node(journal, plan_ref)
+    final_answer = _latest_plan_final_answer_record(journal, plan_record=plan_record)
+    steps_value = plan.get("steps")
+    steps = [dict(step) for step in steps_value if isinstance(step, dict)] if isinstance(steps_value, list) else []
+    progress_steps = [_step_progress(journal, step=step, decision=decisions.get(str(step.get("node_id") or ""))) for step in steps]
+    return {
+        "plan_ref": plan_ref,
+        "plan_id": str(plan.get("plan_id") or ""),
+        "task_id": plan_record.task_id,
+        "run_id": plan_record.run_id,
+        "finalized": final_answer is not None,
+        "final_answer_ref": final_answer.record_id if final_answer is not None else None,
+        "step_count": len(progress_steps),
+        "completed_step_count": sum(1 for step in progress_steps if step.get("progress_status") == "completed"),
+        "approved_step_count": sum(1 for step in progress_steps if step.get("decision") == "approved"),
+        "steps": progress_steps,
+    }
+
+
+def _latest_plan_decisions_by_node(journal: JournalStore, plan_ref: str) -> dict[str, LedgerRecord]:
+    decisions: dict[str, LedgerRecord] = {}
+    for record in journal.records(kind="semantic_task_plan_decision"):
+        if record.data.get("plan_ref") != plan_ref:
+            continue
+        step = record.data.get("executed_step")
+        if isinstance(step, dict) and isinstance(step.get("node_id"), str):
+            decisions[str(step["node_id"])] = record
+    return decisions
+
+
+def _step_progress(journal: JournalStore, *, step: JsonObject, decision: LedgerRecord | None) -> JsonObject:
+    spawned_task_id = decision.data.get("spawned_task_id") if decision is not None else None
+    child_final_answer = _latest_final_answer_for_task(journal, spawned_task_id) if isinstance(spawned_task_id, str) else None
+    progress_status = _step_progress_status(step=step, decision=decision, child_final_answer=child_final_answer)
+    return {
+        "step_id": step.get("step_id"),
+        "node_id": step.get("node_id"),
+        "kind": step.get("kind"),
+        "plan_status": step.get("status"),
+        "progress_status": progress_status,
+        "decision": decision.data.get("decision") if decision is not None else None,
+        "decision_ref": decision.record_id if decision is not None else None,
+        "spawned_task_id": spawned_task_id,
+        "spawned_run_id": decision.data.get("spawned_run_id") if decision is not None else None,
+        "spawned_status": decision.data.get("spawned_status") if decision is not None else None,
+        "final_answer_ref": child_final_answer.record_id if child_final_answer is not None else None,
+    }
+
+
+def _step_progress_status(*, step: JsonObject, decision: LedgerRecord | None, child_final_answer: LedgerRecord | None) -> str:
+    if decision is None:
+        status = str(step.get("status") or "pending")
+        return "pending" if status in {"ready", "needs_confirmation"} else status
+    decision_value = str(decision.data.get("decision") or "")
+    if decision_value == "approved" and child_final_answer is not None:
+        return "completed"
+    if decision_value == "approved":
+        return str(decision.data.get("spawned_status") or "approved")
+    return decision_value or "unknown"
 
 
 def _next_executable_plan_step(journal: JournalStore, plan: JsonObject, *, plan_ref: str) -> JsonObject | None:
