@@ -4,7 +4,7 @@ from kernel_v3.chat import ChatRuntime
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.resident.contracts import ResidentLoopResult, ResidentRunResult
-from kernel_v3.resident.projection import resident_chat_result_payload, resident_outbox_event
+from kernel_v3.resident.projection import resident_chat_result_payload, resident_inbox_event, resident_outbox_event
 from kernel_v3.resident.queue import ResidentQueue
 from kernel_v3.resident.scheduler import ResidentScheduler
 
@@ -194,7 +194,7 @@ class ResidentRuntime:
             )
         self._journal_event(
             "resident_inbox_claimed",
-            message.to_dict(),
+            resident_inbox_event(message),
             state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
         )
         try:

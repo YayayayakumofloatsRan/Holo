@@ -44,7 +44,7 @@ from kernel_v3.retrieval import (
     inspect_retrieval_providers,
 )
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
-from kernel_v3.resident.projection import resident_outbox_event
+from kernel_v3.resident.projection import resident_inbox_event, resident_outbox_event
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
@@ -1074,7 +1074,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             run_id="resident-cli",
             step_id=None,
             kind="resident_inbox_enqueued",
-            data=message.to_dict(),
+            data=resident_inbox_event(message),
             state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
         )
         return {"status": "ok", "message": message.to_dict()}
@@ -1170,7 +1170,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             run_id="resident-cli",
             step_id=None,
             kind="resident_inbox_requeued",
-            data=message.to_dict(),
+            data=resident_inbox_event(message),
             state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
         )
         return {"status": "ok", "message": message.to_dict()}

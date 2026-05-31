@@ -39,6 +39,26 @@ def test_phase73_resident_worker_processes_inbox_to_outbox(tmp_path: Path):
     assert "resident_outbox_appended" in TraceRenderer(journal).render_resident_trace()
 
 
+def test_phase73_resident_inbox_claim_journals_manifest(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+    marker = "RAW_INBOX_CLAIM_MARKER_SHOULD_NOT_APPEAR"
+    text = ("resident-inbox-" * 20) + marker
+    queue.enqueue(thread_id="resident-thread", text=text, message_id="in-manifest")
+
+    ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-1", journal=journal).run_once()
+
+    claimed = journal.records(kind="resident_inbox_claimed")[-1].data
+    serialized = json.dumps(claimed, ensure_ascii=False)
+    assert marker not in serialized
+    assert claimed["message_id"] == "in-manifest"
+    assert claimed["text_length"] == len(text)
+    assert claimed["text_hash"]
+    assert claimed["redaction"] == {"text": "preview_hash_only", "metadata": "manifest_only"}
+    assert "text" not in claimed
+
+
 def test_phase73_resident_outbox_payload_and_journal_do_not_duplicate_full_answer(tmp_path: Path):
     marker = "RESIDENT_FULL_ANSWER_MARKER"
     long_answer = ("a" * 240) + marker
@@ -1172,6 +1192,37 @@ def test_phase73_resident_trace_is_bounded_and_reports_truncation() -> None:
     assert "in-trace-0" not in trace
     assert "in-trace-4" in trace
     assert "in-trace-5" in trace
+
+
+def test_phase73_cli_resident_inbox_admin_journals_manifest(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+    marker = "RAW_INBOX_ADMIN_MARKER_SHOULD_NOT_APPEAR"
+    text = ("cli-inbox-" * 20) + marker
+
+    assert cli.main([*base, "resident", "enqueue", text, "--thread", "resident-cli", "--message-id", "in-admin"]) == 0
+    _ = capsys.readouterr()
+    queue = ResidentQueue(resident_db, clock_ms=_clock())
+    assert queue.acquire_lease(worker_id="worker-admin", ttl_ms=30_000) is not None
+    claimed = queue.claim_next(worker_id="worker-admin")
+    assert claimed is not None
+    assert queue.fail(claimed.message_id, reason="manual_failure", worker_id="worker-admin", max_attempts=1)
+
+    assert cli.main([*base, "resident", "requeue", "in-admin", "--reason", "operator_retry"]) == 0
+    _ = capsys.readouterr()
+
+    records = JournalStore(journal, index_path=index).records()
+    admin_events = [record for record in records if record.kind in {"resident_inbox_enqueued", "resident_inbox_requeued"}]
+    serialized_events = json.dumps([record.data for record in admin_events], ensure_ascii=False)
+
+    assert len(admin_events) == 2
+    assert marker not in serialized_events
+    assert admin_events[0].data["text_length"] == len(text)
+    assert admin_events[0].data["redaction"] == {"text": "preview_hash_only", "metadata": "manifest_only"}
+    assert admin_events[1].data["text_length"] == len(text)
+    assert admin_events[1].data["redaction"] == {"text": "preview_hash_only", "metadata": "manifest_only"}
 
 
 def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys):

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.resident.contracts import OutboxMessage
+from kernel_v3.resident.contracts import InboundMessage, OutboxMessage
 
 
 COMMAND_MANIFEST_TEXT_LIMIT = 160
@@ -54,6 +55,25 @@ def resident_outbox_event(outbox: OutboxMessage) -> JsonObject:
         "text_hash": _text_hash(outbox.text),
         "payload": _outbox_payload_manifest(outbox.payload),
         "redaction": {"text": "preview_hash_only", "payload": "manifest_only"},
+    }
+
+
+def resident_inbox_event(message: InboundMessage) -> JsonObject:
+    return {
+        "message_id": message.message_id,
+        "thread_id": message.thread_id,
+        "source": message.source,
+        "status": message.status,
+        "created_at_ms": message.created_at_ms,
+        "lease_owner": message.lease_owner,
+        "lease_until_ms": message.lease_until_ms,
+        "attempts": message.attempts,
+        "next_attempt_at_ms": message.next_attempt_at_ms,
+        "text_preview": _preview(message.text),
+        "text_length": len(message.text),
+        "text_hash": _text_hash(message.text),
+        "metadata": _metadata_manifest(message.metadata),
+        "redaction": {"text": "preview_hash_only", "metadata": "manifest_only"},
     }
 
 
@@ -117,6 +137,16 @@ def _outbox_payload_manifest(payload: JsonObject) -> JsonObject:
         "failure_report": payload.get("failure_report") if isinstance(payload.get("failure_report"), dict) else None,
         "pending_question": payload.get("pending_question") if isinstance(payload.get("pending_question"), dict) else None,
         "redaction": {"answer": "not_embedded", "summary": "manifest_only", "command_result": "manifest_only"},
+    }
+
+
+def _metadata_manifest(metadata: JsonObject) -> JsonObject:
+    keys = sorted(str(key) for key in metadata.keys())
+    return {
+        "key_count": len(keys),
+        "keys": keys[:COMMAND_MANIFEST_LIST_LIMIT],
+        "keys_truncated": len(keys) > COMMAND_MANIFEST_LIST_LIMIT,
+        "hash": _text_hash(_stable_json(metadata)),
     }
 
 
@@ -186,3 +216,7 @@ def _preview(text: str, *, limit: int = 160) -> str:
 
 def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stable_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
