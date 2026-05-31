@@ -6,10 +6,15 @@ from typing import Callable
 from kernel_v3.contracts import JsonObject
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
-from kernel_v3.memory import MemoryStore
-from kernel_v3.research import ResearchCorpusStore
+from kernel_v3.memory import MemoryInspection, MemoryStore
+from kernel_v3.research import CorpusInspection, ResearchCorpusStore
 from kernel_v3.retrieval import RetrievalOperator, inspect_retrieval_providers
-from kernel_v3.resident.contracts import ResidentDoctorReport
+from kernel_v3.retrieval.contracts import RetrievalProviderInspection
+from kernel_v3.resident.contracts import (
+    ResidentDoctorReport,
+    ResidentQueueInspection,
+    ResidentScheduleInspection,
+)
 from kernel_v3.resident.queue import ResidentQueue
 from kernel_v3.resident.scheduler import ResidentScheduler
 
@@ -39,31 +44,11 @@ class ResidentDoctor:
         self.clock_ms = clock_ms or queue.clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
 
     def inspect(self, *, sample_limit: int = 5) -> ResidentDoctorReport:
-        queue_inspection = self.queue.inspect(sample_limit=sample_limit)
-        schedule_inspection = self.scheduler.inspect(sample_limit=sample_limit)
-        memory_inspection = (
-            self.memory_store.inspect(
-                sample_limit=sample_limit,
-                journal=self.journal,
-                artifact_store=self.artifact_store,
-            )
-            if self.memory_store is not None
-            else None
-        )
-        corpus_inspection = (
-            self.corpus_store.inspect(sample_limit=sample_limit, artifact_store=self.artifact_store)
-            if self.corpus_store is not None
-            else None
-        )
-        retrieval_provider_inspection = (
-            inspect_retrieval_providers(
-                self.retrieval_operator,
-                research_profile_id=self.research_profile_id,
-                clock_ms=self.clock_ms,
-            )
-            if self.retrieval_operator is not None
-            else None
-        )
+        queue_inspection = self._inspect_queue(sample_limit=sample_limit)
+        schedule_inspection = self._inspect_schedule(sample_limit=sample_limit)
+        memory_inspection = self._inspect_memory(sample_limit=sample_limit)
+        corpus_inspection = self._inspect_corpus(sample_limit=sample_limit)
+        retrieval_provider_inspection = self._inspect_retrieval_providers()
         configured = {
             "artifact_store": self.artifact_store is not None,
             "memory_store": self.memory_store is not None,
@@ -114,8 +99,106 @@ class ResidentDoctor:
             ),
         )
 
+    def _inspect_queue(self, *, sample_limit: int) -> ResidentQueueInspection:
+        try:
+            return self.queue.inspect(sample_limit=sample_limit)
+        except Exception as exc:
+            return ResidentQueueInspection(
+                status="error",
+                generated_at_ms=self._now_ms(),
+                issues=[_inspection_failure_issue("queue", exc)],
+                recommended_actions=["repair resident queue store or rerun resident doctor with diagnostics"],
+                queue_status={"status": "failed", "reason": type(exc).__name__},
+                samples={},
+            )
+
+    def _inspect_schedule(self, *, sample_limit: int) -> ResidentScheduleInspection:
+        try:
+            return self.scheduler.inspect(sample_limit=sample_limit)
+        except Exception as exc:
+            return ResidentScheduleInspection(
+                status="error",
+                generated_at_ms=self._now_ms(),
+                issues=[_inspection_failure_issue("schedule", exc)],
+                recommended_actions=["repair resident schedule store or rerun resident doctor with diagnostics"],
+                schedule_status={"status": "failed", "reason": type(exc).__name__},
+                samples={},
+            )
+
+    def _inspect_memory(self, *, sample_limit: int) -> MemoryInspection | None:
+        if self.memory_store is None:
+            return None
+        try:
+            return self.memory_store.inspect(
+                sample_limit=sample_limit,
+                journal=self.journal,
+                artifact_store=self.artifact_store,
+            )
+        except Exception as exc:
+            return MemoryInspection(
+                status="error",
+                active_count=0,
+                expired_count=0,
+                deleted_count=0,
+                sensitive_count=0,
+                proposal_counts={},
+                shadow_candidate_count=0,
+                tombstone_count=0,
+                audit_record_count=0,
+                issues=[_inspection_failure_issue("memory", exc)],
+                provenance_consistency={"checked": False, "reason": "memory_inspection_failed"},
+                samples={},
+                recommended_actions=["repair memory store or rebuild memory index"],
+                generated_at_ms=self._now_ms(),
+            )
+
+    def _inspect_corpus(self, *, sample_limit: int) -> CorpusInspection | None:
+        if self.corpus_store is None:
+            return None
+        try:
+            return self.corpus_store.inspect(sample_limit=sample_limit, artifact_store=self.artifact_store)
+        except Exception as exc:
+            return CorpusInspection(
+                status="error",
+                generated_at_ms=self._now_ms(),
+                issues=[_inspection_failure_issue("corpus", exc)],
+                recommended_actions=["repair research corpus store or rebuild corpus index"],
+                corpus_status={"status": "failed", "reason": type(exc).__name__},
+                artifact_consistency={"checked": False, "reason": "corpus_inspection_failed"},
+                samples={},
+            )
+
+    def _inspect_retrieval_providers(self) -> RetrievalProviderInspection | None:
+        if self.retrieval_operator is None:
+            return None
+        try:
+            return inspect_retrieval_providers(
+                self.retrieval_operator,
+                research_profile_id=self.research_profile_id,
+                clock_ms=self.clock_ms,
+            )
+        except Exception as exc:
+            return RetrievalProviderInspection(
+                status="error",
+                generated_at_ms=self._now_ms(),
+                network_access=False,
+                provider_capabilities=[],
+                issues=[_inspection_failure_issue("retrieval", exc)],
+                recommended_actions=["repair retrieval provider configuration"],
+                diagnostics={"status": "failed", "reason": type(exc).__name__},
+            )
+
     def _now_ms(self) -> int:
         return int(self.clock_ms())
+
+
+def _inspection_failure_issue(component: str, exc: Exception) -> JsonObject:
+    return {
+        "severity": "error",
+        "code": f"{component}_inspection_failed",
+        "reason": type(exc).__name__,
+        "redaction": {"exception_message": "omitted"},
+    }
 
 
 def _component_issues(component: str, issues: list[JsonObject]) -> list[JsonObject]:

@@ -71,6 +71,38 @@ def test_phase77_resident_doctor_reports_memory_reference_integrity(tmp_path: Pa
     assert "repair artifact store or delete affected memory" in report.recommended_actions
 
 
+def test_phase77_resident_doctor_contains_component_inspection_failures(tmp_path: Path) -> None:
+    report = ResidentDoctor(
+        queue=_FailingQueue(tmp_path / "resident-failed.sqlite"),
+        scheduler=_FailingScheduler(),
+        memory_store=_FailingMemoryStore(),
+        corpus_store=_FailingCorpusStore(),
+        retrieval_operator=_FailingRetrievalOperator(),
+    ).inspect(sample_limit=1)
+
+    assert report.status == "error"
+    assert report.queue_inspection["status"] == "error"
+    assert report.schedule_inspection["status"] == "error"
+    assert report.memory_inspection is not None
+    assert report.memory_inspection["status"] == "error"
+    assert report.corpus_inspection is not None
+    assert report.corpus_inspection["status"] == "error"
+    assert report.retrieval_provider_inspection is not None
+    assert report.retrieval_provider_inspection["status"] == "error"
+    codes = {(issue["component"], issue["code"]) for issue in report.issues}
+    assert ("queue", "queue_inspection_failed") in codes
+    assert ("schedule", "schedule_inspection_failed") in codes
+    assert ("memory", "memory_inspection_failed") in codes
+    assert ("corpus", "corpus_inspection_failed") in codes
+    assert ("retrieval", "retrieval_inspection_failed") in codes
+    assert all(issue["redaction"] == {"exception_message": "omitted"} for issue in report.issues)
+    assert "repair resident queue store or rerun resident doctor with diagnostics" in report.recommended_actions
+    assert "repair resident schedule store or rerun resident doctor with diagnostics" in report.recommended_actions
+    assert "repair memory store or rebuild memory index" in report.recommended_actions
+    assert "repair research corpus store or rebuild corpus index" in report.recommended_actions
+    assert "repair retrieval provider configuration" in report.recommended_actions
+
+
 def test_phase77_cli_resident_doctor_includes_configured_memory_and_corpus(tmp_path: Path, capsys) -> None:
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -196,3 +228,31 @@ def _clock(start: int = 1_000):
         return current
 
     return tick
+
+
+class _FailingQueue:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        self.clock_ms = _clock()
+
+    def inspect(self, *, sample_limit: int = 5):
+        raise RuntimeError("queue raw failure must not leak")
+
+
+class _FailingScheduler:
+    def inspect(self, *, sample_limit: int = 5):
+        raise RuntimeError("schedule raw failure must not leak")
+
+
+class _FailingMemoryStore:
+    def inspect(self, *, sample_limit: int = 5, journal=None, artifact_store=None):
+        raise RuntimeError("memory raw failure must not leak")
+
+
+class _FailingCorpusStore:
+    def inspect(self, *, sample_limit: int = 5, artifact_store=None):
+        raise RuntimeError("corpus raw failure must not leak")
+
+
+class _FailingRetrievalOperator:
+    pass
