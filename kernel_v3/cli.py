@@ -6,11 +6,12 @@ import os
 import sys
 from pathlib import Path
 
-from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent import AgentRuntime, analyze_goal
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ContextCompiler, ContextPackCompiler
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
+from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import (
     PLANNER_SCHEMA,
@@ -37,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="holo-v3")
     parser.add_argument("--journal", default="kernel_v3/.holo-v3-journal.jsonl")
     parser.add_argument("--index", default="kernel_v3/.holo-v3-journal.sqlite")
+    parser.add_argument("--memory-log", default=None)
+    parser.add_argument("--memory-index", default=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_parser = sub.add_parser("run")
@@ -69,6 +72,25 @@ def main(argv: list[str] | None = None) -> int:
 
     chat_summary_parser = sub.add_parser("chat-summary")
     chat_summary_parser.add_argument("thread_id")
+
+    memory_parser = sub.add_parser("memory")
+    memory_sub = memory_parser.add_subparsers(dest="memory_command", required=True)
+    memory_list = memory_sub.add_parser("list")
+    memory_list.add_argument("--thread", default=None)
+    memory_list.add_argument("--query", default=None)
+    memory_proposals = memory_sub.add_parser("proposals")
+    memory_proposals.add_argument("--thread", default=None)
+    memory_propose = memory_sub.add_parser("propose")
+    memory_propose.add_argument("text")
+    memory_propose.add_argument("--thread", default="default")
+    memory_approve = memory_sub.add_parser("approve")
+    memory_approve.add_argument("proposal_id")
+    memory_reject = memory_sub.add_parser("reject")
+    memory_reject.add_argument("proposal_id")
+    memory_reject.add_argument("--reason", default="user_rejected")
+    memory_delete = memory_sub.add_parser("delete")
+    memory_delete.add_argument("memory_id")
+    memory_delete.add_argument("--reason", default="user_deleted")
 
     inspect_run_parser = sub.add_parser("inspect-run")
     inspect_run_parser.add_argument("task_id")
@@ -156,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            memory_store=_memory_store(args, create_default=False),
         )
         payload = runtime.run(
             args.goal,
@@ -170,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "answer":
-        runtime = _agent_runtime(journal, live_model=False)
+        runtime = _agent_runtime(journal, live_model=False, memory_store=_memory_store(args, create_default=False))
         payload = runtime.run(
             args.goal,
             mode="retrieval" if args.citations_required else "auto",
@@ -180,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "chat":
-        runtime = _chat_runtime(journal)
+        runtime = _chat_runtime(journal, memory_store=_memory_store(args, create_default=False))
         if args.once is not None:
             payload = runtime.receive(args.once, thread_id=args.thread)
             print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
@@ -195,15 +218,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "chat-status":
-        runtime = _chat_runtime(journal)
+        runtime = _chat_runtime(journal, memory_store=_memory_store(args, create_default=False))
         print(json.dumps(runtime.build_thread_state(args.thread_id).to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
 
     if args.command == "chat-summary":
-        runtime = _chat_runtime(journal)
+        runtime = _chat_runtime(journal, memory_store=_memory_store(args, create_default=False))
         summary = runtime.summarize_thread(args.thread_id)
         print(json.dumps(summary.to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
+
+    if args.command == "memory":
+        payload = _memory_command(args, journal)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload.get("status") != "failed" else 1
 
     if args.command == "inspect-run":
         renderer = TraceRenderer(journal)
@@ -267,7 +295,10 @@ def main(argv: list[str] | None = None) -> int:
         if task_id is None:
             parser.error("context requires a task_id or a context subcommand")
         state = _active_task(journal, task_id)
-        pack = ContextPackCompiler(permission_state={"mode": "read_write"}).compile(
+        pack = ContextPackCompiler(
+            permission_state={"mode": "read_write"},
+            durable_memory_store=_memory_store(args, create_default=False),
+        ).compile(
             state,
             journal,
             tool_briefs=_tool_briefs(),
@@ -403,6 +434,7 @@ def _agent_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    memory_store: MemoryStore | None = None,
 ) -> AgentRuntime:
     fabric = (
         _live_processor_fabric(
@@ -420,11 +452,62 @@ def _agent_runtime(
         journal=journal,
         processor_fabric=fabric,
         workspace_root=Path.cwd(),
+        memory_store=memory_store,
     )
 
 
-def _chat_runtime(journal: JournalStore) -> ChatRuntime:
-    return ChatRuntime(journal=journal, agent_runtime=_agent_runtime(journal, live_model=False))
+def _chat_runtime(journal: JournalStore, *, memory_store: MemoryStore | None = None) -> ChatRuntime:
+    return ChatRuntime(
+        journal=journal,
+        agent_runtime=_agent_runtime(journal, live_model=False, memory_store=memory_store),
+        memory_store=memory_store,
+    )
+
+
+def _memory_store(args, *, create_default: bool) -> MemoryStore | None:
+    memory_log = getattr(args, "memory_log", None)
+    memory_index = getattr(args, "memory_index", None)
+    if memory_log is None and not create_default:
+        return None
+    log_path = Path(memory_log or "kernel_v3/.holo-v3-memory.jsonl")
+    index_path = Path(memory_index) if memory_index is not None else log_path.with_suffix(".sqlite")
+    return MemoryStore(log_path, index_path=index_path)
+
+
+def _memory_command(args, journal: JournalStore) -> dict[str, object]:
+    store = _memory_store(args, create_default=True)
+    if store is None:
+        return {"status": "failed", "reason": "memory_store_not_configured"}
+    command = args.memory_command
+    if command == "list":
+        scope = {"thread_id": args.thread} if args.thread else None
+        result = store.recall(query=args.query, scope=scope)
+        return {"status": "ok", "result": result.to_dict()}
+    if command == "proposals":
+        proposals = [proposal.to_dict() for proposal in store.proposals()]
+        if args.thread:
+            proposals = [proposal for proposal in proposals if proposal.get("source_thread_id") == args.thread]
+        return {"status": "ok", "proposals": proposals}
+    pipeline = MemoryPipeline(store=store, journal=journal)
+    if command == "propose":
+        result = pipeline.propose_from_semantic_intake(
+            analyze_goal(args.text),
+            task_id="task-cli-memory",
+            run_id="run-cli-memory",
+            thread_id=args.thread,
+            source_record_ref=None,
+        )
+        return {"status": "ok", "result": result.to_dict()}
+    if command == "approve":
+        result = pipeline.approve_proposal(args.proposal_id, approved_by="user")
+        return {"status": "ok", "result": result.to_dict()}
+    if command == "reject":
+        result = pipeline.reject_proposal(args.proposal_id, reason=args.reason)
+        return {"status": "ok", "result": result.to_dict()}
+    if command == "delete":
+        tombstone = store.delete(args.memory_id, reason=args.reason, deleted_by="user")
+        return {"status": "ok", "tombstone": tombstone.to_dict()}
+    return {"status": "failed", "reason": f"unknown_memory_command:{command}"}
 
 
 def _agent_uses_live_model(args) -> bool:

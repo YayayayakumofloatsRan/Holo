@@ -191,6 +191,26 @@ Tests:
 - summary questions still answer from journal, not durable memory, unless memory
   recall is explicitly relevant
 
+Implementation note:
+
+- `ContextPackCompiler` now accepts an optional `durable_memory_store`. When it
+  is absent, existing context sections are unchanged. When present, the compiler
+  adds a separate `durable_memory` section with compact summaries, ids,
+  provenance refs, artifact refs, confidence, privacy class, and payload hashes.
+- The older `memory_refs` section remains journal-derived episodic evidence and
+  is not overloaded with committed durable memory.
+- `AgentRuntime` passes its optional `MemoryStore` into the context compiler, so
+  a new run/resume sees a frozen snapshot of approved active memory.
+- `ChatRuntime` supports `/memory list`, `/memory proposals`,
+  `/memory approve <id>`, `/memory reject <id> [reason]`, and
+  `/memory delete <id> [reason]`. Chat only routes admin commands; approval and
+  deletion still go through host-side `MemoryPipeline` / `MemoryStore`.
+- `holo-v3 memory propose/list/approve/reject/delete` provides a local CLI admin
+  surface. Ordinary CLI agent/chat commands do not create durable-memory files
+  unless a memory store is explicitly configured.
+- Implemented tests live in
+  `tests/test_kernel_v3_phase72_memory_context_admin.py`.
+
 ## Phase7.3: Resident Runtime Shell
 
 Defer until the memory core and context injection are stable.

@@ -125,7 +125,11 @@ class AgentRuntime:
         )
         loop = LoopControllerV3(
             journal=self.journal,
-            context_compiler=_AgentContextCompiler(recipe=recipe, tool_manifests=registry.manifests()),
+            context_compiler=_AgentContextCompiler(
+                recipe=recipe,
+                tool_manifests=registry.manifests(),
+                memory_store=self.memory_store,
+            ),
             planner=planner,
             policy_gate=PolicyGate(permission=recipe.permission_profile),
             tool_registry=registry,
@@ -531,11 +535,12 @@ class AgentRuntime:
 
 
 class _AgentContextCompiler:
-    def __init__(self, *, recipe: TaskRecipe, tool_manifests: list[ToolManifest]) -> None:
+    def __init__(self, *, recipe: TaskRecipe, tool_manifests: list[ToolManifest], memory_store: MemoryStore | None = None) -> None:
         self.recipe = recipe
         self.tool_manifests = [
             manifest for manifest in tool_manifests if manifest.name in set(recipe.allowed_tools)
         ]
+        self.memory_store = memory_store
 
     def compile(self, task: TaskState, journal: JournalStore) -> ContextBundle:
         pack = ContextPackCompiler(
@@ -556,6 +561,7 @@ class _AgentContextCompiler:
                 "allowed_permissions": [],
             },
             budget_mode=self.recipe.context_budget_mode,
+            durable_memory_store=self.memory_store,
         ).compile(
             task,
             journal,

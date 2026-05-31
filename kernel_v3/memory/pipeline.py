@@ -4,14 +4,16 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass, replace
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory.contracts import MemoryItem, MemoryProposal, ShadowCandidate
 from kernel_v3.memory.privacy import contains_secret_like_content, validate_memory_item
 from kernel_v3.memory.store import MemoryStore, stable_candidate_id, stable_memory_id, stable_proposal_id
+
+if TYPE_CHECKING:
+    from kernel_v3.agent.contracts import SemanticIntake
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -20,6 +22,14 @@ class MemoryPipelineResult:
     proposals: list[MemoryProposal]
     committed_items: list[MemoryItem]
     rejected: list[JsonObject]
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "shadow_candidates": [item.to_dict() for item in self.shadow_candidates],
+            "proposals": [item.to_dict() for item in self.proposals],
+            "committed_items": [item.to_dict() for item in self.committed_items],
+            "rejected": list(self.rejected),
+        }
 
 
 class MemoryPipeline:
@@ -40,7 +50,7 @@ class MemoryPipeline:
 
     def propose_from_semantic_intake(
         self,
-        intake: SemanticIntake,
+        intake: "SemanticIntake",
         *,
         task_id: str,
         run_id: str,
@@ -402,7 +412,7 @@ class MemoryPipeline:
         return int(self.clock_ms())
 
 
-def _memory_intents(intake: SemanticIntake) -> list[JsonObject]:
+def _memory_intents(intake: "SemanticIntake") -> list[JsonObject]:
     result = []
     for intent in intake.intents:
         if not isinstance(intent, dict):

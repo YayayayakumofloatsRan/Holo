@@ -16,6 +16,7 @@ from kernel_v3.chat.contracts import (
 )
 from kernel_v3.contracts import JsonObject, LedgerRecord
 from kernel_v3.journal import JournalStore
+from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.trace import TraceRenderer
 
 
@@ -25,9 +26,12 @@ class ChatRuntime:
         *,
         journal: JournalStore | None = None,
         agent_runtime: AgentRuntime | None = None,
+        memory_store: MemoryStore | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.agent_runtime = agent_runtime or AgentRuntime(journal=self.journal, workspace_root=Path.cwd())
+        self.memory_store = memory_store if memory_store is not None else getattr(self.agent_runtime, "memory_store", None)
+        self.memory_pipeline = MemoryPipeline(store=self.memory_store, journal=self.journal) if self.memory_store is not None else None
 
     def receive(self, message: str, *, thread_id: str = "default") -> ChatRuntimeResult:
         normalized_thread = _normalize_thread_id(thread_id)
@@ -270,12 +274,55 @@ class ChatRuntime:
             summary = self._append_thread_summary(state.thread_id)
             command = self._append_command(turn, name=name, args=args, status="ok", result=summary.to_dict())
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_summary_text(summary), summary=summary)
+        if name == "/memory":
+            return self._execute_memory_command(args=args, state=state, turn=turn, decision=decision)
         if name == "/help":
-            result = {"commands": ["/status", "/trace", "/summary", "/tasks", "/cancel", "/new", "/help"]}
+            result = {"commands": ["/status", "/trace", "/summary", "/tasks", "/memory", "/cancel", "/new", "/help"]}
             command = self._append_command(turn, name=name, args=args, status="ok", result=result)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=", ".join(result["commands"]))
         command = self._append_command(turn, name=name, args=args, status="unknown", result={"error": "unknown_command"})
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="Unknown command.")
+
+    def _execute_memory_command(
+        self,
+        *,
+        args: list[str],
+        state: ThreadState,
+        turn: ChatTurn,
+        decision: TurnRoutingDecision,
+    ) -> ChatRuntimeResult:
+        if self.memory_store is None or self.memory_pipeline is None:
+            command = self._append_command(turn, name="/memory", args=args, status="failed", result={"error": "memory_store_not_configured"})
+            return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="Memory store is not configured.")
+        subcommand = args[0].lower() if args else "list"
+        if subcommand == "list":
+            payload = self.memory_store.recall(scope={"thread_id": state.thread_id}, limit=20).to_dict()
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_memory_list_text(payload))
+        if subcommand in {"proposals", "proposal"}:
+            payload = {"proposals": [_proposal.to_dict() for _proposal in self.memory_store.proposals() if _proposal.source_thread_id == state.thread_id]}
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_proposal_list_text(payload))
+        if subcommand == "approve" and len(args) >= 2:
+            result = self.memory_pipeline.approve_proposal(args[1], approved_by="user")
+            payload = result.to_dict()
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Approved {args[1]}.")
+        if subcommand == "reject" and len(args) >= 2:
+            reason = " ".join(args[2:]) or "user_rejected"
+            result = self.memory_pipeline.reject_proposal(args[1], reason=reason)
+            payload = result.to_dict()
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Rejected {args[1]}.")
+        if subcommand == "delete" and len(args) >= 2:
+            reason = " ".join(args[2:]) or "user_deleted"
+            tombstone = self.memory_store.delete(args[1], reason=reason, deleted_by="user")
+            payload = tombstone.to_dict()
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Deleted {args[1]}.")
+        result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|approve <id>|reject <id> [reason]|delete <id> [reason]"}
+        command = self._append_command(turn, name="/memory", args=args, status="failed", result=result)
+        return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
 
     def _agent_result(
         self,
@@ -623,6 +670,30 @@ def _summary_text(summary: ThreadSummary) -> str:
         previews = [str(turn.get("text_preview", "")) for turn in summary.recent_turns if turn.get("text_preview")]
         parts.append("recent turns: " + " | ".join(previews))
     return "\n".join(parts)
+
+
+def _memory_list_text(payload: JsonObject) -> str:
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return "No active durable memory for this thread."
+    lines = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        lines.append(f"{item.get('memory_id')}: {item.get('summary')}")
+    return "\n".join(lines) or "No active durable memory for this thread."
+
+
+def _proposal_list_text(payload: JsonObject) -> str:
+    proposals = payload.get("proposals")
+    if not isinstance(proposals, list) or not proposals:
+        return "No pending durable memory proposals for this thread."
+    lines = []
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
+        lines.append(f"{proposal.get('proposal_id')}: {proposal.get('approval_status')} {proposal.get('approval_policy')}")
+    return "\n".join(lines) or "No pending durable memory proposals for this thread."
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

@@ -10,6 +10,7 @@ from kernel_v3.context.redaction import Redactor
 from kernel_v3.context.validator import deterministic_hash
 from kernel_v3.contracts import ContextBundle, JsonObject
 from kernel_v3.journal import JournalStore
+from kernel_v3.memory import MemoryStore
 from kernel_v3.session import TaskState
 
 
@@ -58,6 +59,9 @@ class ContextPackCompiler:
         permission_state: JsonObject | None = None,
         redactor: Redactor | None = None,
         budget_mode: str = "fail",
+        durable_memory_store: MemoryStore | None = None,
+        durable_memory_limit: int = 5,
+        include_sensitive_memory: bool = False,
     ) -> None:
         if budget_mode not in {"fail", "truncate"}:
             raise ValueError("budget_mode must be 'fail' or 'truncate'")
@@ -69,6 +73,9 @@ class ContextPackCompiler:
         self.permission_state = permission_state or {"mode": "read_write"}
         self.redactor = redactor or Redactor(private_path_markers=self.project_profile.redaction_markers)
         self.budget_mode = budget_mode
+        self.durable_memory_store = durable_memory_store
+        self.durable_memory_limit = durable_memory_limit
+        self.include_sensitive_memory = include_sensitive_memory
 
     def compile(
         self,
@@ -91,6 +98,21 @@ class ContextPackCompiler:
         evidence = memory_read.query_observations(task_id=task.task_id, limit=3, order="recent")
         citations = memory_read.query_citations(task_id=task.task_id, limit=3, order="recent")
         memory_refs = [item.observation_id for item in evidence]
+        durable_memory_enabled = self.durable_memory_store is not None
+        durable_memory: JsonObject = {}
+        durable_memory_items: list[JsonObject] = []
+        if durable_memory_enabled:
+            durable_memory = _recall_durable_memory(
+                self.durable_memory_store,
+                task=task,
+                limit=self.durable_memory_limit,
+                include_sensitive=self.include_sensitive_memory,
+            )
+            durable_memory_items = [
+                _compact_durable_memory_item(item)
+                for item in durable_memory.get("items", [])
+                if isinstance(item, dict)
+            ]
         sections: list[JsonObject] = [
             {"name": "user_event", "records": [_compact_event(record.data) for record in event_records[-1:]]},
             {"name": "active_task_state", **_compact_task_state(task, target_step)},
@@ -111,6 +133,17 @@ class ContextPackCompiler:
             {"name": "tool_briefs", "tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             {"name": "permission_state", "permission": _compact_permission_state(self.permission_state)},
         ]
+        if durable_memory_enabled:
+            sections.insert(
+                7,
+                {
+                    "name": "durable_memory",
+                    "items": durable_memory_items,
+                    "scope": durable_memory.get("scope", {}),
+                    "total": durable_memory.get("total", 0),
+                    "filtered": durable_memory.get("filtered", {}),
+                },
+            )
         budget_views = {
             "user_event": {"records": [_event_budget_view(record.data) for record in event_records[-1:]]},
             "active_task_state": _compact_task_state(task, target_step),
@@ -126,6 +159,8 @@ class ContextPackCompiler:
             "tool_briefs": {"tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             "permission_state": {"permission": _compact_permission_state(self.permission_state)},
         }
+        if durable_memory_enabled:
+            budget_views["durable_memory"] = {"items": [_durable_memory_budget_view(item) for item in durable_memory_items]}
         redacted_sections, redactions = self.redactor.redact(sections)
         section_units, compacted_section_names = self._enforce_section_budgets(redacted_sections, budget_views)
         total_units = sum(section_units)
@@ -135,6 +170,16 @@ class ContextPackCompiler:
             total_units = self._truncate_bundle(redacted_sections, section_units, total_units, compacted_section_names)
         source_refs = [record.record_id for record in event_records[-1:] + observation_records]
         source_refs.extend(artifact_ids)
+        source_refs.extend(
+            _ordered_unique(
+                [
+                    str(ref)
+                    for item in durable_memory_items
+                    for ref in [item.get("memory_id"), *list(item.get("provenance_refs", []))]
+                    if ref
+                ]
+            )
+        )
         budget = {
             "token_budget": self.token_budget,
             "section_limit": self.section_budget,
@@ -204,7 +249,7 @@ class ContextPackCompiler:
         total_units: int,
         compacted_section_names: list[str],
     ) -> int:
-        droppable = ["tool_briefs", "citations", "memory_refs", "recent_observations", "project_profile"]
+        droppable = ["tool_briefs", "citations", "durable_memory", "memory_refs", "recent_observations", "project_profile"]
         for name in droppable:
             if total_units <= self.token_budget:
                 break
@@ -273,6 +318,10 @@ class ContextPackCompiler:
             refs = section.get("refs")
             if isinstance(refs, list):
                 del refs[1:]
+        elif name == "durable_memory":
+            items = section.get("items")
+            if isinstance(items, list):
+                del items[1:]
         elif name == "citations":
             items = section.get("items")
             if isinstance(items, list):
@@ -295,6 +344,13 @@ class ContextPackCompiler:
                 for ref in refs:
                     if isinstance(ref, dict):
                         ref.pop("artifact_refs", None)
+        elif name == "durable_memory":
+            items = section.get("items")
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        item.pop("scope", None)
+                        item["summary"] = _compact_text(str(item.get("summary", "")), limit=8)
         elif name == "citations":
             items = section.get("items")
             if isinstance(items, list):
@@ -469,6 +525,39 @@ def _compact_citation(item) -> JsonObject:
     }
 
 
+def _recall_durable_memory(
+    store: MemoryStore | None,
+    *,
+    task: TaskState,
+    limit: int,
+    include_sensitive: bool,
+) -> JsonObject:
+    if store is None or limit <= 0:
+        return {"query": None, "scope": {"thread_id": task.thread_id}, "items": [], "total": 0, "filtered": {}}
+    return store.recall(
+        query=None,
+        scope={"thread_id": task.thread_id},
+        include_sensitive=include_sensitive,
+        limit=limit,
+    ).to_dict()
+
+
+def _compact_durable_memory_item(item: JsonObject) -> JsonObject:
+    return {
+        "memory_id": item.get("memory_id"),
+        "kind": item.get("kind"),
+        "title": _compact_text(str(item.get("title", "")), limit=96),
+        "summary": _compact_text(str(item.get("summary", "")), limit=240),
+        "scope": dict(item.get("scope", {})) if isinstance(item.get("scope"), dict) else {},
+        "privacy_class": item.get("privacy_class"),
+        "confidence": item.get("confidence"),
+        "dedupe_key": item.get("dedupe_key"),
+        "provenance_refs": list(item.get("provenance_refs", [])) if isinstance(item.get("provenance_refs"), list) else [],
+        "artifact_refs": list(item.get("artifact_refs", [])) if isinstance(item.get("artifact_refs"), list) else [],
+        "payload_hash": deterministic_hash(item),
+    }
+
+
 def _compact_tool_brief(brief: JsonObject) -> JsonObject:
     return {
         "name": brief.get("name"),
@@ -543,4 +632,13 @@ def _citation_budget_view(item) -> JsonObject:
         "record_ref": item.record_ref,
         "artifact_ref": item.artifact_ref,
         "uri": item.uri,
+    }
+
+
+def _durable_memory_budget_view(item: JsonObject) -> JsonObject:
+    return {
+        "memory_id": item.get("memory_id"),
+        "kind": item.get("kind"),
+        "summary": item.get("summary"),
+        "provenance_refs": list(item.get("provenance_refs", [])) if isinstance(item.get("provenance_refs"), list) else [],
     }
