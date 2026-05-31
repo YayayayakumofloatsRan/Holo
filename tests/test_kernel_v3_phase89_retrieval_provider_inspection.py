@@ -162,6 +162,30 @@ def test_phase89_resident_doctor_includes_retrieval_provider_inspection(tmp_path
     assert report.issues[0]["code"] == "research_profile_not_provider_native"
 
 
+def test_phase89_resident_doctor_promotes_retrieval_provider_errors(tmp_path: Path) -> None:
+    queue = ResidentQueue(tmp_path / "resident-empty-provider.sqlite", clock_ms=lambda: 306)
+    scheduler = ResidentScheduler(queue=queue, clock_ms=lambda: 307)
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([]),
+        fetch_provider=FakeFetchProvider({}),
+    )
+
+    report = ResidentDoctor(
+        queue=queue,
+        scheduler=scheduler,
+        retrieval_operator=operator,
+        research_profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID,
+        clock_ms=lambda: 308,
+    ).inspect(sample_limit=1)
+
+    assert report.status == "error"
+    assert report.retrieval_provider_inspection is not None
+    assert report.retrieval_provider_inspection["status"] == "error"
+    assert report.issues[0]["component"] == "retrieval"
+    assert report.issues[0]["code"] == "empty_fallback_search_chain"
+    assert "configure at least one concrete fallback search provider" in report.recommended_actions
+
+
 def _fake_operator() -> RetrievalOperator:
     source = SearchSource(
         source_id="src-inspection-test",

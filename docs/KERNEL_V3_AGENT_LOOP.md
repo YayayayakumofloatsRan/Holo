@@ -246,12 +246,15 @@ configured, doctor also asks durable memory inspection to verify committed
 memory provenance refs and artifact refs, using metadata/blob presence checks
 only. Retrieval-provider inspection is capability-only: it reports fake/corpus/
 future-live provider metadata, network capability, and research-profile support
-without running retrieval or reading artifact bodies. Doctor also isolates
-component inspection failures: if queue, schedule, memory, corpus, or retrieval
-inspection raises, the report still returns `error` with the component, failure
-code, exception type, and redacted exception message instead of crashing the
-operator path. This keeps long-running memory and research operation auditable
-without exposing raw artifact payloads.
+without running retrieval or reading artifact bodies. Retrieval-provider errors,
+such as an empty fallback search chain, are promoted into the doctor status and
+recommended actions so a resident supervisor does not mistake an unusable
+research configuration for a healthy worker. Doctor also isolates component
+inspection failures: if queue, schedule, memory, corpus, or retrieval inspection
+raises, the report still returns `error` with the component, failure code,
+exception type, and redacted exception message instead of crashing the operator
+path. This keeps long-running memory and research operation auditable without
+exposing raw artifact payloads.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that
