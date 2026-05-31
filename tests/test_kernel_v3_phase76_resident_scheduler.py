@@ -43,6 +43,43 @@ def test_phase76_due_schedule_enqueues_once_and_journals(tmp_path: Path):
     assert "resident_schedule_enqueued" in TraceRenderer(journal).render_resident_trace()
 
 
+def test_phase76_schedule_journal_and_inspection_use_manifests(tmp_path: Path):
+    clock = _clock(start=2_000)
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
+    journal = JournalStore.in_memory()
+    scheduler = ResidentScheduler(queue=queue, clock_ms=clock, journal=journal)
+    marker = "RAW_SCHEDULE_MARKER_SHOULD_NOT_APPEAR"
+    text = ("scheduled-manifest-" * 20) + marker
+    scheduler.add_schedule(
+        schedule_id="sched-manifest",
+        thread_id="resident-scheduled",
+        text=text,
+        due_in_ms=0,
+        metadata={"operator_note": marker},
+    )
+
+    scheduler.tick()
+    inspection = scheduler.inspect(sample_limit=1)
+    schedule_records = [record.data for record in journal.records() if record.kind.startswith("resident_schedule")]
+    serialized_records = json.dumps(schedule_records, ensure_ascii=False)
+    serialized_samples = json.dumps(inspection.samples, ensure_ascii=False)
+
+    assert marker not in serialized_records
+    assert marker not in serialized_samples
+    added = journal.records(kind="resident_schedule_added")[-1].data
+    enqueued = journal.records(kind="resident_schedule_enqueued")[-1].data
+    tick = journal.records(kind="resident_schedule_tick")[-1].data
+    sample = inspection.samples["schedules"][0]
+    assert added["text_length"] == len(text)
+    assert added["redaction"] == {"text": "preview_hash_only", "metadata": "manifest_only"}
+    assert enqueued["schedule"]["text_length"] == len(text)
+    assert enqueued["message"]["text_length"] == len(text)
+    assert tick["schedules"][0]["text_length"] == len(text)
+    assert tick["enqueued_messages"][0]["text_length"] == len(text)
+    assert sample["text_length"] == len(text)
+    assert sample["redaction"] == {"text": "preview_hash_only", "metadata": "manifest_only"}
+
+
 def test_phase76_recurring_schedule_advances_and_worker_consumes_inbox(tmp_path: Path):
     clock = _clock(start=10_000)
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
@@ -84,10 +121,12 @@ def test_phase76_worker_can_tick_schedules_before_claiming_inbox(tmp_path: Path)
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
     journal = JournalStore.in_memory()
     scheduler = ResidentScheduler(queue=queue, clock_ms=clock, journal=journal)
+    marker = "RAW_WORKER_SCHEDULE_MARKER_SHOULD_NOT_APPEAR"
+    text = ("worker-schedule-" * 20) + marker
     scheduler.add_schedule(
         schedule_id="sched-worker",
         thread_id="resident-worker-scheduled",
-        text="worker should tick this schedule",
+        text=text,
         due_in_ms=0,
     )
     runtime = ResidentRuntime(
@@ -102,8 +141,12 @@ def test_phase76_worker_can_tick_schedules_before_claiming_inbox(tmp_path: Path)
 
     assert result.status == "processed"
     assert result.payload["schedule_tick"]["enqueued_count"] == 1
+    assert marker not in json.dumps(result.payload["schedule_tick"], ensure_ascii=False)
     assert queue.inbox_messages()[0].status == "completed"
     assert queue.outbox_messages()[0].in_reply_to == "scheduled-sched-worker-30001"
+    loop_records = journal.records(kind="resident_loop_result")
+    if loop_records:
+        assert marker not in json.dumps(loop_records[-1].data, ensure_ascii=False)
     assert [record.kind for record in journal.records() if record.kind.startswith("resident_schedule")] == [
         "resident_schedule_added",
         "resident_schedule_enqueued",

@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.resident.contracts import InboundMessage, OutboxMessage
+from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, ResidentSchedule, ResidentScheduleTickResult
 
 
 COMMAND_MANIFEST_TEXT_LIMIT = 160
@@ -74,6 +74,44 @@ def resident_inbox_event(message: InboundMessage) -> JsonObject:
         "text_hash": _text_hash(message.text),
         "metadata": _metadata_manifest(message.metadata),
         "redaction": {"text": "preview_hash_only", "metadata": "manifest_only"},
+    }
+
+
+def resident_schedule_event(schedule: ResidentSchedule) -> JsonObject:
+    return _resident_schedule_payload(schedule.to_dict())
+
+
+def resident_schedule_enqueued_event(*, schedule: ResidentSchedule, message: InboundMessage) -> JsonObject:
+    return {
+        "schedule": resident_schedule_event(schedule),
+        "message": resident_inbox_event(message),
+        "redaction": {"schedule": "manifest_only", "message": "manifest_only"},
+    }
+
+
+def resident_schedule_tick_event(result: ResidentScheduleTickResult | object) -> JsonObject:
+    if isinstance(result, ResidentScheduleTickResult):
+        payload = result.to_dict()
+    else:
+        to_dict = getattr(result, "to_dict", None)
+        payload = to_dict() if callable(to_dict) else {}
+        payload = payload if isinstance(payload, dict) else {}
+    schedules = payload.get("schedules") if isinstance(payload.get("schedules"), list) else []
+    enqueued_messages = payload.get("enqueued_messages") if isinstance(payload.get("enqueued_messages"), list) else []
+    failures = payload.get("failures") if isinstance(payload.get("failures"), list) else []
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    return {
+        "status": payload.get("status"),
+        "generated_at_ms": payload.get("generated_at_ms"),
+        "due_count": payload.get("due_count", 0),
+        "enqueued_count": payload.get("enqueued_count", 0),
+        "skipped_count": payload.get("skipped_count", 0),
+        "failed_count": payload.get("failed_count", 0),
+        "schedules": [_resident_schedule_payload(item) for item in schedules if isinstance(item, dict)],
+        "enqueued_messages": [_resident_inbox_payload(item) for item in enqueued_messages if isinstance(item, dict)],
+        "failures": [dict(item) for item in failures if isinstance(item, dict)],
+        "diagnostics": dict(diagnostics),
+        "redaction": {"schedules": "manifest_only", "enqueued_messages": "manifest_only"},
     }
 
 
@@ -174,6 +212,50 @@ def _metadata_manifest(metadata: JsonObject) -> JsonObject:
         "keys": keys[:COMMAND_MANIFEST_LIST_LIMIT],
         "keys_truncated": len(keys) > COMMAND_MANIFEST_LIST_LIMIT,
         "hash": _text_hash(_stable_json(metadata)),
+    }
+
+
+def _resident_schedule_payload(payload: JsonObject) -> JsonObject:
+    text = str(payload.get("text") or "")
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    return {
+        "schedule_id": payload.get("schedule_id"),
+        "thread_id": payload.get("thread_id"),
+        "source": payload.get("source"),
+        "status": payload.get("status"),
+        "created_at_ms": payload.get("created_at_ms"),
+        "next_due_at_ms": payload.get("next_due_at_ms"),
+        "interval_ms": payload.get("interval_ms"),
+        "max_runs": payload.get("max_runs"),
+        "run_count": payload.get("run_count"),
+        "last_enqueued_at_ms": payload.get("last_enqueued_at_ms"),
+        "last_message_id": payload.get("last_message_id"),
+        "text_preview": _preview(text),
+        "text_length": len(text),
+        "text_hash": _text_hash(text),
+        "metadata": _metadata_manifest(metadata),
+        "redaction": {"text": "preview_hash_only", "metadata": "manifest_only"},
+    }
+
+
+def _resident_inbox_payload(payload: JsonObject) -> JsonObject:
+    text = str(payload.get("text") or "")
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    return {
+        "message_id": payload.get("message_id"),
+        "thread_id": payload.get("thread_id"),
+        "source": payload.get("source"),
+        "status": payload.get("status"),
+        "created_at_ms": payload.get("created_at_ms"),
+        "lease_owner": payload.get("lease_owner"),
+        "lease_until_ms": payload.get("lease_until_ms"),
+        "attempts": payload.get("attempts"),
+        "next_attempt_at_ms": payload.get("next_attempt_at_ms"),
+        "text_preview": _preview(text),
+        "text_length": len(text),
+        "text_hash": _text_hash(text),
+        "metadata": _metadata_manifest(metadata),
+        "redaction": {"text": "preview_hash_only", "metadata": "manifest_only"},
     }
 
 

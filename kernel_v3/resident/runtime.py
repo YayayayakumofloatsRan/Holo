@@ -4,7 +4,12 @@ from kernel_v3.chat import ChatRuntime
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.resident.contracts import ResidentLoopResult, ResidentRunResult
-from kernel_v3.resident.projection import resident_chat_result_payload, resident_inbox_event, resident_outbox_event
+from kernel_v3.resident.projection import (
+    resident_chat_result_payload,
+    resident_inbox_event,
+    resident_outbox_event,
+    resident_schedule_tick_event,
+)
 from kernel_v3.resident.queue import ResidentQueue
 from kernel_v3.resident.scheduler import ResidentScheduler
 
@@ -413,7 +418,7 @@ class ResidentRuntime:
         if self.scheduler is None:
             return None
         try:
-            return self.scheduler.tick(limit=self.schedule_tick_limit).to_dict()
+            return resident_schedule_tick_event(self.scheduler.tick(limit=self.schedule_tick_limit))
         except Exception as exc:  # pragma: no cover - defensive scheduler containment
             payload = {"status": "failed", "reason": type(exc).__name__, "worker_id": self.worker_id}
             self._journal_event(

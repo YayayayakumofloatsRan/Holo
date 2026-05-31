@@ -256,8 +256,11 @@ workers can opt into `resident run --tick-schedules` or `resident run-once
 --tick-schedules`; without that explicit flag, run and run-once preserve normal
 queue-only behavior. Schedule ticks and inspection samples are clamped inside
 `ResidentScheduler`, so a large CLI/runtime limit cannot cause one resident
-iteration to enqueue or render an unbounded number of schedules. `resident
-status` and `resident inspect` include schedule health, including due schedules
+iteration to enqueue or render an unbounded number of schedules. Scheduler
+journal records and inspection samples use schedule/message manifests with
+text preview/hash and metadata manifests rather than duplicating the full
+scheduled prompt body. `resident status` and `resident inspect` include
+schedule health, including due schedules
 and unbounded recurring schedules, so operators can see whether a resident loop
 should run with schedule ticking enabled. When
 schedule ticking is enabled and no inbox item is claimable, `resident run`

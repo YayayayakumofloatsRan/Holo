@@ -15,6 +15,11 @@ from kernel_v3.resident.contracts import (
     ResidentScheduleStatus,
     ResidentScheduleTickResult,
 )
+from kernel_v3.resident.projection import (
+    resident_schedule_enqueued_event,
+    resident_schedule_event,
+    resident_schedule_tick_event,
+)
 from kernel_v3.resident.queue import ResidentQueue
 
 
@@ -106,7 +111,7 @@ class ResidentScheduler:
             conn.close()
         self._journal_event(
             "resident_schedule_added",
-            schedule.to_dict(),
+            resident_schedule_event(schedule),
             state_delta={"resident_schedule_status": schedule.status, "resident_schedule_id": schedule.schedule_id},
         )
         return schedule
@@ -260,7 +265,7 @@ class ResidentScheduler:
         if row is not None:
             self._journal_event(
                 "resident_schedule_disabled",
-                row.to_dict(),
+                resident_schedule_event(row),
                 state_delta={"resident_schedule_status": row.status, "resident_schedule_id": row.schedule_id},
             )
         return row
@@ -296,7 +301,7 @@ class ResidentScheduler:
                 updated_schedules.append(updated)
                 self._journal_event(
                     "resident_schedule_enqueued",
-                    {"schedule": updated.to_dict(), "message": message.to_dict()},
+                    resident_schedule_enqueued_event(schedule=updated, message=message),
                     state_delta={
                         "resident_schedule_status": updated.status,
                         "resident_schedule_id": updated.schedule_id,
@@ -331,7 +336,7 @@ class ResidentScheduler:
         )
         self._journal_event(
             "resident_schedule_tick",
-            result.to_dict(),
+            resident_schedule_tick_event(result),
             state_delta={"resident_schedule_tick_status": result.status, "resident_schedule_due_count": result.due_count},
         )
         return result
@@ -592,7 +597,7 @@ def _inspection_samples(
     requested_sample_limit: int,
     effective_sample_limit: int,
 ) -> JsonObject:
-    samples: JsonObject = {"schedules": [schedule.to_dict() for schedule in schedules]}
+    samples: JsonObject = {"schedules": [resident_schedule_event(schedule) for schedule in schedules]}
     if effective_sample_limit != requested_sample_limit:
         samples["requested_sample_limit"] = requested_sample_limit
         samples["sample_limit"] = effective_sample_limit
