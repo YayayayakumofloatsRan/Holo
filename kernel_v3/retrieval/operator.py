@@ -36,6 +36,10 @@ class RetrievalOperator:
         self.fetch_provider = fetch_provider
         self.evaluator = evaluator or EvidenceEvaluator()
         self.preview_chars = preview_chars
+        self.network_access = bool(
+            getattr(search_provider, "live_network", False)
+            or getattr(fetch_provider, "live_network", False)
+        )
 
     def run(
         self,
@@ -317,8 +321,8 @@ def register_retrieval_tool(
             version="1",
             resource_kind="retrieval",
             operator_kind="run",
-            side_effect_class="read",
-            permissions_required=[],
+            side_effect_class="network" if operator.network_access else "read",
+            permissions_required=["network:fetch"] if operator.network_access else [],
             enabled=True,
             description="retrieval.run",
             input_schema={

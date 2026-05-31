@@ -63,23 +63,31 @@ def test_fake_workspace_tools_cover_phase0_5_simple_tools():
         side_effect_class="destructive",
     )
     gate = PolicyGate(permission="read_write")
-    search = registry.execute_with_artifacts(
+    search_result = registry.execute_with_artifacts(
         search_action,
         policy_decision=gate.validate(run_id="run-1", action=search_action, manifest=registry.manifest_for_action(search_action)),
-    ).observation
-    read = registry.execute_with_artifacts(
+    )
+    read_result = registry.execute_with_artifacts(
         read_action,
         policy_decision=gate.validate(run_id="run-1", action=read_action, manifest=registry.manifest_for_action(read_action)),
-    ).observation
+    )
     write = registry.execute_with_artifacts(
         write_action,
         policy_decision=gate.validate(run_id="run-1", action=write_action, manifest=registry.manifest_for_action(write_action)),
     ).observation
+    search = search_result.observation
+    read = read_result.observation
 
     assert respond.kind == "respond_result"
     assert ask_user.kind == "ask_user"
-    assert search.content["matches"] == [{"path": "README.md", "text": "Holo is a host-owned agent harness."}]
-    assert read.content == {"path": "README.md", "text": "Holo is a host-owned agent harness."}
+    assert search.content["matches"][0]["path"] == "README.md"
+    assert search.content["matches"][0]["text_preview"] == "Holo is a host-owned agent harness."
+    assert "text" not in search.content["matches"][0]
+    assert read.content["path"] == "README.md"
+    assert read.content["text_preview"] == "Holo is a host-owned agent harness."
+    assert "text" not in read.content
+    assert search_result.artifact_refs
+    assert read_result.artifact_refs
     assert write.status == "blocked"
 
 

@@ -4,7 +4,9 @@ import subprocess
 import sys
 
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.workloop import assess_progress
 from kernel_v3.context import ArtifactStore
+from kernel_v3.contracts import Observation
 from kernel_v3.journal import JournalStore
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
 
@@ -91,6 +93,32 @@ def test_phase61_workspace_search_then_file_read_counts_as_progress():
         for record in journal.records(task_id=result.task_id, kind="progress_assessment")
     ]
     assert "new_file_read" in progress_types
+
+
+def test_phase61_failed_or_blocked_observation_alone_does_not_count_as_progress():
+    journal = JournalStore.in_memory()
+    observation = Observation(
+        observation_id="obs-failed",
+        run_id="run-progress",
+        kind="tool_result",
+        status="failed",
+        source="tool:file.read",
+        content={"error": "file_not_found"},
+        observed_at_ms=0,
+        action_id="act-read",
+        tool_call_id=None,
+    )
+
+    progress = assess_progress(
+        journal,
+        task_id="task-progress",
+        run_id="run-progress",
+        step_id="step-1",
+        observation=observation,
+    )
+
+    assert progress.made_progress is False
+    assert progress.progress_type == "none"
 
 
 def test_phase61_evaluator_final_answer_ready_is_overridden_without_required_citations():

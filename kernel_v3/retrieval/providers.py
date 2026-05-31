@@ -26,6 +26,8 @@ class FetchResponse:
 
 
 class FakeSearchProvider:
+    live_network = False
+
     def __init__(self, results_by_query: dict[str, list[SearchSource | JsonObject]]) -> None:
         self.results_by_query = {
             query.lower(): [_coerce_source(source) for source in sources]
@@ -37,6 +39,8 @@ class FakeSearchProvider:
 
 
 class FakeFetchProvider:
+    live_network = False
+
     def __init__(self, responses_by_uri: dict[str, str | FetchResponse | JsonObject]) -> None:
         self.responses_by_uri = {
             uri: _coerce_fetch_response(response)

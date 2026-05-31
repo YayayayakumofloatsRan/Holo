@@ -1,8 +1,9 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from kernel_v3.context import ContextCompiler
-from kernel_v3.contracts import CandidateAction
+from kernel_v3.contracts import CandidateAction, Observation
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.policy import PolicyGate
@@ -337,6 +338,80 @@ def test_phase5_timeout_provider_produces_failed_processor_result():
     result_record = journal.records(task_id="task-timeout", kind="processor_result")[0]
     assert result_record.data["status"] == "failed"
     assert result_record.data["error"] == "TimeoutError"
+
+
+def test_phase5_evaluator_prompt_uses_observation_previews_not_raw_bodies():
+    raw = "RAW_PROVIDER_EGRESS_OBSERVATION_" + ("x" * 900)
+    provider = CapturingFakeJsonProvider(
+        {
+            "evaluator.assess": {
+                "status": "final_answer_ready",
+                "answer": "ok",
+                "stop_reason": "completed",
+                "missing_evidence": [],
+            }
+        }
+    )
+    evaluator = ModelEvaluator(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        )
+    )
+
+    evaluator.evaluate(
+        _context(),
+        Observation(
+            observation_id="obs-raw",
+            run_id="run-1",
+            kind="tool_result",
+            status="ok",
+            source="tool:file.read",
+            content={"path": "secret.txt", "text": raw},
+            observed_at_ms=0,
+            action_id="act-read",
+            tool_call_id=None,
+        ),
+    )
+
+    assert raw not in provider.last_prompt
+    assert "text_preview" in provider.last_prompt
+    assert "text_hash" in provider.last_prompt
+
+
+def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_bodies():
+    raw = "RAW_PROVIDER_EGRESS_EVIDENCE_" + ("y" * 900)
+    report, evidence, citation = _retrieval_contracts()
+    provider = CapturingFakeJsonProvider(
+        {
+            "synthesizer.answer": {
+                "answer": "Kernel v3 cites evidence.",
+                "citation_refs": ["cite-1"],
+                "confidence": 0.82,
+                "limitations": [],
+                "used_evidence": ["ev-1"],
+            }
+        }
+    )
+
+    answer = Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        )
+    ).synthesize(
+        task_id="task-1",
+        run_id="run-1",
+        context_id="ctx-1",
+        report=report,
+        evidence=[replace(evidence, text=raw)],
+        citations=[replace(citation, quote=raw)],
+    )
+
+    assert answer.status == "ok"
+    assert raw not in provider.last_prompt
+    assert "text_preview" in provider.last_prompt
+    assert "quote_preview" in provider.last_prompt
 
 
 def test_phase5_router_model_takes_precedence_over_provider_default():
@@ -721,3 +796,13 @@ def _retrieval_contracts():
         preview="Kernel v3 cites evidence.",
     )
     return report, evidence, citation
+
+
+class CapturingFakeJsonProvider(FakeJsonProvider):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.last_prompt = ""
+
+    def run(self, request):
+        self.last_prompt = request.prompt
+        return super().run(request)

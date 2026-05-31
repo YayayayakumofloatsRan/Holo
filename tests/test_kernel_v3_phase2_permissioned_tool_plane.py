@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -34,7 +35,8 @@ def test_real_workspace_read_only_tools_work_under_workspace_root():
     root = Path("kernel_v3/.test-phase2-read")
     _reset_dir(root)
     try:
-        (root / "README.md").write_text("Holo is a host-owned kernel.", encoding="utf-8")
+        raw_text = "Holo is a host-owned kernel. " + "workspace-raw-sentinel-" * 40
+        (root / "README.md").write_text(raw_text, encoding="utf-8")
         registry = ToolRegistry.with_permissioned_workspace(root=root)
         search_action = CandidateAction(
             action_id="act-search",
@@ -67,12 +69,16 @@ def test_real_workspace_read_only_tools_work_under_workspace_root():
         )
 
         assert search.observation.status == "ok"
-        assert search.observation.content["matches"] == [
-            {"path": "README.md", "text": "Holo is a host-owned kernel."}
-        ]
-        assert read.observation.content == {"path": "README.md", "text": "Holo is a host-owned kernel."}
+        assert search.observation.content["matches"][0]["path"] == "README.md"
+        assert "text" not in search.observation.content["matches"][0]
+        assert search.observation.content["matches"][0]["text_preview"].startswith("Holo is a host-owned kernel.")
+        assert read.observation.content["path"] == "README.md"
+        assert "text" not in read.observation.content
+        assert read.observation.content["text_preview"].startswith("Holo is a host-owned kernel.")
+        encoded = json.dumps([search.observation.to_dict(), read.observation.to_dict()], ensure_ascii=False)
+        assert raw_text not in encoded
         assert search.artifact_refs[0].payload_hash
-        assert read.artifact_refs[0].artifact_id.startswith("artifact-obs-act-read")
+        assert read.artifact_refs[0].artifact_id.startswith("artifact-workspace-")
     finally:
         _remove_dir(root)
 

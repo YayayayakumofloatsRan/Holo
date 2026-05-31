@@ -177,8 +177,11 @@ class AgentRuntime:
             return registry
         if recipe.mode == "workspace_answer":
             if self.workspace_root is not None:
-                return ToolRegistry.with_permissioned_workspace(root=self.workspace_root)
-            return ToolRegistry.with_fake_workspace_tools(files=self.workspace_files or {"README.md": "Holo Kernel v3 workspace evidence."})
+                return ToolRegistry.with_permissioned_workspace(root=self.workspace_root, artifact_store=self.artifact_store)
+            return ToolRegistry.with_fake_workspace_tools(
+                files=self.workspace_files or {"README.md": "Holo Kernel v3 workspace evidence."},
+                artifact_store=self.artifact_store,
+            )
         return ToolRegistry.with_builtin_respond()
 
     def _planner(
@@ -826,7 +829,9 @@ def _workspace_grounding(journal: JournalStore, task_id: str) -> tuple[list[Evid
         if not isinstance(content, dict):
             continue
         path = str(content.get("path", "workspace"))
-        text = str(content.get("text", ""))
+        text_value = content.get("text")
+        preview_value = content.get("text_preview")
+        text = str(text_value if isinstance(text_value, str) else preview_value if isinstance(preview_value, str) else "")
         evidence_id = f"workspace-evidence-{index}"
         citation_id = f"workspace-cite-{index}"
         artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or evidence_id}"

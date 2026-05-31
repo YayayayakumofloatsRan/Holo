@@ -96,7 +96,8 @@ class ChatRuntime:
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         else:
-            agent_result = self.agent_runtime.run(message, thread_id=normalized_thread, mode="auto")
+            mode = "clarify_first" if "continue_without_active_task" in decision.reasons else "auto"
+            agent_result = self.agent_runtime.run(message, thread_id=normalized_thread, mode=mode)
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         self.journal.append(
             task_id=result.task_id,
@@ -152,6 +153,16 @@ class ChatRuntime:
                 command=None,
                 reasons=["continue_intent", "active_task_present"],
             )
+        if _looks_like_continue(stripped):
+            return TurnRoutingDecision(
+                decision_id=f"route-{turn_id}",
+                thread_id=state.thread_id,
+                turn_id=turn_id,
+                route="new_task",
+                task_id=None,
+                command=None,
+                reasons=["continue_intent", "continue_without_active_task"],
+            )
         return TurnRoutingDecision(
             decision_id=f"route-{turn_id}",
             thread_id=state.thread_id,
@@ -172,11 +183,13 @@ class ChatRuntime:
         ]
         task_refs = _ordered_unique([str(record.task_id) for record in task_records if record.task_id])
         latest_agent = _latest_chat_agent_result(self.journal, normalized_thread, after_ms=clear_at)
-        active_task_id = latest_agent.task_id if latest_agent is not None else (task_refs[-1] if task_refs else None)
+        active_task_id = task_refs[-1] if latest_agent is None and task_refs else None
         last_result_status = None
         pending: PendingUserInput | None = None
         if latest_agent is not None:
             last_result_status = str(latest_agent.data.get("status") or "unknown")
+            if _keeps_task_active(last_result_status):
+                active_task_id = latest_agent.task_id
             if last_result_status == "needs_user_input" and latest_agent.task_id is not None:
                 pending = _pending_for_task(
                     self.journal,
@@ -483,6 +496,10 @@ def _is_task_result(data: JsonObject) -> bool:
         return data.get("task_id") is not None
     command_result = data.get("command_result")
     return route == "command" and isinstance(command_result, dict) and command_result.get("started_new_task") is True
+
+
+def _keeps_task_active(status: str) -> bool:
+    return status in {"running", "continue", "needs_user_input"}
 
 
 def _thread_turn_records(journal: JournalStore, thread_id: str) -> list[LedgerRecord]:

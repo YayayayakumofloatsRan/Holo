@@ -51,16 +51,20 @@ def test_phase62_next_user_answer_resumes_same_task_and_clears_pending_state():
     assert journal.records(task_id=pending.task_id, kind="resume")
 
 
-def test_phase62_continue_resumes_active_task_in_same_thread():
+def test_phase62_continue_after_completed_task_asks_for_clarification_not_resume():
     journal = JournalStore.in_memory()
     chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
 
     first = chat.receive("state your role", thread_id="thread-continue")
     continued = chat.receive("继续", thread_id="thread-continue")
+    state = chat.build_thread_state("thread-continue")
 
-    assert continued.route == "continue_task"
-    assert continued.task_id == first.task_id
-    assert journal.records(task_id=first.task_id, kind="resume")
+    assert first.status == "completed"
+    assert continued.route == "new_task"
+    assert continued.status == "needs_user_input"
+    assert continued.task_id != first.task_id
+    assert state.pending_question is not None
+    assert not journal.records(task_id=first.task_id, kind="resume")
 
 
 def test_phase62_new_command_with_goal_starts_new_task():
@@ -151,7 +155,8 @@ def test_phase62_cli_chat_once_status_and_summary(tmp_path: Path):
 
     status = _run_cli("--journal", str(journal), "--index", str(index), "chat-status", "cli-thread")
     status_payload = json.loads(status.stdout)
-    assert status_payload["active_task_id"] == payload["task_id"]
+    assert status_payload["active_task_id"] is None
+    assert status_payload["last_result_status"] == "completed"
 
     summary = _run_cli("--journal", str(journal), "--index", str(index), "chat-summary", "cli-thread")
     summary_payload = json.loads(summary.stdout)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
@@ -166,7 +167,7 @@ def _evaluator_prompt(context: ContextBundle, observation: Observation) -> str:
     payload = {
         "contract": EVALUATOR_PROMPT_CONTRACT,
         "context": _compact_context(context),
-        "observation": observation.to_dict(),
+        "observation": _compact_observation_for_provider(observation),
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -179,8 +180,8 @@ def _synthesizer_prompt(
     payload = {
         "contract": SYNTHESIZER_PROMPT_CONTRACT,
         "retrieval_report": report.to_dict(),
-        "evidence": [item.to_dict() for item in evidence],
-        "citations": [item.to_dict() for item in citations],
+        "evidence": [_compact_evidence_for_provider(item) for item in evidence],
+        "citations": [_compact_citation_for_provider(item) for item in citations],
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -194,6 +195,50 @@ def _compact_context(context: ContextBundle) -> JsonObject:
         "state": context.state,
         "token_budget": context.token_budget,
     }
+
+
+def _compact_observation_for_provider(observation: Observation) -> JsonObject:
+    data = observation.to_dict()
+    data["content"] = _compact_prompt_value(observation.content)
+    return data
+
+
+def _compact_evidence_for_provider(item: EvidenceItem) -> JsonObject:
+    data = item.to_dict()
+    text = str(data.pop("text", ""))
+    data["text_preview"] = _preview(text, 512)
+    data["text_hash"] = _hash_text(text)
+    data["text_chars"] = len(text)
+    return data
+
+
+def _compact_citation_for_provider(item: CitationItem) -> JsonObject:
+    data = item.to_dict()
+    quote = str(data.pop("quote", ""))
+    data["quote_preview"] = _preview(quote, 512)
+    data["quote_hash"] = _hash_text(quote)
+    data["quote_chars"] = len(quote)
+    return data
+
+
+def _compact_prompt_value(value):
+    if isinstance(value, str):
+        if len(value) <= 512:
+            return value
+        return {"preview": _preview(value, 512), "hash": _hash_text(value), "chars": len(value)}
+    if isinstance(value, list):
+        return [_compact_prompt_value(item) for item in value[:20]]
+    if isinstance(value, dict):
+        compacted = {}
+        for key, item in value.items():
+            if isinstance(item, str) and key in {"text", "quote", "body", "raw", "content"}:
+                compacted[f"{key}_preview"] = _preview(item, 512)
+                compacted[f"{key}_hash"] = _hash_text(item)
+                compacted[f"{key}_chars"] = len(item)
+                continue
+            compacted[key] = _compact_prompt_value(item)
+        return compacted
+    return value
 
 
 def _action_from_json(data: JsonObject) -> CandidateAction:
@@ -337,3 +382,14 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str)]
+
+
+def _preview(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()

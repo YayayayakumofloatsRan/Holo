@@ -200,7 +200,7 @@ def assess_progress(
     current_action = _latest_record(journal, task_id=task_id, kind="action")
     action_ref = current_action.action_ref if current_action is not None else None
     signals: list[ProgressSignal] = []
-    if observation.status in {"ok", "needs_user_input", "blocked", "failed"}:
+    if observation.status == "ok":
         signals.append(ProgressSignal(signal_type="new_observation", ref=observation.observation_id, weight=0.15))
     current_records = [
         record for record in journal.records(task_id=task_id)
@@ -220,7 +220,7 @@ def assess_progress(
             signals.append(ProgressSignal(signal_type="new_file_read", ref=str(path or record.record_id), weight=0.35))
         elif record.kind == "retrieval_search_attempt" and record.data.get("status") == "failed":
             signals.append(ProgressSignal(signal_type="new_failure_diagnostic", ref=record.record_id, weight=0.1))
-    if current_action is not None and _action_narrows_scope(current_action.data):
+    if observation.status not in {"blocked", "failed"} and current_action is not None and _action_narrows_scope(current_action.data):
         signals.append(ProgressSignal(signal_type="narrowed_scope", ref=current_action.record_id, weight=0.1))
     if observation.status == "needs_user_input":
         signals.append(ProgressSignal(signal_type="new_user_input_requirement", ref=observation.observation_id, weight=0.1))

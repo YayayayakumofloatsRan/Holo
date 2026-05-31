@@ -7,7 +7,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
+from kernel_v3.context.artifacts import ArtifactStore
 from kernel_v3.contracts import ArtifactRef, CandidateAction, JsonObject, Observation, PolicyDecision, ToolManifest
+
+WORKSPACE_PREVIEW_CHARS = 240
 
 
 @dataclass(frozen=True)
@@ -42,11 +45,24 @@ class ToolRegistry:
         return registry
 
     @classmethod
-    def with_fake_workspace_tools(cls, *, files: dict[str, str] | None = None) -> "ToolRegistry":
+    def with_fake_workspace_tools(
+        cls,
+        *,
+        files: dict[str, str] | None = None,
+        artifact_store: ArtifactStore | None = None,
+    ) -> "ToolRegistry":
         registry = cls.with_builtin_respond()
         fake_files = dict(files or {})
-        registry.register("workspace.search", _fake_workspace_search(fake_files), manifest=_workspace_manifest("workspace.search", "search", "read"))
-        registry.register("file.read", _fake_file_read(fake_files), manifest=_workspace_manifest("file.read", "read", "read"))
+        registry.register(
+            "workspace.search",
+            _fake_workspace_search(fake_files, artifact_store=artifact_store),
+            manifest=_workspace_manifest("workspace.search", "search", "read"),
+        )
+        registry.register(
+            "file.read",
+            _fake_file_read(fake_files, artifact_store=artifact_store),
+            manifest=_workspace_manifest("file.read", "read", "read"),
+        )
         registry.register(
             "blocked_external_write",
             _fake_blocked_external_write,
@@ -66,9 +82,10 @@ class ToolRegistry:
         *,
         root: Path | str,
         shell_allowed_executables: set[str] | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> "ToolRegistry":
         registry = cls.with_builtin_respond()
-        workspace = _Workspace(root)
+        workspace = _Workspace(root, artifact_store=artifact_store)
         registry.register("workspace.search", workspace.search, manifest=_workspace_manifest("workspace.search", "search", "read"))
         registry.register("file.read", workspace.read, manifest=_workspace_manifest("file.read", "read", "read"))
         registry.register("workspace.write", workspace.write, manifest=_workspace_manifest("workspace.write", "write", "write"))
@@ -295,25 +312,43 @@ def _user_payload(payload: JsonObject) -> JsonObject:
     return {key: value for key, value in payload.items() if not str(key).startswith("_host_")}
 
 
-def _fake_workspace_search(files: dict[str, str]) -> ToolExecutor:
+def _fake_workspace_search(files: dict[str, str], *, artifact_store: ArtifactStore | None) -> ToolExecutor:
     def execute(action: CandidateAction) -> Observation:
         query = str(action.payload.get("query", ""))
-        matches = [
-            {"path": path, "text": text}
-            for path, text in files.items()
-            if query.lower() in text.lower() or query.lower() in path.lower()
-        ]
-        return _tool_observation(action, "ok", {"matches": matches})
+        matches = []
+        artifacts: list[ArtifactRef] = []
+        for path, text in files.items():
+            if query.lower() not in text.lower() and query.lower() not in path.lower():
+                continue
+            artifact = _workspace_payload_artifact(
+                artifact_store=artifact_store,
+                kind="workspace_search_match",
+                path=path,
+                text=text,
+            )
+            artifacts.append(artifact)
+            matches.append(_workspace_text_payload(path=path, text=text, artifact=artifact))
+        return ToolResult(observation=_tool_observation(action, "ok", {"matches": matches}), artifact_refs=artifacts)
 
     return execute
 
 
-def _fake_file_read(files: dict[str, str]) -> ToolExecutor:
+def _fake_file_read(files: dict[str, str], *, artifact_store: ArtifactStore | None) -> ToolExecutor:
     def execute(action: CandidateAction) -> Observation:
         path = str(action.payload.get("path", ""))
         if path not in files:
             return _tool_observation(action, "failed", {"path": path, "error": "file_not_found"})
-        return _tool_observation(action, "ok", {"path": path, "text": files[path]})
+        text = files[path]
+        artifact = _workspace_payload_artifact(
+            artifact_store=artifact_store,
+            kind="workspace_file_read",
+            path=path,
+            text=text,
+        )
+        return ToolResult(
+            observation=_tool_observation(action, "ok", _workspace_text_payload(path=path, text=text, artifact=artifact)),
+            artifact_refs=[artifact],
+        )
 
     return execute
 
@@ -323,12 +358,14 @@ def _fake_blocked_external_write(action: CandidateAction) -> Observation:
 
 
 class _Workspace:
-    def __init__(self, root: Path | str) -> None:
+    def __init__(self, root: Path | str, *, artifact_store: ArtifactStore | None = None) -> None:
         self.root = Path(root).resolve()
+        self.artifact_store = artifact_store
 
     def search(self, action: CandidateAction) -> ToolResult:
         query = str(action.payload.get("query", ""))
         matches: list[JsonObject] = []
+        artifacts: list[ArtifactRef] = []
         for path in sorted(self.root.rglob("*")):
             if not path.is_file():
                 continue
@@ -338,15 +375,32 @@ class _Workspace:
             except UnicodeDecodeError:
                 continue
             if query.lower() in text.lower() or query.lower() in rel.lower():
-                matches.append({"path": rel, "text": text})
-        return _tool_result(action, "ok", {"matches": matches})
+                artifact = _workspace_payload_artifact(
+                    artifact_store=self.artifact_store,
+                    kind="workspace_search_match",
+                    path=rel,
+                    text=text,
+                )
+                artifacts.append(artifact)
+                matches.append(_workspace_text_payload(path=rel, text=text, artifact=artifact))
+        return ToolResult(observation=_tool_observation(action, "ok", {"matches": matches}), artifact_refs=artifacts)
 
     def read(self, action: CandidateAction) -> ToolResult:
         rel = str(action.payload.get("path", ""))
         path = self._resolve(rel)
         if path is None or not path.is_file():
             return _tool_result(action, "failed", {"path": rel, "error": "file_not_found"})
-        return _tool_result(action, "ok", {"path": rel, "text": path.read_text(encoding="utf-8")})
+        text = path.read_text(encoding="utf-8")
+        artifact = _workspace_payload_artifact(
+            artifact_store=self.artifact_store,
+            kind="workspace_file_read",
+            path=rel,
+            text=text,
+        )
+        return ToolResult(
+            observation=_tool_observation(action, "ok", _workspace_text_payload(path=rel, text=text, artifact=artifact)),
+            artifact_refs=[artifact],
+        )
 
     def write(self, action: CandidateAction) -> ToolResult:
         rel = str(action.payload.get("path", ""))
@@ -449,3 +503,55 @@ def _artifact_for_observation(observation: Observation) -> ArtifactRef:
 def _payload_hash(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _workspace_payload_artifact(
+    *,
+    artifact_store: ArtifactStore | None,
+    kind: str,
+    path: str,
+    text: str,
+) -> ArtifactRef:
+    payload_bytes = text.encode("utf-8")
+    payload_hash = hashlib.sha256(payload_bytes).hexdigest()
+    preview = _preview_text(text, WORKSPACE_PREVIEW_CHARS)
+    metadata = {
+        "path": path,
+        "size_bytes": len(payload_bytes),
+        "preview": preview,
+        "redaction_status": "raw_body_in_artifact_store",
+    }
+    if artifact_store is not None:
+        return artifact_store.write_blob(
+            kind=kind,
+            payload=text,
+            mime_type="text/plain",
+            metadata={"path": path},
+            redaction_status="unredacted",
+        )
+    return ArtifactRef(
+        artifact_id=f"artifact-workspace-{payload_hash[:16]}",
+        kind=kind,
+        uri=f"workspace://{path}",
+        payload_hash=payload_hash,
+        metadata=metadata,
+    )
+
+
+def _workspace_text_payload(*, path: str, text: str, artifact: ArtifactRef) -> JsonObject:
+    size = artifact.metadata.get("size_bytes")
+    preview = artifact.metadata.get("preview")
+    return {
+        "path": path,
+        "text_preview": str(preview) if isinstance(preview, str) else _preview_text(text, WORKSPACE_PREVIEW_CHARS),
+        "artifact_id": artifact.artifact_id,
+        "payload_hash": artifact.payload_hash,
+        "size_bytes": int(size) if isinstance(size, int) else len(text.encode("utf-8")),
+    }
+
+
+def _preview_text(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."

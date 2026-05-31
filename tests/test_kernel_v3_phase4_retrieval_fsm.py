@@ -306,6 +306,51 @@ def test_phase4_retrieval_tool_uses_generic_registry_dispatch_without_loop_branc
     assert "retrieval.run" not in loop_source
 
 
+def test_phase4_live_capable_retrieval_manifest_is_network_budgeted_before_fetch():
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    registry = ToolRegistry()
+    fetch_provider = LiveNetworkFetchProvider()
+    operator = RetrievalOperator(
+        search_provider=LiveNetworkSearchProvider(),
+        fetch_provider=fetch_provider,
+    )
+    register_retrieval_tool(
+        registry,
+        operator=operator,
+        journal=journal,
+        artifact_store=artifacts,
+    )
+    action = CandidateAction(
+        action_id="act-live-retrieval",
+        kind="tool",
+        name="retrieval.run",
+        description="run live-capable retrieval",
+        score=1.0,
+        payload={"query": "Kernel v3 retrieval", "goal_id": "goal-live-budget"},
+        reasons=["network-capable retrieval"],
+        side_effect_class="read",
+    )
+    loop = LoopControllerV3(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=FakePlanner([action]),
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("should not execute"),
+        max_network_fetches=0,
+    )
+
+    result = loop.run("retrieve live evidence")
+
+    manifest = registry.manifest_for_action(action)
+    observation = journal.records(task_id=result.task_id, kind="observation")[0]
+    assert manifest.side_effect_class == "network"
+    assert result.stop_reason == "max_network_fetches"
+    assert observation.data["content"]["reason"] == "max_network_fetches"
+    assert fetch_provider.called is False
+
+
 def _operator(*, body: str) -> RetrievalOperator:
     return RetrievalOperator(
         search_provider=FakeSearchProvider(
@@ -342,3 +387,21 @@ class RaisingSearchProvider:
 class RaisingFetchProvider:
     def fetch(self, source):
         raise RuntimeError("fetch failed")
+
+
+class LiveNetworkSearchProvider:
+    live_network = True
+
+    def search(self, query, *, goal, plan):
+        return [_source("src-live", "https://example.test/live", "Kernel", "Kernel")]
+
+
+class LiveNetworkFetchProvider:
+    live_network = True
+
+    def __init__(self):
+        self.called = False
+
+    def fetch(self, source):
+        self.called = True
+        return FetchResponse(status="ok", body="Kernel live retrieval evidence.")
