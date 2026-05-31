@@ -277,7 +277,14 @@ def test_phase81_chat_plan_approve_executes_first_safe_step_only():
 
 def test_phase81_pending_plan_confirmation_can_approve_without_slash_command():
     journal = JournalStore.in_memory()
-    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+    chat = _chat_with_semantic_plan(
+        journal,
+        _compound_research_write_intake(),
+        chat_routes=[
+            _chat_route("new_task"),
+            _chat_route("answer_pending_question", command="approve_plan"),
+        ],
+    )
 
     initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-natural-approve")
     approved = chat.receive("同意", thread_id="thread-plan-natural-approve")
@@ -294,7 +301,14 @@ def test_phase81_pending_plan_confirmation_can_approve_without_slash_command():
 
 def test_phase81_pending_plan_confirmation_can_reject_without_resuming_task():
     journal = JournalStore.in_memory()
-    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+    chat = _chat_with_semantic_plan(
+        journal,
+        _compound_research_write_intake(),
+        chat_routes=[
+            _chat_route("new_task"),
+            _chat_route("answer_pending_question", command="reject_plan"),
+        ],
+    )
 
     initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-natural-reject")
     rejected = chat.receive("拒绝", thread_id="thread-plan-natural-reject")
@@ -344,11 +358,18 @@ def test_phase81_chat_plan_reject_journals_decision_without_execution():
 
 def test_phase81_chat_plan_approve_can_continue_next_safe_dependent_tool_step():
     journal = JournalStore.in_memory()
-    chat = _chat_with_semantic_plan(journal, _multi_safe_read_after_research_intake())
+    chat = _chat_with_semantic_plan(
+        journal,
+        _multi_safe_read_after_research_intake(),
+        chat_routes=[
+            _chat_route("new_task"),
+            _chat_route("continue_plan"),
+        ],
+    )
 
     initial = chat.receive("safe multi-step plan requiring confirmation", thread_id="thread-plan-continue")
     first = chat.receive("/plan approve", thread_id="thread-plan-continue")
-    second = chat.receive("/plan approve", thread_id="thread-plan-continue")
+    second = chat.receive("继续", thread_id="thread-plan-continue")
     shown = chat.receive("/plan", thread_id="thread-plan-continue")
     third = chat.receive("/plan approve", thread_id="thread-plan-continue")
 
@@ -357,6 +378,7 @@ def test_phase81_chat_plan_approve_can_continue_next_safe_dependent_tool_step():
     assert first.command_result is not None
     assert first.command_result["executed_node_id"] == "node-1-retrieval_research"
     assert second.status == "completed"
+    assert second.route == "continue_plan"
     assert second.command_result is not None
     assert second.command_result["executed_node_id"] == "node-2-workspace_read"
     assert third.status == "failed"
@@ -371,20 +393,49 @@ def test_phase81_chat_plan_approve_can_continue_next_safe_dependent_tool_step():
     assert "completed_steps=2/2" in (shown.answer or "")
 
 
+def test_phase81_continue_without_unfinished_plan_still_asks_clarification():
+    journal = JournalStore.in_memory()
+    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+
+    first = chat.receive("plain completed task", thread_id="thread-no-plan-continue")
+    fabric = fake_fabric(
+        {"chat.route": _chat_route("continue_plan", reasons=["semantic_continuation_without_state"])},
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        turn_router_mode="model",
+    )
+    continued = chat.receive("carry the prior work forward", thread_id="thread-no-plan-continue")
+
+    assert first.status == "completed"
+    assert continued.route == "new_task"
+    assert continued.status == "needs_user_input"
+
+
 def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_evidence_context():
     journal = JournalStore.in_memory()
-    chat = _chat_with_semantic_plan(journal, _dependent_synthesis_intake())
+    chat = _chat_with_semantic_plan(
+        journal,
+        _dependent_synthesis_intake(),
+        chat_routes=[
+            _chat_route("new_task"),
+            _chat_route("continue_plan"),
+            _chat_route("continue_plan"),
+        ],
+    )
 
     initial = chat.receive("research then synthesize requiring confirmation", thread_id="thread-plan-dependent-respond")
     first = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
-    second = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
-    repeated = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
+    second = chat.receive("继续", thread_id="thread-plan-dependent-respond")
 
     assert initial.status == "needs_user_input"
     assert first.status == "completed"
     assert first.command_result is not None
     assert first.command_result["executed_node_id"] == "node-1-retrieval_research"
     assert second.status == "completed"
+    assert second.route == "continue_plan"
     assert second.command_result is not None
     assert second.final_answer is not None
     decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
@@ -397,10 +448,6 @@ def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_eviden
     assert "synthesize from the collected evidence" in second.answer
     final_records = journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")
     assert len(final_records) == 1
-    assert repeated.status == "completed"
-    assert repeated.command_result is not None
-    assert repeated.command_result["result"]["already_finalized"] is True
-    assert len(journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")) == 1
     shown = chat.receive("/plan", thread_id="thread-plan-dependent-respond")
     progress = shown.command_result["result"]["progress"]
     assert progress["finalized"] is True
@@ -411,6 +458,11 @@ def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_eviden
     summary = chat.receive("/summary", thread_id="thread-plan-dependent-respond")
     assert summary.summary is not None
     assert "synthesize from the collected evidence" in str(summary.summary["last_answer_preview"])
+    repeated = chat.receive("继续", thread_id="thread-plan-dependent-respond")
+    assert repeated.status == "needs_user_input"
+    assert repeated.route == "new_task"
+    assert repeated.command_result is None
+    assert len(journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")) == 1
 
 
 def test_phase81_chat_plan_finalize_fails_before_dependencies_complete():
@@ -428,10 +480,28 @@ def test_phase81_chat_plan_finalize_fails_before_dependencies_complete():
     assert not journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")
 
 
-def _chat_with_semantic_plan(journal: JournalStore, response: dict) -> ChatRuntime:
-    fabric = fake_fabric({"semantic.intake": response}, journal=journal)
+def _chat_with_semantic_plan(journal: JournalStore, response: dict, *, chat_routes: list[dict] | None = None) -> ChatRuntime:
+    responses = {"semantic.intake": response}
+    if chat_routes is not None:
+        responses["chat.route"] = chat_routes
+    fabric = fake_fabric(responses, journal=journal)
     agent = AgentRuntime(journal=journal, processor_fabric=fabric)
-    return ChatRuntime(journal=journal, agent_runtime=agent, semantic_mode="model")
+    return ChatRuntime(
+        journal=journal,
+        agent_runtime=agent,
+        semantic_mode="model",
+        turn_router_mode="model" if chat_routes is not None else "fake",
+    )
+
+
+def _chat_route(route: str, *, command: str | None = None, reasons: list[str] | None = None) -> dict:
+    return {
+        "route": route,
+        "command": command,
+        "target_task_id": None,
+        "confidence": 0.97,
+        "reasons": list(reasons or [f"fake_model_{route}"]),
+    }
 
 
 def _compound_research_write_intake() -> dict:

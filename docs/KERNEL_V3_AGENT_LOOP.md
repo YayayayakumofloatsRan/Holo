@@ -158,6 +158,15 @@ rejected, finalized, or answered a pending plan without scraping visible text.
 Pending plan-confirmation outboxes are marked `answered` when the user's later
 message approves or rejects the plan.
 
+Natural-language turn routing is processor-shaped rather than phrase-table
+driven. A model or fake provider may emit a bounded `chat.route` proposal such
+as `summary`, `continue_task`, `continue_plan`, `answer_pending_question`, or
+`new_task`; `ChatRuntime` then validates that proposal against the current
+thread state and journal. If the proposal asks to continue a plan, the host only
+routes to `continue_plan` when an unfinished approved plan exists in the thread,
+and it executes the same host-owned `/plan approve` path. Finalized plans are
+not reused.
+
 ## Iteration 2026-05-31
 
 Hardening completed in this iteration:

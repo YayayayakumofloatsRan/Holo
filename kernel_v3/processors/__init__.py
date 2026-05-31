@@ -1,4 +1,6 @@
 from kernel_v3.processors.contracts import (
+    CHAT_ROUTE_PROMPT_CONTRACT,
+    CHAT_ROUTE_SCHEMA,
     EVALUATOR_PROMPT_CONTRACT,
     EVALUATOR_SCHEMA,
     PLANNER_PROMPT_CONTRACT,
@@ -40,6 +42,8 @@ from kernel_v3.processors.scenarios import (
 )
 
 __all__ = [
+    "CHAT_ROUTE_PROMPT_CONTRACT",
+    "CHAT_ROUTE_SCHEMA",
     "DeepSeekProvider",
     "DEEPSEEK_LEGACY_REASONER",
     "DEEPSEEK_V4_FLASH",

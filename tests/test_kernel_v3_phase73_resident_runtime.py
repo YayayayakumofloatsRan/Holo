@@ -235,11 +235,21 @@ def test_phase73_answering_pending_question_marks_old_outbox_answered(tmp_path: 
 def test_phase73_resident_can_confirm_pending_task_plan_without_slash_command(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
-    fabric = fake_fabric({"semantic.intake": _compound_research_write_intake()}, journal=journal)
+    fabric = fake_fabric(
+        {
+            "semantic.intake": _compound_research_write_intake(),
+            "chat.route": [
+                _chat_route("new_task"),
+                _chat_route("answer_pending_question", command="approve_plan"),
+            ],
+        },
+        journal=journal,
+    )
     chat = ChatRuntime(
         journal=journal,
         agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
         semantic_mode="model",
+        turn_router_mode="model",
     )
     runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-plan", journal=journal)
     queue.enqueue(thread_id="resident-plan-thread", text="compound plan request", message_id="in-plan")
@@ -263,14 +273,67 @@ def test_phase73_resident_can_confirm_pending_task_plan_without_slash_command(tm
     assert journal.records(task_id=approved.payload["command_result"]["spawned_task_id"], kind="retrieval_report")
 
 
-def test_phase73_resident_can_reject_pending_task_plan_without_execution(tmp_path: Path):
+def test_phase73_resident_continue_advances_unfinished_task_plan(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
-    fabric = fake_fabric({"semantic.intake": _compound_research_write_intake()}, journal=journal)
+    fabric = fake_fabric(
+        {
+            "semantic.intake": _multi_safe_read_after_research_intake(),
+            "chat.route": [
+                _chat_route("new_task"),
+                _chat_route("answer_pending_question", command="approve_plan"),
+                _chat_route("continue_plan"),
+            ],
+        },
+        journal=journal,
+    )
     chat = ChatRuntime(
         journal=journal,
         agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
         semantic_mode="model",
+        turn_router_mode="model",
+    )
+    runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-plan-continue", journal=journal)
+    queue.enqueue(thread_id="resident-plan-continue", text="safe multi-step plan", message_id="in-plan")
+
+    first = runtime.run_once()
+    queue.enqueue(thread_id="resident-plan-continue", text="同意", message_id="in-approve")
+    second = runtime.run_once()
+    queue.enqueue(thread_id="resident-plan-continue", text="继续", message_id="in-continue")
+    third = runtime.run_once()
+
+    outboxes = {item.in_reply_to: item for item in queue.outbox_messages()}
+    assert first.status == "processed"
+    assert second.status == "processed"
+    assert third.status == "processed"
+    assert outboxes["in-plan"].status == "answered"
+    assert second.payload["chat_route"] == "answer_pending_question"
+    assert second.payload["command_result"]["executed_node_id"] == "node-1-retrieval_research"
+    assert third.payload["chat_route"] == "continue_plan"
+    assert third.payload["command_result"]["executed_node_id"] == "node-2-workspace_read"
+    assert "workspace evidence" in outboxes["in-continue"].text
+    decisions = journal.records(kind="semantic_task_plan_decision")
+    assert [record.data["decision"] for record in decisions] == ["approved", "approved"]
+
+
+def test_phase73_resident_can_reject_pending_task_plan_without_execution(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": _compound_research_write_intake(),
+            "chat.route": [
+                _chat_route("new_task"),
+                _chat_route("answer_pending_question", command="reject_plan"),
+            ],
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+        turn_router_mode="model",
     )
     runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-plan-reject", journal=journal)
     queue.enqueue(thread_id="resident-plan-thread", text="compound plan request", message_id="in-plan")
@@ -828,4 +891,47 @@ def _compound_research_write_intake() -> dict:
         "warnings": ["model_detected_compound_task"],
         "response_hint": None,
         "clarification_question": "Confirm the resident task plan.",
+    }
+
+
+def _multi_safe_read_after_research_intake() -> dict:
+    return {
+        "primary_intent": "retrieval_research",
+        "suggested_mode": "clarify_first",
+        "compound": True,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "retrieval_research",
+                "text": "research resident plan evidence",
+                "sequence_index": 1,
+                "required_capabilities": ["retrieval.run"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "workspace_read",
+                "text": "read README.md after research",
+                "sequence_index": 2,
+                "required_capabilities": ["workspace.search", "file.read"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+        ],
+        "blocked_capabilities": [],
+        "warnings": ["model_detected_compound_task"],
+        "response_hint": None,
+        "clarification_question": "Confirm the resident read-only task plan.",
+    }
+
+
+def _chat_route(route: str, *, command: str | None = None, reasons: list[str] | None = None) -> dict:
+    return {
+        "route": route,
+        "command": command,
+        "target_task_id": None,
+        "confidence": 0.97,
+        "reasons": list(reasons or [f"fake_model_{route}"]),
     }

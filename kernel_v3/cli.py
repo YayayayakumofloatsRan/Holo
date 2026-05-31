@@ -73,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
+    chat_parser.add_argument("--turn-router", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--model", default=None)
     chat_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -121,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     resident_run_once.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     resident_run_once.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
+    resident_run_once.add_argument("--turn-router", choices=["fake", "model"], default="fake")
     resident_run_once.add_argument("--model", default=None)
     resident_run_once.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -134,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     resident_run.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     resident_run.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
+    resident_run.add_argument("--turn-router", choices=["fake", "model"], default="fake")
     resident_run.add_argument("--model", default=None)
     resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -281,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             evaluator_mode=args.evaluator,
             synthesizer_mode=args.synthesizer,
             semantic_mode=args.semantic_intake,
+            turn_router_mode=args.turn_router,
         )
         if args.once is not None:
             payload = runtime.receive(args.once, thread_id=args.thread)
@@ -567,6 +571,7 @@ def _chat_runtime(
     evaluator_mode: str = "fake",
     synthesizer_mode: str = "fake",
     semantic_mode: str = "fake",
+    turn_router_mode: str = "fake",
 ) -> ChatRuntime:
     return ChatRuntime(
         journal=journal,
@@ -584,6 +589,7 @@ def _chat_runtime(
         evaluator_mode=evaluator_mode,
         synthesizer_mode=synthesizer_mode,
         semantic_mode=semantic_mode,
+        turn_router_mode=turn_router_mode,
     )
 
 
@@ -727,6 +733,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 evaluator_mode=getattr(args, "evaluator", "fake"),
                 synthesizer_mode=getattr(args, "synthesizer", "fake"),
                 semantic_mode=getattr(args, "semantic_intake", "fake"),
+                turn_router_mode=getattr(args, "turn_router", "fake"),
             ),
             worker_id=args.worker_id,
             max_attempts=args.max_attempts,
@@ -760,6 +767,7 @@ def _agent_uses_live_model(args) -> bool:
             getattr(args, "evaluator", "fake"),
             getattr(args, "synthesizer", "fake"),
             getattr(args, "semantic_intake", "fake"),
+            getattr(args, "turn_router", "fake"),
         )
     )
 

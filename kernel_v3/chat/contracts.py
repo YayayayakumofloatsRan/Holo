@@ -74,6 +74,16 @@ class TurnRoutingDecision(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class TurnRouteProposal(Contract):
+    route: str
+    command: str | None
+    target_task_id: str | None
+    confidence: float
+    reasons: list[str]
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class ChatCommand(Contract):
     command_id: str
     thread_id: str

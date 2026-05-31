@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
@@ -17,6 +18,7 @@ from kernel_v3.chat.contracts import (
 from kernel_v3.contracts import JsonObject, LedgerRecord
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryPipeline, MemoryStore
+from kernel_v3.processors.contracts import CHAT_ROUTE_PROMPT_CONTRACT, CHAT_ROUTE_SCHEMA
 from kernel_v3.trace import TraceRenderer
 
 
@@ -35,6 +37,7 @@ class ChatRuntime:
         evaluator_mode: str = "fake",
         synthesizer_mode: str = "fake",
         semantic_mode: str = "fake",
+        turn_router_mode: str = "fake",
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.agent_runtime = agent_runtime or AgentRuntime(journal=self.journal, workspace_root=Path.cwd())
@@ -44,6 +47,7 @@ class ChatRuntime:
         self.evaluator_mode = evaluator_mode
         self.synthesizer_mode = synthesizer_mode
         self.semantic_mode = semantic_mode
+        self.turn_router_mode = turn_router_mode
 
     def receive(self, message: str, *, thread_id: str = "default") -> ChatRuntimeResult:
         normalized_thread = _normalize_thread_id(thread_id)
@@ -79,6 +83,8 @@ class ChatRuntime:
             result = self._execute_command(message, state=before, turn=turn, decision=decision)
         elif decision.route == "summary":
             result = self._summary_result(state=before, turn=turn, decision=decision)
+        elif decision.route == "continue_plan":
+            result = self._execute_plan_command(args=["approve"], state=before, turn=turn, decision=decision)
         elif decision.route == "answer_pending_question":
             pending = PendingUserInput.from_dict(before.pending_question or {})
             self.journal.append(
@@ -96,7 +102,7 @@ class ChatRuntime:
                 state_delta={"thread_id": normalized_thread, "pending_answered": pending.pending_id},
             )
             plan_record = _latest_task_plan_record(self.journal, normalized_thread, task_id=pending.task_id)
-            plan_response = _plan_confirmation_response(message) if _is_pending_plan_confirmation(plan_record) else None
+            plan_response = _plan_confirmation_from_decision(decision)
             if plan_response == "approve":
                 result = self._execute_plan_command(args=["approve"], state=before, turn=turn, decision=decision)
             elif plan_response == "reject":
@@ -173,6 +179,11 @@ class ChatRuntime:
                 reasons=["slash_command"],
             )
         if state.pending_question is not None:
+            plan_record = _latest_task_plan_record(self.journal, state.thread_id, task_id=str(state.pending_question["task_id"]))
+            if self.turn_router_mode == "model" and _is_pending_plan_confirmation(plan_record):
+                routed = self._route_turn_with_model(message, state=state, turn_id=turn_id)
+                if routed is not None and routed.route == "answer_pending_question":
+                    return routed
             return TurnRoutingDecision(
                 decision_id=f"route-{turn_id}",
                 thread_id=state.thread_id,
@@ -182,36 +193,10 @@ class ChatRuntime:
                 command=None,
                 reasons=["pending_user_input"],
             )
-        if _looks_like_summary_request(stripped):
-            return TurnRoutingDecision(
-                decision_id=f"route-{turn_id}",
-                thread_id=state.thread_id,
-                turn_id=turn_id,
-                route="summary",
-                task_id=state.active_task_id,
-                command=None,
-                reasons=["journal_summary_request"],
-            )
-        if state.active_task_id is not None and _looks_like_continue(stripped):
-            return TurnRoutingDecision(
-                decision_id=f"route-{turn_id}",
-                thread_id=state.thread_id,
-                turn_id=turn_id,
-                route="continue_task",
-                task_id=state.active_task_id,
-                command=None,
-                reasons=["continue_intent", "active_task_present"],
-            )
-        if _looks_like_continue(stripped):
-            return TurnRoutingDecision(
-                decision_id=f"route-{turn_id}",
-                thread_id=state.thread_id,
-                turn_id=turn_id,
-                route="new_task",
-                task_id=None,
-                command=None,
-                reasons=["continue_intent", "continue_without_active_task"],
-            )
+        if self.turn_router_mode == "model":
+            routed = self._route_turn_with_model(message, state=state, turn_id=turn_id)
+            if routed is not None:
+                return routed
         return TurnRoutingDecision(
             decision_id=f"route-{turn_id}",
             thread_id=state.thread_id,
@@ -220,6 +205,42 @@ class ChatRuntime:
             task_id=None,
             command=None,
             reasons=["no_pending_or_continue_route"],
+        )
+
+    def _route_turn_with_model(self, message: str, *, state: ThreadState, turn_id: str) -> TurnRoutingDecision | None:
+        fabric = getattr(self.agent_runtime, "processor_fabric", None)
+        if fabric is None:
+            return None
+        plan_record = _latest_continuable_task_plan_record(self.journal, state.thread_id)
+        pending_plan_record = None
+        if state.pending_question is not None:
+            pending_plan_record = _latest_task_plan_record(
+                self.journal,
+                state.thread_id,
+                task_id=str(state.pending_question["task_id"]),
+            )
+        outcome = fabric.run_json(
+            task_type="chat.route",
+            task_id=state.active_task_id,
+            run_id=_chat_run_id(state.thread_id),
+            context_id=f"chat:{state.thread_id}",
+            prompt=_chat_route_prompt(
+                message,
+                state=state,
+                continuable_plan=plan_record,
+                pending_plan=pending_plan_record,
+            ),
+            schema=CHAT_ROUTE_SCHEMA,
+            parameters={"adapter": "ChatTurnRouter", "contract_version": 1},
+        )
+        if outcome.parsed is None:
+            return None
+        return _decision_from_route_proposal(
+            outcome.parsed,
+            state=state,
+            turn_id=turn_id,
+            continuable_plan=plan_record,
+            pending_plan=pending_plan_record,
         )
 
     def build_thread_state(self, thread_id: str) -> ThreadState:
@@ -791,6 +812,149 @@ def _replace_command_result(result: ChatRuntimeResult, command_result: JsonObjec
     )
 
 
+def _chat_route_prompt(
+    message: str,
+    *,
+    state: ThreadState,
+    continuable_plan: LedgerRecord | None,
+    pending_plan: LedgerRecord | None,
+) -> str:
+    pending_plan_confirmation = _is_pending_plan_confirmation(pending_plan)
+    payload = {
+        "contract": CHAT_ROUTE_PROMPT_CONTRACT,
+        "contract_version": 1,
+        "user_turn": message,
+        "thread_state": {
+            "thread_id": state.thread_id,
+            "active_task_id": state.active_task_id,
+            "pending_question": state.pending_question,
+            "last_result_status": state.last_result_status,
+            "recent_task_refs": list(state.recent_task_refs),
+            "thread_summary_ref": state.thread_summary_ref,
+        },
+        "host_state": {
+            "active_task_present": state.active_task_id is not None,
+            "pending_user_input": state.pending_question is not None,
+            "pending_plan_confirmation": pending_plan_confirmation,
+            "continuable_task_plan_present": continuable_plan is not None,
+            "continuable_task_id": continuable_plan.task_id if continuable_plan is not None else None,
+            "continuable_plan_id": continuable_plan.data.get("plan_id") if continuable_plan is not None else None,
+        },
+        "host_rules": [
+            "Do not execute commands, tools, memory writes, or transports.",
+            "If pending_user_input is true, route answer_pending_question unless the user explicitly asks a slash command.",
+            "If pending_plan_confirmation is true, set command to approve_plan or reject_plan when the turn semantically approves or rejects.",
+            "Use continue_plan only when the user wants to advance an unfinished approved task plan.",
+            "Use continue_task only when the user wants to resume an active task.",
+            "Use summary when the user asks about prior conversation, recap, or what was discussed.",
+            "Use new_task when the turn is a fresh request or when continuation is vague but no active or continuable task exists.",
+            "The host will validate route feasibility against thread state before acting.",
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _decision_from_route_proposal(
+    proposal: JsonObject,
+    *,
+    state: ThreadState,
+    turn_id: str,
+    continuable_plan: LedgerRecord | None,
+    pending_plan: LedgerRecord | None,
+) -> TurnRoutingDecision:
+    route = str(proposal.get("route") or "new_task")
+    command = _string_or_none(proposal.get("command"))
+    reasons = _ordered_unique(["model_turn_route", *_string_values(proposal.get("reasons"))])
+    if state.pending_question is not None:
+        if _is_pending_plan_confirmation(pending_plan) and command in {"approve_plan", "reject_plan"}:
+            reasons = _ordered_unique([*reasons, "pending_plan_confirmation"])
+            return TurnRoutingDecision(
+                decision_id=f"route-{turn_id}",
+                thread_id=state.thread_id,
+                turn_id=turn_id,
+                route="answer_pending_question",
+                task_id=str(state.pending_question["task_id"]),
+                command=command,
+                reasons=reasons,
+            )
+        return TurnRoutingDecision(
+            decision_id=f"route-{turn_id}",
+            thread_id=state.thread_id,
+            turn_id=turn_id,
+            route="answer_pending_question",
+            task_id=str(state.pending_question["task_id"]),
+            command=None,
+            reasons=_ordered_unique([*reasons, "pending_user_input"]),
+        )
+    if route == "summary":
+        return TurnRoutingDecision(
+            decision_id=f"route-{turn_id}",
+            thread_id=state.thread_id,
+            turn_id=turn_id,
+            route="summary",
+            task_id=state.active_task_id,
+            command=None,
+            reasons=_ordered_unique([*reasons, "journal_summary_request"]),
+        )
+    if route == "continue_task":
+        if state.active_task_id is not None:
+            return TurnRoutingDecision(
+                decision_id=f"route-{turn_id}",
+                thread_id=state.thread_id,
+                turn_id=turn_id,
+                route="continue_task",
+                task_id=state.active_task_id,
+                command=None,
+                reasons=_ordered_unique([*reasons, "active_task_present"]),
+            )
+        return TurnRoutingDecision(
+            decision_id=f"route-{turn_id}",
+            thread_id=state.thread_id,
+            turn_id=turn_id,
+            route="new_task",
+            task_id=None,
+            command=None,
+            reasons=_ordered_unique([*reasons, "model_continue_without_active_task", "continue_without_active_task"]),
+        )
+    if route == "continue_plan":
+        if continuable_plan is not None:
+            return TurnRoutingDecision(
+                decision_id=f"route-{turn_id}",
+                thread_id=state.thread_id,
+                turn_id=turn_id,
+                route="continue_plan",
+                task_id=continuable_plan.task_id,
+                command=None,
+                reasons=_ordered_unique([*reasons, "continuable_task_plan_present"]),
+            )
+        return TurnRoutingDecision(
+            decision_id=f"route-{turn_id}",
+            thread_id=state.thread_id,
+            turn_id=turn_id,
+            route="new_task",
+            task_id=None,
+            command=None,
+            reasons=_ordered_unique([*reasons, "model_continue_plan_without_continuable_plan", "continue_without_active_task"]),
+        )
+    return TurnRoutingDecision(
+        decision_id=f"route-{turn_id}",
+        thread_id=state.thread_id,
+        turn_id=turn_id,
+        route="new_task",
+        task_id=None,
+        command=None,
+        reasons=_ordered_unique([*reasons, "fresh_or_invalid_model_route"]),
+    )
+
+
+def _plan_confirmation_from_decision(decision: TurnRoutingDecision) -> str | None:
+    if decision.command == "approve_plan":
+        return "approve"
+    if decision.command == "reject_plan":
+        return "reject"
+    return None
+
+
 def _latest_task_plan_record(journal: JournalStore, thread_id: str, *, task_id: str | None) -> LedgerRecord | None:
     task_ids = {task_id} if task_id else _thread_task_ids(journal, thread_id)
     records = [
@@ -805,6 +969,24 @@ def _latest_task_plan_record(journal: JournalStore, thread_id: str, *, task_id: 
     return records[-1] if records else None
 
 
+def _latest_continuable_task_plan_record(journal: JournalStore, thread_id: str) -> LedgerRecord | None:
+    task_ids = _thread_task_ids(journal, thread_id)
+    records = [
+        record
+        for record in journal.records(kind="semantic_task_plan")
+        if record.task_id in task_ids and record.data.get("approval_required") is True
+    ]
+    for record in reversed(records):
+        plan = dict(record.data)
+        if _latest_plan_final_answer_record(journal, plan_record=record) is not None:
+            continue
+        if _next_executable_plan_step(journal, plan, plan_ref=record.record_id) is not None:
+            return record
+        if _ready_plan_finalizer_step(plan) is not None:
+            return record
+    return None
+
+
 def _is_pending_plan_confirmation(plan_record: LedgerRecord | None) -> bool:
     if plan_record is None:
         return False
@@ -812,19 +994,6 @@ def _is_pending_plan_confirmation(plan_record: LedgerRecord | None) -> bool:
         return False
     prompt = plan_record.data.get("confirmation_prompt")
     return isinstance(prompt, str) and bool(prompt.strip())
-
-
-def _plan_confirmation_response(text: str) -> str | None:
-    normalized = text.strip().lower().strip(".。!！")
-    if normalized in {"yes", "y", "ok", "okay", "approve", "approved", "confirm", "confirmed", "continue", "go on"}:
-        return "approve"
-    if normalized in {"同意", "批准", "确认", "可以", "继续", "接着", "执行", "开始", "好", "好的"}:
-        return "approve"
-    if normalized in {"no", "n", "reject", "rejected", "cancel", "stop", "abort"}:
-        return "reject"
-    if normalized in {"不同意", "拒绝", "取消", "停止", "不要", "不执行", "先别"}:
-        return "reject"
-    return None
 
 
 def _task_plan_text(plan: JsonObject, *, progress: JsonObject | None = None) -> str:
@@ -1179,6 +1348,12 @@ def _string_values(value: object) -> list[str]:
     return [str(item) for item in value if isinstance(item, str) and item]
 
 
+def _string_or_none(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _pending_for_task(journal: JournalStore, *, thread_id: str, task_id: str, run_id: str) -> PendingUserInput:
     question = "请补充完成这个任务所需的信息。"
     source_ref = None
@@ -1229,7 +1404,7 @@ def _latest_chat_agent_result(journal: JournalStore, thread_id: str, *, after_ms
 
 def _is_task_result(data: JsonObject) -> bool:
     route = data.get("route")
-    if route in {"new_task", "continue_task", "answer_pending_question"}:
+    if route in {"new_task", "continue_task", "answer_pending_question", "continue_plan"}:
         return data.get("task_id") is not None
     command_result = data.get("command_result")
     if route != "command" or not isinstance(command_result, dict):
@@ -1298,16 +1473,6 @@ def _thread_task_ids(journal: JournalStore, thread_id: str) -> set[str]:
         for record in journal.records(kind="task")
         if record.task_id is not None and record.data.get("thread_id") == thread_id
     }
-
-
-def _looks_like_continue(text: str) -> bool:
-    lowered = text.strip().lower()
-    return lowered in {"continue", "continue.", "go on", "resume", "接着", "继续", "继续刚才的", "接着刚才"}
-
-
-def _looks_like_summary_request(text: str) -> bool:
-    lowered = text.lower()
-    return any(marker in lowered for marker in ("刚刚我们说了什么", "我们说了什么", "what did we say", "recap", "summary"))
 
 
 def _command_name(text: str) -> str | None:

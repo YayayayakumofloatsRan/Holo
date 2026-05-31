@@ -63,6 +63,13 @@ def deepseek_v4_routes(
     effort = _reasoning_effort(reasoning_effort)
     if profile == "fast":
         return {
+            "chat.route": _deepseek_route(
+                "chat.route",
+                DEEPSEEK_V4_FLASH,
+                thinking=thinking or "disabled",
+                reasoning_effort=effort,
+                max_tokens=384,
+            ),
             "semantic.intake": _deepseek_route(
                 "semantic.intake",
                 DEEPSEEK_V4_FLASH,
@@ -94,6 +101,13 @@ def deepseek_v4_routes(
         }
     if profile == "quality":
         return {
+            "chat.route": _deepseek_route(
+                "chat.route",
+                DEEPSEEK_V4_FLASH,
+                thinking=thinking or "disabled",
+                reasoning_effort=effort,
+                max_tokens=384,
+            ),
             "semantic.intake": _deepseek_route(
                 "semantic.intake",
                 DEEPSEEK_V4_PRO,
@@ -126,6 +140,13 @@ def deepseek_v4_routes(
     if profile != "balanced":
         raise ValueError(f"unknown DeepSeek V4 routing profile: {profile}")
     return {
+        "chat.route": _deepseek_route(
+            "chat.route",
+            DEEPSEEK_V4_FLASH,
+            thinking=thinking or "disabled",
+            reasoning_effort=effort,
+            max_tokens=384,
+        ),
         "semantic.intake": _deepseek_route(
             "semantic.intake",
             DEEPSEEK_V4_PRO,

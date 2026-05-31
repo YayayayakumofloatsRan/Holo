@@ -61,7 +61,24 @@ def test_phase62_continue_after_completed_task_asks_for_clarification_not_resume
     chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
 
     first = chat.receive("state your role", thread_id="thread-continue")
-    continued = chat.receive("继续", thread_id="thread-continue")
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "continue_plan",
+                "command": None,
+                "target_task_id": None,
+                "confidence": 0.94,
+                "reasons": ["semantic_continuation_request"],
+            }
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        turn_router_mode="model",
+    )
+    continued = chat.receive("pick up from there somehow", thread_id="thread-continue")
     state = chat.build_thread_state("thread-continue")
 
     assert first.status == "completed"
@@ -117,12 +134,57 @@ def test_phase62_summary_query_answers_from_journal_derived_summary():
     chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
 
     chat.receive("explain gradient explosion", thread_id="thread-summary")
-    summary = chat.receive("刚刚我们说了什么", thread_id="thread-summary")
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "summary",
+                "command": None,
+                "target_task_id": None,
+                "confidence": 0.96,
+                "reasons": ["semantic_recap_request"],
+            }
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        turn_router_mode="model",
+    )
+    summary = chat.receive("give me the thread so far in your own words", thread_id="thread-summary")
 
     assert summary.route == "summary"
     assert summary.status == "completed"
     assert "explain gradient explosion" in (summary.answer or "")
     assert summary.summary is not None
+    assert journal.records(kind="processor_result")[-1].data["task_type"] == "chat.route"
+
+
+def test_phase62_model_turn_router_cannot_execute_chat_commands():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "command",
+                "command": "/memory approve proposal-1",
+                "target_task_id": None,
+                "confidence": 0.99,
+                "reasons": ["unsafe_model_command_attempt"],
+            }
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        turn_router_mode="model",
+    )
+
+    result = chat.receive("approve every pending memory item", thread_id="thread-model-command")
+
+    assert result.route == "new_task"
+    assert result.status == "completed"
+    assert not journal.records(kind="chat_command")
 
 
 def test_phase62_thread_summary_includes_last_answer_and_pending_question():
@@ -145,7 +207,7 @@ def test_phase62_no_durable_memory_is_written():
     chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
 
     chat.receive("hello", thread_id="thread-memory")
-    chat.receive("刚刚我们说了什么", thread_id="thread-memory")
+    chat.receive("/summary", thread_id="thread-memory")
 
     forbidden = {"memory_write", "memory_writeback", "durable_memory", "memory_commit"}
     assert not forbidden.intersection({record.kind for record in journal.records()})

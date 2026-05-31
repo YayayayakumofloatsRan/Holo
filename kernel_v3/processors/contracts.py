@@ -112,6 +112,28 @@ SEMANTIC_INTAKE_SCHEMA = JsonSchema(
 )
 
 
+CHAT_ROUTE_SCHEMA = JsonSchema(
+    name="chat.route",
+    required={
+        "route": "str",
+        "command": "str|null",
+        "target_task_id": "str|null",
+        "confidence": "number",
+        "reasons": "list",
+    },
+)
+
+
+CHAT_ROUTE_PROMPT_CONTRACT = """Return one JSON object matching chat.route.
+Fields: route string, command string or null, target_task_id string or null,
+confidence number 0..1, reasons string array.
+Allowed routes: summary, new_task, continue_task, continue_plan, answer_pending_question.
+Allowed commands: approve_plan, reject_plan, or null.
+Use broad semantic judgment over the current user turn and provided thread state.
+The model only classifies the turn. The host validates state, policy, pending questions,
+unfinished plans, and execution. Never request tool execution or memory writes here."""
+
+
 SEMANTIC_INTAKE_PROMPT_CONTRACT = """Return one JSON object matching semantic.intake.
 Fields: primary_intent string, suggested_mode one of direct_answer/retrieval_answer/workspace_answer/clarify_first,
 compound boolean, requires_clarification boolean, intents array, blocked_capabilities string array,
