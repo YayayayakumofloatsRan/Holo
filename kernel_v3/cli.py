@@ -111,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_enqueue = resident_sub.add_parser("enqueue")
     resident_enqueue.add_argument("text")
     resident_enqueue.add_argument("--thread", default="default")
+    resident_enqueue.add_argument("--message-id", default=None)
     resident_run_once = resident_sub.add_parser("run-once")
     resident_run_once.add_argument("--worker-id", default="resident-worker-1")
     resident_run_once.add_argument("--max-attempts", type=int, default=3)
@@ -641,7 +642,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
     queue = _resident_queue(args)
     command = args.resident_command
     if command == "enqueue":
-        message = queue.enqueue(thread_id=args.thread, text=args.text, source="cli")
+        message = queue.enqueue(thread_id=args.thread, text=args.text, source="cli", message_id=args.message_id)
         journal.append(
             task_id=None,
             run_id="resident-cli",

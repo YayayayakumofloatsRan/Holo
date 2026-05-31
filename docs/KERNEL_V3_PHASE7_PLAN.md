@@ -273,10 +273,15 @@ Implementation note:
   after writing the outbox but before completing the inbox item, a later retry
   reuses the existing outbox item instead of creating a duplicate outbound
   response.
+- Inbound enqueue is idempotent by `message_id`. A transport/gateway retry of
+  the same thread/source/text returns the existing inbox item instead of
+  creating a duplicate task. Reusing a `message_id` with different thread,
+  source, or text is rejected as a conflict.
 - `needs_user_input` becomes an outbox item with status `pending_user_input`;
   the worker does not fabricate the missing user answer or continue the task.
 - `holo-v3 resident enqueue/run-once/run/status/inbox/outbox/ack` provides the local
-  dev/admin surface. This is not a live transport integration.
+  dev/admin surface. `resident enqueue --message-id` can replay a gateway
+  delivery id to test idempotency. This is not a live transport integration.
 - `holo-v3 resident-trace` renders resident journal records, keeping the SQLite
   queue state auditable through the normal kernel trace path.
 - Implemented tests live in `tests/test_kernel_v3_phase73_resident_runtime.py`.

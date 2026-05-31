@@ -26,8 +26,9 @@ class ResidentQueue:
         metadata: JsonObject | None = None,
     ) -> InboundMessage:
         now = self._now_ms()
+        message_id = message_id or f"inbox-{now}"
         message = InboundMessage(
-            message_id=message_id or f"inbox-{now}",
+            message_id=message_id,
             thread_id=thread_id,
             text=text,
             source=source,
@@ -41,6 +42,14 @@ class ResidentQueue:
         )
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _inbox_by_id(conn, message_id)
+            if existing is not None:
+                if existing.thread_id != thread_id or existing.text != text or existing.source != source:
+                    conn.rollback()
+                    raise ValueError(f"resident_inbox_message_id_conflict:{message_id}")
+                conn.rollback()
+                return existing
             conn.execute(
                 """
                 INSERT INTO resident_inbox (
@@ -51,6 +60,9 @@ class ResidentQueue:
                 _inbox_row(message),
             )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
         return message
@@ -646,6 +658,19 @@ def _outbox_from_row(row) -> OutboxMessage:
             "payload": _json_dict(row[8]),
         }
     )
+
+
+def _inbox_by_id(conn: sqlite3.Connection, message_id: str) -> InboundMessage | None:
+    row = conn.execute(
+        """
+        SELECT message_id, thread_id, text, source, status, created_at_ms,
+               lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
+        FROM resident_inbox
+        WHERE message_id = ?
+        """,
+        (message_id,),
+    ).fetchone()
+    return _inbox_from_row(row) if row is not None else None
 
 
 def _json(payload: JsonObject) -> str:

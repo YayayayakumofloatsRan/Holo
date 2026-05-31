@@ -64,6 +64,31 @@ def test_phase73_restart_picks_pending_inbox_item(tmp_path: Path):
     assert restarted.outbox_messages()[0].in_reply_to == "in-restart"
 
 
+def test_phase73_enqueue_is_idempotent_for_retried_inbound_delivery(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+
+    first = queue.enqueue(thread_id="resident-thread", text="same delivery", source="gateway", message_id="in-same")
+    second = queue.enqueue(thread_id="resident-thread", text="same delivery", source="gateway", message_id="in-same")
+
+    assert second == first
+    assert len(queue.inbox_messages()) == 1
+    assert queue.inbox_messages()[0].message_id == "in-same"
+
+
+def test_phase73_enqueue_rejects_conflicting_duplicate_message_id(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+
+    queue.enqueue(thread_id="resident-thread", text="first payload", source="gateway", message_id="in-conflict")
+
+    try:
+        queue.enqueue(thread_id="resident-thread", text="changed payload", source="gateway", message_id="in-conflict")
+    except ValueError as exc:
+        assert "resident_inbox_message_id_conflict:in-conflict" in str(exc)
+    else:  # pragma: no cover - regression guard
+        raise AssertionError("conflicting duplicate message_id was accepted")
+    assert len(queue.inbox_messages()) == 1
+
+
 def test_phase73_restart_after_partial_outbox_write_is_idempotent(tmp_path: Path):
     db_path = tmp_path / "resident.sqlite"
     queue = ResidentQueue(db_path, clock_ms=_clock())
@@ -334,6 +359,24 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     assert "resident_inbox_enqueued" in trace
     assert "resident_outbox_ack" in trace
     assert outbox_id in trace
+
+
+def test_phase73_cli_resident_enqueue_can_replay_message_id_idempotently(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    assert cli.main([*base, "resident", "enqueue", "same gateway delivery", "--thread", "resident-cli", "--message-id", "in-cli-same"]) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert cli.main([*base, "resident", "enqueue", "same gateway delivery", "--thread", "resident-cli", "--message-id", "in-cli-same"]) == 0
+    second = json.loads(capsys.readouterr().out)
+
+    assert second["message"] == first["message"]
+    assert cli.main([*base, "resident", "inbox"]) == 0
+    inbox = json.loads(capsys.readouterr().out)
+    assert len(inbox["messages"]) == 1
+    assert inbox["messages"][0]["message_id"] == "in-cli-same"
 
 
 def test_phase73_cli_resident_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
