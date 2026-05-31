@@ -253,6 +253,10 @@ schedule ticking is enabled and no inbox item is claimable, `resident run`
 reports `waiting_for_schedule` instead of plain `idle` if a future active
 schedule is still pending; the loop result includes `schedule_status` so a
 supervisor can see the next due time.
+Resident run loops also accept `--max-duration-ms` as a host-owned wall-clock
+budget in addition to `--max-iterations`. Hitting that budget returns
+`max_duration_ms` and journals the loop result; it does not let the model decide
+termination and it does not change `run-once` semantics.
 
 `resident doctor` is the read-only operator snapshot for long-running work. It
 aggregates queue inspection, schedule inspection, and any configured durable

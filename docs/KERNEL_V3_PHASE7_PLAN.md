@@ -289,9 +289,10 @@ Implementation note:
   calls can be guarded by worker id, so an old worker cannot complete a message
   after its lease expired and another worker reclaimed the item. The runtime
   renews its lease before writing outbox to avoid stale external responses.
-- `ResidentRuntime.run_loop()` is bounded by `max_iterations` and stops on idle
-  or blocked lease. This gives a safe resident worker loop without introducing
-  an unbounded always-on loop into the kernel.
+- `ResidentRuntime.run_loop()` is bounded by `max_iterations` and optional
+  `max_duration_ms`, and stops on idle or blocked lease. This gives a safe
+  resident worker loop without introducing an unbounded always-on loop into the
+  kernel.
 - Runtime exceptions move inbox items to `retry_wait` until `max_attempts` is
   reached, then to `dead_letter`. Retry scheduling is local queue metadata, not
   a scheduler or external transport.

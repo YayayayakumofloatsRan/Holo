@@ -726,6 +726,29 @@ def test_phase73_bounded_run_loop_processes_until_idle(tmp_path: Path):
     assert [message.in_reply_to for message in queue.outbox_messages()] == ["in-loop-1", "in-loop-2"]
 
 
+def test_phase73_run_loop_stops_at_host_duration_budget(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    queue.enqueue(thread_id="resident-thread", text="first duration item", message_id="in-duration-1")
+    queue.enqueue(thread_id="resident-thread", text="second duration item", message_id="in-duration-2")
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-duration",
+        journal=journal,
+    ).run_loop(max_iterations=10, max_duration_ms=1)
+
+    assert result.status == "max_duration_ms"
+    assert result.reason == "max_duration_ms"
+    assert result.iterations == 1
+    assert result.processed_count == 1
+    assert [message.status for message in queue.inbox_messages()] == ["completed", "pending"]
+    loop_record = journal.records(kind="resident_loop_result")[-1]
+    assert loop_record.state_delta["resident_loop_status"] == "max_duration_ms"
+    assert loop_record.state_delta["resident_loop_max_duration_ms"] == 1
+
+
 def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()

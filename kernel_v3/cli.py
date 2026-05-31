@@ -163,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run = resident_sub.add_parser("run")
     resident_run.add_argument("--worker-id", default="resident-worker-1")
     resident_run.add_argument("--max-iterations", type=int, default=10)
+    resident_run.add_argument("--max-duration-ms", type=int, default=None)
     resident_run.add_argument("--max-attempts", type=int, default=3)
     resident_run.add_argument("--retry-backoff-ms", type=int, default=1000)
     resident_run.add_argument("--planner", choices=["fake", "model"], default="fake")
@@ -1197,7 +1198,10 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             schedule_tick_limit=args.schedule_tick_limit,
         )
         if command == "run":
-            return runtime.run_loop(max_iterations=args.max_iterations).to_dict()
+            return runtime.run_loop(
+                max_iterations=args.max_iterations,
+                max_duration_ms=args.max_duration_ms,
+            ).to_dict()
         return runtime.run_once().to_dict()
     if command == "ack":
         outbox, reason = queue.transition_outbox_status(args.outbox_id, status=args.status)

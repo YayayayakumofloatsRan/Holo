@@ -33,14 +33,36 @@ class ResidentRuntime:
         self.scheduler = scheduler
         self.schedule_tick_limit = schedule_tick_limit
 
-    def run_loop(self, *, max_iterations: int = 10, stop_on_idle: bool = True) -> ResidentLoopResult:
+    def run_loop(
+        self,
+        *,
+        max_iterations: int = 10,
+        stop_on_idle: bool = True,
+        max_duration_ms: int | None = None,
+    ) -> ResidentLoopResult:
         results: list[ResidentRunResult] = []
+        started_at_ms = self._clock_ms()
+        duration_exceeded = False
         for _ in range(max(0, max_iterations)):
+            if _duration_exceeded(
+                clock_ms=self._clock_ms,
+                started_at_ms=started_at_ms,
+                max_duration_ms=max_duration_ms,
+            ):
+                duration_exceeded = True
+                break
             result = self.run_once()
             results.append(result)
             if result.status == "blocked":
                 break
             if stop_on_idle and result.status == "idle":
+                break
+            if _duration_exceeded(
+                clock_ms=self._clock_ms,
+                started_at_ms=started_at_ms,
+                max_duration_ms=max_duration_ms,
+            ):
+                duration_exceeded = True
                 break
         processed = len([item for item in results if item.status == "processed"])
         failed = len([item for item in results if item.status == "failed"])
@@ -90,6 +112,9 @@ class ResidentRuntime:
             elif results and results[-1].status == "idle":
                 status = "idle" if processed == 0 and failed == 0 else "completed"
                 reason = results[-1].reason
+            elif duration_exceeded:
+                status = "max_duration_ms"
+                reason = "max_duration_ms"
             elif len(results) >= max_iterations:
                 status = "max_iterations"
                 reason = "max_iterations"
@@ -115,10 +140,14 @@ class ResidentRuntime:
             state_delta={
                 "resident_loop_status": loop.status,
                 "resident_loop_iterations": loop.iterations,
+                "resident_loop_max_duration_ms": max_duration_ms,
                 "resident_schedule_active_count": schedule_status.get("active_count", 0),
             },
         )
         return loop
+
+    def _clock_ms(self) -> int:
+        return int(self.queue.clock_ms())
 
     def run_once(self) -> ResidentRunResult:
         schedule_tick = self._tick_schedules()
@@ -482,3 +511,14 @@ def _schedule_failure_reason(results: list[ResidentRunResult], schedule_status: 
         if isinstance(tick, dict) and tick.get("status") == "failed":
             return "resident_schedule_tick_failed"
     return None
+
+
+def _duration_exceeded(
+    *,
+    clock_ms,
+    started_at_ms: int,
+    max_duration_ms: int | None,
+) -> bool:
+    if max_duration_ms is None:
+        return False
+    return clock_ms() - started_at_ms > max(0, max_duration_ms)
