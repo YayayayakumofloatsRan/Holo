@@ -5,6 +5,7 @@ from typing import Protocol
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import CandidateAction, JsonObject, Observation, ToolManifest
 from kernel_v3.journal import JournalStore
+from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.research.contracts import CorpusDocument, ResearchProfile, SourceAssessment
 from kernel_v3.research.profiles import profile_by_id
 from kernel_v3.research.source_policy import assess_search_source, source_authority_summary
@@ -700,8 +701,10 @@ def _safe_json(data: JsonObject) -> JsonObject:
         lowered = key.lower()
         if "body" in lowered or "raw" in lowered:
             safe[key] = "[omitted]"
+        elif _secret_like_key(lowered):
+            safe[key] = "[omitted]"
         elif isinstance(value, str):
-            safe[key] = _preview(value, 160)
+            safe[key] = "[omitted]" if contains_secret_like_content(value) else _preview(value, 160)
         elif isinstance(value, (int, float, bool)) or value is None:
             safe[key] = value
         elif isinstance(value, list):
@@ -713,13 +716,29 @@ def _safe_json(data: JsonObject) -> JsonObject:
     return safe
 
 
+def _secret_like_key(key: str) -> bool:
+    normalized = key.replace("-", "_")
+    return normalized in {
+        "api_key",
+        "apikey",
+        "secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "cookie",
+        "password",
+        "private_key",
+    }
+
+
 def _dict_or_empty(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
 def _safe_list_item(value):
     if isinstance(value, str):
-        return _preview(value, 160)
+        return "[omitted]" if contains_secret_like_content(value) else _preview(value, 160)
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, dict):

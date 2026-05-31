@@ -178,6 +178,10 @@ CLI or unit-test path.
   `name`, `snippet`, `description`, and `summary`
 - it drops results without a usable URI and bounds query/result text before
   returning `SearchSource` objects
+- it drops result URLs with embedded credentials or secret-like query values
+  before they can become journaled `SearchSource` records
+- it redacts secret-like result title/snippet/source-id text and omits
+  secret-like `source_family` metadata
 - source metadata contains a result payload hash, not the raw JSON result body
 - diagnostics contain status, counts, URL scheme, host hash, query hash, and
   plan id only; raw endpoint URLs, raw queries, API keys, and response bodies

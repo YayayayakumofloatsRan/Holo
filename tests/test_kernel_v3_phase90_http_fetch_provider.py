@@ -248,6 +248,53 @@ def test_phase90_json_http_search_provider_parses_bounded_results() -> None:
     assert "this raw field" not in dumped_source
 
 
+def test_phase90_json_http_search_provider_rejects_secret_bearing_result_urls_and_text() -> None:
+    transport = _Transport(
+        response=HttpTransportResponse(
+            status_code=200,
+            mime_type="application/json",
+            body=json.dumps(
+                {
+                    "results": [
+                        {
+                            "url": "https://docs.example.com/leak?access_token=live-secret-token-1234567890",
+                            "title": "must be skipped before journal",
+                        },
+                        {
+                            "url": "https://docs.example.com/ok",
+                            "source_id": "Bearer source-secret-1234567890",
+                            "title": "Bearer title-secret-1234567890",
+                            "snippet": "api_key=snippet-secret-1234567890",
+                            "source_family": "Bearer family-secret-1234567890",
+                        },
+                    ]
+                }
+            ).encode("utf-8"),
+        )
+    )
+    provider = JsonHttpSearchProvider(
+        endpoint_url="https://api.example.com/search",
+        enabled=True,
+        allowed_hosts=["api.example.com"],
+        transport=transport,
+    )
+
+    sources = provider.search("DeepSeek API docs", goal=_goal(max_sources=5), plan=_plan())
+
+    assert [source.uri for source in sources] == ["https://docs.example.com/ok"]
+    assert sources[0].source_id.startswith("live_json_http_search-")
+    assert sources[0].title == "[omitted_secret_like_content]"
+    assert sources[0].snippet == "[omitted_secret_like_content]"
+    assert "source_family" not in sources[0].metadata
+    dumped = json.dumps([source.to_dict() for source in sources], ensure_ascii=False)
+    assert "live-secret-token" not in dumped
+    assert "source-secret" not in dumped
+    assert "title-secret" not in dumped
+    assert "snippet-secret" not in dumped
+    assert "family-secret" not in dumped
+    assert "must be skipped" not in dumped
+
+
 def test_phase90_json_http_search_provider_normalizes_url_form_allowed_hosts() -> None:
     transport = _Transport(response=HttpTransportResponse(status_code=200, body=b'{"results": []}'))
     provider = JsonHttpSearchProvider(

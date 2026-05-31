@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.memory.privacy import contains_secret_like_content
+from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.research.contracts import CorpusDocument, CorpusInspection, CorpusSearchResult, CorpusStatus, SourceAssessment
 from kernel_v3.research.profiles import profile_by_id
 

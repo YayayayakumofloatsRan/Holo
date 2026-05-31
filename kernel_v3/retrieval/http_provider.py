@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from kernel_v3.contracts import JsonObject
+from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 from kernel_v3.retrieval.providers import FetchResponse
 
@@ -19,6 +20,27 @@ SEARCH_RESULT_URL_LIMIT = 2_048
 SEARCH_RESULT_TITLE_LIMIT = 240
 SEARCH_RESULT_SNIPPET_LIMIT = 800
 SEARCH_RESULT_ID_LIMIT = 160
+SAFE_RESULT_URI_SCHEMES = {"http", "https"}
+SECRET_QUERY_KEYS = {
+    "api_key",
+    "apikey",
+    "key",
+    "secret",
+    "client_secret",
+    "token",
+    "access_token",
+    "refresh_token",
+    "auth_token",
+    "authorization",
+    "cookie",
+    "password",
+    "private_key",
+    "signature",
+    "sig",
+    "x_amz_signature",
+    "x_goog_signature",
+}
+SECRET_TEXT_PLACEHOLDER = "[omitted_secret_like_content]"
 
 HttpTransport = Callable[[str, dict[str, str], int, int], "HttpTransportResponse"]
 
@@ -387,23 +409,20 @@ def _sources_from_json_results(results: list[JsonObject], *, provider_id: str, m
 
 def _source_from_json_result(result: JsonObject, *, index: int, provider_id: str) -> SearchSource | None:
     uri = _bounded_text(str(result.get("url") or result.get("uri") or result.get("link") or ""), SEARCH_RESULT_URL_LIMIT)
-    if not uri:
+    if not uri or not _is_safe_result_uri(uri):
         return None
-    title = _bounded_text(str(result.get("title") or result.get("name") or uri), SEARCH_RESULT_TITLE_LIMIT)
-    snippet = _bounded_text(
+    title = _safe_result_text(str(result.get("title") or result.get("name") or uri), SEARCH_RESULT_TITLE_LIMIT)
+    snippet = _safe_result_text(
         str(result.get("snippet") or result.get("description") or result.get("summary") or ""),
         SEARCH_RESULT_SNIPPET_LIMIT,
     )
-    source_id = _bounded_text(
-        str(result.get("source_id") or f"{provider_id}-{_text_hash(uri)[:12]}-{index}"),
-        SEARCH_RESULT_ID_LIMIT,
-    )
+    source_id = _source_id_from_result(result, uri=uri, index=index, provider_id=provider_id)
     metadata = {
         "rank": index,
         "result_payload_hash": _json_hash(result),
     }
     source_family = result.get("source_family")
-    if isinstance(source_family, str) and source_family:
+    if isinstance(source_family, str) and source_family and not contains_secret_like_content(source_family):
         metadata["source_family"] = _bounded_text(source_family, SEARCH_RESULT_TITLE_LIMIT)
     return SearchSource(
         source_id=source_id,
@@ -413,6 +432,45 @@ def _source_from_json_result(result: JsonObject, *, index: int, provider_id: str
         provider=provider_id,
         metadata=metadata,
     )
+
+
+def _is_safe_result_uri(uri: str) -> bool:
+    parsed = urllib.parse.urlparse(uri)
+    if parsed.scheme.lower() not in SAFE_RESULT_URI_SCHEMES:
+        return False
+    if not parsed.hostname:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    if contains_secret_like_content(uri):
+        return False
+    for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
+        if _query_pair_secret_like(key, value):
+            return False
+    return True
+
+
+def _query_pair_secret_like(key: str, value: str) -> bool:
+    normalized_key = key.strip().lower().replace("-", "_")
+    if normalized_key in SECRET_QUERY_KEYS and len(value.strip()) >= 8:
+        return True
+    if contains_secret_like_content({normalized_key: value}):
+        return True
+    return contains_secret_like_content(value)
+
+
+def _safe_result_text(text: str, limit: int) -> str:
+    bounded = _bounded_text(text, limit)
+    if contains_secret_like_content(bounded):
+        return SECRET_TEXT_PLACEHOLDER
+    return bounded
+
+
+def _source_id_from_result(result: JsonObject, *, uri: str, index: int, provider_id: str) -> str:
+    raw_source_id = result.get("source_id")
+    if isinstance(raw_source_id, str) and raw_source_id and not contains_secret_like_content(raw_source_id):
+        return _bounded_text(raw_source_id, SEARCH_RESULT_ID_LIMIT)
+    return _bounded_text(f"{provider_id}-{_text_hash(uri)[:12]}-{index}", SEARCH_RESULT_ID_LIMIT)
 
 
 def _text_hash(text: str) -> str:
