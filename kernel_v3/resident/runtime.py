@@ -41,7 +41,7 @@ class ResidentRuntime:
         max_duration_ms: int | None = None,
     ) -> ResidentLoopResult:
         results: list[ResidentRunResult] = []
-        started_at_ms = self._clock_ms()
+        started_at_ms = self._clock_ms() if max_duration_ms is not None else None
         duration_exceeded = False
         for _ in range(max(0, max_iterations)):
             if _duration_exceeded(
@@ -516,9 +516,9 @@ def _schedule_failure_reason(results: list[ResidentRunResult], schedule_status: 
 def _duration_exceeded(
     *,
     clock_ms,
-    started_at_ms: int,
+    started_at_ms: int | None,
     max_duration_ms: int | None,
 ) -> bool:
-    if max_duration_ms is None:
+    if max_duration_ms is None or started_at_ms is None:
         return False
     return clock_ms() - started_at_ms > max(0, max_duration_ms)

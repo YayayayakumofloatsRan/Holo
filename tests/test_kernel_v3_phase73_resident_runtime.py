@@ -749,6 +749,27 @@ def test_phase73_run_loop_stops_at_host_duration_budget(tmp_path: Path):
     assert loop_record.state_delta["resident_loop_max_duration_ms"] == 1
 
 
+def test_phase73_run_loop_without_duration_budget_does_not_preconsume_clock(tmp_path: Path):
+    clock_calls = 0
+
+    def clock() -> int:
+        nonlocal clock_calls
+        clock_calls += 1
+        return 1_000 + clock_calls
+
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
+    journal = JournalStore.in_memory()
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-no-duration",
+    ).run_loop(max_iterations=0)
+
+    assert result.status == "max_iterations"
+    assert clock_calls == 1
+
+
 def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
