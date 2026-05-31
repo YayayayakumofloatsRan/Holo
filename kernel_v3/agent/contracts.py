@@ -10,6 +10,33 @@ AgentMode = Literal["direct_answer", "retrieval_answer", "workspace_answer", "cl
 
 
 @dataclass(frozen=True, kw_only=True)
+class TaskIntent(Contract):
+    intent_id: str
+    kind: str
+    text: str
+    sequence_index: int
+    required_capabilities: list[str]
+    risk: str
+    status: str
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class SemanticIntake(Contract):
+    intake_id: str
+    goal: str
+    primary_intent: str
+    suggested_mode: str
+    compound: bool
+    requires_clarification: bool
+    intents: list[JsonObject]
+    blocked_capabilities: list[str]
+    warnings: list[str]
+    response_hint: str | None
+    clarification_question: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
 class TaskRecipe(Contract):
     recipe_id: str
     allowed_tools: list[str]

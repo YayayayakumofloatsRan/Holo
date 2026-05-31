@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from kernel_v3.agent.contracts import AgentRuntimeResult, FailureReport, FinalAnswer, TaskRecipe
+from kernel_v3.agent.contracts import AgentRuntimeResult, FailureReport, FinalAnswer, SemanticIntake, TaskRecipe
+from kernel_v3.agent.semantics import analyze_goal
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
@@ -96,10 +97,15 @@ class AgentRuntime:
         citations_required: bool | None,
         task_id: str | None,
     ) -> AgentRuntimeResult:
-        selected_mode = _select_mode(goal, mode)
+        intake = analyze_goal(goal)
+        selected_mode = intake.suggested_mode if mode == "auto" else _select_mode(goal, mode)
         if selected_mode == "workspace_answer" and not _file_target(goal):
             selected_mode = "clarify_first"
-        recipe = task_recipe(selected_mode, citations_required=citations_required)
+        recipe = task_recipe(
+            selected_mode,
+            citations_required=citations_required,
+            metadata={"semantic_intake": intake.to_dict()},
+        )
         registry = self._registry(recipe, goal)
         planner = self._planner(goal, recipe, registry, planner_mode)
         evaluator = WorkloopEvaluator(
@@ -133,6 +139,7 @@ class AgentRuntime:
             )
         else:
             result = loop.resume(task_id, user_input=goal, thread_id=thread_id)
+        self._append_semantic_intake(intake, task_id=result.task_id, run_id=result.run_id)
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
         if result.status == "needs_user_input":
             return AgentRuntimeResult(
@@ -402,6 +409,20 @@ class AgentRuntime:
             state_delta={"agent_recipe": recipe.recipe_id, "agent_mode": recipe.mode},
         )
 
+    def _append_semantic_intake(self, intake: SemanticIntake, *, task_id: str, run_id: str) -> None:
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="semantic_intake",
+            data=intake.to_dict(),
+            state_delta={
+                "primary_intent": intake.primary_intent,
+                "suggested_mode": intake.suggested_mode,
+                "compound": intake.compound,
+            },
+        )
+
     def _append_final(self, answer: FinalAnswer) -> FinalAnswer:
         record = self.journal.append(
             task_id=answer.task_id,
@@ -556,9 +577,15 @@ class _RecipeEvaluator:
         return _feedback(run_id, self.calls, "final_answer_ready", "completed", answer if isinstance(answer, str) else None, [])
 
 
-def task_recipe(mode: str, *, citations_required: bool | None = None) -> TaskRecipe:
+def task_recipe(
+    mode: str,
+    *,
+    citations_required: bool | None = None,
+    metadata: JsonObject | None = None,
+) -> TaskRecipe:
     normalized = _select_mode("", mode)
     required = citations_required if citations_required is not None else normalized == "retrieval_answer"
+    recipe_metadata = dict(metadata or {})
     if normalized == "retrieval_answer":
         return TaskRecipe(
             recipe_id="recipe-retrieval-answer",
@@ -572,6 +599,7 @@ def task_recipe(mode: str, *, citations_required: bool | None = None) -> TaskRec
             finalizer="retrieval_synthesizer",
             context_budget_mode="truncate",
             mode=normalized,
+            metadata=recipe_metadata,
         )
     if normalized == "workspace_answer":
         return TaskRecipe(
@@ -586,6 +614,7 @@ def task_recipe(mode: str, *, citations_required: bool | None = None) -> TaskRec
             finalizer="workspace_synthesizer",
             context_budget_mode="truncate",
             mode=normalized,
+            metadata=recipe_metadata,
         )
     if normalized == "clarify_first":
         return TaskRecipe(
@@ -600,6 +629,7 @@ def task_recipe(mode: str, *, citations_required: bool | None = None) -> TaskRec
             finalizer="none",
             context_budget_mode="truncate",
             mode=normalized,
+            metadata=recipe_metadata,
         )
     return TaskRecipe(
         recipe_id="recipe-direct-answer",
@@ -613,6 +643,7 @@ def task_recipe(mode: str, *, citations_required: bool | None = None) -> TaskRec
         finalizer="direct_observation",
         context_budget_mode="truncate",
         mode="direct_answer",
+        metadata=recipe_metadata,
     )
 
 
@@ -689,6 +720,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
             ),
         ]
     if recipe.mode == "clarify_first":
+        question = _semantic_clarification_question(recipe) or "请明确目标、文件名或需要检索的问题。"
         return [
             CandidateAction(
                 action_id="act-agent-clarify",
@@ -696,11 +728,12 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
                 name=None,
                 description="ask user to clarify target",
                 score=1.0,
-                payload={"question": "请明确目标、文件名或需要检索的问题。"},
+                payload={"question": question},
                 reasons=["clarification_required"],
                 side_effect_class="none",
             )
         ]
+    response_hint = _semantic_response_hint(recipe)
     return [
         CandidateAction(
             action_id="act-agent-direct",
@@ -708,7 +741,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
             name=None,
             description="answer directly",
             score=1.0,
-            payload={"text": f"Direct answer: {goal}"},
+            payload={"text": response_hint or f"Direct answer: {goal}"},
             reasons=["direct_answer recipe"],
             side_effect_class="none",
         )
@@ -716,6 +749,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
 
 
 def _planner_directive(recipe: TaskRecipe) -> JsonObject:
+    semantic = _semantic_intake_metadata(recipe)
     if recipe.mode == "retrieval_answer":
         return {
             "mode": recipe.mode,
@@ -727,6 +761,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             },
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["web_search", "page_open", "network.fetch"],
+            "semantic_intake": semantic,
         }
     if recipe.mode == "workspace_answer":
         return {
@@ -737,6 +772,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             ],
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "workspace.write"],
+            "semantic_intake": semantic,
         }
     if recipe.mode == "clarify_first":
         return {
@@ -744,13 +780,34 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "required_first_action": {"kind": "ask_user", "name": None, "side_effect_class": "none"},
             "allowed_tools": [],
             "forbidden": ["all tool actions"],
+            "semantic_intake": semantic,
         }
     return {
         "mode": recipe.mode,
         "required_first_action": {"kind": "respond", "name": None, "side_effect_class": "none"},
         "allowed_tools": [],
         "forbidden": ["all tool actions"],
+        "semantic_intake": semantic,
     }
+
+
+def _semantic_intake_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = recipe.metadata.get("semantic_intake")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _semantic_response_hint(recipe: TaskRecipe) -> str | None:
+    value = _semantic_intake_metadata(recipe).get("response_hint")
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _semantic_clarification_question(recipe: TaskRecipe) -> str | None:
+    value = _semantic_intake_metadata(recipe).get("clarification_question")
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 def _default_retrieval_operator(goal: str) -> RetrievalOperator:
