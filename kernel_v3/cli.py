@@ -93,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
     memory_delete = memory_sub.add_parser("delete")
     memory_delete.add_argument("memory_id")
     memory_delete.add_argument("--reason", default="user_deleted")
+    memory_export = memory_sub.add_parser("export")
+    memory_export.add_argument("memory_id")
+    memory_migrate = memory_sub.add_parser("migrate-semantic")
+    memory_migrate.add_argument("--limit", type=int, default=None)
 
     resident_parser = sub.add_parser("resident")
     resident_sub = resident_parser.add_subparsers(dest="resident_command", required=True)
@@ -133,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
 
     retrieval_trace_parser = sub.add_parser("retrieval-trace")
     retrieval_trace_parser.add_argument("task_id")
+
+    memory_trace_parser = sub.add_parser("memory-trace")
+    memory_trace_parser.add_argument("task_id")
 
     resume_parser = sub.add_parser("resume")
     resume_parser.add_argument("task_id")
@@ -260,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
                     "evidence": renderer.render_evidence(args.task_id),
                     "artifacts": renderer.render_artifacts(args.task_id),
                     "retrieval_trace": renderer.render_retrieval_trace(args.task_id),
+                    "memory_trace": renderer.render_memory_trace(args.task_id),
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -305,6 +313,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "retrieval-trace":
         print(TraceRenderer(journal).render_retrieval_trace(args.task_id))
+        return 0
+
+    if args.command == "memory-trace":
+        print(TraceRenderer(journal).render_memory_trace(args.task_id))
         return 0
 
     if args.command == "context":
@@ -524,6 +536,13 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
     if command == "delete":
         tombstone = store.delete(args.memory_id, reason=args.reason, deleted_by="user")
         return {"status": "ok", "tombstone": tombstone.to_dict()}
+    if command == "export":
+        return {"status": "ok", "export": store.export_item(args.memory_id)}
+    if command == "migrate-semantic":
+        from kernel_v3.memory.migration import migrate_semantic_intake_records
+
+        report = migrate_semantic_intake_records(journal=journal, store=store, limit=args.limit)
+        return {"status": "ok", "migration": report.to_dict()}
     return {"status": "failed", "reason": f"unknown_memory_command:{command}"}
 
 

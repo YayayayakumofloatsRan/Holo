@@ -255,6 +255,25 @@ Implementation note:
   surface. This is not a live transport integration.
 - Implemented tests live in `tests/test_kernel_v3_phase73_resident_runtime.py`.
 
+## Phase7.4: Migration, Export, And Trace Hardening
+
+Add the close-out pieces that make durable memory auditable across old and new
+runs:
+
+- `kernel_v3/memory/migration.py` migrates existing `semantic_intake` records
+  containing `durable_memory:write` into shadow candidates and pending
+  proposals.
+- Migration is idempotent by journaling `memory_migration` records with the
+  source semantic-intake record ref.
+- `MemoryStore.export_item()` returns the committed item, linked proposals,
+  tombstone if present, and matching append-only audit records.
+- `TraceRenderer.render_memory_trace()` and `holo-v3 memory-trace <task_id>`
+  expose memory proposal, approval, migration, rejection, and deletion events in
+  task trace output.
+- `holo-v3 memory migrate-semantic` and `holo-v3 memory export <memory_id>` are
+  the CLI surfaces for migration and audit export.
+- Implemented tests live in `tests/test_kernel_v3_phase74_memory_migration_trace.py`.
+
 ## Acceptance Gate
 
 Before moving beyond Phase7 memory core:

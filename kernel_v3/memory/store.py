@@ -248,6 +248,28 @@ class MemoryStore:
     def audit_records(self) -> list[JsonObject]:
         return [dict(event) for event in self._events]
 
+    def export_item(self, memory_id: str) -> JsonObject:
+        item = self._items.get(memory_id)
+        if item is None:
+            raise KeyError(f"unknown memory_id: {memory_id}")
+        proposals = [
+            proposal.to_dict()
+            for proposal in self._proposals.values()
+            if proposal.proposed_item.get("memory_id") == memory_id
+        ]
+        tombstone = self._tombstones.get(memory_id)
+        return {
+            "memory_id": memory_id,
+            "item": item.to_dict(),
+            "proposals": proposals,
+            "tombstone": tombstone.to_dict() if tombstone is not None else None,
+            "audit_records": [
+                event
+                for event in self.audit_records()
+                if _event_mentions_memory(event, memory_id)
+            ],
+        }
+
     def index_items(self) -> list[JsonObject]:
         if self.index_path is None:
             raise RuntimeError("index_path is not configured")
@@ -559,6 +581,18 @@ def _search_text(item: MemoryItem) -> str:
             _canonical_json(item.structured),
         ]
     ).lower()
+
+
+def _event_mentions_memory(event: JsonObject, memory_id: str) -> bool:
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("memory_id") == memory_id:
+        return True
+    proposed = payload.get("proposed_item")
+    if isinstance(proposed, dict) and proposed.get("memory_id") == memory_id:
+        return True
+    return False
 
 
 def _canonical_json(payload: object) -> str:

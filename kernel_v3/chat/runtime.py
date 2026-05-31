@@ -320,7 +320,11 @@ class ChatRuntime:
             payload = tombstone.to_dict()
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Deleted {args[1]}.")
-        result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|approve <id>|reject <id> [reason]|delete <id> [reason]"}
+        if subcommand == "export" and len(args) >= 2:
+            payload = self.memory_store.export_item(args[1])
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Exported {args[1]}.")
+        result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|approve <id>|reject <id> [reason]|delete <id> [reason]|export <id>"}
         command = self._append_command(turn, name="/memory", args=args, status="failed", result=result)
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
 

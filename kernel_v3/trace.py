@@ -89,6 +89,20 @@ class TraceRenderer:
                     lines.append(f"{record.step_id or '-'} why_stop={stop_reason}")
         return "\n".join(lines)
 
+    def render_memory_trace(self, task_id: str) -> str:
+        records = self.journal.records(task_id=task_id)
+        lines = [f"Memory Trace {task_id}"]
+        for record in records:
+            if record.kind.startswith("memory_"):
+                data = record.data
+                lines.append(
+                    f"{record.run_id} {record.step_id or '-'} {record.kind} "
+                    f"proposal={data.get('proposal_id')} memory={data.get('memory_id')} "
+                    f"status={data.get('approval_status') or data.get('reason') or data.get('status')} "
+                    f"source={data.get('source_record_ref')}"
+                )
+        return "\n".join(lines)
+
     def _retrieval_lines(self, record) -> list[str]:
         data = record.data
         step = record.step_id or "-"
