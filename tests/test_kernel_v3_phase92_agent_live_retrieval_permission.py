@@ -263,6 +263,8 @@ def test_phase92_cli_resident_doctor_inspects_live_retrieval_without_network(
     _clear_live_env(monkeypatch)
     monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
     monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS", "api.example.com")
+    monkeypatch.setenv("HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS", "docs.example.com")
     journal_path = tmp_path / "journal.jsonl"
     index_path = tmp_path / "journal.sqlite"
     resident_db = tmp_path / "resident.sqlite"
@@ -293,6 +295,48 @@ def test_phase92_cli_resident_doctor_inspects_live_retrieval_without_network(
         for item in payload["doctor"]["retrieval_provider_inspection"]["diagnostics"]["provider_chain"]
     }
     assert {"live_json_http_search", "live_http_fetch"}.issubset(provider_ids)
+    assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
+def test_phase92_cli_resident_doctor_flags_live_retrieval_without_allowed_hosts(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "--resident-db",
+                str(resident_db),
+                "resident",
+                "doctor",
+                "--live-retrieval",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "error"
+    provider_issues = payload["doctor"]["retrieval_provider_inspection"]["issues"]
+    issue_keys = {
+        (issue["code"], issue["provider_id"], issue["provider_kind"])
+        for issue in provider_issues
+        if issue["code"] == "live_provider_without_allowed_hosts"
+    }
+    assert ("live_provider_without_allowed_hosts", "live_json_http_search", "search") in issue_keys
+    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 

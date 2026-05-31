@@ -76,6 +76,29 @@ def test_phase91_live_retrieval_config_builds_inspectable_operator() -> None:
     assert inspection.issues[0]["code"] == "live_retrieval_provider_present"
 
 
+def test_phase91_live_retrieval_inspection_flags_missing_allowed_hosts() -> None:
+    config = LiveRetrievalConfig.from_env(
+        {
+            "HOLO_V3_LIVE_RETRIEVAL": "1",
+            "HOLO_V3_LIVE_SEARCH_ENDPOINT": "https://api.example.com/search",
+        }
+    )
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b'{"results": []}'))
+
+    operator = config.build_operator(search_transport=transport, fetch_transport=transport)
+    inspection = inspect_retrieval_providers(operator, clock_ms=lambda: 9192)
+
+    assert inspection.status == "error"
+    issue_keys = {
+        (issue["code"], issue["provider_id"], issue["provider_kind"])
+        for issue in inspection.issues
+        if issue["code"] == "live_provider_without_allowed_hosts"
+    }
+    assert ("live_provider_without_allowed_hosts", "live_json_http_search", "search") in issue_keys
+    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
+    assert "configure allowed hosts for live retrieval providers" in inspection.recommended_actions
+
+
 def test_phase91_cli_live_http_provider_inspection_blocks_without_endpoint(tmp_path: Path, capsys, monkeypatch) -> None:
     _clear_live_env(monkeypatch)
     journal_path = tmp_path / "journal.jsonl"

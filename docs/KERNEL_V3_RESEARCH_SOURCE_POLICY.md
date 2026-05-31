@@ -265,7 +265,9 @@ holo-v3 resident doctor --live-retrieval --research-profile finance_fundamentals
 
 The doctor output includes `live_retrieval_config`,
 `live_retrieval_issues`, and normal retrieval provider inspection. Missing live
-env gates or endpoints are reported before a worker is started.
+env gates, endpoints, or live provider host allowlists are reported before a
+worker is started. A live provider with no `allowed_hosts` and no
+`allow_all_hosts` setting is considered unusable and is reported as an error.
 
 Provider inspection is also available before a run starts:
 

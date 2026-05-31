@@ -52,6 +52,7 @@ def _provider_issues(
     if not _providers_by_kind(capabilities, "fetch"):
         issues.append({"severity": "error", "code": "missing_fetch_provider"})
     issues.extend(_composite_provider_issues(raw_capabilities))
+    issues.extend(_live_provider_configuration_issues(raw_capabilities))
     if network_access:
         issues.append({"severity": "attention", "code": "live_retrieval_provider_present"})
     for capability in capabilities:
@@ -108,6 +109,31 @@ def _composite_provider_issues(capabilities: list[JsonObject]) -> list[JsonObjec
     return issues
 
 
+def _live_provider_configuration_issues(capabilities: list[JsonObject]) -> list[JsonObject]:
+    issues: list[JsonObject] = []
+    for capability in _walk_capabilities(capabilities):
+        if not bool(capability.get("live_network", False)):
+            continue
+        if not bool(capability.get("default_enabled", True)):
+            continue
+        diagnostics = capability.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            continue
+        allow_all_hosts = bool(diagnostics.get("allow_all_hosts", False))
+        allowed_host_count = int(diagnostics.get("allowed_host_count") or 0)
+        if allow_all_hosts or allowed_host_count > 0:
+            continue
+        issues.append(
+            {
+                "severity": "error",
+                "code": "live_provider_without_allowed_hosts",
+                "provider_id": str(capability.get("provider_id") or ""),
+                "provider_kind": str(capability.get("provider_kind") or ""),
+            }
+        )
+    return issues
+
+
 def _providers_by_kind(capabilities: list[JsonObject], provider_kind: str) -> list[JsonObject]:
     return [capability for capability in capabilities if capability.get("provider_kind") == provider_kind]
 
@@ -148,6 +174,8 @@ def _recommended_actions(issues: list[JsonObject]) -> list[str]:
         actions.append("configure at least one concrete fallback search provider")
     if "no_enabled_fallback_search_provider" in codes:
         actions.append("enable at least one concrete fallback search provider")
+    if "live_provider_without_allowed_hosts" in codes:
+        actions.append("configure allowed hosts for live retrieval providers")
     if "research_profile_not_provider_native" in codes:
         actions.append("prefer a profile-aware corpus or retrieval provider for directed research")
     return _ordered_unique(actions)
