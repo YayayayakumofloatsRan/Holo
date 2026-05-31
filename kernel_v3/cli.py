@@ -105,8 +105,18 @@ def main(argv: list[str] | None = None) -> int:
     resident_enqueue.add_argument("--thread", default="default")
     resident_run_once = resident_sub.add_parser("run-once")
     resident_run_once.add_argument("--worker-id", default="resident-worker-1")
+    resident_run_once.add_argument("--max-attempts", type=int, default=3)
+    resident_run_once.add_argument("--retry-backoff-ms", type=int, default=1000)
+    resident_run = resident_sub.add_parser("run")
+    resident_run.add_argument("--worker-id", default="resident-worker-1")
+    resident_run.add_argument("--max-iterations", type=int, default=10)
+    resident_run.add_argument("--max-attempts", type=int, default=3)
+    resident_run.add_argument("--retry-backoff-ms", type=int, default=1000)
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
+    resident_ack = resident_sub.add_parser("ack")
+    resident_ack.add_argument("outbox_id")
+    resident_ack.add_argument("--status", default="acknowledged")
 
     inspect_run_parser = sub.add_parser("inspect-run")
     inspect_run_parser.add_argument("task_id")
@@ -561,14 +571,23 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         return {"status": "ok", "messages": [message.to_dict() for message in queue.inbox_messages()]}
     if command == "outbox":
         return {"status": "ok", "messages": [message.to_dict() for message in queue.outbox_messages()]}
-    if command == "run-once":
+    if command in {"run-once", "run"}:
         memory_store = _memory_store(args, create_default=False)
         runtime = ResidentRuntime(
             queue=queue,
             chat_runtime=_chat_runtime(journal, memory_store=memory_store),
             worker_id=args.worker_id,
+            max_attempts=args.max_attempts,
+            retry_backoff_ms=args.retry_backoff_ms,
         )
+        if command == "run":
+            return runtime.run_loop(max_iterations=args.max_iterations).to_dict()
         return runtime.run_once().to_dict()
+    if command == "ack":
+        outbox = queue.mark_outbox_status(args.outbox_id, status=args.status)
+        if outbox is None:
+            return {"status": "failed", "reason": "outbox_not_found", "outbox_id": args.outbox_id}
+        return {"status": "ok", "outbox": outbox.to_dict()}
     return {"status": "failed", "reason": f"unknown_resident_command:{command}"}
 
 

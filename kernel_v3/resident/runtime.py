@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kernel_v3.chat import ChatRuntime
-from kernel_v3.resident.contracts import ResidentRunResult
+from kernel_v3.resident.contracts import ResidentLoopResult, ResidentRunResult
 from kernel_v3.resident.queue import ResidentQueue
 
 
@@ -13,11 +13,52 @@ class ResidentRuntime:
         chat_runtime: ChatRuntime,
         worker_id: str = "resident-worker-1",
         lease_ttl_ms: int = 30_000,
+        max_attempts: int = 3,
+        retry_backoff_ms: int = 1_000,
     ) -> None:
         self.queue = queue
         self.chat_runtime = chat_runtime
         self.worker_id = worker_id
         self.lease_ttl_ms = lease_ttl_ms
+        self.max_attempts = max_attempts
+        self.retry_backoff_ms = retry_backoff_ms
+
+    def run_loop(self, *, max_iterations: int = 10, stop_on_idle: bool = True) -> ResidentLoopResult:
+        results: list[ResidentRunResult] = []
+        for _ in range(max(0, max_iterations)):
+            result = self.run_once()
+            results.append(result)
+            if result.status == "blocked":
+                break
+            if stop_on_idle and result.status == "idle":
+                break
+        processed = len([item for item in results if item.status == "processed"])
+        failed = len([item for item in results if item.status == "failed"])
+        blocked = len([item for item in results if item.status == "blocked"])
+        idle = len([item for item in results if item.status == "idle"])
+        if blocked:
+            status = "blocked"
+            reason = results[-1].reason if results else "blocked"
+        elif results and results[-1].status == "idle":
+            status = "idle" if processed == 0 and failed == 0 else "completed"
+            reason = results[-1].reason
+        elif len(results) >= max_iterations:
+            status = "max_iterations"
+            reason = "max_iterations"
+        else:
+            status = "completed"
+            reason = None
+        return ResidentLoopResult(
+            status=status,
+            worker_id=self.worker_id,
+            iterations=len(results),
+            processed_count=processed,
+            failed_count=failed,
+            blocked_count=blocked,
+            idle_count=idle,
+            reason=reason,
+            results=[item.to_dict() for item in results],
+        )
 
     def run_once(self) -> ResidentRunResult:
         lease = self.queue.acquire_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
@@ -81,14 +122,20 @@ class ResidentRuntime:
                 payload={"chat_status": chat_result.status, "outbox_status": outbox.status},
             )
         except Exception as exc:  # pragma: no cover - defensive worker containment
-            self.queue.fail(message.message_id, reason=type(exc).__name__, worker_id=self.worker_id)
+            recorded = self.queue.fail(
+                message.message_id,
+                reason=type(exc).__name__,
+                worker_id=self.worker_id,
+                max_attempts=self.max_attempts,
+                retry_backoff_ms=self.retry_backoff_ms,
+            )
             return ResidentRunResult(
                 status="failed",
                 worker_id=self.worker_id,
                 message_id=message.message_id,
                 outbox_id=None,
                 reason=type(exc).__name__,
-                payload={"error": type(exc).__name__},
+                payload={"error": type(exc).__name__, "failure_recorded": recorded},
             )
         finally:
             self.queue.release_lease(worker_id=self.worker_id)

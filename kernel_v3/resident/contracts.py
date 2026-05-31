@@ -16,6 +16,7 @@ class InboundMessage(Contract):
     lease_owner: str | None
     lease_until_ms: int | None
     attempts: int
+    next_attempt_at_ms: int | None
     metadata: JsonObject = field(default_factory=dict)
 
 
@@ -49,3 +50,16 @@ class ResidentRunResult(Contract):
     outbox_id: str | None
     reason: str | None
     payload: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResidentLoopResult(Contract):
+    status: str
+    worker_id: str
+    iterations: int
+    processed_count: int
+    failed_count: int
+    blocked_count: int
+    idle_count: int
+    reason: str | None
+    results: list[JsonObject] = field(default_factory=list)

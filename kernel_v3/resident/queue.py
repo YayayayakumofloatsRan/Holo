@@ -36,6 +36,7 @@ class ResidentQueue:
             lease_owner=None,
             lease_until_ms=None,
             attempts=0,
+            next_attempt_at_ms=None,
             metadata=dict(metadata or {}),
         )
         conn = self._connect()
@@ -44,8 +45,8 @@ class ResidentQueue:
                 """
                 INSERT INTO resident_inbox (
                     message_id, thread_id, text, source, status, created_at_ms,
-                    lease_owner, lease_until_ms, attempts, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    lease_owner, lease_until_ms, attempts, next_attempt_at_ms, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _inbox_row(message),
             )
@@ -155,14 +156,15 @@ class ResidentQueue:
             row = conn.execute(
                 """
                 SELECT message_id, thread_id, text, source, status, created_at_ms,
-                       lease_owner, lease_until_ms, attempts, metadata_json
+                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
                 FROM resident_inbox
                 WHERE status = 'pending'
+                   OR (status = 'retry_wait' AND next_attempt_at_ms IS NOT NULL AND next_attempt_at_ms <= ?)
                    OR (status = 'running' AND lease_until_ms IS NOT NULL AND lease_until_ms <= ?)
                 ORDER BY created_at_ms, message_id
                 LIMIT 1
                 """,
-                (now,),
+                (now, now),
             ).fetchone()
             if row is None:
                 conn.rollback()
@@ -171,14 +173,15 @@ class ResidentQueue:
             updated = conn.execute(
                 """
                 UPDATE resident_inbox
-                SET status = 'running', lease_owner = ?, lease_until_ms = ?, attempts = ?
+                SET status = 'running', lease_owner = ?, lease_until_ms = ?, attempts = ?, next_attempt_at_ms = NULL
                 WHERE message_id = ?
                   AND (
                     status = 'pending'
+                    OR (status = 'retry_wait' AND next_attempt_at_ms IS NOT NULL AND next_attempt_at_ms <= ?)
                     OR (status = 'running' AND lease_until_ms IS NOT NULL AND lease_until_ms <= ?)
                   )
                 """,
-                (worker_id, lease_until, attempts, row[0], now),
+                (worker_id, lease_until, attempts, row[0], now, now),
             )
             if updated.rowcount != 1:
                 conn.rollback()
@@ -195,6 +198,7 @@ class ResidentQueue:
                     "lease_owner": worker_id,
                     "lease_until_ms": lease_until,
                     "attempts": attempts,
+                    "next_attempt_at_ms": None,
                     "metadata": _json_dict(row[9]),
                 }
             )
@@ -207,30 +211,55 @@ class ResidentQueue:
     def complete(self, message_id: str, *, worker_id: str | None = None) -> bool:
         return self._set_inbox_status(message_id, "completed", worker_id=worker_id)
 
-    def fail(self, message_id: str, *, reason: str, worker_id: str | None = None) -> bool:
+    def fail(
+        self,
+        message_id: str,
+        *,
+        reason: str,
+        worker_id: str | None = None,
+        max_attempts: int | None = None,
+        retry_backoff_ms: int = 0,
+    ) -> bool:
+        now = self._now_ms()
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT metadata_json FROM resident_inbox WHERE message_id = ?", (message_id,)).fetchone()
-            metadata = _json_dict(row[0] if row else None)
+            row = conn.execute(
+                "SELECT attempts, metadata_json FROM resident_inbox WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+            attempts = int(row[0]) if row is not None else 0
+            metadata = _json_dict(row[1] if row else None)
             metadata["failure_reason"] = reason
+            status = "failed"
+            next_attempt_at_ms = None
+            if max_attempts is not None:
+                metadata["max_attempts"] = max_attempts
+                if attempts < max_attempts:
+                    status = "retry_wait"
+                    next_attempt_at_ms = now + max(0, int(retry_backoff_ms))
+                    metadata["retry_reason"] = reason
+                else:
+                    status = "dead_letter"
             if worker_id is None:
                 updated = conn.execute(
                     """
                     UPDATE resident_inbox
-                    SET status = 'failed', lease_owner = NULL, lease_until_ms = NULL, metadata_json = ?
+                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL,
+                        next_attempt_at_ms = ?, metadata_json = ?
                     WHERE message_id = ?
                     """,
-                    (_json(metadata), message_id),
+                    (status, next_attempt_at_ms, _json(metadata), message_id),
                 )
             else:
                 updated = conn.execute(
                     """
                     UPDATE resident_inbox
-                    SET status = 'failed', lease_owner = NULL, lease_until_ms = NULL, metadata_json = ?
+                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL,
+                        next_attempt_at_ms = ?, metadata_json = ?
                     WHERE message_id = ? AND lease_owner = ?
                     """,
-                    (_json(metadata), message_id, worker_id),
+                    (status, next_attempt_at_ms, _json(metadata), message_id, worker_id),
                 )
             conn.commit()
             return updated.rowcount == 1
@@ -294,7 +323,7 @@ class ResidentQueue:
             rows = conn.execute(
                 """
                 SELECT message_id, thread_id, text, source, status, created_at_ms,
-                       lease_owner, lease_until_ms, attempts, metadata_json
+                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
                 FROM resident_inbox
                 ORDER BY created_at_ms, message_id
                 """
@@ -315,6 +344,34 @@ class ResidentQueue:
                 """
             ).fetchall()
             return [_outbox_from_row(row) for row in rows]
+        finally:
+            conn.close()
+
+    def mark_outbox_status(self, outbox_id: str, *, status: str) -> OutboxMessage | None:
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            updated = conn.execute(
+                "UPDATE resident_outbox SET status = ? WHERE outbox_id = ?",
+                (status, outbox_id),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                return None
+            row = conn.execute(
+                """
+                SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
+                       task_id, run_id, payload_json
+                FROM resident_outbox
+                WHERE outbox_id = ?
+                """,
+                (outbox_id,),
+            ).fetchone()
+            conn.commit()
+            return _outbox_from_row(row) if row is not None else None
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -344,7 +401,7 @@ class ResidentQueue:
                 updated = conn.execute(
                     """
                     UPDATE resident_inbox
-                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL
+                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL, next_attempt_at_ms = NULL
                     WHERE message_id = ?
                     """,
                     (status, message_id),
@@ -353,7 +410,7 @@ class ResidentQueue:
                 updated = conn.execute(
                     """
                     UPDATE resident_inbox
-                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL
+                    SET status = ?, lease_owner = NULL, lease_until_ms = NULL, next_attempt_at_ms = NULL
                     WHERE message_id = ? AND lease_owner = ?
                     """,
                     (status, message_id, worker_id),
@@ -397,10 +454,12 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             lease_owner TEXT,
             lease_until_ms INTEGER,
             attempts INTEGER NOT NULL,
+            next_attempt_at_ms INTEGER,
             metadata_json TEXT NOT NULL
         )
         """
     )
+    _ensure_column(conn, "resident_inbox", "next_attempt_at_ms", "INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_resident_inbox_status ON resident_inbox(status, created_at_ms)")
     conn.execute(
         """
@@ -445,6 +504,13 @@ def _dedupe_outbox_replies(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if column in {str(row[1]) for row in rows}:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _lease_is_active(conn: sqlite3.Connection, *, worker_id: str, now_ms: int) -> bool:
     row = conn.execute(
         "SELECT expires_at_ms FROM resident_leases WHERE lease_id = ? AND worker_id = ?",
@@ -464,6 +530,7 @@ def _inbox_row(message: InboundMessage) -> tuple[object, ...]:
         message.lease_owner,
         message.lease_until_ms,
         message.attempts,
+        message.next_attempt_at_ms,
         _json(message.metadata),
     )
 
@@ -494,6 +561,7 @@ def _inbox_from_row(row) -> InboundMessage:
             "lease_owner": row[6],
             "lease_until_ms": int(row[7]) if row[7] is not None else None,
             "attempts": int(row[8]),
+            "next_attempt_at_ms": int(row[10]) if row[10] is not None else None,
             "metadata": _json_dict(row[9]),
         }
     )

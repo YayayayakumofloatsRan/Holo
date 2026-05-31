@@ -155,6 +155,56 @@ def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuatio
     assert len(queue.outbox_messages()) == 1
 
 
+def test_phase73_bounded_run_loop_processes_until_idle(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    queue.enqueue(thread_id="resident-thread", text="first loop item", message_id="in-loop-1")
+    queue.enqueue(thread_id="resident-thread", text="second loop item", message_id="in-loop-2")
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-loop",
+    ).run_loop(max_iterations=5)
+
+    assert result.status == "completed"
+    assert result.iterations == 3
+    assert result.processed_count == 2
+    assert result.idle_count == 1
+    assert [message.status for message in queue.inbox_messages()] == ["completed", "completed"]
+    assert [message.in_reply_to for message in queue.outbox_messages()] == ["in-loop-1", "in-loop-2"]
+
+
+def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="will fail", message_id="in-fail")
+    runtime = ResidentRuntime(
+        queue=queue,
+        chat_runtime=_RaisingChatRuntime(),
+        worker_id="worker-fail",
+        max_attempts=2,
+        retry_backoff_ms=0,
+    )
+
+    first = runtime.run_once()
+    first_inbox = queue.inbox_messages()[0]
+    second = runtime.run_once()
+    second_inbox = queue.inbox_messages()[0]
+    third = runtime.run_once()
+
+    assert first.status == "failed"
+    assert first.payload["failure_recorded"] is True
+    assert first_inbox.status == "retry_wait"
+    assert first_inbox.attempts == 1
+    assert first_inbox.next_attempt_at_ms is not None
+    assert second.status == "failed"
+    assert second_inbox.status == "dead_letter"
+    assert second_inbox.attempts == 2
+    assert second_inbox.metadata["failure_reason"] == "RuntimeError"
+    assert third.status == "idle"
+    assert not queue.outbox_messages()
+
+
 def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -174,6 +224,20 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     assert outbox["messages"][0]["status"] == "ready"
     assert "离线 host fallback" in outbox["messages"][0]["text"]
     assert "Direct answer:" not in outbox["messages"][0]["text"]
+    outbox_id = outbox["messages"][0]["outbox_id"]
+
+    assert cli.main([*base, "resident", "ack", outbox_id, "--status", "acknowledged"]) == 0
+    acked = json.loads(capsys.readouterr().out)
+    assert acked["outbox"]["status"] == "acknowledged"
+
+    assert cli.main([*base, "resident", "run", "--worker-id", "worker-cli", "--max-iterations", "2"]) == 0
+    loop = json.loads(capsys.readouterr().out)
+    assert loop["status"] == "idle"
+
+
+class _RaisingChatRuntime:
+    def receive(self, text: str, *, thread_id: str):
+        raise RuntimeError("simulated failure")
 
 
 def _clock(start: int = 1_000):

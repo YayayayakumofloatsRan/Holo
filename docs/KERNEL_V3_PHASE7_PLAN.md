@@ -237,6 +237,10 @@ Tests:
 - worker lease prevents duplicate ownership
 - restart resumes pending inbox item safely
 - needs_user_input creates pending outbox, not self-answer
+- bounded worker loop stops on idle, blocked lease, or max iteration guard
+- transient worker failures retry with backoff and eventually enter dead letter
+- outbox items can be acknowledged by admin/transport glue without adding a live
+  transport decision layer
 - no live network or model required for default tests
 
 Implementation note:
@@ -255,14 +259,20 @@ Implementation note:
   calls can be guarded by worker id, so an old worker cannot complete a message
   after its lease expired and another worker reclaimed the item. The runtime
   renews its lease before writing outbox to avoid stale external responses.
+- `ResidentRuntime.run_loop()` is bounded by `max_iterations` and stops on idle
+  or blocked lease. This gives a safe resident worker loop without introducing
+  an unbounded always-on loop into the kernel.
+- Runtime exceptions move inbox items to `retry_wait` until `max_attempts` is
+  reached, then to `dead_letter`. Retry scheduling is local queue metadata, not
+  a scheduler or external transport.
 - Outbox writes are idempotent by inbound `in_reply_to`. If a worker crashes
   after writing the outbox but before completing the inbox item, a later retry
   reuses the existing outbox item instead of creating a duplicate outbound
   response.
 - `needs_user_input` becomes an outbox item with status `pending_user_input`;
   the worker does not fabricate the missing user answer or continue the task.
-- `holo-v3 resident enqueue/run-once/inbox/outbox` provides the local dev/admin
-  surface. This is not a live transport integration.
+- `holo-v3 resident enqueue/run-once/run/inbox/outbox/ack` provides the local
+  dev/admin surface. This is not a live transport integration.
 - Implemented tests live in `tests/test_kernel_v3_phase73_resident_runtime.py`.
 
 ## Phase7.4: Migration, Export, And Trace Hardening
