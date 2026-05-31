@@ -118,6 +118,10 @@ ids; it does not contain raw artifact payloads or raw task bodies. Access
 context is passed through the shared low-sensitive audit sanitizer: known
 operator identifiers are preserved, secret-like keys are omitted, and unknown
 free-form strings are hash-only.
+Durable-memory context injection is clamped by a context-owned limit that is
+smaller than generic memory recall. If a larger limit is requested, the
+durable-memory section records the requested limit, effective limit, cap, and
+clamp flag; recall audit records only the effective context limit.
 auditing is metadata only: it does not approve proposals, commit new memories,
 or let the model write durable state. `memory export <memory_id>` includes
 these recall/access events for the selected item, and memory inspection samples

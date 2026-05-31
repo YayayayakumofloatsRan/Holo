@@ -14,6 +14,9 @@ from kernel_v3.memory import MemoryStore
 from kernel_v3.session import TaskState
 
 
+CONTEXT_DURABLE_MEMORY_LIMIT_CAP = 10
+
+
 @dataclass(frozen=True, kw_only=True)
 class ProjectProfile:
     project_id: str
@@ -75,7 +78,8 @@ class ContextPackCompiler:
         self.redactor = redactor or Redactor(private_path_markers=self.project_profile.redaction_markers)
         self.budget_mode = budget_mode
         self.durable_memory_store = durable_memory_store
-        self.durable_memory_limit = durable_memory_limit
+        self.durable_memory_limit = _clamp_limit(durable_memory_limit, cap=CONTEXT_DURABLE_MEMORY_LIMIT_CAP)
+        self.requested_durable_memory_limit = durable_memory_limit
         self.include_sensitive_memory = include_sensitive_memory
         self.durable_memory_user_id = durable_memory_user_id
 
@@ -148,6 +152,12 @@ class ContextPackCompiler:
                     "scope": durable_memory.get("scope", {}),
                     "total": durable_memory.get("total", 0),
                     "filtered": durable_memory.get("filtered", {}),
+                    "limit": durable_memory.get("limit", self.durable_memory_limit),
+                    **_limit_section_diagnostics(
+                        requested_limit=self.requested_durable_memory_limit,
+                        effective_limit=self.durable_memory_limit,
+                        limit_cap=CONTEXT_DURABLE_MEMORY_LIMIT_CAP,
+                    ),
                 },
             )
         budget_views = {
@@ -415,6 +425,20 @@ def _truncate_json(value, *, limit: int):
     return copied
 
 
+def _clamp_limit(value: int, *, cap: int) -> int:
+    return min(max(0, int(value)), cap)
+
+
+def _limit_section_diagnostics(*, requested_limit: int, effective_limit: int, limit_cap: int) -> JsonObject:
+    if requested_limit == effective_limit:
+        return {}
+    return {
+        "requested_limit": requested_limit,
+        "limit_cap": limit_cap,
+        "limit_clamped": True,
+    }
+
+
 def _truncate_text_values(value, *, limit: int) -> None:
     if isinstance(value, dict):
         for key, item in list(value.items()):
@@ -543,9 +567,9 @@ def _recall_durable_memory(
     step_id: str,
 ) -> JsonObject:
     if store is None or limit <= 0:
-        return {"query": None, "scope": {"thread_id": task.thread_id}, "items": [], "total": 0, "filtered": {}}
+        return {"query": None, "scope": {"thread_id": task.thread_id}, "items": [], "total": 0, "filtered": {}, "limit": 0}
     scope = _durable_memory_recall_scope(task=task, user_id=user_id, project_id=project_id)
-    return store.recall(
+    result = store.recall(
         query=None,
         scope=scope,
         include_sensitive=include_sensitive,
@@ -560,8 +584,11 @@ def _recall_durable_memory(
             "thread_id": task.thread_id,
             "step_id": step_id,
             "rank_query_hash": deterministic_hash({"text": task.input_text}),
+            "durable_memory_limit": max(0, int(limit)),
         },
     ).to_dict()
+    result["limit"] = max(0, int(limit))
+    return result
 
 
 def _durable_memory_recall_scope(*, task: TaskState, user_id: str, project_id: str) -> JsonObject:

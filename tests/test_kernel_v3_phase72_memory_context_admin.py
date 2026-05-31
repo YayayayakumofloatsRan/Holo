@@ -5,6 +5,7 @@ from kernel_v3 import cli
 from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.context import ContextPackCompiler, ProjectProfile
+from kernel_v3.context.compiler import CONTEXT_DURABLE_MEMORY_LIMIT_CAP
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryStore, stable_memory_id
 from kernel_v3.processors.testing import fake_fabric
@@ -104,6 +105,30 @@ def test_phase72_context_ranks_durable_memory_by_task_input():
     assert access_event["payload"]["memory_ids"] == [relevant.memory_id]
     assert "rank_query_hash" in access_event["payload"]["access_context"]
     assert "continue finance research" not in json.dumps(access_event, ensure_ascii=False)
+
+
+def test_phase72_context_durable_memory_limit_is_bounded_and_audited():
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    for index in range(CONTEXT_DURABLE_MEMORY_LIMIT_CAP + 5):
+        store.commit(_memory_item(summary=f"bounded context memory {index}", thread_id="thread-1"))
+
+    requested_limit = CONTEXT_DURABLE_MEMORY_LIMIT_CAP + 99
+    pack = ContextPackCompiler(
+        durable_memory_store=store,
+        durable_memory_limit=requested_limit,
+    ).compile(_task(thread_id="thread-1"), JournalStore.in_memory())
+
+    durable = next(section for section in pack.sections if section["name"] == "durable_memory")
+    access_event = [event for event in store.audit_records() if event["event_type"] == "memory_items_recalled"][-1]
+
+    assert len(durable["items"]) == CONTEXT_DURABLE_MEMORY_LIMIT_CAP
+    assert durable["limit"] == CONTEXT_DURABLE_MEMORY_LIMIT_CAP
+    assert durable["requested_limit"] == requested_limit
+    assert durable["limit_cap"] == CONTEXT_DURABLE_MEMORY_LIMIT_CAP
+    assert durable["limit_clamped"] is True
+    assert access_event["payload"]["limit"] == CONTEXT_DURABLE_MEMORY_LIMIT_CAP
+    assert access_event["payload"]["access_context"]["durable_memory_limit"] == CONTEXT_DURABLE_MEMORY_LIMIT_CAP
+    assert len(access_event["payload"]["memory_ids"]) == CONTEXT_DURABLE_MEMORY_LIMIT_CAP
 
 
 def test_phase72_context_injection_audits_memory_access_without_changing_snapshot_hash():
