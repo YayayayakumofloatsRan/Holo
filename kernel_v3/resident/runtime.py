@@ -54,9 +54,13 @@ class ResidentRuntime:
             queue_status.outbox_counts.get("pending_user_input_delivered", 0)
         )
         schedule_status = self._schedule_status()
+        schedule_failure_reason = _schedule_failure_reason(results, schedule_status)
         if blocked:
             status = "blocked"
             reason = results[-1].reason if results else "blocked"
+        elif schedule_failure_reason is not None:
+            status = "failed"
+            reason = schedule_failure_reason
         elif unresolved_failed_inbox:
             status = "failed"
             reason = "unresolved_failed_inbox"
@@ -467,3 +471,13 @@ def _with_schedule_tick(payload: JsonObject, schedule_tick: JsonObject | None) -
     if schedule_tick is None:
         return payload
     return {**payload, "schedule_tick": schedule_tick}
+
+
+def _schedule_failure_reason(results: list[ResidentRunResult], schedule_status: JsonObject) -> str | None:
+    if schedule_status.get("status") == "failed":
+        return "resident_schedule_status_failed"
+    for result in results:
+        tick = result.payload.get("schedule_tick")
+        if isinstance(tick, dict) and tick.get("status") == "failed":
+            return "resident_schedule_tick_failed"
+    return None

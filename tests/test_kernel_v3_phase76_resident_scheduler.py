@@ -284,6 +284,45 @@ def test_phase76_run_loop_reports_waiting_for_future_schedule(tmp_path: Path):
     assert not queue.inbox_messages()
 
 
+def test_phase76_run_loop_reports_failed_when_schedule_tick_fails(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    scheduler = _FailingTickScheduler()
+
+    loop = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-schedule-tick-failure",
+        journal=journal,
+        scheduler=scheduler,
+    ).run_loop(max_iterations=1)
+
+    assert loop.status == "failed"
+    assert loop.reason == "resident_schedule_tick_failed"
+    assert loop.results[0]["status"] == "idle"
+    assert loop.results[0]["payload"]["schedule_tick"]["status"] == "failed"
+    assert journal.records(kind="resident_schedule_tick_failed")
+    assert journal.records(kind="resident_loop_result")[-1].data["status"] == "failed"
+
+
+def test_phase76_run_loop_reports_failed_when_schedule_status_fails(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    scheduler = _FailingStatusScheduler()
+
+    loop = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-schedule-status-failure",
+        journal=journal,
+        scheduler=scheduler,
+    ).run_loop(max_iterations=1)
+
+    assert loop.status == "failed"
+    assert loop.reason == "resident_schedule_status_failed"
+    assert loop.schedule_status == {"status": "failed", "reason": "RuntimeError"}
+
+
 def test_phase76_cli_run_reports_schedule_status_when_waiting(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -371,3 +410,27 @@ def _clock(start: int = 1_000):
         return current
 
     return tick
+
+
+class _DictResult:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def to_dict(self):
+        return dict(self.payload)
+
+
+class _FailingTickScheduler:
+    def tick(self, *, limit: int = 20):
+        raise RuntimeError("simulated schedule tick failure")
+
+    def status(self):
+        return _DictResult({"active_count": 0, "next_due_at_ms": None})
+
+
+class _FailingStatusScheduler:
+    def tick(self, *, limit: int = 20):
+        return _DictResult({"status": "idle", "due_count": 0, "enqueued_count": 0, "failed_count": 0})
+
+    def status(self):
+        raise RuntimeError("simulated schedule status failure")
