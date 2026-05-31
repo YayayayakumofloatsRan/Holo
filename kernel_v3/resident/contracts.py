@@ -88,6 +88,7 @@ class ResidentLoopResult(Contract):
     reason: str | None
     results: list[JsonObject] = field(default_factory=list)
     queue_status: JsonObject = field(default_factory=dict)
+    schedule_status: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)

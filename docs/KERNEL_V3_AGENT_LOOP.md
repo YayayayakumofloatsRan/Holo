@@ -222,7 +222,11 @@ workers can opt into `resident run --tick-schedules` or `resident run-once
 --tick-schedules`; without that explicit flag, run and run-once preserve normal
 queue-only behavior. `resident status` and `resident inspect` include schedule
 health, including due schedules and unbounded recurring schedules, so operators
-can see whether a resident loop should run with schedule ticking enabled.
+can see whether a resident loop should run with schedule ticking enabled. When
+schedule ticking is enabled and no inbox item is claimable, `resident run`
+reports `waiting_for_schedule` instead of plain `idle` if a future active
+schedule is still pending; the loop result includes `schedule_status` so a
+supervisor can see the next due time.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that

@@ -52,6 +52,7 @@ class ResidentRuntime:
         unresolved_user_input = int(queue_status.outbox_counts.get("pending_user_input", 0)) + int(
             queue_status.outbox_counts.get("pending_user_input_delivered", 0)
         )
+        schedule_status = self._schedule_status()
         if blocked:
             status = "blocked"
             reason = results[-1].reason if results else "blocked"
@@ -67,15 +68,25 @@ class ResidentRuntime:
         elif unresolved_user_input:
             status = "awaiting_user_input"
             reason = "unresolved_pending_user_input"
-        elif results and results[-1].status == "idle":
-            status = "idle" if processed == 0 and failed == 0 else "completed"
-            reason = results[-1].reason
-        elif len(results) >= max_iterations:
-            status = "max_iterations"
-            reason = "max_iterations"
         else:
-            status = "completed"
-            reason = None
+            if (
+                schedule_status
+                and results
+                and results[-1].status == "idle"
+                and int(schedule_status.get("active_count") or 0) > 0
+                and schedule_status.get("next_due_at_ms") is not None
+            ):
+                status = "waiting_for_schedule"
+                reason = "next_schedule_pending"
+            elif results and results[-1].status == "idle":
+                status = "idle" if processed == 0 and failed == 0 else "completed"
+                reason = results[-1].reason
+            elif len(results) >= max_iterations:
+                status = "max_iterations"
+                reason = "max_iterations"
+            else:
+                status = "completed"
+                reason = None
         loop = ResidentLoopResult(
             status=status,
             worker_id=self.worker_id,
@@ -87,11 +98,16 @@ class ResidentRuntime:
             reason=reason,
             results=[item.to_dict() for item in results],
             queue_status=queue_status.to_dict(),
+            schedule_status=schedule_status,
         )
         self._journal_event(
             "resident_loop_result",
             loop.to_dict(),
-            state_delta={"resident_loop_status": loop.status, "resident_loop_iterations": loop.iterations},
+            state_delta={
+                "resident_loop_status": loop.status,
+                "resident_loop_iterations": loop.iterations,
+                "resident_schedule_active_count": schedule_status.get("active_count", 0),
+            },
         )
         return loop
 
@@ -357,6 +373,14 @@ class ResidentRuntime:
                 state_delta={"resident_schedule_tick_status": "failed"},
             )
             return payload
+
+    def _schedule_status(self) -> JsonObject:
+        if self.scheduler is None:
+            return {}
+        try:
+            return self.scheduler.status().to_dict()
+        except Exception as exc:  # pragma: no cover - defensive scheduler containment
+            return {"status": "failed", "reason": type(exc).__name__}
 
     def _journal_event(
         self,

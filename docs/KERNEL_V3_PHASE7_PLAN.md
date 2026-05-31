@@ -359,6 +359,9 @@ Rules:
   AgentRuntime`
 - resident workers only tick schedules when constructed with a scheduler or
   started through CLI with `--tick-schedules`
+- schedule-enabled loop results include `schedule_status`; if no inbox work is
+  claimable but a future active schedule remains, the loop reports
+  `waiting_for_schedule` instead of a misleading completed idle state
 - every schedule add, due enqueue, disable, and tick is journaled
 - enqueue is idempotent by deterministic scheduled message id
 - repeated schedules require a positive interval and bounded `max_runs` unless
@@ -381,6 +384,8 @@ Implementation note:
 - `ResidentScheduler.status()` and `ResidentScheduler.inspect()` report active,
   due, recurring, and unbounded schedule counts plus recommended operator
   actions such as running the resident loop with `--tick-schedules`.
+- `ResidentLoopResult.schedule_status` is empty when no scheduler is attached
+  and populated only for schedule-enabled resident workers.
 - Implemented tests live in
   `tests/test_kernel_v3_phase76_resident_scheduler.py`.
 

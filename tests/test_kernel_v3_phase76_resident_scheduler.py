@@ -256,6 +256,68 @@ def test_phase76_cli_run_can_tick_schedules_before_worker_loop(tmp_path: Path, c
     assert loop["queue_status"]["inbox_counts"]["completed"] == 1
 
 
+def test_phase76_run_loop_reports_waiting_for_future_schedule(tmp_path: Path):
+    clock = _clock(start=70_000)
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
+    journal = JournalStore.in_memory()
+    scheduler = ResidentScheduler(queue=queue, clock_ms=clock, journal=journal)
+    scheduler.add_schedule(
+        schedule_id="sched-future",
+        thread_id="resident-future",
+        text="future resident work",
+        due_in_ms=100,
+    )
+
+    loop = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-waiting-schedule",
+        journal=journal,
+        scheduler=scheduler,
+    ).run_loop(max_iterations=2)
+
+    assert loop.status == "waiting_for_schedule"
+    assert loop.reason == "next_schedule_pending"
+    assert loop.idle_count == 1
+    assert loop.schedule_status["active_count"] == 1
+    assert loop.schedule_status["next_due_at_ms"] == 70101
+    assert not queue.inbox_messages()
+
+
+def test_phase76_cli_run_reports_schedule_status_when_waiting(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    assert (
+        cli.main(
+            [
+                *base,
+                "resident",
+                "schedule-add",
+                "future cli resident work",
+                "--thread",
+                "resident-cli-future",
+                "--schedule-id",
+                "sched-cli-future",
+                "--due-at-ms",
+                "999999999999",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert cli.main([*base, "resident", "run", "--tick-schedules", "--max-iterations", "2"]) == 0
+    loop = json.loads(capsys.readouterr().out)
+
+    assert loop["status"] == "waiting_for_schedule"
+    assert loop["reason"] == "next_schedule_pending"
+    assert loop["schedule_status"]["active_count"] == 1
+    assert loop["schedule_status"]["next_due_at_ms"] == 999999999999
+
+
 def test_phase76_cli_status_and_inspect_include_schedule_health(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
