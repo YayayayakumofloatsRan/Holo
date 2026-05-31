@@ -868,7 +868,16 @@ class ChatRuntime:
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Deleted {args[1]}.")
         if subcommand == "export" and len(args) >= 2:
             try:
-                payload = self.memory_store.export_item(args[1])
+                payload = self.memory_store.export_item(
+                    args[1],
+                    record_access=True,
+                    access_context={
+                        "surface": "chat",
+                        "thread_id": state.thread_id,
+                        "turn_id": turn.turn_id,
+                        "command": "/memory export",
+                    },
+                )
             except (KeyError, ValueError) as exc:
                 return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)

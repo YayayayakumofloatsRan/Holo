@@ -361,7 +361,13 @@ class MemoryStore:
             generated_at_ms=timestamp,
         )
 
-    def export_item(self, memory_id: str) -> JsonObject:
+    def export_item(
+        self,
+        memory_id: str,
+        *,
+        record_access: bool = False,
+        access_context: JsonObject | None = None,
+    ) -> JsonObject:
         item = self._items.get(memory_id)
         if item is None:
             raise KeyError(f"unknown memory_id: {memory_id}")
@@ -371,7 +377,7 @@ class MemoryStore:
             if proposal.proposed_item.get("memory_id") == memory_id
         ]
         tombstone = self._tombstones.get(memory_id)
-        return {
+        export_payload = {
             "memory_id": memory_id,
             "item": item.to_dict(),
             "proposals": proposals,
@@ -382,6 +388,13 @@ class MemoryStore:
                 if _event_mentions_memory(event, memory_id)
             ],
         }
+        if record_access:
+            self._record_export_access(
+                memory_id,
+                included_audit_record_count=len(export_payload["audit_records"]),
+                access_context=access_context,
+            )
+        return export_payload
 
     def index_items(self) -> list[JsonObject]:
         if self.index_path is None:
@@ -501,6 +514,22 @@ class MemoryStore:
             if previous > accessed_at_ms:
                 continue
             self._items[memory_id] = replace(item, last_accessed_ms=accessed_at_ms)
+
+    def _record_export_access(
+        self,
+        memory_id: str,
+        *,
+        included_audit_record_count: int,
+        access_context: JsonObject | None,
+    ) -> None:
+        payload = {
+            "memory_id": memory_id,
+            "exported_at_ms": self._now_ms(),
+            "included_audit_record_count": included_audit_record_count,
+            "access_context": _safe_metadata(dict(access_context or {})),
+            "redaction": {"export_payload": "not_embedded"},
+        }
+        self._append_event("memory_item_exported", payload)
 
     def _append_event(self, event_type: str, payload: JsonObject) -> None:
         event = {

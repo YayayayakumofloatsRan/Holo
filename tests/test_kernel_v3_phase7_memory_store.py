@@ -106,6 +106,34 @@ def test_phase7_memory_export_includes_recall_access_for_that_item_only():
     assert first_export["item"]["last_accessed_ms"] == 1200
 
 
+def test_phase7_memory_export_can_audit_access_without_embedding_export_payload():
+    store = MemoryStore.in_memory(clock_ms=_sequence_clock([1000, 1100, 1200, 1300, 1400]))
+    item = _memory_item(summary="User prefers concise Chinese answers.", body="full body is returned only in the export payload")
+    store.commit(item)
+
+    first_export = store.export_item(
+        item.memory_id,
+        record_access=True,
+        access_context={"surface": "cli", "raw_body": "RAW_EXPORT_SECRET", "api_key": "sk_12345678901234567890"},
+    )
+    second_export = store.export_item(item.memory_id, record_access=True, access_context={"surface": "chat"})
+
+    export_event = store.audit_records()[-2]
+    assert first_export["item"]["body"] == "full body is returned only in the export payload"
+    assert "memory_item_exported" not in [event["event_type"] for event in first_export["audit_records"]]
+    assert "memory_item_exported" in [event["event_type"] for event in second_export["audit_records"]]
+    assert export_event["event_type"] == "memory_item_exported"
+    assert export_event["payload"]["memory_id"] == item.memory_id
+    assert export_event["payload"]["included_audit_record_count"] == 1
+    assert export_event["payload"]["redaction"] == {"export_payload": "not_embedded"}
+    assert export_event["payload"]["access_context"]["raw_body"] == "[omitted]"
+    assert export_event["payload"]["access_context"]["api_key"] == "[omitted]"
+    dumped = json.dumps(store.audit_records(), ensure_ascii=False)
+    assert "RAW_EXPORT_SECRET" not in dumped
+    assert "sk_12345678901234567890" not in dumped
+    assert "full body is returned only in the export payload" not in json.dumps(export_event, ensure_ascii=False)
+
+
 def test_phase7_memory_store_rebuilds_index_and_state_from_append_only_log(tmp_path):
     log_path = tmp_path / "memory_log.jsonl"
     index_path = tmp_path / "memory_index.sqlite3"

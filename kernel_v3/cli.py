@@ -870,7 +870,16 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
             return _memory_command_failure(journal, command=command, target_id=args.memory_id, error=_exception_reason(exc))
     if command == "export":
         try:
-            return {"status": "ok", "export": store.export_item(args.memory_id)}
+            export = store.export_item(
+                args.memory_id,
+                record_access=True,
+                access_context={
+                    "surface": "cli",
+                    "command": "memory export",
+                    "target_id": args.memory_id,
+                },
+            )
+            return {"status": "ok", "export": export}
         except (KeyError, ValueError) as exc:
             return _memory_command_failure(journal, command=command, target_id=args.memory_id, error=_exception_reason(exc))
     if command == "migrate-semantic":

@@ -189,14 +189,20 @@ def test_phase72_chat_memory_admin_approves_and_lists_pending_proposal():
     approved = chat.receive(f"/memory approve {proposal_id}", thread_id="thread-memory")
     memory_list = chat.receive("/memory list", thread_id="thread-memory")
     memory_id = store.recall(query="中文", scope={"thread_id": "thread-memory"}).items[0]["memory_id"]
+    exported = chat.receive(f"/memory export {memory_id}", thread_id="thread-memory")
     deleted = chat.receive(f"/memory delete {memory_id} test-delete", thread_id="thread-memory")
 
     assert first.status == "needs_user_input"
     assert listed.status == "completed"
     assert proposal_id in listed.answer
     assert approved.status == "completed"
+    assert exported.status == "completed"
     assert deleted.status == "completed"
     assert "中文" in memory_list.answer
+    export_events = [event for event in store.audit_records() if event["event_type"] == "memory_item_exported"]
+    assert export_events[-1]["payload"]["memory_id"] == memory_id
+    assert export_events[-1]["payload"]["access_context"]["surface"] == "chat"
+    assert export_events[-1]["payload"]["access_context"]["thread_id"] == "thread-memory"
     assert store.recall(query="中文", scope={"thread_id": "thread-memory"}).total == 0
     delete_records = journal.records(kind="memory_item_deleted")
     assert delete_records[-1].data["memory_id"] == memory_id
@@ -246,6 +252,18 @@ def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
     assert cli.main([*base, "memory", "list", "--thread", "cli-thread"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["result"]["total"] == 1
+
+    assert cli.main([*base, "memory", "export", memory_id]) == 0
+    exported = json.loads(capsys.readouterr().out)
+    assert exported["export"]["memory_id"] == memory_id
+    export_events = [
+        event
+        for event in MemoryStore(memory_log, index_path=memory_index).audit_records()
+        if event["event_type"] == "memory_item_exported"
+    ]
+    assert export_events[-1]["payload"]["memory_id"] == memory_id
+    assert export_events[-1]["payload"]["access_context"]["surface"] == "cli"
+    assert export_events[-1]["payload"]["redaction"] == {"export_payload": "not_embedded"}
 
     assert cli.main([*base, "memory", "delete", memory_id, "--reason", "test"]) == 0
     capsys.readouterr()

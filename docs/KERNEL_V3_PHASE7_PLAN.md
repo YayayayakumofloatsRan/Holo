@@ -339,6 +339,9 @@ runs:
   source semantic-intake record ref.
 - `MemoryStore.export_item()` returns the committed item, linked proposals,
   tombstone if present, and matching append-only audit records.
+- Explicit export surfaces also append a low-sensitive `memory_item_exported`
+  audit event with memory id, access surface, and redaction metadata; the export
+  payload itself is not embedded into that audit event.
 - `TraceRenderer.render_memory_trace()` and `holo-v3 memory-trace <task_id>`
   expose memory proposal, approval, migration, rejection, and deletion events in
   task trace output.
