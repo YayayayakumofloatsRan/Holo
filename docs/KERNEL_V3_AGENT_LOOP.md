@@ -44,6 +44,26 @@ This is the anti-table path for compound and open-ended requests. The fake
 semantic fallback stays conservative, while model mode can propose broad task
 structure through JSON and the host validates it before anything runs.
 
+## Plan Review Commands
+
+`ChatRuntime` exposes `/plan` as a host-owned review surface for the latest
+`semantic_task_plan` in the thread:
+
+- `/plan` or `/plan show` renders the latest model-proposed, host-validated
+  plan;
+- `/plan reject [plan_id] [reason]` journals a
+  `semantic_task_plan_decision` and does not execute anything;
+- `/plan approve [plan_id]` journals approval and runs only the first safe
+  executable step through `AgentRuntime`.
+
+Approval is deliberately narrow. It does not execute an arbitrary model graph
+and it does not bypass `LoopControllerV3`. The selected step must be ready or
+waiting for confirmation, use only safe read/respond/ask-user capabilities, and
+then it is re-entered through the normal recipe, planner, PolicyGate, registry,
+workloop, and finalization path. Blocked capabilities such as shell execution,
+workspace writes, live transports, network fetches, and durable-memory writes
+remain non-executable in this path.
+
 ## Stop Semantics
 
 The agent stops when one of these host-visible conditions is reached:

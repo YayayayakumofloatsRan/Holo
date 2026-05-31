@@ -1,5 +1,6 @@
 from kernel_v3.agent import AgentRuntime, build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.contracts import SemanticIntake, TaskGraphProposal
+from kernel_v3.chat import ChatRuntime
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 
@@ -223,3 +224,144 @@ def test_phase81_boundary_only_fallback_still_gets_direct_graph():
     assert validation.selected_mode == "direct_answer"
     assert plan.status == "ready"
     assert plan.approval_required is False
+
+
+def test_phase81_chat_plan_show_lists_latest_model_task_plan():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+
+    initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-show")
+    shown = chat.receive("/plan", thread_id="thread-plan-show")
+
+    assert initial.status == "needs_user_input"
+    assert shown.route == "command"
+    assert shown.status == "completed"
+    assert shown.command_result is not None
+    assert shown.command_result["result"]["plan_id"] == "plan-task-graph-1"
+    assert "plan=plan-task-graph-1" in (shown.answer or "")
+    assert "retrieval.run" in (shown.answer or "")
+    assert "workspace:write" in (shown.answer or "")
+
+
+def test_phase81_chat_plan_approve_executes_first_safe_step_only():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+
+    initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-approve")
+    approved = chat.receive("/plan approve", thread_id="thread-plan-approve")
+
+    assert initial.status == "needs_user_input"
+    assert approved.route == "command"
+    assert approved.status == "completed"
+    assert approved.command_result is not None
+    assert approved.command_result["started_new_task"] is True
+    assert approved.command_result["executed_step_id"] == "plan-step-1"
+    assert approved.command_result["spawned_task_id"] != initial.task_id
+    decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert decisions[-1].data["decision"] == "approved"
+    assert decisions[-1].data["executed_step"]["tool_name"] == "retrieval.run"
+    assert decisions[-1].data["spawned_task_id"] == approved.command_result["spawned_task_id"]
+    assert journal.records(task_id=approved.command_result["spawned_task_id"], kind="retrieval_report")
+    tool_calls = [record.data.get("name") for record in journal.records(kind="tool_call")]
+    assert "workspace.write" not in tool_calls
+
+    repeated = chat.receive("/plan approve", thread_id="thread-plan-approve")
+    assert repeated.status == "failed"
+    assert repeated.command_result is not None
+    assert repeated.command_result["result"]["reason"] == "no_safe_executable_step"
+    assert len(journal.records(task_id=approved.command_result["spawned_task_id"], kind="retrieval_report")) == 1
+
+
+def test_phase81_chat_plan_approve_blocks_plan_without_safe_executable_step():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _shell_only_intake())
+
+    initial = chat.receive("unsafe execution task", thread_id="thread-plan-blocked")
+    approved = chat.receive("/plan approve", thread_id="thread-plan-blocked")
+
+    assert initial.status == "needs_user_input"
+    assert approved.route == "command"
+    assert approved.status == "failed"
+    assert approved.command_result is not None
+    assert approved.command_result["result"]["reason"] == "no_safe_executable_step"
+    decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert decisions[-1].data["decision"] == "blocked"
+    assert not journal.records(kind="tool_call")
+
+
+def test_phase81_chat_plan_reject_journals_decision_without_execution():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+
+    initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-reject")
+    rejected = chat.receive("/plan reject plan-task-graph-1 too broad", thread_id="thread-plan-reject")
+
+    assert initial.status == "needs_user_input"
+    assert rejected.status == "completed"
+    decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert decisions[-1].data["decision"] == "rejected"
+    assert decisions[-1].data["reason"] == "too broad"
+    assert not journal.records(kind="tool_call")
+
+
+def _chat_with_semantic_plan(journal: JournalStore, response: dict) -> ChatRuntime:
+    fabric = fake_fabric({"semantic.intake": response}, journal=journal)
+    agent = AgentRuntime(journal=journal, processor_fabric=fabric)
+    return ChatRuntime(journal=journal, agent_runtime=agent, semantic_mode="model")
+
+
+def _compound_research_write_intake() -> dict:
+    return {
+        "primary_intent": "retrieval_research",
+        "suggested_mode": "clarify_first",
+        "compound": True,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "retrieval_research",
+                "text": "research a current API surface",
+                "sequence_index": 1,
+                "required_capabilities": ["retrieval.run"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "workspace_write",
+                "text": "write a local report after the research",
+                "sequence_index": 2,
+                "required_capabilities": ["workspace:write"],
+                "risk": "write",
+                "status": "needs_permission",
+                "metadata": {},
+            },
+        ],
+        "blocked_capabilities": ["workspace:write"],
+        "warnings": ["model_detected_compound_task"],
+        "response_hint": None,
+        "clarification_question": "Confirm the ordered plan and write permission.",
+    }
+
+
+def _shell_only_intake() -> dict:
+    return {
+        "primary_intent": "direct_answer",
+        "suggested_mode": "direct_answer",
+        "compound": False,
+        "requires_clarification": False,
+        "intents": [
+            {
+                "kind": "direct_answer",
+                "text": "execute a machine command",
+                "sequence_index": 1,
+                "required_capabilities": ["shell:exec"],
+                "risk": "shell",
+                "status": "blocked",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": [],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }

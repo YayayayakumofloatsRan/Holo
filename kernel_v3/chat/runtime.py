@@ -20,6 +20,10 @@ from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.trace import TraceRenderer
 
 
+_PLAN_SAFE_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
+_PLAN_ALLOWED_MODES = {"direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}
+
+
 class ChatRuntime:
     def __init__(
         self,
@@ -306,14 +310,158 @@ class ChatRuntime:
             summary = self._append_thread_summary(state.thread_id)
             command = self._append_command(turn, name=name, args=args, status="ok", result=summary.to_dict())
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_summary_text(summary), summary=summary)
+        if name == "/plan":
+            return self._execute_plan_command(args=args, state=state, turn=turn, decision=decision)
         if name == "/memory":
             return self._execute_memory_command(args=args, state=state, turn=turn, decision=decision)
         if name == "/help":
-            result = {"commands": ["/status", "/trace", "/summary", "/tasks", "/memory", "/cancel", "/new", "/help"]}
+            result = {"commands": ["/status", "/trace", "/summary", "/tasks", "/plan", "/memory", "/cancel", "/new", "/help"]}
             command = self._append_command(turn, name=name, args=args, status="ok", result=result)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=", ".join(result["commands"]))
         command = self._append_command(turn, name=name, args=args, status="unknown", result={"error": "unknown_command"})
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="Unknown command.")
+
+    def _execute_plan_command(
+        self,
+        *,
+        args: list[str],
+        state: ThreadState,
+        turn: ChatTurn,
+        decision: TurnRoutingDecision,
+    ) -> ChatRuntimeResult:
+        subcommand = args[0].lower() if args else "show"
+        plan_record = _latest_task_plan_record(self.journal, state.thread_id, task_id=state.active_task_id)
+        if plan_record is None:
+            result = {"error": "no_task_plan", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]"}
+            command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+            return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No task plan for this thread.")
+        plan = dict(plan_record.data)
+        plan_id = str(plan.get("plan_id") or "")
+        requested_plan_id = args[1] if len(args) >= 2 else plan_id
+        if subcommand in {"show", "status"}:
+            result = {
+                "plan_id": plan_id,
+                "task_id": plan_record.task_id,
+                "run_id": plan_record.run_id,
+                "plan": plan,
+            }
+            command = self._append_command(turn, name="/plan", args=args, status="ok", result=result)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_task_plan_text(plan))
+        if subcommand == "reject":
+            if requested_plan_id != plan_id:
+                result = {"error": "plan_not_found", "requested_plan_id": requested_plan_id, "latest_plan_id": plan_id}
+                command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+                return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No matching task plan.")
+            reason = " ".join(args[2:]) or "user_rejected"
+            decision_record = self._append_plan_decision(
+                turn,
+                plan_record=plan_record,
+                plan=plan,
+                decision="rejected",
+                reason=reason,
+                step=None,
+                agent_result=None,
+            )
+            result = {"plan_id": plan_id, "decision": "rejected", "reason": reason, "decision_ref": decision_record.record_id}
+            command = self._append_command(turn, name="/plan", args=args, status="ok", result=result)
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Rejected plan {plan_id}.")
+        if subcommand == "approve":
+            if requested_plan_id != plan_id:
+                result = {"error": "plan_not_found", "requested_plan_id": requested_plan_id, "latest_plan_id": plan_id}
+                command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+                return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No matching task plan.")
+            step = _next_executable_plan_step(self.journal, plan, plan_ref=plan_record.record_id)
+            if step is None:
+                decision_record = self._append_plan_decision(
+                    turn,
+                    plan_record=plan_record,
+                    plan=plan,
+                    decision="blocked",
+                    reason="no_safe_executable_step",
+                    step=None,
+                    agent_result=None,
+                )
+                result = {
+                    "plan_id": plan_id,
+                    "decision": "blocked",
+                    "reason": "no_safe_executable_step",
+                    "decision_ref": decision_record.record_id,
+                }
+                command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+                return self._command_result(
+                    turn=turn,
+                    decision=decision,
+                    status="failed",
+                    command=command,
+                    answer="No safe executable step is available in the latest task plan.",
+                )
+            agent_result = self.agent_runtime.run(
+                str(step.get("goal") or plan.get("goal") or ""),
+                thread_id=state.thread_id,
+                mode=_plan_step_mode(step),
+                planner_mode=self.planner_mode,
+                evaluator_mode=self.evaluator_mode,
+                synthesizer_mode=self.synthesizer_mode,
+                semantic_mode="fake",
+                citations_required=_plan_step_citations_required(step),
+            )
+            decision_record = self._append_plan_decision(
+                turn,
+                plan_record=plan_record,
+                plan=plan,
+                decision="approved",
+                reason="executed_first_safe_step",
+                step=step,
+                agent_result=agent_result,
+            )
+            command_result = {
+                "started_new_task": True,
+                "plan_id": plan_id,
+                "decision": "approved",
+                "decision_ref": decision_record.record_id,
+                "executed_step_id": step.get("step_id"),
+                "executed_node_id": step.get("node_id"),
+                "spawned_task_id": agent_result.task_id,
+                "spawned_run_id": agent_result.run_id,
+            }
+            command = self._append_command(turn, name="/plan", args=args, status="ok", result=command_result)
+            result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
+            return _replace_command_result(result, command.result)
+        result = {"error": "invalid_plan_command", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]"}
+        command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+        return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
+
+    def _append_plan_decision(
+        self,
+        turn: ChatTurn,
+        *,
+        plan_record: LedgerRecord,
+        plan: JsonObject,
+        decision: str,
+        reason: str,
+        step: JsonObject | None,
+        agent_result: AgentRuntimeResult | None,
+    ) -> LedgerRecord:
+        data: JsonObject = {
+            "thread_id": turn.thread_id,
+            "turn_id": turn.turn_id,
+            "plan_ref": plan_record.record_id,
+            "plan_id": str(plan.get("plan_id") or ""),
+            "decision": decision,
+            "reason": reason,
+            "executed_step": dict(step) if step is not None else None,
+            "spawned_task_id": agent_result.task_id if agent_result is not None else None,
+            "spawned_run_id": agent_result.run_id if agent_result is not None else None,
+            "spawned_status": agent_result.status if agent_result is not None else None,
+        }
+        return self.journal.append(
+            task_id=plan_record.task_id,
+            run_id=plan_record.run_id,
+            step_id=None,
+            kind="semantic_task_plan_decision",
+            data=data,
+            state_delta={"thread_id": turn.thread_id, "task_plan_decision": decision},
+        )
 
     def _execute_memory_command(
         self,
@@ -523,6 +671,130 @@ def _replace_command_result(result: ChatRuntimeResult, command_result: JsonObjec
         summary=result.summary,
         trace_refs=result.trace_refs,
     )
+
+
+def _latest_task_plan_record(journal: JournalStore, thread_id: str, *, task_id: str | None) -> LedgerRecord | None:
+    task_ids = {task_id} if task_id else _thread_task_ids(journal, thread_id)
+    records = [
+        record
+        for record in journal.records(kind="semantic_task_plan")
+        if record.task_id in task_ids
+    ]
+    if task_id is None:
+        approval_records = [record for record in records if record.data.get("approval_required") is True]
+        if approval_records:
+            return approval_records[-1]
+    return records[-1] if records else None
+
+
+def _task_plan_text(plan: JsonObject) -> str:
+    lines = [
+        f"plan={plan.get('plan_id') or 'unknown'} status={plan.get('status') or 'unknown'} "
+        f"approval_required={bool(plan.get('approval_required'))}"
+    ]
+    prompt = plan.get("confirmation_prompt")
+    if isinstance(prompt, str) and prompt.strip():
+        lines.append(f"prompt={prompt}")
+    steps = plan.get("steps")
+    if isinstance(steps, list):
+        for raw_step in steps:
+            if not isinstance(raw_step, dict):
+                continue
+            lines.append(
+                " ".join(
+                    [
+                        f"{raw_step.get('step_id') or '?'}:",
+                        str(raw_step.get("status") or "unknown"),
+                        str(raw_step.get("kind") or "step"),
+                        f"mode={raw_step.get('mode') or 'unknown'}",
+                        f"tool={raw_step.get('tool_name') or 'none'}",
+                        f"approval_required={bool(raw_step.get('approval_required'))}",
+                    ]
+                )
+            )
+            goal = raw_step.get("goal")
+            if isinstance(goal, str) and goal.strip():
+                lines.append(f"  goal={_preview(goal, limit=180)}")
+            capabilities = raw_step.get("required_capabilities")
+            if isinstance(capabilities, list) and capabilities:
+                lines.append("  capabilities=" + ", ".join(str(item) for item in capabilities))
+    return "\n".join(lines)
+
+
+def _next_executable_plan_step(journal: JournalStore, plan: JsonObject, *, plan_ref: str) -> JsonObject | None:
+    steps_value = plan.get("steps")
+    if not isinstance(steps_value, list):
+        return None
+    steps = [dict(step) for step in steps_value if isinstance(step, dict)]
+    executed_node_ids = _executed_plan_node_ids(journal, plan_ref)
+    blocked_nodes = {
+        str(step.get("node_id"))
+        for step in steps
+        if str(step.get("status") or "") in {"blocked", "invalid"} and step.get("node_id") is not None
+    }
+    for step in sorted(steps, key=_step_sequence_index):
+        node_id = str(step.get("node_id") or "")
+        if node_id and node_id in executed_node_ids:
+            continue
+        if not _is_safe_plan_step(step):
+            continue
+        dependencies = _string_values(step.get("depends_on"))
+        if any(dependency in blocked_nodes for dependency in dependencies):
+            continue
+        if dependencies and not all(dependency in executed_node_ids for dependency in dependencies):
+            continue
+        return step
+    return None
+
+
+def _executed_plan_node_ids(journal: JournalStore, plan_ref: str) -> set[str]:
+    executed: set[str] = set()
+    for record in journal.records(kind="semantic_task_plan_decision"):
+        if record.data.get("plan_ref") != plan_ref or record.data.get("decision") != "approved":
+            continue
+        step = record.data.get("executed_step")
+        if isinstance(step, dict) and isinstance(step.get("node_id"), str):
+            executed.add(str(step["node_id"]))
+    return executed
+
+
+def _is_safe_plan_step(step: JsonObject) -> bool:
+    status = str(step.get("status") or "")
+    if status not in {"ready", "needs_confirmation"}:
+        return False
+    action_kind = str(step.get("action_kind") or "")
+    if action_kind not in {"tool", "respond", "ask_user"}:
+        return False
+    mode = _plan_step_mode(step)
+    if mode not in _PLAN_ALLOWED_MODES:
+        return False
+    return _safe_plan_capabilities(step)
+
+
+def _safe_plan_capabilities(step: JsonObject) -> bool:
+    capabilities = _string_values(step.get("required_capabilities"))
+    return all(capability in _PLAN_SAFE_CAPABILITIES for capability in capabilities)
+
+
+def _plan_step_mode(step: JsonObject) -> str:
+    mode = str(step.get("mode") or "")
+    return mode if mode in _PLAN_ALLOWED_MODES else "direct_answer"
+
+
+def _plan_step_citations_required(step: JsonObject) -> bool | None:
+    value = step.get("citations_required")
+    return value if isinstance(value, bool) else None
+
+
+def _step_sequence_index(step: JsonObject) -> int:
+    value = step.get("sequence_index")
+    return value if isinstance(value, int) else 1_000_000
+
+
+def _string_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
 
 
 def _pending_for_task(journal: JournalStore, *, thread_id: str, task_id: str, run_id: str) -> PendingUserInput:
