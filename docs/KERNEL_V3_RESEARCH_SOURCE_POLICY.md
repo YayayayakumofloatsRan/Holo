@@ -181,10 +181,32 @@ wrap a regulator, exchange, vendor, or local gateway endpoint behind this
 surface while still letting the retrieval operator apply the same source
 authority policy, corpus indexing, artifact storage, and citation rules.
 
+Live HTTP retrieval configuration is centralized in `LiveRetrievalConfig` and
+read from environment variables only:
+
+```text
+HOLO_V3_LIVE_RETRIEVAL=1
+HOLO_V3_LIVE_SEARCH_ENDPOINT=https://...
+HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api.example.com
+HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=docs.example.com,static.example.com
+HOLO_V3_LIVE_SEARCH_API_KEY_ENV=DEEPSEEK_API_KEY
+HOLO_V3_LIVE_SEARCH_API_KEY_HEADER=Authorization
+HOLO_V3_LIVE_SEARCH_API_KEY_PREFIX="Bearer "
+HOLO_V3_LIVE_SEARCH_RESULTS_PATH=results
+HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS=20
+HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES=1000000
+```
+
+`HOLO_V3_LIVE_RETRIEVAL=1` is the enable gate. Without it, the configured
+provider can still be inspected but reports `default_enabled=false`. API key
+values are read only by the provider at call time, and provider inspection
+reports only booleans, host hashes, counts, and bounds.
+
 Provider inspection is also available before a run starts:
 
 ```bash
 holo-v3 retrieval-providers --profile finance_fundamentals
+holo-v3 retrieval-providers --mode live-http --profile finance_fundamentals
 holo-v3 \
   --artifact-log .state/kernel_v3/artifacts.jsonl \
   --corpus-log .state/kernel_v3/corpus.jsonl \

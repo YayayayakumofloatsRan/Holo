@@ -19,6 +19,7 @@ from kernel_v3.retrieval.composite import FallbackSearchProvider, RoutingFetchPr
 from kernel_v3.retrieval.corpus_provider import CorpusFetchProvider, CorpusSearchProvider
 from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportResponse, JsonHttpSearchProvider
 from kernel_v3.retrieval.inspection import inspect_retrieval_providers
+from kernel_v3.retrieval.live_config import LiveHttpFetchConfig, LiveJsonHttpSearchConfig, LiveRetrievalConfig
 from kernel_v3.retrieval.operator import RetrievalOperator, register_retrieval_tool
 from kernel_v3.retrieval.providers import FakeFetchProvider, FakeSearchProvider, FetchResponse, provider_capability
 
@@ -38,6 +39,9 @@ __all__ = [
     "HttpFetchProvider",
     "HttpTransportResponse",
     "JsonHttpSearchProvider",
+    "LiveHttpFetchConfig",
+    "LiveJsonHttpSearchConfig",
+    "LiveRetrievalConfig",
     "QueryPlan",
     "RankedSource",
     "RankSources",

@@ -36,6 +36,7 @@ from kernel_v3.retrieval import (
     FakeFetchProvider,
     FakeSearchProvider,
     FallbackSearchProvider,
+    LiveRetrievalConfig,
     RetrievalOperator,
     RoutingFetchProvider,
     SearchGoal,
@@ -229,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("--from-corpus", action="store_true")
 
     retrieval_providers_parser = sub.add_parser("retrieval-providers")
-    retrieval_providers_parser.add_argument("--mode", choices=["default", "fake", "corpus"], default="default")
+    retrieval_providers_parser.add_argument("--mode", choices=["default", "fake", "corpus", "live-http"], default="default")
     retrieval_providers_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
 
     corpus_parser = sub.add_parser("corpus")
@@ -481,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "retrieval-providers":
         payload = _retrieval_provider_command(args)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 0 if payload.get("status") not in {"failed", "error"} else 1
+        return 0 if payload.get("status") not in {"failed", "error", "blocked"} else 1
 
     if args.command == "corpus":
         payload = _corpus_command(args)
@@ -1234,6 +1235,27 @@ def _live_processor_fabric(
 
 
 def _retrieval_provider_command(args) -> dict[str, object]:
+    if args.mode == "live-http":
+        config = LiveRetrievalConfig.from_env()
+        if not config.search.configured:
+            return {
+                "status": "blocked",
+                "mode": "live-http",
+                "reason": "live_search_endpoint_not_configured",
+                "network_access": False,
+                "provider_capabilities": [],
+                "live_config": config.safe_diagnostics(),
+            }
+        operator = config.build_operator()
+        inspection = inspect_retrieval_providers(operator, research_profile_id=args.profile)
+        return {
+            "status": inspection.status,
+            "mode": "live-http",
+            "network_access": inspection.network_access,
+            "provider_capabilities": inspection.provider_capabilities,
+            "inspection": inspection.to_dict(),
+            "live_config": config.safe_diagnostics(),
+        }
     operator, mode = _retrieval_operator_for_mode(args.mode, args)
     inspection = inspect_retrieval_providers(operator, research_profile_id=args.profile)
     return {
