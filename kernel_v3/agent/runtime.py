@@ -739,11 +739,6 @@ def _select_mode(goal: str, mode: str) -> str:
         if normalized not in {"direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}:
             raise ValueError(f"unsupported agent mode: {mode}")
         return normalized
-    lowered = goal.lower()
-    if any(marker in lowered for marker in ("search", "retrieve", "web", "internet", "检索", "上网", "搜索")):
-        return "retrieval_answer"
-    if any(marker in lowered for marker in ("file", "readme", ".py", ".md", ".json", "workspace", "文件", "代码", "目录")):
-        return "workspace_answer"
     if not goal.strip() or goal.strip() in {"?", "？", ".", "。"}:
         return "clarify_first"
     return "direct_answer"

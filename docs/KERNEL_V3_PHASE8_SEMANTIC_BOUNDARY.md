@@ -29,3 +29,25 @@ fallback that asks for model, retrieval, or workspace grounding.
 
 This keeps future Phase8 work pointed at richer processor contracts and
 scenario-level evaluation, rather than expanding regex lists.
+
+## Iteration 2026-05-31
+
+The offline `fake` semantic fallback was narrowed after review:
+
+- removed fallback classification for retrieval, role/persona, jokes,
+  synthesis, and compound task decomposition;
+- removed connector-based segmentation of multi-step user text from the fake
+  path;
+- kept host-owned boundary checks for private reasoning, shell execution, live
+  transport control, explicit durable-memory writes, local workspace writes,
+  and missing file targets;
+- kept chat phrase checks only for command-like thread routing such as
+  continue/resume and summary requests;
+- changed tests so open-ended semantics are driven by `semantic.intake` JSON
+  from a provider, not by known user examples.
+
+This means `holo-v3 agent ... --mode auto` in offline fake mode is deliberately
+conservative. Broad intent understanding requires `semantic-intake=model`
+with a configured processor fabric, while explicit `--mode retrieval` or
+`--mode workspace` still exercises those deterministic recipes without asking
+the fake semantic layer to infer intent.

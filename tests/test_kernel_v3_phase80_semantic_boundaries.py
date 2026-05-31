@@ -142,3 +142,18 @@ def test_phase80_non_capability_questions_stay_model_or_fallback_owned():
     assert intake.primary_intent == "direct_answer"
     assert intake.blocked_capabilities == []
     assert intake.response_hint is None
+
+
+def test_phase80_fake_intake_does_not_keyword_route_open_semantics():
+    probes = [
+        "research a current product page",
+        "act as a user-defined assistant",
+        "tell a math joke",
+        "summarize and compare these ideas",
+    ]
+
+    for text in probes:
+        intake = analyze_goal(text)
+        assert intake.primary_intent == "direct_answer"
+        assert intake.suggested_mode == "direct_answer"
+        assert intake.blocked_capabilities == []

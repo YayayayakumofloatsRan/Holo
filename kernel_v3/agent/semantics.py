@@ -11,12 +11,6 @@ from kernel_v3.processors.contracts import SEMANTIC_INTAKE_PROMPT_CONTRACT, SEMA
 from kernel_v3.processors.fabric import ProcessorFabric
 
 
-_SEGMENT_PATTERN = re.compile(
-    r"(?:然后|最后|接着|并且|同时|after that|finally|then|再(?=去|把|帮|写|搜|检索|搜索|读|读取|查看|讲|扮演|作为)|[，,；;])",
-    re.IGNORECASE,
-)
-_LEADING_SEQUENCE_PATTERN = re.compile(r"^\s*(?:先|first(?:ly)?|1[.)、]?)\s*", re.IGNORECASE)
-
 _NOOP_PATTERN = re.compile(
     r"(?:什么都)?(?:不要|别|不用|无需)\s*(?:做|执行|操作|运行|调用|写|改)|(?:do\s+nothing|don't\s+(?:do|run|execute|write|change))",
     re.IGNORECASE,
@@ -33,15 +27,10 @@ _SHELL_EXEC_PATTERN = re.compile(
     r"(?:shell|bash|powershell|cmd\.exe|终端|命令行|执行命令|运行命令|run\s+(?:a\s+)?(?:shell\s+)?command|rm\s+-rf|sudo\b|chmod\b|curl\s+|wget\s+)",
     re.IGNORECASE,
 )
-_ROLE_PATTERN = re.compile(
-    r"(?:扮演|饰演|充当|作为|以.+?身份|act\s+as|roleplay\s+as|pretend\s+to\s+be)\s*(?P<role>[^，,。.;；]*)",
-    re.IGNORECASE,
-)
 _CONTROL_PATTERN = re.compile(r"(?:接管|控制|托管|登录|发送|代发|自动操作|control|take\s+over|login|send|operate)", re.IGNORECASE)
-_RETRIEVAL_PATTERN = re.compile(r"(?:搜索|搜一下|检索|上网|联网查|调研|research|search|retrieve|look\s+up|browse)", re.IGNORECASE)
-_WORKSPACE_READ_PATTERN = re.compile(
-    r"(?:读|读取|查看|检查|打开|分析).*(?:文件|代码|目录|workspace|readme|\.py|\.md|\.json)|"
-    r"(?:read|open|inspect|check).*(?:file|workspace|readme|\.py|\.md|\.json)",
+_FILE_TARGET_PATTERN = re.compile(r"\b\S+\.(?:md|txt|py|json|toml|ya?ml)\b", re.IGNORECASE)
+_AMBIGUOUS_FILE_REQUEST_PATTERN = re.compile(
+    r"(?:读|读取|查看|检查|打开|分析).*(?:文件|代码|目录)|(?:read|open|inspect|check).*(?:file|workspace|readme)",
     re.IGNORECASE,
 )
 _WORKSPACE_WRITE_PATTERN = re.compile(
@@ -50,8 +39,6 @@ _WORKSPACE_WRITE_PATTERN = re.compile(
     r"(?:write|save|generate).*(?:file|local|report|workspace)",
     re.IGNORECASE,
 )
-_JOKE_PATTERN = re.compile(r"(?:笑话|joke)", re.IGNORECASE)
-_SYNTHESIS_PATTERN = re.compile(r"(?:总结|归纳|扩展|比较|分析|思路|synthesize|summari[sz]e|compare|analy[sz]e)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -111,9 +98,7 @@ _SAFE_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspa
 
 def analyze_goal(goal: str) -> SemanticIntake:
     text = goal.strip()
-    intents = _classify_segments(_segments(text))
-    if not intents:
-        intents = [_clarification_intent("")]
+    intents = _classify_goal(text)
     compound = _is_compound(text, intents)
     blocked = _blocked_capabilities(intents)
     warnings = _warnings(intents, compound=compound)
@@ -240,31 +225,71 @@ def _intake_from_model(goal: str, data: JsonObject, *, fallback: SemanticIntake)
     )
 
 
-def _segments(text: str) -> list[str]:
-    normalized = _LEADING_SEQUENCE_PATTERN.sub("", text.strip())
-    if not normalized:
-        return []
-    return [part.strip() for part in _SEGMENT_PATTERN.split(normalized) if part.strip()]
-
-
-def _classify_segments(segments: list[str]) -> list[TaskIntent]:
+def _classify_goal(text: str) -> list[TaskIntent]:
+    if not text:
+        return [_clarification_intent("")]
     intents: list[TaskIntent] = []
-    pending_detail: list[str] = []
-    for segment in segments:
-        intent = _classify_segment(segment, len(intents) + 1)
-        if intent.kind == "detail":
-            if intents:
-                pending_detail.append(segment)
-                continue
-            intent = _intent(1, "direct_answer", segment, risk="none", status="ready")
-        if pending_detail and intents:
-            intents[-1] = _append_detail(intents[-1], pending_detail)
-            pending_detail = []
-        if intent.kind != "detail":
-            intents.append(intent)
-    if pending_detail and intents:
-        intents[-1] = _append_detail(intents[-1], pending_detail)
-    return intents
+    boundary = _first_host_boundary(text)
+    if boundary is not None:
+        intents.append(
+            _intent(
+                len(intents) + 1,
+                boundary.intent_kind,
+                text,
+                capabilities=list(boundary.required_capabilities),
+                risk=boundary.risk,
+                status=boundary.status,
+            )
+        )
+    transport = _transport_control_rule(text)
+    if transport is not None:
+        intents.append(
+            _intent(
+                len(intents) + 1,
+                "transport_control",
+                text,
+                capabilities=[transport.capability],
+                risk=transport.risk,
+                status="blocked",
+                metadata=transport.metadata,
+            )
+        )
+    if _MEMORY_WRITE_PATTERN.search(text):
+        intents.append(
+            _intent(
+                len(intents) + 1,
+                "memory_write",
+                text,
+                capabilities=["durable_memory:write"],
+                risk="write",
+                status="needs_review",
+            )
+        )
+    if _WORKSPACE_WRITE_PATTERN.search(text):
+        intents.append(
+            _intent(
+                len(intents) + 1,
+                "workspace_write",
+                text,
+                capabilities=["workspace:write"],
+                risk="write",
+                status="needs_permission",
+            )
+        )
+    elif _FILE_TARGET_PATTERN.search(text) or _AMBIGUOUS_FILE_REQUEST_PATTERN.search(text):
+        intents.append(
+            _intent(
+                len(intents) + 1,
+                "workspace_read",
+                text,
+                capabilities=["workspace.search", "file.read"],
+                risk="read",
+                status="ready",
+            )
+        )
+    if _NOOP_PATTERN.search(text):
+        intents.append(_intent(len(intents) + 1, "noop", text, risk="none", status="ready"))
+    return intents or [_intent(1, "direct_answer", text, risk="none", status="ready")]
 
 
 def _model_intents(value: object) -> list[TaskIntent]:
@@ -418,68 +443,6 @@ def _renumber(intents: list[TaskIntent], *, start: int) -> list[TaskIntent]:
     return result
 
 
-def _classify_segment(segment: str, index: int) -> TaskIntent:
-    stripped = segment.strip()
-    if not stripped or stripped in {"?", "？", ".", "。"}:
-        return _clarification_intent(stripped, index=index)
-    if _NOOP_PATTERN.search(stripped):
-        return _intent(index, "noop", stripped, risk="none", status="ready")
-    if _MEMORY_WRITE_PATTERN.search(stripped):
-        return _intent(
-            index,
-            "memory_write",
-            stripped,
-            capabilities=["durable_memory:write"],
-            risk="write",
-            status="needs_review",
-        )
-    boundary = _first_host_boundary(stripped)
-    if boundary is not None:
-        return _intent(
-            index,
-            boundary.intent_kind,
-            stripped,
-            capabilities=list(boundary.required_capabilities),
-            risk=boundary.risk,
-            status=boundary.status,
-        )
-    transport = _transport_control_rule(stripped)
-    if transport is not None:
-        return _intent(
-            index,
-            "transport_control",
-            stripped,
-            capabilities=[transport.capability],
-            risk=transport.risk,
-            status="blocked",
-            metadata=transport.metadata,
-        )
-    role = _role_request(stripped)
-    if role is not None:
-        return _intent(index, "roleplay", stripped, risk="none", status="ready", metadata={"role": role, "scope": "current_thread"})
-    if _RETRIEVAL_PATTERN.search(stripped):
-        return _intent(
-            index,
-            "retrieval_research",
-            stripped,
-            capabilities=["retrieval.run"],
-            risk="read",
-            status="ready",
-            metadata={"live_network_requested": _requests_live_network(stripped)},
-        )
-    if _WORKSPACE_WRITE_PATTERN.search(stripped):
-        return _intent(index, "workspace_write", stripped, capabilities=["workspace:write"], risk="write", status="needs_permission")
-    if _WORKSPACE_READ_PATTERN.search(stripped):
-        return _intent(index, "workspace_read", stripped, capabilities=["workspace.search", "file.read"], risk="read", status="ready")
-    if _SYNTHESIS_PATTERN.search(stripped):
-        return _intent(index, "synthesis", stripped, risk="none", status="ready")
-    if _JOKE_PATTERN.search(stripped):
-        return _intent(index, "direct_answer", stripped, risk="none", status="ready", metadata={"style": "joke"})
-    if _looks_like_detail(stripped):
-        return _intent(index, "detail", stripped, risk="none", status="ready")
-    return _intent(index, "direct_answer", stripped, risk="none", status="ready")
-
-
 def _intent(
     index: int,
     kind: str,
@@ -506,22 +469,6 @@ def _clarification_intent(text: str, *, index: int = 1) -> TaskIntent:
     return _intent(index, "clarification", text, risk="none", status="needs_user_input")
 
 
-def _append_detail(intent: TaskIntent, details: list[str]) -> TaskIntent:
-    text = "，".join([intent.text, *details])
-    metadata = dict(intent.metadata)
-    metadata["details"] = list(details)
-    return TaskIntent(
-        intent_id=intent.intent_id,
-        kind=intent.kind,
-        text=text,
-        sequence_index=intent.sequence_index,
-        required_capabilities=list(intent.required_capabilities),
-        risk=intent.risk,
-        status=intent.status,
-        metadata=metadata,
-    )
-
-
 def _transport_control_rule(text: str) -> CapabilityRule | None:
     if _CONTROL_PATTERN.search(text) is None:
         return None
@@ -538,34 +485,6 @@ def _first_host_boundary(text: str) -> HostBoundaryRule | None:
         if rule.matches(text):
             return rule
     return None
-
-
-def _role_request(text: str) -> str | None:
-    match = _ROLE_PATTERN.search(text)
-    if match is None:
-        return None
-    role = _clean_role(match.group("role") or "")
-    return role or "specified_role"
-
-
-def _clean_role(role: str) -> str:
-    cleaned = role.strip(" ：:。.")
-    for marker in ("来", "去", "然后", "并", "给我", "帮我", " and ", " then ", " to "):
-        index = cleaned.lower().find(marker)
-        if index > 0:
-            cleaned = cleaned[:index]
-            break
-    return cleaned.strip(" ：:。.")
-
-
-def _requests_live_network(text: str) -> bool:
-    return bool(re.search(r"(?:上网|联网|live|web|internet|browse)", text, re.IGNORECASE))
-
-
-def _looks_like_detail(text: str) -> bool:
-    if len(text) <= 24 and not re.search(r"(?:去|请|帮|把|执行|调用|run|do|write|read|search)", text, re.IGNORECASE):
-        return True
-    return False
 
 
 def _is_compound(text: str, intents: list[TaskIntent]) -> bool:

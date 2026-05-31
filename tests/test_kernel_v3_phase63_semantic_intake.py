@@ -5,12 +5,42 @@ from kernel_v3.processors.testing import fake_fabric
 
 def test_phase63_roleplay_request_is_scoped_direct_response_not_echo():
     journal = JournalStore.in_memory()
-    result = AgentRuntime(journal=journal).run("你去扮演Jarvis", mode="auto")
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "roleplay",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "roleplay",
+                        "text": "adopt a current-thread role",
+                        "sequence_index": 1,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {"role": "current-thread assistant role"},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "an unseen role request",
+        mode="auto",
+        semantic_mode="model",
+    )
 
     assert result.status == "completed"
     assert result.mode == "direct_answer"
     assert result.final_answer is not None
-    assert "Jarvis" in result.final_answer["answer"]
+    assert "current-thread assistant role" in result.final_answer["answer"]
     assert "不会改变系统权限" in result.final_answer["answer"]
     assert "Direct answer:" not in result.final_answer["answer"]
     intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
@@ -20,9 +50,56 @@ def test_phase63_roleplay_request_is_scoped_direct_response_not_echo():
 
 def test_phase63_compound_task_is_not_flattened_into_single_retrieval():
     journal = JournalStore.in_memory()
-    goal = "先去搜索deepseek的api文档，然后本地写一个报告，再去搜一下它的国内竞品，kimi之类，再扩展一下思路，最后给我讲个笑话，再扮演jarvis"
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "retrieval_research",
+                "suggested_mode": "clarify_first",
+                "compound": True,
+                "requires_clarification": True,
+                "intents": [
+                    {
+                        "kind": "retrieval_research",
+                        "text": "research a current external topic",
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    },
+                    {
+                        "kind": "workspace_write",
+                        "text": "write a local report",
+                        "sequence_index": 2,
+                        "required_capabilities": ["workspace:write"],
+                        "risk": "write",
+                        "status": "needs_permission",
+                        "metadata": {},
+                    },
+                    {
+                        "kind": "roleplay",
+                        "text": "use a requested current-thread role",
+                        "sequence_index": 3,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {"role": "unlisted role"},
+                    },
+                ],
+                "blocked_capabilities": ["workspace:write"],
+                "warnings": ["model_detected_compound_task"],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
 
-    result = AgentRuntime(journal=journal).run(goal, mode="auto")
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "a broad multi-step request with mixed capabilities",
+        mode="auto",
+        semantic_mode="model",
+    )
 
     assert result.status == "needs_user_input"
     assert result.mode == "clarify_first"
@@ -58,8 +135,9 @@ def test_phase63_transport_control_request_is_refused_without_tool_execution():
 def test_phase63_roleplay_extracts_role_without_known_role_table():
     intake = analyze_goal("请扮演Ada Lovelace来解释这个系统")
 
-    assert intake.primary_intent == "roleplay"
-    assert intake.intents[0]["metadata"]["role"] == "Ada Lovelace"
+    assert intake.primary_intent == "direct_answer"
+    assert intake.blocked_capabilities == []
+    assert intake.response_hint is None
     assert intake.suggested_mode == "direct_answer"
 
 
@@ -76,13 +154,46 @@ def test_phase63_noop_request_does_not_execute_tools():
     assert intake["blocked_capabilities"] == []
 
 
-def test_phase63_semantic_intake_preserves_simple_retrieval_route():
-    intake = analyze_goal("搜索 DeepSeek API 文档")
+def test_phase63_model_semantic_intake_preserves_simple_retrieval_route():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "retrieval_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "retrieval_research",
+                        "text": "research a current external topic",
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
 
-    assert intake.primary_intent == "retrieval_research"
-    assert intake.suggested_mode == "retrieval_answer"
-    assert intake.requires_clarification is False
-    assert intake.compound is False
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "an unseen current-facts request",
+        mode="auto",
+        semantic_mode="model",
+    )
+    intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
+
+    assert result.mode == "retrieval_answer"
+    assert result.status == "completed"
+    assert intake["primary_intent"] == "retrieval_research"
+    assert intake["suggested_mode"] == "retrieval_answer"
 
 
 def test_phase63_model_semantic_intake_drives_open_ended_decomposition():
