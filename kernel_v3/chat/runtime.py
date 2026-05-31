@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
-from kernel_v3.agent.contracts import AgentRuntimeResult
+from kernel_v3.agent.contracts import AgentRuntimeResult, FinalAnswer
 from kernel_v3.chat.contracts import (
     ChatCommand,
     ChatRuntimeResult,
@@ -332,7 +332,7 @@ class ChatRuntime:
         subcommand = args[0].lower() if args else "show"
         plan_record = _latest_task_plan_record(self.journal, state.thread_id, task_id=state.active_task_id)
         if plan_record is None:
-            result = {"error": "no_task_plan", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]"}
+            result = {"error": "no_task_plan", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
             command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
             return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No task plan for this thread.")
         plan = dict(plan_record.data)
@@ -427,7 +427,48 @@ class ChatRuntime:
             command = self._append_command(turn, name="/plan", args=args, status="ok", result=command_result)
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
             return _replace_command_result(result, command.result)
-        result = {"error": "invalid_plan_command", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]"}
+        if subcommand in {"finalize", "finish"}:
+            if requested_plan_id != plan_id:
+                result = {"error": "plan_not_found", "requested_plan_id": requested_plan_id, "latest_plan_id": plan_id}
+                command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+                return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No matching task plan.")
+            final_answer, failure = _build_plan_final_answer(self.journal, plan_record=plan_record, plan=plan)
+            if failure is not None:
+                result = {"plan_id": plan_id, **failure}
+                command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+                return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=str(failure["reason"]))
+            assert final_answer is not None
+            record = self.journal.append(
+                task_id=plan_record.task_id,
+                run_id=plan_record.run_id,
+                step_id=None,
+                kind="semantic_task_plan_final_answer",
+                data=final_answer.to_dict(),
+                state_delta={"thread_id": turn.thread_id, "task_plan_final_answer": "ok"},
+            )
+            command = self._append_command(
+                turn,
+                name="/plan",
+                args=args,
+                status="ok",
+                result={"plan_id": plan_id, "final_answer_ref": record.record_id, "citation_refs": list(final_answer.citation_refs)},
+            )
+            return ChatRuntimeResult(
+                status="completed",
+                thread_id=turn.thread_id,
+                turn_id=turn.turn_id,
+                route=decision.route,
+                task_id=plan_record.task_id,
+                run_id=plan_record.run_id,
+                answer=final_answer.answer,
+                final_answer=final_answer.to_dict(),
+                failure_report=None,
+                pending_question=self.build_thread_state(turn.thread_id).pending_question,
+                command_result=command.to_dict(),
+                summary=None,
+                trace_refs=[record.record_id, command.command_id],
+            )
+        result = {"error": "invalid_plan_command", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
         command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
 
@@ -758,6 +799,139 @@ def _executed_plan_node_ids(journal: JournalStore, plan_ref: str) -> set[str]:
     return executed
 
 
+def _approved_plan_decisions(journal: JournalStore, plan_ref: str) -> dict[str, LedgerRecord]:
+    decisions: dict[str, LedgerRecord] = {}
+    for record in journal.records(kind="semantic_task_plan_decision"):
+        if record.data.get("plan_ref") != plan_ref or record.data.get("decision") != "approved":
+            continue
+        step = record.data.get("executed_step")
+        if isinstance(step, dict) and isinstance(step.get("node_id"), str):
+            decisions[str(step["node_id"])] = record
+    return decisions
+
+
+def _build_plan_final_answer(
+    journal: JournalStore,
+    *,
+    plan_record: LedgerRecord,
+    plan: JsonObject,
+) -> tuple[FinalAnswer | None, JsonObject | None]:
+    finalizer = _ready_plan_finalizer_step(plan)
+    if finalizer is None:
+        return None, {"reason": "no_plan_finalizer_step"}
+    plan_ref = plan_record.record_id
+    approved = _approved_plan_decisions(journal, plan_ref)
+    dependencies = _string_values(finalizer.get("depends_on"))
+    missing_nodes = [node_id for node_id in dependencies if node_id not in approved]
+    if missing_nodes:
+        return None, {"reason": "missing_dependency_output", "missing_nodes": missing_nodes}
+    outputs: list[JsonObject] = []
+    for node_id in dependencies:
+        decision = approved[node_id]
+        spawned_task_id = decision.data.get("spawned_task_id")
+        if not isinstance(spawned_task_id, str) or not spawned_task_id:
+            return None, {"reason": "missing_spawned_task", "missing_nodes": [node_id]}
+        child_answer = _latest_final_answer_for_task(journal, spawned_task_id)
+        if child_answer is None:
+            return None, {"reason": "missing_dependency_final_answer", "missing_nodes": [node_id]}
+        outputs.append(
+            {
+                "node_id": node_id,
+                "decision_ref": decision.record_id,
+                "spawned_task_id": spawned_task_id,
+                "step": decision.data.get("executed_step") if isinstance(decision.data.get("executed_step"), dict) else {},
+                "final_answer": child_answer.data,
+                "final_answer_ref": child_answer.record_id,
+            }
+        )
+    if not outputs:
+        return None, {"reason": "missing_dependency_output", "missing_nodes": dependencies}
+    citation_refs = _ordered_unique(
+        [
+            citation
+            for output in outputs
+            for citation in _string_values(output["final_answer"].get("citation_refs") if isinstance(output["final_answer"], dict) else [])
+        ]
+    )
+    if finalizer.get("citations_required") is True and not citation_refs:
+        return None, {"reason": "citations_required_but_missing"}
+    used_evidence = _ordered_unique(
+        [
+            evidence
+            for output in outputs
+            for evidence in _string_values(output["final_answer"].get("used_evidence") if isinstance(output["final_answer"], dict) else [])
+        ]
+    )
+    limitations = _ordered_unique(
+        [
+            limitation
+            for output in outputs
+            for limitation in _string_values(output["final_answer"].get("limitations") if isinstance(output["final_answer"], dict) else [])
+        ]
+    )
+    limitations.append("plan_final_answer_uses_only_completed_approved_step_outputs")
+    answer = _plan_final_answer_text(plan=plan, finalizer=finalizer, outputs=outputs)
+    confidence = min(_answer_confidence(output["final_answer"]) for output in outputs)
+    trace_refs = _ordered_unique(
+        [
+            plan_record.record_id,
+            *[str(output["decision_ref"]) for output in outputs],
+            *[str(output["final_answer_ref"]) for output in outputs],
+        ]
+    )
+    return FinalAnswer(
+        answer=answer,
+        citation_refs=citation_refs,
+        used_evidence=used_evidence,
+        limitations=limitations,
+        confidence=confidence,
+        task_id=str(plan_record.task_id or ""),
+        run_id=plan_record.run_id,
+        trace_refs=trace_refs,
+    ), None
+
+
+def _ready_plan_finalizer_step(plan: JsonObject) -> JsonObject | None:
+    steps_value = plan.get("steps")
+    if not isinstance(steps_value, list):
+        return None
+    for step in sorted([dict(item) for item in steps_value if isinstance(item, dict)], key=_step_sequence_index):
+        if str(step.get("action_kind") or "") != "respond":
+            continue
+        dependencies = _string_values(step.get("depends_on"))
+        if not dependencies:
+            continue
+        if str(step.get("status") or "") not in {"ready", "needs_confirmation"}:
+            continue
+        return step
+    return None
+
+
+def _latest_final_answer_for_task(journal: JournalStore, task_id: str) -> LedgerRecord | None:
+    records = [record for record in journal.records(task_id=task_id, kind="agent_final_answer")]
+    return records[-1] if records else None
+
+
+def _plan_final_answer_text(*, plan: JsonObject, finalizer: JsonObject, outputs: list[JsonObject]) -> str:
+    lines = [str(finalizer.get("goal") or plan.get("goal") or "Completed approved plan outputs.")]
+    for output in outputs:
+        step = output.get("step") if isinstance(output.get("step"), dict) else {}
+        final_answer = output.get("final_answer") if isinstance(output.get("final_answer"), dict) else {}
+        label = str(step.get("goal") or output.get("node_id") or "completed step")
+        answer = str(final_answer.get("answer") or "").strip()
+        if answer:
+            lines.append(f"- {label}: {answer}")
+    return "\n".join(lines)
+
+
+def _answer_confidence(answer: object) -> float:
+    if isinstance(answer, dict):
+        value = answer.get("confidence")
+        if isinstance(value, (int, float)):
+            return max(0.0, min(1.0, float(value)))
+    return 0.0
+
+
 def _is_safe_plan_step(step: JsonObject) -> bool:
     status = str(step.get("status") or "")
     if status not in {"ready", "needs_confirmation"}:
@@ -854,7 +1028,12 @@ def _is_task_result(data: JsonObject) -> bool:
     if route in {"new_task", "continue_task", "answer_pending_question"}:
         return data.get("task_id") is not None
     command_result = data.get("command_result")
-    return route == "command" and isinstance(command_result, dict) and command_result.get("started_new_task") is True
+    if route != "command" or not isinstance(command_result, dict):
+        return False
+    if command_result.get("started_new_task") is True:
+        return True
+    result = command_result.get("result")
+    return isinstance(result, dict) and isinstance(result.get("final_answer_ref"), str) and data.get("task_id") is not None
 
 
 def _keeps_task_active(status: str) -> bool:
@@ -893,7 +1072,9 @@ def _latest_clear_at(journal: JournalStore, thread_id: str) -> int:
 
 def _latest_answer_preview(journal: JournalStore, thread_id: str) -> str | None:
     task_ids = _thread_task_ids(journal, thread_id)
-    for record in reversed(journal.records(kind="agent_final_answer")):
+    for record in reversed(journal.records()):
+        if record.kind not in {"agent_final_answer", "semantic_task_plan_final_answer"}:
+            continue
         if record.task_id in task_ids and isinstance(record.data.get("answer"), str):
             return _preview(str(record.data["answer"]), limit=240)
     return None

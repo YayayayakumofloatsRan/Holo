@@ -335,6 +335,7 @@ def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_eviden
     initial = chat.receive("research then synthesize requiring confirmation", thread_id="thread-plan-dependent-respond")
     first = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
     second = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
+    final = chat.receive("/plan finalize", thread_id="thread-plan-dependent-respond")
 
     assert initial.status == "needs_user_input"
     assert first.status == "completed"
@@ -347,6 +348,31 @@ def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_eviden
     assert [record.data["decision"] for record in decisions] == ["approved", "blocked"]
     action_task_ids = {record.task_id for record in journal.records(kind="action")}
     assert action_task_ids == {initial.task_id, first.command_result["spawned_task_id"]}
+    assert final.status == "completed"
+    assert final.final_answer is not None
+    child = journal.records(task_id=first.command_result["spawned_task_id"], kind="agent_final_answer")[-1].data
+    assert final.final_answer["citation_refs"] == child["citation_refs"]
+    assert final.final_answer["used_evidence"] == child["used_evidence"]
+    assert "synthesize from the collected evidence" in final.answer
+    assert journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")
+    summary = chat.receive("/summary", thread_id="thread-plan-dependent-respond")
+    assert summary.summary is not None
+    assert "synthesize from the collected evidence" in str(summary.summary["last_answer_preview"])
+
+
+def test_phase81_chat_plan_finalize_fails_before_dependencies_complete():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _dependent_synthesis_intake())
+
+    initial = chat.receive("research then synthesize requiring confirmation", thread_id="thread-plan-finalize-missing")
+    final = chat.receive("/plan finalize", thread_id="thread-plan-finalize-missing")
+
+    assert initial.status == "needs_user_input"
+    assert final.status == "failed"
+    assert final.command_result is not None
+    assert final.command_result["result"]["reason"] == "missing_dependency_output"
+    assert final.command_result["result"]["missing_nodes"] == ["node-1-retrieval_research"]
+    assert not journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")
 
 
 def _chat_with_semantic_plan(journal: JournalStore, response: dict) -> ChatRuntime:

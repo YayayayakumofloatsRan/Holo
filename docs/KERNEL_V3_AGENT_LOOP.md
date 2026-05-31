@@ -54,7 +54,9 @@ structure through JSON and the host validates it before anything runs.
 - `/plan reject [plan_id] [reason]` journals a
   `semantic_task_plan_decision` and does not execute anything;
 - `/plan approve [plan_id]` journals approval and runs only the first safe
-  executable step through `AgentRuntime`.
+  executable step through `AgentRuntime`;
+- `/plan finalize [plan_id]` builds a plan-level final answer only from
+  journaled outputs of completed approved steps.
 
 Approval is deliberately narrow. It does not execute an arbitrary model graph
 and it does not bypass `LoopControllerV3`. The selected step must be ready or
@@ -72,6 +74,14 @@ approved and completed through the same journaled decision path. Dependent
 because they would not carry the prior step's evidence context; those require a
 future explicit plan-level synthesizer/finalizer instead of an implicit direct
 fallback.
+
+The plan finalizer is deliberately conservative. It does not call tools, does
+not re-run semantic intake, and does not invent citations. It reads completed
+approved step decisions, loads their `agent_final_answer` records, preserves
+their `citation_refs` and `used_evidence`, and journals
+`semantic_task_plan_final_answer` on the original plan task. If a dependency has
+not completed, finalization fails with a journaled command result instead of
+filling the gap.
 
 ## Stop Semantics
 
