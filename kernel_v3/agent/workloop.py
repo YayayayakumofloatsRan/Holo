@@ -173,19 +173,19 @@ class WorkloopEvaluator:
 
 
 def workloop_state(journal: JournalStore, *, task_id: str, run_id: str, step_id: str | None = None) -> WorkloopState:
-    records = journal.records(task_id=task_id)
+    records = [record for record in journal.records(task_id=task_id) if record.run_id == run_id]
     return WorkloopState(
         task_id=task_id,
         run_id=run_id,
         step_id=step_id,
-        iteration_index=len(journal.records(task_id=task_id, kind="termination_decision")) + 1,
-        action_count=len(journal.records(task_id=task_id, kind="action")),
-        observation_count=len(journal.records(task_id=task_id, kind="observation")),
+        iteration_index=len([record for record in records if record.kind == "termination_decision"]) + 1,
+        action_count=len([record for record in records if record.kind == "action"]),
+        observation_count=len([record for record in records if record.kind == "observation"]),
         artifact_count=len({artifact for record in records for artifact in record.artifact_refs}),
-        evidence_count=len(journal.records(task_id=task_id, kind="retrieval_evidence")),
-        citation_count=len(journal.records(task_id=task_id, kind="retrieval_citation")),
-        missing_evidence=_latest_missing_evidence(journal, task_id=task_id),
-        failure_reasons=_failure_reasons(journal, task_id=task_id),
+        evidence_count=len([record for record in records if record.kind == "retrieval_evidence"]),
+        citation_count=len([record for record in records if record.kind == "retrieval_citation"]),
+        missing_evidence=_latest_missing_evidence(journal, task_id=task_id, run_id=run_id),
+        failure_reasons=_failure_reasons(journal, task_id=task_id, run_id=run_id),
     )
 
 
@@ -292,11 +292,19 @@ def assess_evidence_sufficiency(
     step_id: str | None,
     recipe: TaskRecipe,
 ) -> EvidenceSufficiency:
-    retrieval_evidence = journal.records(task_id=task_id, kind="retrieval_evidence")
-    retrieval_citations = journal.records(task_id=task_id, kind="retrieval_citation")
+    retrieval_evidence = [
+        record for record in journal.records(task_id=task_id, kind="retrieval_evidence")
+        if record.run_id == run_id
+    ]
+    retrieval_citations = [
+        record for record in journal.records(task_id=task_id, kind="retrieval_citation")
+        if record.run_id == run_id
+    ]
     workspace_reads = [
         record for record in journal.records(task_id=task_id, kind="observation")
-        if record.data.get("source") == "tool:file.read" and record.data.get("status") == "ok"
+        if record.run_id == run_id
+        and record.data.get("source") == "tool:file.read"
+        and record.data.get("status") == "ok"
     ]
     evidence_count = len(retrieval_evidence) + len(workspace_reads)
     citation_refs = [str(record.data.get("citation_id")) for record in retrieval_citations if record.data.get("citation_id")]
@@ -579,9 +587,11 @@ def _missing_evidence_values(journal: JournalStore, *, task_id: str, run_id: str
     return values
 
 
-def _failure_reasons(journal: JournalStore, *, task_id: str) -> list[str]:
+def _failure_reasons(journal: JournalStore, *, task_id: str, run_id: str | None = None) -> list[str]:
     reasons = []
     for record in journal.records(task_id=task_id):
+        if run_id is not None and record.run_id != run_id:
+            continue
         reason = _failure_reason_from_record(record)
         if isinstance(reason, str) and reason:
             reasons.append(reason)
@@ -644,8 +654,10 @@ def _recent_no_progress_count(journal: JournalStore, *, task_id: str, run_id: st
     return count
 
 
-def _latest_missing_evidence(journal: JournalStore, *, task_id: str) -> list[str]:
+def _latest_missing_evidence(journal: JournalStore, *, task_id: str, run_id: str | None = None) -> list[str]:
     for record in reversed(journal.records(task_id=task_id, kind="feedback")):
+        if run_id is not None and record.run_id != run_id:
+            continue
         missing = record.data.get("missing_evidence")
         if isinstance(missing, list):
             return [str(item) for item in missing]

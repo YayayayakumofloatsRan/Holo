@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 from kernel_v3.agent import AgentRuntime
-from kernel_v3.agent.workloop import assess_progress
+from kernel_v3.agent.workloop import assess_progress, workloop_state
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import Observation
 from kernel_v3.journal import JournalStore
@@ -78,6 +78,41 @@ def test_phase61_retrieval_resume_gets_fresh_repetition_budget_and_unique_action
     assert len(action_ids) == len(set(action_ids))
     assert any(action_id.endswith("-run-1") for action_id in action_ids)
     assert any(action_id.endswith("-run-2") for action_id in action_ids)
+
+
+def test_phase61_retrieval_resume_does_not_reuse_previous_run_evidence():
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    first = AgentRuntime(journal=journal, artifact_store=artifacts).run("grounded topic", mode="retrieval")
+    failing_runtime = AgentRuntime(
+        journal=journal,
+        artifact_store=artifacts,
+        retrieval_operator=RetrievalOperator(
+            search_provider=FakeSearchProvider({"missing": []}),
+            fetch_provider=FakeFetchProvider({}),
+        ),
+    )
+
+    second = failing_runtime.resume(first.task_id, "missing", mode="retrieval")
+
+    assert first.status == "completed"
+    assert second.status == "failed"
+    assert second.run_id == "run-2"
+    decisions = [
+        record.data
+        for record in journal.records(task_id=first.task_id, kind="termination_decision")
+        if record.run_id == "run-2"
+    ]
+    assert [item["decision"] for item in decisions] == ["continue", "failure_report"]
+    sufficiency = [
+        record.data
+        for record in journal.records(task_id=first.task_id, kind="evidence_sufficiency")
+        if record.run_id == "run-2"
+    ]
+    assert all(item["evidence_count"] == 0 for item in sufficiency)
+    assert all(item["citation_count"] == 0 for item in sufficiency)
+    assert workloop_state(journal, task_id=first.task_id, run_id="run-2").evidence_count == 0
+    assert second.failure_report["attempted_actions"] == ["retrieval.run", "retrieval.run"]
 
 
 def test_phase61_repeated_same_retrieval_query_sets_repetition_signal():

@@ -75,6 +75,34 @@ def test_phase6_workspace_answer_searches_reads_and_synthesizes_without_network(
     assert not journal.records(task_id=result.task_id, kind="retrieval_report")
 
 
+def test_phase6_workspace_resume_does_not_finalize_from_stale_file_observation():
+    journal = JournalStore.in_memory()
+    first = AgentRuntime(
+        journal=journal,
+        workspace_files={"README.md": "old workspace evidence"},
+    ).run("read README.md", mode="workspace")
+
+    second = AgentRuntime(
+        journal=journal,
+        workspace_files={"README.md": "old workspace evidence"},
+    ).resume(first.task_id, "read MISSING.md", mode="workspace")
+
+    assert first.status == "completed"
+    assert second.status == "needs_user_input"
+    assert second.final_answer is None
+    run2_finals = [
+        record for record in journal.records(task_id=first.task_id, kind="agent_final_answer")
+        if record.run_id == "run-2"
+    ]
+    assert run2_finals == []
+    run2_sufficiency = [
+        record.data for record in journal.records(task_id=first.task_id, kind="evidence_sufficiency")
+        if record.run_id == "run-2"
+    ]
+    assert run2_sufficiency
+    assert all(item["evidence_count"] == 0 for item in run2_sufficiency)
+
+
 def test_phase6_ambiguous_workspace_request_asks_user():
     journal = JournalStore.in_memory()
     result = AgentRuntime(journal=journal).run("read the file", mode="workspace")

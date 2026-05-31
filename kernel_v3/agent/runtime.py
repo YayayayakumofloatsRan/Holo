@@ -238,7 +238,7 @@ class AgentRuntime:
                     missing_evidence=["citation_refs"],
                     next_action="use_retrieval_or_workspace_mode",
                 )
-            text = loop_answer or _last_response_text(self.journal, task_id) or ""
+            text = loop_answer or _last_response_text(self.journal, task_id, run_id) or ""
             if not text:
                 return None, self._failure(task_id, run_id, "missing_direct_answer", next_action="ask_user")
             return self._append_final(
@@ -279,13 +279,13 @@ class AgentRuntime:
         loop_stop_reason: str | None,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
-        report = _latest_retrieval_report(self.journal, task_id)
-        evidence = _retrieval_evidence(self.journal, task_id)
-        citations = _retrieval_citations(self.journal, task_id)
+        report = _latest_retrieval_report(self.journal, task_id, run_id)
+        evidence = _retrieval_evidence(self.journal, task_id, run_id)
+        citations = _retrieval_citations(self.journal, task_id, run_id)
         if report is None:
             return None, self._failure(task_id, run_id, "missing_retrieval_report", next_action="retry_retrieval")
         if report.status != "sufficient":
-            reason = _latest_termination_failure_reason(self.journal, task_id) or loop_stop_reason or f"retrieval_{report.status}"
+            reason = _latest_termination_failure_reason(self.journal, task_id, run_id) or loop_stop_reason or f"retrieval_{report.status}"
             return None, self._failure(
                 task_id,
                 run_id,
@@ -327,7 +327,7 @@ class AgentRuntime:
         recipe: TaskRecipe,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
-        evidence, citations, report = _workspace_grounding(self.journal, task_id)
+        evidence, citations, report = _workspace_grounding(self.journal, task_id, run_id)
         if not evidence:
             return None, self._failure(
                 task_id,
@@ -467,10 +467,10 @@ class AgentRuntime:
     ) -> FailureReport:
         failure = FailureReport(
             reason=reason,
-            attempted_actions=_attempted_actions(self.journal, task_id),
-            attempted_sources=_attempted_sources(self.journal, task_id),
-            missing_evidence=list(missing_evidence or _missing_evidence(self.journal, task_id)),
-            last_observations=_last_observations(self.journal, task_id),
+            attempted_actions=_attempted_actions(self.journal, task_id, run_id),
+            attempted_sources=_attempted_sources(self.journal, task_id, run_id),
+            missing_evidence=list(missing_evidence or _missing_evidence(self.journal, task_id, run_id)),
+            last_observations=_last_observations(self.journal, task_id, run_id),
             user_help_needed=reason in {"needs_user_input", "clarification_required"} or next_action in {"ask_user", "provide_more_detail"},
             next_possible_action=next_action,
             task_id=task_id,
@@ -915,25 +915,40 @@ def _feedback(
     )
 
 
-def _latest_retrieval_report(journal: JournalStore, task_id: str) -> RetrievalReport | None:
-    records = journal.records(task_id=task_id, kind="retrieval_report")
+def _latest_retrieval_report(journal: JournalStore, task_id: str, run_id: str) -> RetrievalReport | None:
+    records = [
+        record for record in journal.records(task_id=task_id, kind="retrieval_report")
+        if record.run_id == run_id
+    ]
     if not records:
         return None
     return RetrievalReport.from_dict(records[-1].data)
 
 
-def _retrieval_evidence(journal: JournalStore, task_id: str) -> list[EvidenceItem]:
-    return [EvidenceItem.from_dict(record.data) for record in journal.records(task_id=task_id, kind="retrieval_evidence")]
+def _retrieval_evidence(journal: JournalStore, task_id: str, run_id: str) -> list[EvidenceItem]:
+    return [
+        EvidenceItem.from_dict(record.data)
+        for record in journal.records(task_id=task_id, kind="retrieval_evidence")
+        if record.run_id == run_id
+    ]
 
 
-def _retrieval_citations(journal: JournalStore, task_id: str) -> list[CitationItem]:
-    return [CitationItem.from_dict(record.data) for record in journal.records(task_id=task_id, kind="retrieval_citation")]
+def _retrieval_citations(journal: JournalStore, task_id: str, run_id: str) -> list[CitationItem]:
+    return [
+        CitationItem.from_dict(record.data)
+        for record in journal.records(task_id=task_id, kind="retrieval_citation")
+        if record.run_id == run_id
+    ]
 
 
-def _workspace_grounding(journal: JournalStore, task_id: str) -> tuple[list[EvidenceItem], list[CitationItem], RetrievalReport]:
+def _workspace_grounding(journal: JournalStore, task_id: str, run_id: str) -> tuple[list[EvidenceItem], list[CitationItem], RetrievalReport]:
     evidence: list[EvidenceItem] = []
     citations: list[CitationItem] = []
-    for index, record in enumerate(journal.records(task_id=task_id, kind="observation"), start=1):
+    observations = [
+        record for record in journal.records(task_id=task_id, kind="observation")
+        if record.run_id == run_id
+    ]
+    for index, record in enumerate(observations, start=1):
         data = record.data
         if data.get("source") != "tool:file.read" or data.get("status") != "ok":
             continue
@@ -1016,8 +1031,10 @@ def _agent_final_from_processor(processor_answer, *, task_id: str, run_id: str, 
     )
 
 
-def _last_response_text(journal: JournalStore, task_id: str) -> str | None:
+def _last_response_text(journal: JournalStore, task_id: str, run_id: str) -> str | None:
     for record in reversed(journal.records(task_id=task_id, kind="observation")):
+        if record.run_id != run_id:
+            continue
         content = record.data.get("content")
         if isinstance(content, dict) and isinstance(content.get("text"), str):
             return str(content["text"])
@@ -1028,18 +1045,22 @@ def _trace_refs(journal: JournalStore, task_id: str) -> list[str]:
     return [record.record_id for record in journal.records(task_id=task_id)]
 
 
-def _attempted_actions(journal: JournalStore, task_id: str) -> list[str]:
+def _attempted_actions(journal: JournalStore, task_id: str, run_id: str) -> list[str]:
     actions = []
     for record in journal.records(task_id=task_id, kind="action"):
+        if record.run_id != run_id:
+            continue
         name = record.data.get("name")
         kind = record.data.get("kind")
         actions.append(str(name or kind or record.action_ref))
     return actions
 
 
-def _attempted_sources(journal: JournalStore, task_id: str) -> list[str]:
+def _attempted_sources(journal: JournalStore, task_id: str, run_id: str) -> list[str]:
     sources: list[str] = []
     for record in journal.records(task_id=task_id):
+        if record.run_id != run_id:
+            continue
         data = record.data
         if record.kind == "retrieval_search_attempt":
             for source in data.get("sources", []) if isinstance(data.get("sources"), list) else []:
@@ -1055,24 +1076,32 @@ def _attempted_sources(journal: JournalStore, task_id: str) -> list[str]:
     return _ordered_unique(sources)
 
 
-def _missing_evidence(journal: JournalStore, task_id: str) -> list[str]:
+def _missing_evidence(journal: JournalStore, task_id: str, run_id: str) -> list[str]:
     for record in reversed(journal.records(task_id=task_id, kind="feedback")):
+        if record.run_id != run_id:
+            continue
         missing = record.data.get("missing_evidence")
         if isinstance(missing, list):
             return [str(item) for item in missing]
     return []
 
 
-def _latest_termination_failure_reason(journal: JournalStore, task_id: str) -> str | None:
+def _latest_termination_failure_reason(journal: JournalStore, task_id: str, run_id: str) -> str | None:
     for record in reversed(journal.records(task_id=task_id, kind="termination_decision")):
+        if record.run_id != run_id:
+            continue
         if record.data.get("decision") == "failure_report" and isinstance(record.data.get("reason"), str):
             return str(record.data["reason"])
     return None
 
 
-def _last_observations(journal: JournalStore, task_id: str, *, limit: int = 3) -> list[JsonObject]:
+def _last_observations(journal: JournalStore, task_id: str, run_id: str, *, limit: int = 3) -> list[JsonObject]:
     observations = []
-    for record in journal.records(task_id=task_id, kind="observation")[-limit:]:
+    records = [
+        record for record in journal.records(task_id=task_id, kind="observation")
+        if record.run_id == run_id
+    ]
+    for record in records[-limit:]:
         data = dict(record.data)
         content = data.get("content")
         if isinstance(content, dict):
