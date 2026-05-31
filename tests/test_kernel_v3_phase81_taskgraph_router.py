@@ -304,6 +304,51 @@ def test_phase81_chat_plan_reject_journals_decision_without_execution():
     assert not journal.records(kind="tool_call")
 
 
+def test_phase81_chat_plan_approve_can_continue_next_safe_dependent_tool_step():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _multi_safe_read_after_research_intake())
+
+    initial = chat.receive("safe multi-step plan requiring confirmation", thread_id="thread-plan-continue")
+    first = chat.receive("/plan approve", thread_id="thread-plan-continue")
+    second = chat.receive("/plan approve", thread_id="thread-plan-continue")
+    third = chat.receive("/plan approve", thread_id="thread-plan-continue")
+
+    assert initial.status == "needs_user_input"
+    assert first.status == "completed"
+    assert first.command_result is not None
+    assert first.command_result["executed_node_id"] == "node-1-retrieval_research"
+    assert second.status == "completed"
+    assert second.command_result is not None
+    assert second.command_result["executed_node_id"] == "node-2-workspace_read"
+    assert third.status == "failed"
+    decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert [record.data["decision"] for record in decisions] == ["approved", "approved", "blocked"]
+    assert journal.records(task_id=first.command_result["spawned_task_id"], kind="retrieval_report")
+    actions = [record.data.get("name") for record in journal.records(task_id=second.command_result["spawned_task_id"], kind="action")]
+    assert actions == ["workspace.search", "file.read"]
+
+
+def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_evidence_context():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _dependent_synthesis_intake())
+
+    initial = chat.receive("research then synthesize requiring confirmation", thread_id="thread-plan-dependent-respond")
+    first = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
+    second = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
+
+    assert initial.status == "needs_user_input"
+    assert first.status == "completed"
+    assert first.command_result is not None
+    assert first.command_result["executed_node_id"] == "node-1-retrieval_research"
+    assert second.status == "failed"
+    assert second.command_result is not None
+    assert second.command_result["result"]["reason"] == "no_safe_executable_step"
+    decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert [record.data["decision"] for record in decisions] == ["approved", "blocked"]
+    action_task_ids = {record.task_id for record in journal.records(kind="action")}
+    assert action_task_ids == {initial.task_id, first.command_result["spawned_task_id"]}
+
+
 def _chat_with_semantic_plan(journal: JournalStore, response: dict) -> ChatRuntime:
     fabric = fake_fabric({"semantic.intake": response}, journal=journal)
     agent = AgentRuntime(journal=journal, processor_fabric=fabric)
@@ -364,4 +409,70 @@ def _shell_only_intake() -> dict:
         "warnings": [],
         "response_hint": None,
         "clarification_question": None,
+    }
+
+
+def _multi_safe_read_after_research_intake() -> dict:
+    return {
+        "primary_intent": "retrieval_research",
+        "suggested_mode": "clarify_first",
+        "compound": True,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "retrieval_research",
+                "text": "research current API evidence",
+                "sequence_index": 1,
+                "required_capabilities": ["retrieval.run"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "workspace_read",
+                "text": "read README.md after the research",
+                "sequence_index": 2,
+                "required_capabilities": ["workspace.search", "file.read"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+        ],
+        "blocked_capabilities": [],
+        "warnings": ["model_detected_compound_task"],
+        "response_hint": None,
+        "clarification_question": "Confirm the ordered read-only plan.",
+    }
+
+
+def _dependent_synthesis_intake() -> dict:
+    return {
+        "primary_intent": "retrieval_research",
+        "suggested_mode": "clarify_first",
+        "compound": True,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "retrieval_research",
+                "text": "research current API evidence",
+                "sequence_index": 1,
+                "required_capabilities": ["retrieval.run"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "synthesis",
+                "text": "synthesize from the collected evidence",
+                "sequence_index": 2,
+                "required_capabilities": [],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+        ],
+        "blocked_capabilities": [],
+        "warnings": ["model_detected_compound_task"],
+        "response_hint": None,
+        "clarification_question": "Confirm the ordered evidence and synthesis plan.",
     }

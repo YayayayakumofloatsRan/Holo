@@ -765,6 +765,10 @@ def _is_safe_plan_step(step: JsonObject) -> bool:
     action_kind = str(step.get("action_kind") or "")
     if action_kind not in {"tool", "respond", "ask_user"}:
         return False
+    if action_kind == "respond":
+        dependencies = _string_values(step.get("depends_on"))
+        if dependencies or step.get("evidence_required") is True or step.get("citations_required") is True:
+            return False
     mode = _plan_step_mode(step)
     if mode not in _PLAN_ALLOWED_MODES:
         return False

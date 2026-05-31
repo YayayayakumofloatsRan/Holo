@@ -64,6 +64,15 @@ workloop, and finalization path. Blocked capabilities such as shell execution,
 workspace writes, live transports, network fetches, and durable-memory writes
 remain non-executable in this path.
 
+Plan approval is also step-aware. Approved steps are recorded by
+`plan_ref + node_id`, so repeated `/plan approve` calls do not rerun the same
+tool step. A later safe step can run only after its dependency node was
+approved and completed through the same journaled decision path. Dependent
+`respond` or synthesis nodes are not executed as standalone direct answers,
+because they would not carry the prior step's evidence context; those require a
+future explicit plan-level synthesizer/finalizer instead of an implicit direct
+fallback.
+
 ## Stop Semantics
 
 The agent stops when one of these host-visible conditions is reached:
