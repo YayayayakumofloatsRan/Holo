@@ -88,11 +88,14 @@ finalizer when there are no more safe tool steps and all finalizer dependencies
 are complete. A repeated approval after finalization returns the existing
 `semantic_task_plan_final_answer` instead of writing a duplicate.
 
-When the active pending question is a host-generated plan confirmation, a narrow
-confirmation reply such as "yes", "approve", "同意", or "继续" is treated as
-`/plan approve`; a narrow rejection reply such as "no", "reject", "拒绝", or
-"取消" is treated as `/plan reject`. This parser is only for answering the
-host's own confirmation prompt. It is not used for open-ended semantic routing.
+When the active pending question is a host-generated plan confirmation, natural
+language approval or rejection goes through the same bounded `chat.route`
+processor contract as other turn routing. The provider may propose
+`route="answer_pending_question"` with `command="approve_plan"` or
+`command="reject_plan"`, and `ChatRuntime` then verifies that a pending plan
+confirmation actually exists before mapping it to `/plan approve` or
+`/plan reject`. There is no kernel-level phrase table for open-ended approval,
+continuation, or summary semantics.
 
 `/plan` also renders journal-derived progress. It reports per-step pending,
 approved, completed, blocked, or finalized state from
@@ -143,13 +146,14 @@ same Phase5 execution modes used by `holo-v3 agent`:
 - `evaluator_mode`
 - `synthesizer_mode`
 - `semantic_mode`
+- `turn_router_mode`
 
 The default remains fully offline fake mode. CLI model modes for `holo-v3 chat`
 and `holo-v3 resident run/run-once` are gated by `HOLO_V3_LIVE_MODEL=1`, then
 use the configured provider fabric. This lets a resident worker use model-backed
-semantic intake or planner/evaluator/synthesizer behavior without letting the
-worker execute tools directly, bypass PolicyGate, or become a transport-level
-decision maker.
+semantic intake, turn routing, or planner/evaluator/synthesizer behavior
+without letting the worker execute tools directly, bypass PolicyGate, or become
+a transport-level decision maker.
 
 Resident outbox payloads keep the full `ChatRuntimeResult`. Resident run
 results also surface `chat_route`, `command_result`, `pending_question`, and
@@ -157,6 +161,13 @@ results also surface `chat_route`, `command_result`, `pending_question`, and
 rejected, finalized, or answered a pending plan without scraping visible text.
 Pending plan-confirmation outboxes are marked `answered` when the user's later
 message approves or rejects the plan.
+
+Resident loop summaries include the queue health snapshot used to decide the
+loop result. A loop no longer reports `completed` when unresolved failed,
+dead-letter, or retry-wait inbox items remain after an idle turn; it reports
+`failed` for unresolved failed/dead-letter work and `retry_wait` for delayed
+retry work. This keeps long-running supervision from confusing "no claimable
+message right now" with a healthy completed queue.
 
 Natural-language turn routing is processor-shaped rather than phrase-table
 driven. A model or fake provider may emit a bounded `chat.route` proposal such

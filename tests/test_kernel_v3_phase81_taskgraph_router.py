@@ -299,6 +299,20 @@ def test_phase81_pending_plan_confirmation_can_approve_without_slash_command():
     assert not journal.records(task_id=initial.task_id, kind="resume")
 
 
+def test_phase81_fake_mode_does_not_phrase_parse_plan_confirmation():
+    journal = JournalStore.in_memory()
+    chat = _chat_with_semantic_plan(journal, _compound_research_write_intake())
+
+    initial = chat.receive("compound task requiring confirmation", thread_id="thread-plan-no-phrase-table")
+    answered = chat.receive("同意", thread_id="thread-plan-no-phrase-table")
+
+    assert initial.status == "needs_user_input"
+    assert answered.route == "answer_pending_question"
+    assert answered.command_result is None
+    assert not journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
+    assert not journal.records(kind="retrieval_report")
+
+
 def test_phase81_pending_plan_confirmation_can_reject_without_resuming_task():
     journal = JournalStore.in_memory()
     chat = _chat_with_semantic_plan(

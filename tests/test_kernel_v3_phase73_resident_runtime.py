@@ -570,6 +570,46 @@ def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
     assert not queue.outbox_messages()
 
 
+def test_phase73_run_loop_reports_retry_wait_after_unresolved_failure(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="will wait for retry", message_id="in-retry-wait")
+    runtime = ResidentRuntime(
+        queue=queue,
+        chat_runtime=_RaisingChatRuntime(),
+        worker_id="worker-retry-wait",
+        max_attempts=3,
+        retry_backoff_ms=5_000,
+    )
+
+    result = runtime.run_loop(max_iterations=3)
+
+    assert result.status == "retry_wait"
+    assert result.reason == "unresolved_retry_wait"
+    assert result.failed_count == 1
+    assert result.queue_status["inbox_counts"]["retry_wait"] == 1
+    assert queue.inbox_messages()[0].status == "retry_wait"
+
+
+def test_phase73_run_loop_reports_failed_when_dead_letter_remains(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="will dead letter", message_id="in-dead-loop")
+    runtime = ResidentRuntime(
+        queue=queue,
+        chat_runtime=_RaisingChatRuntime(),
+        worker_id="worker-dead-loop",
+        max_attempts=1,
+        retry_backoff_ms=0,
+    )
+
+    result = runtime.run_loop(max_iterations=3)
+
+    assert result.status == "failed"
+    assert result.reason == "unresolved_failed_inbox"
+    assert result.failed_count == 1
+    assert result.queue_status["dead_letter_count"] == 1
+    assert queue.inbox_messages()[0].status == "dead_letter"
+
+
 def test_phase73_dead_letter_can_be_requeued_for_manual_recovery(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     queue.enqueue(thread_id="resident-thread", text="recover me", message_id="in-dead")

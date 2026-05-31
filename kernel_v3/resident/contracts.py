@@ -87,3 +87,4 @@ class ResidentLoopResult(Contract):
     idle_count: int
     reason: str | None
     results: list[JsonObject] = field(default_factory=list)
+    queue_status: JsonObject = field(default_factory=dict)

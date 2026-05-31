@@ -40,9 +40,18 @@ class ResidentRuntime:
         failed = len([item for item in results if item.status == "failed"])
         blocked = len([item for item in results if item.status == "blocked"])
         idle = len([item for item in results if item.status == "idle"])
+        queue_status = self.queue.status()
+        unresolved_failed = int(queue_status.inbox_counts.get("failed", 0)) + queue_status.dead_letter_count
+        unresolved_retry = int(queue_status.inbox_counts.get("retry_wait", 0))
         if blocked:
             status = "blocked"
             reason = results[-1].reason if results else "blocked"
+        elif unresolved_failed:
+            status = "failed"
+            reason = "unresolved_failed_inbox"
+        elif unresolved_retry:
+            status = "retry_wait"
+            reason = "unresolved_retry_wait"
         elif results and results[-1].status == "idle":
             status = "idle" if processed == 0 and failed == 0 else "completed"
             reason = results[-1].reason
@@ -62,6 +71,7 @@ class ResidentRuntime:
             idle_count=idle,
             reason=reason,
             results=[item.to_dict() for item in results],
+            queue_status=queue_status.to_dict(),
         )
         self._journal_event(
             "resident_loop_result",
