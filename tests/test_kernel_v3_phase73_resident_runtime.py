@@ -197,6 +197,74 @@ def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuatio
     assert len(queue.outbox_messages()) == 1
 
 
+def test_phase73_answering_pending_question_marks_old_outbox_answered(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": [_workspace_read_intake(), _workspace_read_intake()]}, journal=journal)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(
+            journal=journal,
+            processor_fabric=fabric,
+            workspace_files={"README.md": "resident answered workspace evidence"},
+        ),
+        semantic_mode="model",
+    )
+    runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-1", journal=journal)
+    queue.enqueue(thread_id="resident-thread", text="read the file", message_id="in-question")
+
+    first = runtime.run_once()
+    queue.enqueue(thread_id="resident-thread", text="README.md", message_id="in-answer")
+    second = runtime.run_once()
+
+    outboxes = {item.in_reply_to: item for item in queue.outbox_messages()}
+    pending = outboxes["in-question"]
+    answer = outboxes["in-answer"]
+    assert first.status == "processed"
+    assert second.status == "processed"
+    assert pending.status == "answered"
+    assert pending.payload["answered_by_message_id"] == "in-answer"
+    assert pending.payload["answered_run_id"] == "run-2"
+    assert answer.status == "ready"
+    assert "resident answered workspace evidence" in answer.text
+    assert second.payload["answered_pending_outbox_ids"] == [pending.outbox_id]
+    assert journal.records(kind="resident_pending_outbox_answered")
+    assert "resident_pending_outbox_answered" in TraceRenderer(journal).render_resident_trace()
+
+
+def test_phase73_answered_marker_does_not_mark_current_pending_outbox(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    old = queue.append_outbox(
+        in_reply_to="in-question",
+        thread_id="resident-thread",
+        text="which file?",
+        status="pending_user_input",
+        task_id="task-1",
+        run_id="run-1",
+    )
+    current = queue.append_outbox(
+        in_reply_to="in-answer",
+        thread_id="resident-thread",
+        text="still need a clearer path",
+        status="pending_user_input",
+        task_id="task-1",
+        run_id="run-2",
+    )
+
+    answered = queue.mark_pending_user_input_answered(
+        thread_id="resident-thread",
+        answered_by_message_id="in-answer",
+        task_id="task-1",
+        run_id="run-2",
+        exclude_in_reply_to="in-answer",
+    )
+
+    statuses = {item.outbox_id: item.status for item in queue.outbox_messages()}
+    assert [item.outbox_id for item in answered] == [old.outbox_id]
+    assert statuses[old.outbox_id] == "answered"
+    assert statuses[current.outbox_id] == "pending_user_input"
+
+
 def test_phase73_resident_worker_can_use_configured_model_semantic_chat(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()

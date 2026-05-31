@@ -149,6 +149,26 @@ class ResidentRuntime:
                 task_id=chat_result.task_id,
                 state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
             )
+            answered_pending = []
+            if chat_result.route == "answer_pending_question":
+                answered_pending = self.queue.mark_pending_user_input_answered(
+                    thread_id=message.thread_id,
+                    answered_by_message_id=message.message_id,
+                    task_id=chat_result.task_id,
+                    run_id=chat_result.run_id,
+                    exclude_in_reply_to=message.message_id,
+                )
+                for answered in answered_pending:
+                    self._journal_event(
+                        "resident_pending_outbox_answered",
+                        answered.to_dict(),
+                        task_id=chat_result.task_id,
+                        state_delta={
+                            "resident_outbox_status": answered.status,
+                            "resident_outbox_id": answered.outbox_id,
+                            "resident_answered_by_message_id": message.message_id,
+                        },
+                    )
             completed = self.queue.complete(message.message_id, worker_id=self.worker_id)
             if not completed:
                 self._journal_event(
@@ -182,7 +202,11 @@ class ResidentRuntime:
                 message_id=message.message_id,
                 outbox_id=outbox.outbox_id,
                 reason=None,
-                payload={"chat_status": chat_result.status, "outbox_status": outbox.status},
+                payload={
+                    "chat_status": chat_result.status,
+                    "outbox_status": outbox.status,
+                    "answered_pending_outbox_ids": [item.outbox_id for item in answered_pending],
+                },
             )
         except Exception as exc:  # pragma: no cover - defensive worker containment
             recorded = self.queue.fail(
