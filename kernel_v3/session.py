@@ -121,7 +121,10 @@ class SessionEngine:
         task_ids = {
             int(record.task_id.split("-", 1)[1])
             for record in journal.records()
-            if record.task_id and record.task_id.startswith("task-") and record.task_id.split("-", 1)[1].isdigit()
+            if record.kind in {"task", "session_state"}
+            and record.task_id
+            and record.task_id.startswith("task-")
+            and record.task_id.split("-", 1)[1].isdigit()
         }
         return max(task_ids, default=0) + 1
 
@@ -129,7 +132,9 @@ class SessionEngine:
         run_ids = {
             int(record.run_id.split("-", 1)[1])
             for record in journal.records(task_id=task_id)
-            if record.run_id.startswith("run-") and record.run_id.split("-", 1)[1].isdigit()
+            if record.kind in {"run", "session_state"}
+            and record.run_id.startswith("run-")
+            and record.run_id.split("-", 1)[1].isdigit()
         }
         return max(run_ids, default=0) + 1
 

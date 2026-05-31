@@ -140,12 +140,102 @@ def test_phase63_model_semantic_intake_drives_open_ended_decomposition():
 
     assert result.status == "needs_user_input"
     assert result.mode == "clarify_first"
+    assert result.task_id == "task-1"
+    assert result.run_id == "run-1"
     assert not journal.records(task_id=result.task_id, kind="retrieval_report")
     intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
     assert intake["intents"][0]["text"] == "research a current API surface"
     assert "workspace:write" in intake["blocked_capabilities"]
     assert "model_detected_compound_task" in intake["warnings"]
-    assert any(record.data["task_type"] == "semantic.intake" for record in journal.records(kind="processor_result"))
+    processor_results = journal.records(task_id=result.task_id, kind="processor_result")
+    assert [record.data["task_type"] for record in processor_results] == ["semantic.intake"]
+    assert processor_results[0].run_id == result.run_id
+
+
+def test_phase63_model_semantic_intake_cannot_hide_blocked_capability_under_safe_kind():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "direct_answer",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "direct_answer",
+                        "text": "remember this preference",
+                        "sequence_index": 1,
+                        "required_capabilities": ["durable_memory:write"],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": "I will remember it.",
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "remember my preference",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "needs_user_input"
+    intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
+    assert intake["blocked_capabilities"] == ["durable_memory:write"]
+    assert "未开放能力" in intake["clarification_question"]
+
+
+def test_phase63_model_semantic_intake_resume_uses_next_real_run_id():
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(journal=journal, workspace_files={"README.md": "resume evidence"})
+    pending = runtime.run("read the file", mode="workspace")
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "workspace_read",
+                "suggested_mode": "workspace_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "workspace_read",
+                        "text": "README.md",
+                        "sequence_index": 1,
+                        "required_capabilities": ["file.read"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    resumed = AgentRuntime(journal=journal, processor_fabric=fabric, workspace_files={"README.md": "resume evidence"}).resume(
+        pending.task_id,
+        "README.md",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert resumed.status == "completed"
+    assert resumed.task_id == pending.task_id
+    assert resumed.run_id == "run-2"
+    processor_results = journal.records(task_id=pending.task_id, kind="processor_result")
+    assert processor_results[0].run_id == "run-2"
 
 
 def _action_names(journal: JournalStore, task_id: str) -> list[str]:

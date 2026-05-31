@@ -71,7 +71,7 @@ class LoopControllerV3:
         }
         if task_threads and thread_id not in task_threads:
             raise ValueError(f"thread_id {thread_id!r} does not match task_id {task_id!r}")
-        run_index = 1 + len({record.run_id for record in records})
+        run_index = 1 + len({record.run_id for record in records if record.kind in {"run", "session_state"}})
         task = self.session_engine.resume(
             task_id,
             user_input,

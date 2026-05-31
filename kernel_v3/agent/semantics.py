@@ -59,6 +59,7 @@ _LIVE_TRANSPORT_RULES = (
     CapabilityRule("live_transport:discord", ("discord",), "external_control", {"transport": "discord"}),
     CapabilityRule("live_transport:email", ("email", "mail", "邮箱", "邮件"), "external_control", {"transport": "email"}),
 )
+_SAFE_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
 
 
 def analyze_goal(goal: str) -> SemanticIntake:
@@ -442,10 +443,22 @@ def _blocked_capabilities(intents: list[TaskIntent]) -> list[str]:
         [
             capability
             for intent in intents
-            if intent.kind in {"transport_control", "workspace_write"}
             for capability in intent.required_capabilities
+            if _is_blocked_capability(capability)
         ]
     )
+
+
+def _is_blocked_capability(capability: str) -> bool:
+    if not capability:
+        return False
+    if capability in _SAFE_CAPABILITIES:
+        return False
+    if capability.startswith("live_transport:"):
+        return True
+    if capability in {"workspace:write", "shell:exec", "network.fetch", "durable_memory:write"}:
+        return True
+    return True
 
 
 def _warnings(intents: list[TaskIntent], *, compound: bool) -> list[str]:

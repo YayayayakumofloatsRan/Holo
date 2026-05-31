@@ -411,12 +411,14 @@ class AgentRuntime:
             raise ValueError(f"unsupported semantic_mode: {semantic_mode}")
         if self.processor_fabric is None:
             raise ValueError("model semantic intake requires processor_fabric")
+        semantic_task_id = task_id or _next_task_id(self.journal)
+        semantic_run_id = _next_run_id(self.journal, semantic_task_id)
         return analyze_goal_with_processor(
             goal,
             fabric=self.processor_fabric,
-            task_id=task_id,
-            run_id="semantic-intake",
-            context_id=f"ctx-semantic-{task_id or 'new'}",
+            task_id=semantic_task_id,
+            run_id=semantic_run_id,
+            context_id=f"ctx-semantic-{semantic_task_id}-{semantic_run_id}",
         )
 
     def _append_recipe(self, recipe: TaskRecipe, *, task_id: str, run_id: str) -> None:
@@ -828,6 +830,29 @@ def _semantic_clarification_question(recipe: TaskRecipe) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
+
+
+def _next_task_id(journal: JournalStore) -> str:
+    task_ids = {
+        int(record.task_id.split("-", 1)[1])
+        for record in journal.records()
+        if record.kind in {"task", "session_state"}
+        and record.task_id
+        and record.task_id.startswith("task-")
+        and record.task_id.split("-", 1)[1].isdigit()
+    }
+    return f"task-{max(task_ids, default=0) + 1}"
+
+
+def _next_run_id(journal: JournalStore, task_id: str) -> str:
+    run_ids = {
+        int(record.run_id.split("-", 1)[1])
+        for record in journal.records(task_id=task_id)
+        if record.kind in {"run", "session_state"}
+        and record.run_id.startswith("run-")
+        and record.run_id.split("-", 1)[1].isdigit()
+    }
+    return f"run-{max(run_ids, default=0) + 1}"
 
 
 def _default_retrieval_operator(goal: str) -> RetrievalOperator:
