@@ -84,16 +84,56 @@ class MemoryStore:
         if existing is not None:
             if existing.to_dict() == proposal.to_dict():
                 return existing
+            if (
+                existing.candidate_id == proposal.candidate_id
+                and existing.operation == proposal.operation
+                and existing.proposed_item.get("memory_id") == proposal.proposed_item.get("memory_id")
+            ):
+                return existing
             raise ValueError(f"memory_proposal_conflict:{proposal.proposal_id}")
         self._proposals[proposal.proposal_id] = proposal
         self._append_event("memory_proposal_recorded", proposal.to_dict())
         self._upsert_proposal_index(proposal)
         return proposal
 
+    def proposal(self, proposal_id: str) -> MemoryProposal | None:
+        return self._proposals.get(proposal_id)
+
+    def decide_proposal(
+        self,
+        proposal_id: str,
+        *,
+        approval_status: str,
+        decided_at_ms: int | None = None,
+        metadata: JsonObject | None = None,
+    ) -> MemoryProposal:
+        if approval_status not in {"pending", "approved", "rejected", "expired"}:
+            raise ValueError(f"invalid_memory_proposal_status:{approval_status}")
+        proposal = self._proposals.get(proposal_id)
+        if proposal is None:
+            raise KeyError(f"unknown proposal_id: {proposal_id}")
+        timestamp = decided_at_ms if decided_at_ms is not None else self._now_ms()
+        decided = replace(
+            proposal,
+            approval_status=approval_status,
+            decided_at_ms=timestamp,
+            metadata={**dict(proposal.metadata), **dict(metadata or {})},
+        )
+        self._proposals[proposal_id] = decided
+        self._append_event("memory_proposal_decided", decided.to_dict())
+        self._upsert_proposal_index(decided)
+        return decided
+
     def record_shadow_candidate(self, candidate: ShadowCandidate) -> ShadowCandidate:
         existing = self._candidates.get(candidate.candidate_id)
         if existing is not None:
             if existing.to_dict() == candidate.to_dict():
+                return existing
+            if (
+                existing.source_kind == candidate.source_kind
+                and existing.candidate_text == candidate.candidate_text
+                and existing.normalized_topic == candidate.normalized_topic
+            ):
                 return existing
             raise ValueError(f"shadow_candidate_conflict:{candidate.candidate_id}")
         self._candidates[candidate.candidate_id] = candidate
@@ -262,6 +302,9 @@ class MemoryStore:
                 item = MemoryItem.from_dict(payload)
                 self._items[item.memory_id] = item
             elif event_type == "memory_proposal_recorded":
+                proposal = MemoryProposal.from_dict(payload)
+                self._proposals[proposal.proposal_id] = proposal
+            elif event_type == "memory_proposal_decided":
                 proposal = MemoryProposal.from_dict(payload)
                 self._proposals[proposal.proposal_id] = proposal
             elif event_type == "shadow_candidate_recorded":

@@ -11,6 +11,7 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback,
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
+from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
@@ -31,6 +32,7 @@ class AgentRuntime:
         workspace_root: Path | str | None = None,
         workspace_files: dict[str, str] | None = None,
         workloop_config: WorkloopConfig | None = None,
+        memory_store: MemoryStore | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.artifact_store = artifact_store or ArtifactStore.in_memory()
@@ -39,6 +41,8 @@ class AgentRuntime:
         self.workspace_root = Path(workspace_root) if workspace_root is not None else None
         self.workspace_files = dict(workspace_files or {})
         self.workloop_config = workloop_config or WorkloopConfig()
+        self.memory_store = memory_store
+        self.memory_pipeline = MemoryPipeline(store=memory_store, journal=self.journal) if memory_store is not None else None
 
     def run(
         self,
@@ -144,7 +148,14 @@ class AgentRuntime:
             )
         else:
             result = loop.resume(task_id, user_input=goal, thread_id=thread_id)
-        self._append_semantic_intake(intake, task_id=result.task_id, run_id=result.run_id)
+        semantic_record = self._append_semantic_intake(intake, task_id=result.task_id, run_id=result.run_id)
+        self._maybe_propose_memory(
+            intake,
+            task_id=result.task_id,
+            run_id=result.run_id,
+            thread_id=thread_id,
+            source_record_ref=semantic_record.record_id,
+        )
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
         if result.status == "needs_user_input":
             return AgentRuntimeResult(
@@ -431,8 +442,8 @@ class AgentRuntime:
             state_delta={"agent_recipe": recipe.recipe_id, "agent_mode": recipe.mode},
         )
 
-    def _append_semantic_intake(self, intake: SemanticIntake, *, task_id: str, run_id: str) -> None:
-        self.journal.append(
+    def _append_semantic_intake(self, intake: SemanticIntake, *, task_id: str, run_id: str):
+        return self.journal.append(
             task_id=task_id,
             run_id=run_id,
             step_id=None,
@@ -444,6 +455,37 @@ class AgentRuntime:
                 "compound": intake.compound,
             },
         )
+
+    def _maybe_propose_memory(
+        self,
+        intake: SemanticIntake,
+        *,
+        task_id: str,
+        run_id: str,
+        thread_id: str,
+        source_record_ref: str | None,
+    ) -> None:
+        if self.memory_pipeline is None:
+            return
+        if not _has_memory_write_intent(intake):
+            return
+        try:
+            self.memory_pipeline.propose_from_semantic_intake(
+                intake,
+                task_id=task_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                source_record_ref=source_record_ref,
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime isolation
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="memory_pipeline_error",
+                data={"error_type": type(exc).__name__, "redaction": {"message": "omitted"}},
+                state_delta={"memory_pipeline": "failed"},
+            )
 
     def _append_final(self, answer: FinalAnswer) -> FinalAnswer:
         record = self.journal.append(
@@ -826,6 +868,18 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
 def _semantic_intake_metadata(recipe: TaskRecipe) -> JsonObject:
     value = recipe.metadata.get("semantic_intake")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _has_memory_write_intent(intake: SemanticIntake) -> bool:
+    for intent in intake.intents:
+        if not isinstance(intent, dict):
+            continue
+        if str(intent.get("kind") or "") == "memory_write":
+            return True
+        capabilities = intent.get("required_capabilities")
+        if isinstance(capabilities, list) and "durable_memory:write" in capabilities:
+            return True
+    return "durable_memory:write" in intake.blocked_capabilities
 
 
 def _semantic_response_hint(recipe: TaskRecipe) -> str | None:

@@ -138,6 +138,27 @@ Tests:
 - model malformed memory proposal does not crash the loop
 - processor calls are journaled without secrets
 
+Implementation note:
+
+- `kernel_v3.memory.pipeline.MemoryPipeline` is now the only Phase7 path from
+  semantic memory intent to durable-memory write. It creates shadow candidates
+  and proposals first; it never commits unless `approve_proposal()` is called by
+  host-side code.
+- `AgentRuntime` accepts an optional `MemoryStore`. Without it, the runnable
+  skeleton keeps the old no-durable-memory behavior. With it, explicit
+  `durable_memory:write` semantic intake produces a pending proposal while the
+  task still asks the user for clarification/approval.
+- `MemoryStore.decide_proposal()` records approval/rejection decisions in the
+  append-only memory log and replays them on reload. Candidate/proposal writes
+  are tolerant of duplicate stable ids so resume and resident retries can stay
+  idempotent.
+- Secret-like candidate text is rejected before writing a shadow candidate,
+  proposal, or committed item. The journal records only hashes, risk flags, and
+  redaction metadata for that path.
+- Implemented tests live in `tests/test_kernel_v3_phase71_memory_pipeline.py`.
+  The migration bridge from old semantic-intake records is still a later Phase7
+  slice, not part of this iteration.
+
 ## Phase7.2: Context Injection And Chat Admin
 
 Add durable memory as a separate context section, not by overloading existing

@@ -7,11 +7,14 @@ from kernel_v3.memory.contracts import (
     ProvenanceRef,
     ShadowCandidate,
 )
+from kernel_v3.memory.pipeline import MemoryPipeline, MemoryPipelineResult
 from kernel_v3.memory.privacy import MemoryPrivacyDecision, contains_secret_like_content, validate_memory_item
 from kernel_v3.memory.store import MemoryStore, stable_candidate_id, stable_memory_id, stable_proposal_id
 
 __all__ = [
     "MemoryItem",
+    "MemoryPipeline",
+    "MemoryPipelineResult",
     "MemoryPrivacyDecision",
     "MemoryPrivacyError",
     "MemoryProposal",

@@ -20,6 +20,10 @@ _NOOP_PATTERN = re.compile(
     r"(?:什么都)?(?:不要|别|不用|无需)\s*(?:做|执行|操作|运行|调用|写|改)|(?:do\s+nothing|don't\s+(?:do|run|execute|write|change))",
     re.IGNORECASE,
 )
+_MEMORY_WRITE_PATTERN = re.compile(
+    r"(?:记住|记下|保存(?:这个)?偏好|不要忘|以后(?:都|请|用|按)|remember\b|save\s+this\s+preference|keep\s+this\s+preference|from\s+now\s+on)",
+    re.IGNORECASE,
+)
 _ROLE_PATTERN = re.compile(
     r"(?:扮演|饰演|充当|作为|以.+?身份|act\s+as|roleplay\s+as|pretend\s+to\s+be)\s*(?P<role>[^，,。.;；]*)",
     re.IGNORECASE,
@@ -227,6 +231,8 @@ def _model_intents(value: object) -> list[TaskIntent]:
         kind = _normalize_intent_kind(str(item.get("kind") or "direct_answer"))
         text = str(item.get("text") or "")
         capabilities = _string_list(item.get("required_capabilities"))
+        if kind == "memory_write":
+            capabilities = _ordered_unique([*capabilities, "durable_memory:write"])
         risk = str(item.get("risk") or _risk_for_kind(kind))
         status = str(item.get("status") or _status_for_kind(kind))
         metadata = item.get("metadata")
@@ -245,27 +251,52 @@ def _model_intents(value: object) -> list[TaskIntent]:
 
 
 def _apply_hard_capability_overrides(goal: str, intents: list[TaskIntent]) -> list[TaskIntent]:
+    result = intents
     transport = _transport_control_rule(goal)
-    if transport is None:
-        return intents
-    if any(intent.kind == "transport_control" for intent in intents):
+    if transport is not None:
+        if any(intent.kind == "transport_control" for intent in result):
+            result = [
+                _merge_capability(intent, transport.capability, risk=transport.risk, status="blocked", metadata=transport.metadata)
+                if intent.kind == "transport_control"
+                else intent
+                for intent in result
+            ]
+        else:
+            result = [
+                _intent(
+                    1,
+                    "transport_control",
+                    goal,
+                    capabilities=[transport.capability],
+                    risk=transport.risk,
+                    status="blocked",
+                    metadata=transport.metadata,
+                ),
+                *_renumber(result, start=2),
+            ]
+    if _MEMORY_WRITE_PATTERN.search(goal):
+        result = _ensure_memory_write_intent(goal, result)
+    return result
+
+
+def _ensure_memory_write_intent(goal: str, intents: list[TaskIntent]) -> list[TaskIntent]:
+    if any(intent.kind == "memory_write" for intent in intents):
         return [
-            _merge_capability(intent, transport.capability, risk=transport.risk, status="blocked", metadata=transport.metadata)
-            if intent.kind == "transport_control"
+            _merge_capability(intent, "durable_memory:write", risk="write", status="needs_review", metadata={})
+            if intent.kind == "memory_write"
             else intent
             for intent in intents
         ]
     return [
+        *intents,
         _intent(
-            1,
-            "transport_control",
+            len(intents) + 1,
+            "memory_write",
             goal,
-            capabilities=[transport.capability],
-            risk=transport.risk,
-            status="blocked",
-            metadata=transport.metadata,
+            capabilities=["durable_memory:write"],
+            risk="write",
+            status="needs_review",
         ),
-        *_renumber(intents, start=2),
     ]
 
 
@@ -314,6 +345,15 @@ def _classify_segment(segment: str, index: int) -> TaskIntent:
         return _clarification_intent(stripped, index=index)
     if _NOOP_PATTERN.search(stripped):
         return _intent(index, "noop", stripped, risk="none", status="ready")
+    if _MEMORY_WRITE_PATTERN.search(stripped):
+        return _intent(
+            index,
+            "memory_write",
+            stripped,
+            capabilities=["durable_memory:write"],
+            risk="write",
+            status="needs_review",
+        )
     transport = _transport_control_rule(stripped)
     if transport is not None:
         return _intent(
@@ -476,6 +516,7 @@ def _primary_intent(intents: list[TaskIntent]) -> str:
     priority = [
         "transport_control",
         "noop",
+        "memory_write",
         "retrieval_research",
         "workspace_write",
         "workspace_read",
@@ -529,6 +570,8 @@ def _normalize_mode(value: str, *, primary: str, requires_clarification: bool) -
 
 def _normalize_primary(value: str, intents: list[TaskIntent]) -> str:
     kind = _normalize_intent_kind(value)
+    if kind == "direct_answer" and any(intent.kind != "direct_answer" for intent in intents):
+        return _primary_intent(intents)
     if kind != "direct_answer" or value == "direct_answer":
         return kind
     return _primary_intent(intents)
@@ -542,6 +585,7 @@ def _normalize_intent_kind(value: str) -> str:
         "workspace_write",
         "workspace_read",
         "synthesis",
+        "memory_write",
         "roleplay",
         "clarification",
         "direct_answer",
@@ -552,7 +596,7 @@ def _normalize_intent_kind(value: str) -> str:
 def _risk_for_kind(kind: str) -> str:
     if kind in {"transport_control"}:
         return "external_control"
-    if kind == "workspace_write":
+    if kind in {"workspace_write", "memory_write"}:
         return "write"
     if kind in {"retrieval_research", "workspace_read"}:
         return "read"
@@ -564,6 +608,8 @@ def _status_for_kind(kind: str) -> str:
         return "blocked"
     if kind == "workspace_write":
         return "needs_permission"
+    if kind == "memory_write":
+        return "needs_review"
     if kind == "clarification":
         return "needs_user_input"
     return "ready"
@@ -578,6 +624,8 @@ def _response_hint(primary: str, *, intents: list[TaskIntent], blocked: list[str
     if primary == "transport_control":
         transport = _first_metadata_value(intents, "transport") or "live transport"
         return f"当前 kernel_v3 不接管 {transport} 或其他 live transport。transports 不是决策层；如需后续接入，应作为独立 transport phase，并继续由宿主校验权限。"
+    if primary == "memory_write":
+        return "可以生成 durable memory 提案，但不会自动写入长期记忆；需要宿主规则和用户审批后才会提交。"
     if blocked:
         return "当前请求需要未开放的能力：" + ", ".join(blocked)
     return None
