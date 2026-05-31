@@ -48,6 +48,17 @@ class RetrievalProviderCapability(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class RetrievalProviderInspection(Contract):
+    status: str
+    generated_at_ms: int
+    network_access: bool
+    provider_capabilities: list[JsonObject]
+    issues: list[JsonObject]
+    recommended_actions: list[str]
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class SearchAttempt(Contract):
     attempt_id: str
     goal_id: str

@@ -154,3 +154,4 @@ class ResidentDoctorReport(Contract):
     schedule_inspection: JsonObject
     memory_inspection: JsonObject | None
     corpus_inspection: JsonObject | None
+    retrieval_provider_inspection: JsonObject | None

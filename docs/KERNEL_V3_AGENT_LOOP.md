@@ -230,13 +230,16 @@ supervisor can see the next due time.
 
 `resident doctor` is the read-only operator snapshot for long-running work. It
 aggregates queue inspection, schedule inspection, and any configured durable
-memory or research corpus inspections into one status, issue list, and action
-list. It does not create memory/corpus stores unless their CLI paths are
-configured, and it does not enqueue, approve memory, retrieve, or execute tools.
-When the journal and artifact store are configured, doctor also asks durable
-memory inspection to verify committed memory provenance refs and artifact refs,
-using metadata/blob presence checks only. This keeps long-running memory
-auditable without exposing raw artifact payloads.
+memory, research corpus, or retrieval-provider inspections into one status,
+issue list, and action list. It does not create memory/corpus stores unless
+their CLI paths are configured, and it does not enqueue, approve memory,
+retrieve, fetch, or execute tools. When the journal and artifact store are
+configured, doctor also asks durable memory inspection to verify committed
+memory provenance refs and artifact refs, using metadata/blob presence checks
+only. Retrieval-provider inspection is capability-only: it reports fake/corpus/
+future-live provider metadata, network capability, and research-profile support
+without running retrieval or reading artifact bodies. This keeps long-running
+memory and research operation auditable without exposing raw artifact payloads.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that

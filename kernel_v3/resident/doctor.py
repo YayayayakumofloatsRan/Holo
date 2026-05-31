@@ -8,6 +8,7 @@ from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
 from kernel_v3.research import ResearchCorpusStore
+from kernel_v3.retrieval import RetrievalOperator, inspect_retrieval_providers
 from kernel_v3.resident.contracts import ResidentDoctorReport
 from kernel_v3.resident.queue import ResidentQueue
 from kernel_v3.resident.scheduler import ResidentScheduler
@@ -23,6 +24,8 @@ class ResidentDoctor:
         artifact_store: ArtifactStore | None = None,
         memory_store: MemoryStore | None = None,
         corpus_store: ResearchCorpusStore | None = None,
+        retrieval_operator: RetrievalOperator | None = None,
+        research_profile_id: str | None = None,
         clock_ms: Callable[[], int] | None = None,
     ) -> None:
         self.queue = queue
@@ -31,6 +34,8 @@ class ResidentDoctor:
         self.artifact_store = artifact_store
         self.memory_store = memory_store
         self.corpus_store = corpus_store
+        self.retrieval_operator = retrieval_operator
+        self.research_profile_id = research_profile_id
         self.clock_ms = clock_ms or queue.clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
 
     def inspect(self, *, sample_limit: int = 5) -> ResidentDoctorReport:
@@ -50,10 +55,20 @@ class ResidentDoctor:
             if self.corpus_store is not None
             else None
         )
+        retrieval_provider_inspection = (
+            inspect_retrieval_providers(
+                self.retrieval_operator,
+                research_profile_id=self.research_profile_id,
+                clock_ms=self.clock_ms,
+            )
+            if self.retrieval_operator is not None
+            else None
+        )
         configured = {
             "artifact_store": self.artifact_store is not None,
             "memory_store": self.memory_store is not None,
             "corpus_store": self.corpus_store is not None,
+            "retrieval_operator": self.retrieval_operator is not None,
             "resident_db": str(self.queue.db_path),
         }
         component_statuses = [
@@ -61,6 +76,7 @@ class ResidentDoctor:
             schedule_inspection.status,
             memory_inspection.status if memory_inspection is not None else "ok",
             corpus_inspection.status if corpus_inspection is not None else "ok",
+            retrieval_provider_inspection.status if retrieval_provider_inspection is not None else "ok",
         ]
         issues: list[JsonObject] = []
         issues.extend(_component_issues("queue", queue_inspection.issues))
@@ -69,6 +85,8 @@ class ResidentDoctor:
             issues.extend(_memory_issues(memory_inspection.to_dict()))
         if corpus_inspection is not None:
             issues.extend(_component_issues("corpus", corpus_inspection.issues))
+        if retrieval_provider_inspection is not None:
+            issues.extend(_component_issues("retrieval", retrieval_provider_inspection.issues))
         return ResidentDoctorReport(
             status=_combined_health(component_statuses),
             generated_at_ms=self._now_ms(),
@@ -80,12 +98,20 @@ class ResidentDoctor:
                     *schedule_inspection.recommended_actions,
                     *(memory_inspection.recommended_actions if memory_inspection is not None else []),
                     *(corpus_inspection.recommended_actions if corpus_inspection is not None else []),
+                    *(
+                        retrieval_provider_inspection.recommended_actions
+                        if retrieval_provider_inspection is not None
+                        else []
+                    ),
                 ]
             ),
             queue_inspection=queue_inspection.to_dict(),
             schedule_inspection=schedule_inspection.to_dict(),
             memory_inspection=memory_inspection.to_dict() if memory_inspection is not None else None,
             corpus_inspection=corpus_inspection.to_dict() if corpus_inspection is not None else None,
+            retrieval_provider_inspection=(
+                retrieval_provider_inspection.to_dict() if retrieval_provider_inspection is not None else None
+            ),
         )
 
     def _now_ms(self) -> int:

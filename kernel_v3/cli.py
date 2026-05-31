@@ -35,9 +35,12 @@ from kernel_v3.retrieval import (
     CorpusSearchProvider,
     FakeFetchProvider,
     FakeSearchProvider,
+    FallbackSearchProvider,
     RetrievalOperator,
+    RoutingFetchProvider,
     SearchGoal,
     SearchSource,
+    inspect_retrieval_providers,
 )
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
@@ -169,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_inspect.add_argument("--sample-limit", type=int, default=5)
     resident_doctor = resident_sub.add_parser("doctor")
     resident_doctor.add_argument("--sample-limit", type=int, default=5)
+    resident_doctor.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
@@ -223,6 +227,10 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("--max-spans-per-document", type=int, default=1)
     retrieve_parser.add_argument("--index-corpus", action="store_true")
     retrieve_parser.add_argument("--from-corpus", action="store_true")
+
+    retrieval_providers_parser = sub.add_parser("retrieval-providers")
+    retrieval_providers_parser.add_argument("--mode", choices=["default", "fake", "corpus"], default="default")
+    retrieval_providers_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
 
     corpus_parser = sub.add_parser("corpus")
     corpus_sub = corpus_parser.add_subparsers(dest="corpus_command", required=True)
@@ -468,6 +476,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
+
+    if args.command == "retrieval-providers":
+        payload = _retrieval_provider_command(args)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload.get("status") not in {"failed", "error"} else 1
 
     if args.command == "corpus":
         payload = _corpus_command(args)
@@ -916,13 +929,19 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         scheduler = ResidentScheduler(queue=queue, journal=journal)
         memory_store = _memory_store(args, create_default=_memory_configured(args))
         corpus_store = _corpus_store(args, create_default=_corpus_configured(args))
+        artifact_store = _artifact_store(args, create_default=False)
         report = ResidentDoctor(
             queue=queue,
             scheduler=scheduler,
             journal=journal,
-            artifact_store=_artifact_store(args, create_default=False),
+            artifact_store=artifact_store,
             memory_store=memory_store,
             corpus_store=corpus_store,
+            retrieval_operator=_inspectable_retrieval_operator(
+                artifact_store=artifact_store or ArtifactStore.in_memory(),
+                corpus_store=corpus_store,
+            ),
+            research_profile_id=args.research_profile,
         ).inspect(sample_limit=args.sample_limit)
         return {"status": report.status, "doctor": report.to_dict()}
     if command == "schedule-add":
@@ -1148,6 +1167,80 @@ def _live_processor_fabric(
         providers=providers,
         router=router,
         journal=journal,
+    )
+
+
+def _retrieval_provider_command(args) -> dict[str, object]:
+    operator, mode = _retrieval_operator_for_mode(args.mode, args)
+    inspection = inspect_retrieval_providers(operator, research_profile_id=args.profile)
+    return {
+        "status": inspection.status,
+        "mode": mode,
+        "network_access": inspection.network_access,
+        "provider_capabilities": inspection.provider_capabilities,
+        "inspection": inspection.to_dict(),
+    }
+
+
+def _retrieval_operator_for_mode(mode: str, args) -> tuple[RetrievalOperator, str]:
+    if mode == "fake":
+        return _fake_retrieval_operator(), "fake"
+    if mode == "corpus":
+        corpus_store = _corpus_store(args, create_default=True)
+        artifact_store = _artifact_store(args, create_default=False) or ArtifactStore.in_memory()
+        if corpus_store is None:
+            return _fake_retrieval_operator(), "fake"
+        return (
+            RetrievalOperator(
+                search_provider=CorpusSearchProvider(corpus_store),
+                fetch_provider=CorpusFetchProvider(artifact_store),
+            ),
+            "corpus",
+        )
+    corpus_store = _runtime_corpus_store(args)
+    artifact_store = _runtime_artifact_store(args) or ArtifactStore.in_memory()
+    if corpus_store is None:
+        return _fake_retrieval_operator(), "fake"
+    return _inspectable_retrieval_operator(artifact_store=artifact_store, corpus_store=corpus_store), "default"
+
+
+def _inspectable_retrieval_operator(
+    *,
+    artifact_store: ArtifactStore,
+    corpus_store: ResearchCorpusStore | None,
+) -> RetrievalOperator:
+    if corpus_store is None:
+        return _fake_retrieval_operator()
+    source = _inspection_source()
+    return RetrievalOperator(
+        search_provider=FallbackSearchProvider(
+            [
+                CorpusSearchProvider(corpus_store),
+                FakeSearchProvider({"inspection": [source]}),
+            ]
+        ),
+        fetch_provider=RoutingFetchProvider(
+            routes={"research_corpus": CorpusFetchProvider(artifact_store)},
+            fallback=FakeFetchProvider({source.uri: "inspection fixture"}),
+        ),
+    )
+
+
+def _fake_retrieval_operator() -> RetrievalOperator:
+    source = _inspection_source()
+    return RetrievalOperator(
+        search_provider=FakeSearchProvider({"inspection": [source]}),
+        fetch_provider=FakeFetchProvider({source.uri: "inspection fixture"}),
+    )
+
+
+def _inspection_source() -> SearchSource:
+    return SearchSource(
+        source_id="src-retrieval-inspection",
+        uri="https://example.test/holo-v3-retrieval-inspection",
+        title="Holo v3 retrieval inspection fixture",
+        snippet="Inspection fixture for provider capability reporting.",
+        provider="fake",
     )
 
 

@@ -93,6 +93,21 @@ Retrieval query-plan and report diagnostics include these provider capabilities,
 so a resident operator can audit whether a run used corpus-only, fake, or
 future live-capable providers.
 
+Provider inspection is also available before a run starts:
+
+```bash
+holo-v3 retrieval-providers --profile finance_fundamentals
+holo-v3 \
+  --artifact-log .state/kernel_v3/artifacts.jsonl \
+  --corpus-log .state/kernel_v3/corpus.jsonl \
+  retrieval-providers --mode default --profile finance_fundamentals
+```
+
+This command is read-only. It does not retrieve, fetch, index, or read artifact
+bodies. It reports provider capabilities, `network_access`, profile awareness,
+and operator-facing issues such as using a generic fake provider for a directed
+finance profile.
+
 ## CLI Workflow
 
 The CLI exposes corpus inspection and corpus-backed retrieval without enabling
