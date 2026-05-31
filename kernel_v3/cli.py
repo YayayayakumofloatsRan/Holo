@@ -788,9 +788,20 @@ def _corpus_command(args) -> dict[str, object]:
         documents = store.documents(profile_id=args.profile)[: _positive_limit(args.limit)]
         return {"status": "ok", "documents": [document.to_dict() for document in documents]}
     if command == "search":
+        result = store.search(
+            args.query,
+            profile_id=args.profile,
+            limit=_positive_limit(args.limit),
+            record_access=True,
+            access_context={
+                "surface": "cli",
+                "command": "corpus search",
+                "profile_id": args.profile,
+            },
+        )
         return {
             "status": "ok",
-            "result": store.search(args.query, profile_id=args.profile, limit=_positive_limit(args.limit)).to_dict(),
+            "result": result.to_dict(),
         }
     if command == "inspect":
         document = store.get(args.document_id)

@@ -64,6 +64,18 @@ def test_phase85_cli_indexes_searches_and_reuses_corpus_without_network(tmp_path
     assert search_payload["result"]["total"] == 1
     assert search_payload["result"]["documents"][0]["document_id"] == document_id
     assert RAW_ONLY_SENTINEL not in search.stdout
+    corpus_events = [
+        json.loads(line)
+        for line in corpus_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    search_event = corpus_events[-1]
+    assert search_event["event_type"] == "corpus_documents_searched"
+    assert search_event["payload"]["document_ids"] == [document_id]
+    assert search_event["payload"]["access_context"]["surface"] == "cli"
+    assert search_event["payload"]["access_context"]["command"] == "corpus search"
+    assert search_event["payload"]["redaction"] == {"query": "hash_only", "documents": "ids_only"}
+    assert "AAPL revenue" not in json.dumps(corpus_events, ensure_ascii=False)
 
     reused = _run_cli(
         *base_args,
