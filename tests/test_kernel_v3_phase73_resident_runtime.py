@@ -610,6 +610,52 @@ def test_phase73_run_loop_reports_failed_when_dead_letter_remains(tmp_path: Path
     assert queue.inbox_messages()[0].status == "dead_letter"
 
 
+def test_phase73_run_loop_reports_awaiting_user_input_when_pending_outbox_remains(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": _workspace_read_intake()}, journal=journal)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+    )
+    queue.enqueue(thread_id="resident-thread", text="read the file", message_id="in-needs-user")
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=chat,
+        worker_id="worker-awaiting-input",
+    ).run_loop(max_iterations=3)
+
+    assert result.status == "awaiting_user_input"
+    assert result.reason == "unresolved_pending_user_input"
+    assert result.queue_status["outbox_counts"]["pending_user_input"] == 1
+    assert queue.outbox_messages()[0].status == "pending_user_input"
+
+
+def test_phase73_run_loop_reports_delivery_failed_outbox(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    queue.append_outbox(
+        in_reply_to="in-delivery",
+        thread_id="resident-thread",
+        text="delivery failed",
+        status="delivery_failed",
+        task_id=None,
+        run_id=None,
+    )
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-delivery-failed",
+    ).run_loop(max_iterations=1)
+
+    assert result.status == "delivery_failed"
+    assert result.reason == "unresolved_delivery_failed_outbox"
+    assert result.queue_status["outbox_counts"]["delivery_failed"] == 1
+
+
 def test_phase73_dead_letter_can_be_requeued_for_manual_recovery(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     queue.enqueue(thread_id="resident-thread", text="recover me", message_id="in-dead")

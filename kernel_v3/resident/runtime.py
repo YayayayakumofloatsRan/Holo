@@ -43,15 +43,25 @@ class ResidentRuntime:
         queue_status = self.queue.status()
         unresolved_failed = int(queue_status.inbox_counts.get("failed", 0)) + queue_status.dead_letter_count
         unresolved_retry = int(queue_status.inbox_counts.get("retry_wait", 0))
+        unresolved_delivery_failed = int(queue_status.outbox_counts.get("delivery_failed", 0))
+        unresolved_user_input = int(queue_status.outbox_counts.get("pending_user_input", 0)) + int(
+            queue_status.outbox_counts.get("pending_user_input_delivered", 0)
+        )
         if blocked:
             status = "blocked"
             reason = results[-1].reason if results else "blocked"
         elif unresolved_failed:
             status = "failed"
             reason = "unresolved_failed_inbox"
+        elif unresolved_delivery_failed:
+            status = "delivery_failed"
+            reason = "unresolved_delivery_failed_outbox"
         elif unresolved_retry:
             status = "retry_wait"
             reason = "unresolved_retry_wait"
+        elif unresolved_user_input:
+            status = "awaiting_user_input"
+            reason = "unresolved_pending_user_input"
         elif results and results[-1].status == "idle":
             status = "idle" if processed == 0 and failed == 0 else "completed"
             reason = results[-1].reason

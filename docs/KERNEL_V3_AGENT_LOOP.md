@@ -164,10 +164,12 @@ message approves or rejects the plan.
 
 Resident loop summaries include the queue health snapshot used to decide the
 loop result. A loop no longer reports `completed` when unresolved failed,
-dead-letter, or retry-wait inbox items remain after an idle turn; it reports
-`failed` for unresolved failed/dead-letter work and `retry_wait` for delayed
-retry work. This keeps long-running supervision from confusing "no claimable
-message right now" with a healthy completed queue.
+dead-letter, retry-wait, delivery-failed, or pending-user-input work remains
+after an idle turn. It reports `failed` for unresolved failed/dead-letter work,
+`delivery_failed` for failed outbox delivery, `retry_wait` for delayed retry
+work, and `awaiting_user_input` when the next useful step is a user reply. This
+keeps long-running supervision from confusing "no claimable message right now"
+with a healthy completed queue.
 
 Natural-language turn routing is processor-shaped rather than phrase-table
 driven. A model or fake provider may emit a bounded `chat.route` proposal such
