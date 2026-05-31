@@ -300,6 +300,10 @@ Implementation note:
   the local dev/admin surface. `resident enqueue --message-id` can replay a
   gateway delivery id to test idempotency. This is not a live transport
   integration.
+- `holo-v3 resident inspect` converts queue counts into an actionable health
+  report with issue codes, sample message/outbox ids, and recommended host/admin
+  actions. This gives a long-running resident worker an operator-facing doctor
+  view without adding transport-level autonomy.
 - `holo-v3 resident-trace` renders resident journal records, keeping the SQLite
   queue state auditable through the normal kernel trace path.
 - Implemented tests live in `tests/test_kernel_v3_phase73_resident_runtime.py`.

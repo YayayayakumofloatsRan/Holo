@@ -57,6 +57,16 @@ class ResidentQueueStatus(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ResidentQueueInspection(Contract):
+    status: str
+    generated_at_ms: int
+    issues: list[JsonObject]
+    recommended_actions: list[str]
+    queue_status: JsonObject
+    samples: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class ResidentRunResult(Contract):
     status: str
     worker_id: str

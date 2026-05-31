@@ -510,6 +510,43 @@ def test_phase73_queue_status_reports_health_counts(tmp_path: Path):
     assert status.active_lease is None
 
 
+def test_phase73_queue_inspect_reports_actionable_health(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="dead item", message_id="in-dead")
+    queue.enqueue(thread_id="resident-thread", text="pending item", message_id="in-pending")
+    assert queue.acquire_lease(worker_id="worker-inspect", ttl_ms=10) is not None
+    dead_claim = queue.claim_next(worker_id="worker-inspect")
+    assert dead_claim is not None
+    assert queue.fail(dead_claim.message_id, reason="RuntimeError", worker_id="worker-inspect", max_attempts=1)
+    queue.append_outbox(
+        in_reply_to="out-ready",
+        thread_id="resident-thread",
+        text="ready",
+        status="ready",
+        task_id=None,
+        run_id=None,
+    )
+    queue.append_outbox(
+        in_reply_to="out-waiting",
+        thread_id="resident-thread",
+        text="which file?",
+        status="pending_user_input",
+        task_id="task-1",
+        run_id="run-1",
+    )
+
+    inspection = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock(start=10_000)).inspect(sample_limit=2)
+
+    codes = {issue["code"] for issue in inspection.issues}
+    assert inspection.status == "error"
+    assert {"dead_letter_inbox", "pending_inbox", "ready_outbox", "awaiting_user_input"}.issubset(codes)
+    assert "resident requeue <message_id> --reason manual_review" in inspection.recommended_actions
+    assert "resident outbox" in inspection.recommended_actions
+    assert inspection.queue_status["dead_letter_count"] == 1
+    assert inspection.samples["inbox"]
+    assert inspection.samples["outbox"]
+
+
 def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -573,6 +610,22 @@ def test_phase73_cli_resident_ack_rejects_invalid_outbox_transition(tmp_path: Pa
     assert status == 1
     assert payload["reason"] == "invalid_outbox_status_transition:ready->answered"
     assert ResidentQueue(resident_db).outbox_messages()[0].status == "ready"
+
+
+def test_phase73_cli_resident_inspect_reports_queue_health(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    queue = ResidentQueue(resident_db, clock_ms=_clock())
+    queue.enqueue(thread_id="resident-cli", text="pending", message_id="in-cli-pending")
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    assert cli.main([*base, "resident", "inspect", "--sample-limit", "1"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "attention"
+    assert payload["inspection"]["issues"][0]["code"] == "pending_inbox"
+    assert payload["inspection"]["samples"]["inbox"][0]["message_id"] == "in-cli-pending"
 
 
 def test_phase73_cli_resident_enqueue_can_replay_message_id_idempotently(tmp_path: Path, capsys):

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, ResidentQueueStatus, WorkerLease
+from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, ResidentQueueInspection, ResidentQueueStatus, WorkerLease
 
 
 _OUTBOX_STATUSES = {
@@ -479,6 +479,142 @@ class ResidentQueue:
         finally:
             conn.close()
 
+    def inspect(self, *, sample_limit: int = 5) -> ResidentQueueInspection:
+        status = self.status()
+        inbox = self.inbox_messages()
+        outbox = self.outbox_messages()
+        issues: list[JsonObject] = []
+        actions: list[str] = []
+
+        if status.dead_letter_count:
+            dead = [message.message_id for message in inbox if message.status == "dead_letter"][:sample_limit]
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": "dead_letter_inbox",
+                    "count": status.dead_letter_count,
+                    "message_ids": dead,
+                }
+            )
+            actions.append("resident requeue <message_id> --reason manual_review")
+        if status.stale_running_count:
+            stale = [
+                message.message_id
+                for message in inbox
+                if (
+                    message.status == "running"
+                    and message.lease_until_ms is not None
+                    and message.lease_until_ms <= status.generated_at_ms
+                )
+            ][:sample_limit]
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": "stale_running_inbox",
+                    "count": status.stale_running_count,
+                    "message_ids": stale,
+                }
+            )
+            actions.append("resident run-once --worker-id <worker>")
+        if status.due_retry_count:
+            due = [
+                message.message_id
+                for message in inbox
+                if (
+                    message.status == "retry_wait"
+                    and message.next_attempt_at_ms is not None
+                    and message.next_attempt_at_ms <= status.generated_at_ms
+                )
+            ][:sample_limit]
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "retry_due",
+                    "count": status.due_retry_count,
+                    "message_ids": due,
+                }
+            )
+            actions.append("resident run-once --worker-id <worker>")
+        pending_count = int(status.inbox_counts.get("pending", 0))
+        if pending_count:
+            pending = [message.message_id for message in inbox if message.status == "pending"][:sample_limit]
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "pending_inbox",
+                    "count": pending_count,
+                    "message_ids": pending,
+                }
+            )
+            actions.append("resident run --max-iterations <n>")
+        ready_count = int(status.outbox_counts.get("ready", 0))
+        if ready_count:
+            ready = [message.outbox_id for message in outbox if message.status == "ready"][:sample_limit]
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "ready_outbox",
+                    "count": ready_count,
+                    "outbox_ids": ready,
+                }
+            )
+            actions.append("resident outbox")
+        delivery_failed_count = int(status.outbox_counts.get("delivery_failed", 0))
+        if delivery_failed_count:
+            failed = [
+                message.outbox_id
+                for message in outbox
+                if message.status == "delivery_failed"
+            ][:sample_limit]
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": "delivery_failed_outbox",
+                    "count": delivery_failed_count,
+                    "outbox_ids": failed,
+                }
+            )
+            actions.append("resident ack <outbox_id> --status ready")
+        waiting_count = (
+            int(status.outbox_counts.get("pending_user_input", 0))
+            + int(status.outbox_counts.get("pending_user_input_delivered", 0))
+        )
+        if waiting_count:
+            waiting = [
+                message.outbox_id
+                for message in outbox
+                if message.status in {"pending_user_input", "pending_user_input_delivered"}
+            ][:sample_limit]
+            issues.append(
+                {
+                    "severity": "info",
+                    "code": "awaiting_user_input",
+                    "count": waiting_count,
+                    "outbox_ids": waiting,
+                }
+            )
+            actions.append("wait for user reply in same thread")
+
+        if any(issue["severity"] == "error" for issue in issues):
+            health = "error"
+        elif any(issue["severity"] == "warning" for issue in issues):
+            health = "warning"
+        elif issues:
+            health = "attention"
+        else:
+            health = "ok"
+        return ResidentQueueInspection(
+            status=health,
+            generated_at_ms=status.generated_at_ms,
+            issues=issues,
+            recommended_actions=_ordered_unique(actions),
+            queue_status=status.to_dict(),
+            samples={
+                "inbox": [message.to_dict() for message in inbox[:sample_limit]],
+                "outbox": [message.to_dict() for message in outbox[:sample_limit]],
+            },
+        )
+
     def mark_outbox_status(self, outbox_id: str, *, status: str) -> OutboxMessage | None:
         outbox, _reason = self.transition_outbox_status(outbox_id, status=status)
         return outbox
@@ -870,3 +1006,14 @@ def _json_dict(value: object) -> JsonObject:
         return {}
     loaded = json.loads(value)
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

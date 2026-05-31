@@ -137,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    resident_inspect = resident_sub.add_parser("inspect")
+    resident_inspect.add_argument("--sample-limit", type=int, default=5)
     resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
@@ -662,6 +664,9 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         return {"status": "ok", "messages": [message.to_dict() for message in queue.outbox_messages()]}
     if command == "status":
         return {"status": "ok", "queue": queue.status().to_dict()}
+    if command == "inspect":
+        inspection = queue.inspect(sample_limit=args.sample_limit)
+        return {"status": inspection.status, "inspection": inspection.to_dict()}
     if command == "requeue":
         message = queue.requeue(
             args.message_id,
