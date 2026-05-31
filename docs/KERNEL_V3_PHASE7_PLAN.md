@@ -241,6 +241,8 @@ Tests:
 - transient worker failures retry with backoff and eventually enter dead letter
 - outbox items can be acknowledged by admin/transport glue without adding a live
   transport decision layer
+- resident enqueue, claim, outbox, completion, ack, and loop summaries are
+  journaled and renderable through resident trace
 - no live network or model required for default tests
 
 Implementation note:
@@ -273,6 +275,8 @@ Implementation note:
   the worker does not fabricate the missing user answer or continue the task.
 - `holo-v3 resident enqueue/run-once/run/inbox/outbox/ack` provides the local
   dev/admin surface. This is not a live transport integration.
+- `holo-v3 resident-trace` renders resident journal records, keeping the SQLite
+  queue state auditable through the normal kernel trace path.
 - Implemented tests live in `tests/test_kernel_v3_phase73_resident_runtime.py`.
 
 ## Phase7.4: Migration, Export, And Trace Hardening

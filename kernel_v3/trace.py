@@ -103,6 +103,20 @@ class TraceRenderer:
                 )
         return "\n".join(lines)
 
+    def render_resident_trace(self) -> str:
+        records = [record for record in self.journal.records() if record.kind.startswith("resident_")]
+        lines = ["Resident Trace"]
+        for record in records:
+            data = record.data
+            lines.append(
+                f"{record.run_id} {record.kind} "
+                f"task={record.task_id or '-'} "
+                f"message={data.get('message_id') or data.get('in_reply_to') or '-'} "
+                f"outbox={data.get('outbox_id') or '-'} "
+                f"status={data.get('status') or data.get('reason') or record.state_delta}"
+            )
+        return "\n".join(lines)
+
     def _retrieval_lines(self, record) -> list[str]:
         data = record.data
         step = record.step_id or "-"

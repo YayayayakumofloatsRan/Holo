@@ -6,6 +6,7 @@ from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.journal import JournalStore
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
+from kernel_v3.trace import TraceRenderer
 
 
 def test_phase73_resident_worker_processes_inbox_to_outbox(tmp_path: Path):
@@ -14,7 +15,7 @@ def test_phase73_resident_worker_processes_inbox_to_outbox(tmp_path: Path):
     chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
     queue.enqueue(thread_id="resident-thread", text="hello resident", message_id="in-1")
 
-    result = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-1").run_once()
+    result = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-1", journal=journal).run_once()
 
     assert result.status == "processed"
     assert queue.inbox_messages()[0].status == "completed"
@@ -23,6 +24,15 @@ def test_phase73_resident_worker_processes_inbox_to_outbox(tmp_path: Path):
     assert outbox.status == "ready"
     assert "离线 host fallback" in outbox.text
     assert "Direct answer:" not in outbox.text
+    resident_kinds = [record.kind for record in journal.records() if record.kind.startswith("resident_")]
+    assert resident_kinds == [
+        "resident_lease_acquired",
+        "resident_inbox_claimed",
+        "resident_outbox_appended",
+        "resident_inbox_completed",
+        "resident_lease_released",
+    ]
+    assert "resident_outbox_appended" in TraceRenderer(journal).render_resident_trace()
 
 
 def test_phase73_worker_lease_prevents_duplicate_ownership(tmp_path: Path):
@@ -233,6 +243,13 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     assert cli.main([*base, "resident", "run", "--worker-id", "worker-cli", "--max-iterations", "2"]) == 0
     loop = json.loads(capsys.readouterr().out)
     assert loop["status"] == "idle"
+
+    assert cli.main([*base, "resident-trace"]) == 0
+    trace = capsys.readouterr().out
+    assert "Resident Trace" in trace
+    assert "resident_inbox_enqueued" in trace
+    assert "resident_outbox_ack" in trace
+    assert outbox_id in trace
 
 
 class _RaisingChatRuntime:

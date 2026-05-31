@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from kernel_v3.chat import ChatRuntime
+from kernel_v3.contracts import JsonObject
+from kernel_v3.journal import JournalStore
 from kernel_v3.resident.contracts import ResidentLoopResult, ResidentRunResult
 from kernel_v3.resident.queue import ResidentQueue
 
@@ -15,6 +17,7 @@ class ResidentRuntime:
         lease_ttl_ms: int = 30_000,
         max_attempts: int = 3,
         retry_backoff_ms: int = 1_000,
+        journal: JournalStore | None = None,
     ) -> None:
         self.queue = queue
         self.chat_runtime = chat_runtime
@@ -22,6 +25,7 @@ class ResidentRuntime:
         self.lease_ttl_ms = lease_ttl_ms
         self.max_attempts = max_attempts
         self.retry_backoff_ms = retry_backoff_ms
+        self.journal = journal
 
     def run_loop(self, *, max_iterations: int = 10, stop_on_idle: bool = True) -> ResidentLoopResult:
         results: list[ResidentRunResult] = []
@@ -48,7 +52,7 @@ class ResidentRuntime:
         else:
             status = "completed"
             reason = None
-        return ResidentLoopResult(
+        loop = ResidentLoopResult(
             status=status,
             worker_id=self.worker_id,
             iterations=len(results),
@@ -59,10 +63,21 @@ class ResidentRuntime:
             reason=reason,
             results=[item.to_dict() for item in results],
         )
+        self._journal_event(
+            "resident_loop_result",
+            loop.to_dict(),
+            state_delta={"resident_loop_status": loop.status, "resident_loop_iterations": loop.iterations},
+        )
+        return loop
 
     def run_once(self) -> ResidentRunResult:
         lease = self.queue.acquire_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
         if lease is None:
+            self._journal_event(
+                "resident_worker_blocked",
+                {"worker_id": self.worker_id, "reason": "lease_unavailable"},
+                state_delta={"resident_worker_status": "blocked"},
+            )
             return ResidentRunResult(
                 status="blocked",
                 worker_id=self.worker_id,
@@ -71,9 +86,24 @@ class ResidentRuntime:
                 reason="lease_unavailable",
                 payload={},
             )
+        self._journal_event(
+            "resident_lease_acquired",
+            lease.to_dict(),
+            state_delta={"resident_lease_owner": self.worker_id, "resident_lease_status": lease.status},
+        )
         message = self.queue.claim_next(worker_id=self.worker_id, lease_ttl_ms=self.lease_ttl_ms)
         if message is None:
             self.queue.release_lease(worker_id=self.worker_id)
+            self._journal_event(
+                "resident_worker_idle",
+                {"worker_id": self.worker_id, "reason": "no_pending_inbox", "lease": lease.to_dict()},
+                state_delta={"resident_worker_status": "idle"},
+            )
+            self._journal_event(
+                "resident_lease_released",
+                {"worker_id": self.worker_id, "lease_id": lease.lease_id},
+                state_delta={"resident_lease_status": "released"},
+            )
             return ResidentRunResult(
                 status="idle",
                 worker_id=self.worker_id,
@@ -82,10 +112,20 @@ class ResidentRuntime:
                 reason="no_pending_inbox",
                 payload={"lease": lease.to_dict()},
             )
+        self._journal_event(
+            "resident_inbox_claimed",
+            message.to_dict(),
+            state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
+        )
         try:
             chat_result = self.chat_runtime.receive(message.text, thread_id=message.thread_id)
             renewed = self.queue.renew_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
             if renewed is None:
+                self._journal_event(
+                    "resident_worker_blocked",
+                    {"worker_id": self.worker_id, "message_id": message.message_id, "reason": "lease_lost_before_outbox"},
+                    state_delta={"resident_worker_status": "blocked"},
+                )
                 return ResidentRunResult(
                     status="blocked",
                     worker_id=self.worker_id,
@@ -103,8 +143,25 @@ class ResidentRuntime:
                 run_id=chat_result.run_id,
                 payload=chat_result.to_dict(),
             )
+            self._journal_event(
+                "resident_outbox_appended",
+                outbox.to_dict(),
+                task_id=chat_result.task_id,
+                state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
+            )
             completed = self.queue.complete(message.message_id, worker_id=self.worker_id)
             if not completed:
+                self._journal_event(
+                    "resident_worker_blocked",
+                    {
+                        "worker_id": self.worker_id,
+                        "message_id": message.message_id,
+                        "outbox_id": outbox.outbox_id,
+                        "reason": "message_ownership_lost_before_complete",
+                    },
+                    task_id=chat_result.task_id,
+                    state_delta={"resident_worker_status": "blocked"},
+                )
                 return ResidentRunResult(
                     status="blocked",
                     worker_id=self.worker_id,
@@ -113,6 +170,12 @@ class ResidentRuntime:
                     reason="message_ownership_lost_before_complete",
                     payload={"chat_status": chat_result.status, "outbox_status": outbox.status},
                 )
+            self._journal_event(
+                "resident_inbox_completed",
+                {"worker_id": self.worker_id, "message_id": message.message_id, "outbox_id": outbox.outbox_id},
+                task_id=chat_result.task_id,
+                state_delta={"resident_inbox_status": "completed", "resident_message_id": message.message_id},
+            )
             return ResidentRunResult(
                 status="processed",
                 worker_id=self.worker_id,
@@ -129,6 +192,18 @@ class ResidentRuntime:
                 max_attempts=self.max_attempts,
                 retry_backoff_ms=self.retry_backoff_ms,
             )
+            self._journal_event(
+                "resident_inbox_failed",
+                {
+                    "worker_id": self.worker_id,
+                    "message_id": message.message_id,
+                    "reason": type(exc).__name__,
+                    "failure_recorded": recorded,
+                    "max_attempts": self.max_attempts,
+                    "retry_backoff_ms": self.retry_backoff_ms,
+                },
+                state_delta={"resident_inbox_status": "failed", "resident_message_id": message.message_id},
+            )
             return ResidentRunResult(
                 status="failed",
                 worker_id=self.worker_id,
@@ -139,6 +214,30 @@ class ResidentRuntime:
             )
         finally:
             self.queue.release_lease(worker_id=self.worker_id)
+            self._journal_event(
+                "resident_lease_released",
+                {"worker_id": self.worker_id, "lease_id": lease.lease_id, "message_id": message.message_id},
+                state_delta={"resident_lease_status": "released"},
+            )
+
+    def _journal_event(
+        self,
+        kind: str,
+        data: JsonObject,
+        *,
+        task_id: str | None = None,
+        state_delta: JsonObject | None = None,
+    ) -> None:
+        if self.journal is None:
+            return
+        self.journal.append(
+            task_id=task_id,
+            run_id=f"resident-{self.worker_id}",
+            step_id=None,
+            kind=kind,
+            data=data,
+            state_delta=state_delta or {},
+        )
 
 
 def _outbox_text(chat_result) -> str:

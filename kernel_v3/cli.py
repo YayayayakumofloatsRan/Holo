@@ -150,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
 
     memory_trace_parser = sub.add_parser("memory-trace")
     memory_trace_parser.add_argument("task_id")
+    sub.add_parser("resident-trace")
 
     resume_parser = sub.add_parser("resume")
     resume_parser.add_argument("task_id")
@@ -327,6 +328,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "memory-trace":
         print(TraceRenderer(journal).render_memory_trace(args.task_id))
+        return 0
+    if args.command == "resident-trace":
+        print(TraceRenderer(journal).render_resident_trace())
         return 0
 
     if args.command == "context":
@@ -566,6 +570,14 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
     command = args.resident_command
     if command == "enqueue":
         message = queue.enqueue(thread_id=args.thread, text=args.text, source="cli")
+        journal.append(
+            task_id=None,
+            run_id="resident-cli",
+            step_id=None,
+            kind="resident_inbox_enqueued",
+            data=message.to_dict(),
+            state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
+        )
         return {"status": "ok", "message": message.to_dict()}
     if command == "inbox":
         return {"status": "ok", "messages": [message.to_dict() for message in queue.inbox_messages()]}
@@ -579,6 +591,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             worker_id=args.worker_id,
             max_attempts=args.max_attempts,
             retry_backoff_ms=args.retry_backoff_ms,
+            journal=journal,
         )
         if command == "run":
             return runtime.run_loop(max_iterations=args.max_iterations).to_dict()
@@ -587,6 +600,14 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         outbox = queue.mark_outbox_status(args.outbox_id, status=args.status)
         if outbox is None:
             return {"status": "failed", "reason": "outbox_not_found", "outbox_id": args.outbox_id}
+        journal.append(
+            task_id=outbox.task_id,
+            run_id="resident-cli",
+            step_id=None,
+            kind="resident_outbox_ack",
+            data=outbox.to_dict(),
+            state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
+        )
         return {"status": "ok", "outbox": outbox.to_dict()}
     return {"status": "failed", "reason": f"unknown_resident_command:{command}"}
 
