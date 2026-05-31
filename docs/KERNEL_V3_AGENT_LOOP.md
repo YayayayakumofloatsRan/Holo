@@ -83,6 +83,11 @@ their `citation_refs` and `used_evidence`, and journals
 not completed, finalization fails with a journaled command result instead of
 filling the gap.
 
+For resident-style progress, `/plan approve` also converges to the same host
+finalizer when there are no more safe tool steps and all finalizer dependencies
+are complete. A repeated approval after finalization returns the existing
+`semantic_task_plan_final_answer` instead of writing a duplicate.
+
 ## Stop Semantics
 
 The agent stops when one of these host-visible conditions is reached:

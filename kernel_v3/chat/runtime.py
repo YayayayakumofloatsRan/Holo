@@ -372,6 +372,15 @@ class ChatRuntime:
                 return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No matching task plan.")
             step = _next_executable_plan_step(self.journal, plan, plan_ref=plan_record.record_id)
             if step is None:
+                if _ready_plan_finalizer_step(plan) is not None:
+                    return self._finalize_plan_command(
+                        args=args,
+                        plan_record=plan_record,
+                        plan=plan,
+                        plan_id=plan_id,
+                        turn=turn,
+                        decision=decision,
+                    )
                 decision_record = self._append_plan_decision(
                     turn,
                     plan_record=plan_record,
@@ -432,26 +441,42 @@ class ChatRuntime:
                 result = {"error": "plan_not_found", "requested_plan_id": requested_plan_id, "latest_plan_id": plan_id}
                 command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
                 return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer="No matching task plan.")
-            final_answer, failure = _build_plan_final_answer(self.journal, plan_record=plan_record, plan=plan)
-            if failure is not None:
-                result = {"plan_id": plan_id, **failure}
-                command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
-                return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=str(failure["reason"]))
-            assert final_answer is not None
-            record = self.journal.append(
-                task_id=plan_record.task_id,
-                run_id=plan_record.run_id,
-                step_id=None,
-                kind="semantic_task_plan_final_answer",
-                data=final_answer.to_dict(),
-                state_delta={"thread_id": turn.thread_id, "task_plan_final_answer": "ok"},
+            return self._finalize_plan_command(
+                args=args,
+                plan_record=plan_record,
+                plan=plan,
+                plan_id=plan_id,
+                turn=turn,
+                decision=decision,
             )
+        result = {"error": "invalid_plan_command", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
+        command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+        return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
+
+    def _finalize_plan_command(
+        self,
+        *,
+        args: list[str],
+        plan_record: LedgerRecord,
+        plan: JsonObject,
+        plan_id: str,
+        turn: ChatTurn,
+        decision: TurnRoutingDecision,
+    ) -> ChatRuntimeResult:
+        existing = _latest_plan_final_answer_record(self.journal, plan_record=plan_record)
+        if existing is not None:
+            final_answer = FinalAnswer.from_dict(existing.data)
             command = self._append_command(
                 turn,
                 name="/plan",
                 args=args,
                 status="ok",
-                result={"plan_id": plan_id, "final_answer_ref": record.record_id, "citation_refs": list(final_answer.citation_refs)},
+                result={
+                    "plan_id": plan_id,
+                    "final_answer_ref": existing.record_id,
+                    "citation_refs": list(final_answer.citation_refs),
+                    "already_finalized": True,
+                },
             )
             return ChatRuntimeResult(
                 status="completed",
@@ -466,11 +491,44 @@ class ChatRuntime:
                 pending_question=self.build_thread_state(turn.thread_id).pending_question,
                 command_result=command.to_dict(),
                 summary=None,
-                trace_refs=[record.record_id, command.command_id],
+                trace_refs=[existing.record_id, command.command_id],
             )
-        result = {"error": "invalid_plan_command", "usage": "/plan [show]|approve [plan_id]|reject [plan_id] [reason]|finalize [plan_id]"}
-        command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
-        return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
+        final_answer, failure = _build_plan_final_answer(self.journal, plan_record=plan_record, plan=plan)
+        if failure is not None:
+            result = {"plan_id": plan_id, **failure}
+            command = self._append_command(turn, name="/plan", args=args, status="failed", result=result)
+            return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=str(failure["reason"]))
+        assert final_answer is not None
+        record = self.journal.append(
+            task_id=plan_record.task_id,
+            run_id=plan_record.run_id,
+            step_id=None,
+            kind="semantic_task_plan_final_answer",
+            data=final_answer.to_dict(),
+            state_delta={"thread_id": turn.thread_id, "task_plan_final_answer": "ok"},
+        )
+        command = self._append_command(
+            turn,
+            name="/plan",
+            args=args,
+            status="ok",
+            result={"plan_id": plan_id, "final_answer_ref": record.record_id, "citation_refs": list(final_answer.citation_refs)},
+        )
+        return ChatRuntimeResult(
+            status="completed",
+            thread_id=turn.thread_id,
+            turn_id=turn.turn_id,
+            route=decision.route,
+            task_id=plan_record.task_id,
+            run_id=plan_record.run_id,
+            answer=final_answer.answer,
+            final_answer=final_answer.to_dict(),
+            failure_report=None,
+            pending_question=self.build_thread_state(turn.thread_id).pending_question,
+            command_result=command.to_dict(),
+            summary=None,
+            trace_refs=[record.record_id, command.command_id],
+        )
 
     def _append_plan_decision(
         self,
@@ -909,6 +967,15 @@ def _ready_plan_finalizer_step(plan: JsonObject) -> JsonObject | None:
 
 def _latest_final_answer_for_task(journal: JournalStore, task_id: str) -> LedgerRecord | None:
     records = [record for record in journal.records(task_id=task_id, kind="agent_final_answer")]
+    return records[-1] if records else None
+
+
+def _latest_plan_final_answer_record(journal: JournalStore, *, plan_record: LedgerRecord) -> LedgerRecord | None:
+    records = [
+        record
+        for record in journal.records(task_id=plan_record.task_id, kind="semantic_task_plan_final_answer")
+        if record.run_id == plan_record.run_id
+    ]
     return records[-1] if records else None
 
 

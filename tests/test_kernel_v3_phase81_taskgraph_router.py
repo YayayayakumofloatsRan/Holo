@@ -335,26 +335,29 @@ def test_phase81_chat_plan_approve_does_not_run_dependent_respond_without_eviden
     initial = chat.receive("research then synthesize requiring confirmation", thread_id="thread-plan-dependent-respond")
     first = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
     second = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
-    final = chat.receive("/plan finalize", thread_id="thread-plan-dependent-respond")
+    repeated = chat.receive("/plan approve", thread_id="thread-plan-dependent-respond")
 
     assert initial.status == "needs_user_input"
     assert first.status == "completed"
     assert first.command_result is not None
     assert first.command_result["executed_node_id"] == "node-1-retrieval_research"
-    assert second.status == "failed"
+    assert second.status == "completed"
     assert second.command_result is not None
-    assert second.command_result["result"]["reason"] == "no_safe_executable_step"
+    assert second.final_answer is not None
     decisions = journal.records(task_id=initial.task_id, kind="semantic_task_plan_decision")
-    assert [record.data["decision"] for record in decisions] == ["approved", "blocked"]
+    assert [record.data["decision"] for record in decisions] == ["approved"]
     action_task_ids = {record.task_id for record in journal.records(kind="action")}
     assert action_task_ids == {initial.task_id, first.command_result["spawned_task_id"]}
-    assert final.status == "completed"
-    assert final.final_answer is not None
     child = journal.records(task_id=first.command_result["spawned_task_id"], kind="agent_final_answer")[-1].data
-    assert final.final_answer["citation_refs"] == child["citation_refs"]
-    assert final.final_answer["used_evidence"] == child["used_evidence"]
-    assert "synthesize from the collected evidence" in final.answer
-    assert journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")
+    assert second.final_answer["citation_refs"] == child["citation_refs"]
+    assert second.final_answer["used_evidence"] == child["used_evidence"]
+    assert "synthesize from the collected evidence" in second.answer
+    final_records = journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")
+    assert len(final_records) == 1
+    assert repeated.status == "completed"
+    assert repeated.command_result is not None
+    assert repeated.command_result["result"]["already_finalized"] is True
+    assert len(journal.records(task_id=initial.task_id, kind="semantic_task_plan_final_answer")) == 1
     summary = chat.receive("/summary", thread_id="thread-plan-dependent-respond")
     assert summary.summary is not None
     assert "synthesize from the collected evidence" in str(summary.summary["last_answer_preview"])
