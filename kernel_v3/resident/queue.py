@@ -409,6 +409,13 @@ class ResidentQueue:
         finally:
             conn.close()
 
+    def inbox_message(self, message_id: str) -> InboundMessage | None:
+        conn = self._connect()
+        try:
+            return _inbox_by_id(conn, message_id)
+        finally:
+            conn.close()
+
     def outbox_messages(self) -> list[OutboxMessage]:
         conn = self._connect()
         try:

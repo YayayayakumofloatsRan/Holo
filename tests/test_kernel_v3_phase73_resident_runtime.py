@@ -635,6 +635,7 @@ def test_phase73_bounded_run_loop_processes_until_idle(tmp_path: Path):
 
 def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
     queue.enqueue(thread_id="resident-thread", text="will fail", message_id="in-fail")
     runtime = ResidentRuntime(
         queue=queue,
@@ -642,6 +643,7 @@ def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
         worker_id="worker-fail",
         max_attempts=2,
         retry_backoff_ms=0,
+        journal=journal,
     )
 
     first = runtime.run_once()
@@ -652,15 +654,20 @@ def test_phase73_worker_failure_retries_then_dead_letters(tmp_path: Path):
 
     assert first.status == "failed"
     assert first.payload["failure_recorded"] is True
+    assert first.payload["inbox_status"] == "retry_wait"
     assert first_inbox.status == "retry_wait"
     assert first_inbox.attempts == 1
     assert first_inbox.next_attempt_at_ms is not None
     assert second.status == "failed"
+    assert second.payload["inbox_status"] == "dead_letter"
     assert second_inbox.status == "dead_letter"
     assert second_inbox.attempts == 2
     assert second_inbox.metadata["failure_reason"] == "RuntimeError"
     assert third.status == "idle"
     assert not queue.outbox_messages()
+    failure_records = journal.records(kind="resident_inbox_failed")
+    assert [record.data["resulting_status"] for record in failure_records] == ["retry_wait", "dead_letter"]
+    assert [record.state_delta["resident_inbox_status"] for record in failure_records] == ["retry_wait", "dead_letter"]
 
 
 def test_phase73_run_loop_reports_retry_wait_after_unresolved_failure(tmp_path: Path):

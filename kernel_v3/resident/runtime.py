@@ -329,6 +329,8 @@ class ResidentRuntime:
                 max_attempts=self.max_attempts,
                 retry_backoff_ms=self.retry_backoff_ms,
             )
+            failed_message = self.queue.inbox_message(message.message_id)
+            inbox_status = failed_message.status if failed_message is not None else "unknown"
             self._journal_event(
                 "resident_inbox_failed",
                 {
@@ -336,10 +338,13 @@ class ResidentRuntime:
                     "message_id": message.message_id,
                     "reason": type(exc).__name__,
                     "failure_recorded": recorded,
+                    "resulting_status": inbox_status,
+                    "attempts": failed_message.attempts if failed_message is not None else message.attempts,
+                    "next_attempt_at_ms": failed_message.next_attempt_at_ms if failed_message is not None else None,
                     "max_attempts": self.max_attempts,
                     "retry_backoff_ms": self.retry_backoff_ms,
                 },
-                state_delta={"resident_inbox_status": "failed", "resident_message_id": message.message_id},
+                state_delta={"resident_inbox_status": inbox_status, "resident_message_id": message.message_id},
             )
             return ResidentRunResult(
                 status="failed",
@@ -348,7 +353,13 @@ class ResidentRuntime:
                 outbox_id=None,
                 reason=type(exc).__name__,
                 payload=_with_schedule_tick(
-                    {"error": type(exc).__name__, "failure_recorded": recorded},
+                    {
+                        "error": type(exc).__name__,
+                        "failure_recorded": recorded,
+                        "inbox_status": inbox_status,
+                        "attempts": failed_message.attempts if failed_message is not None else message.attempts,
+                        "next_attempt_at_ms": failed_message.next_attempt_at_ms if failed_message is not None else None,
+                    },
                     schedule_tick,
                 ),
             )

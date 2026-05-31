@@ -211,6 +211,12 @@ work, and `awaiting_user_input` when the next useful step is a user reply. This
 keeps long-running supervision from confusing "no claimable message right now"
 with a healthy completed queue.
 
+Worker exception records also journal the queue state that was actually written
+after containment. `resident_inbox_failed` includes `resulting_status`,
+`attempts`, and `next_attempt_at_ms`, and its state delta uses `retry_wait`,
+`dead_letter`, or the observed queue status rather than a generic `failed`.
+This keeps resident traces aligned with the retry/dead-letter state machine.
+
 The resident scheduler is deliberately below the agent loop. It stores local
 schedule records, ticks due schedules, and enqueues normal resident inbox
 messages with deterministic message ids. It does not route chat turns, execute
