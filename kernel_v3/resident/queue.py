@@ -424,6 +424,9 @@ class ResidentQueue:
         finally:
             conn.close()
 
+    def outbox_for_reply(self, in_reply_to: str) -> OutboxMessage | None:
+        return self._outbox_for_reply(in_reply_to)
+
     def status(self) -> ResidentQueueStatus:
         now = self._now_ms()
         conn = self._connect()

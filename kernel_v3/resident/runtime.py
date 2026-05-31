@@ -138,6 +138,61 @@ class ResidentRuntime:
             state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
         )
         try:
+            existing_outbox = self.queue.outbox_for_reply(message.message_id)
+            if existing_outbox is not None:
+                self._journal_event(
+                    "resident_outbox_recovered",
+                    existing_outbox.to_dict(),
+                    task_id=existing_outbox.task_id,
+                    state_delta={
+                        "resident_outbox_status": existing_outbox.status,
+                        "resident_outbox_id": existing_outbox.outbox_id,
+                    },
+                )
+                completed = self.queue.complete(message.message_id, worker_id=self.worker_id)
+                if not completed:
+                    self._journal_event(
+                        "resident_worker_blocked",
+                        {
+                            "worker_id": self.worker_id,
+                            "message_id": message.message_id,
+                            "outbox_id": existing_outbox.outbox_id,
+                            "reason": "message_ownership_lost_before_recovered_complete",
+                        },
+                        task_id=existing_outbox.task_id,
+                        state_delta={"resident_worker_status": "blocked"},
+                    )
+                    return ResidentRunResult(
+                        status="blocked",
+                        worker_id=self.worker_id,
+                        message_id=message.message_id,
+                        outbox_id=existing_outbox.outbox_id,
+                        reason="message_ownership_lost_before_recovered_complete",
+                        payload={"outbox_status": existing_outbox.status, "recovered_existing_outbox": True},
+                    )
+                self._journal_event(
+                    "resident_inbox_completed",
+                    {
+                        "worker_id": self.worker_id,
+                        "message_id": message.message_id,
+                        "outbox_id": existing_outbox.outbox_id,
+                        "recovered_existing_outbox": True,
+                    },
+                    task_id=existing_outbox.task_id,
+                    state_delta={"resident_inbox_status": "completed", "resident_message_id": message.message_id},
+                )
+                return ResidentRunResult(
+                    status="processed",
+                    worker_id=self.worker_id,
+                    message_id=message.message_id,
+                    outbox_id=existing_outbox.outbox_id,
+                    reason=None,
+                    payload={
+                        "outbox_status": existing_outbox.status,
+                        "recovered_existing_outbox": True,
+                        "chat_status": _chat_status_from_outbox(existing_outbox),
+                    },
+                )
             chat_result = self.chat_runtime.receive(message.text, thread_id=message.thread_id)
             renewed = self.queue.renew_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
             if renewed is None:
@@ -304,6 +359,11 @@ def _outbox_status(status: str) -> str:
     if status in {"failed", "blocked"}:
         return "failed"
     return "ready"
+
+
+def _chat_status_from_outbox(outbox) -> str | None:
+    value = outbox.payload.get("status")
+    return str(value) if isinstance(value, str) and value else None
 
 
 def _final_answer_ref(chat_result) -> str | None:

@@ -110,18 +110,23 @@ def test_phase73_restart_after_partial_outbox_write_is_idempotent(tmp_path: Path
     journal = JournalStore.in_memory()
     result = ResidentRuntime(
         queue=restarted,
-        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        chat_runtime=_RaisingChatRuntime(),
         worker_id="worker-restart",
+        journal=journal,
     ).run_once()
 
     inbox = restarted.inbox_messages()[0]
     outbox = restarted.outbox_messages()
     assert result.status == "processed"
+    assert result.payload["recovered_existing_outbox"] is True
     assert inbox.status == "completed"
     assert inbox.attempts == 2
     assert len(outbox) == 1
     assert outbox[0].in_reply_to == "in-partial"
     assert outbox[0].text == "previous outbox already written"
+    resident_kinds = [record.kind for record in journal.records() if record.kind.startswith("resident_")]
+    assert "resident_outbox_recovered" in resident_kinds
+    assert "resident_inbox_failed" not in resident_kinds
 
 
 def test_phase73_claim_requires_active_worker_lease(tmp_path: Path):

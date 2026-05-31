@@ -192,6 +192,13 @@ work, and `awaiting_user_input` when the next useful step is a user reply. This
 keeps long-running supervision from confusing "no claimable message right now"
 with a healthy completed queue.
 
+Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
+or lost ownership before completing the inbox message, a later worker that
+reclaims the inbox first checks for the existing `in_reply_to` outbox. When it
+finds one, it journals `resident_outbox_recovered`, completes the inbox, and
+does not re-run `ChatRuntime` or the agent loop. This prevents duplicated tool
+work and duplicated agent journal records after a partial worker failure.
+
 Failed delivery recovery is an explicit resident operation. `resident
 retry-outbox <outbox_id>` transitions a `delivery_failed` outbox back to
 `ready`, records retry metadata in the payload, and journals
