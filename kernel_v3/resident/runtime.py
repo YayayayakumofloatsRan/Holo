@@ -204,8 +204,12 @@ class ResidentRuntime:
                 reason=None,
                 payload={
                     "chat_status": chat_result.status,
+                    "chat_route": chat_result.route,
                     "outbox_status": outbox.status,
                     "answered_pending_outbox_ids": [item.outbox_id for item in answered_pending],
+                    "command_result": chat_result.command_result,
+                    "pending_question": chat_result.pending_question,
+                    "final_answer_ref": _final_answer_ref(chat_result),
                 },
             )
         except Exception as exc:  # pragma: no cover - defensive worker containment
@@ -280,3 +284,12 @@ def _outbox_status(status: str) -> str:
     if status in {"failed", "blocked"}:
         return "failed"
     return "ready"
+
+
+def _final_answer_ref(chat_result) -> str | None:
+    command = chat_result.command_result
+    if isinstance(command, dict):
+        result = command.get("result")
+        if isinstance(result, dict) and isinstance(result.get("final_answer_ref"), str):
+            return str(result["final_answer_ref"])
+    return None

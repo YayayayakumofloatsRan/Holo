@@ -151,6 +151,13 @@ semantic intake or planner/evaluator/synthesizer behavior without letting the
 worker execute tools directly, bypass PolicyGate, or become a transport-level
 decision maker.
 
+Resident outbox payloads keep the full `ChatRuntimeResult`. Resident run
+results also surface `chat_route`, `command_result`, `pending_question`, and
+`final_answer_ref` so a supervisor can see whether a message approved,
+rejected, finalized, or answered a pending plan without scraping visible text.
+Pending plan-confirmation outboxes are marked `answered` when the user's later
+message approves or rejects the plan.
+
 ## Iteration 2026-05-31
 
 Hardening completed in this iteration:

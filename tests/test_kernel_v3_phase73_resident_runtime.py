@@ -232,6 +232,66 @@ def test_phase73_answering_pending_question_marks_old_outbox_answered(tmp_path: 
     assert "resident_pending_outbox_answered" in TraceRenderer(journal).render_resident_trace()
 
 
+def test_phase73_resident_can_confirm_pending_task_plan_without_slash_command(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": _compound_research_write_intake()}, journal=journal)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+    )
+    runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-plan", journal=journal)
+    queue.enqueue(thread_id="resident-plan-thread", text="compound plan request", message_id="in-plan")
+
+    first = runtime.run_once()
+    queue.enqueue(thread_id="resident-plan-thread", text="同意", message_id="in-plan-approve")
+    second = runtime.run_once()
+
+    outboxes = {item.in_reply_to: item for item in queue.outbox_messages()}
+    pending = outboxes["in-plan"]
+    approved = outboxes["in-plan-approve"]
+    assert first.status == "processed"
+    assert second.status == "processed"
+    assert pending.status == "answered"
+    assert approved.status == "ready"
+    assert second.payload["chat_route"] == "answer_pending_question"
+    assert second.payload["command_result"]["decision"] == "approved"
+    assert second.payload["answered_pending_outbox_ids"] == [pending.outbox_id]
+    assert approved.payload["command_result"]["executed_step_id"] == "plan-step-1"
+    assert approved.payload["final_answer"]["citation_refs"]
+    assert journal.records(task_id=approved.payload["command_result"]["spawned_task_id"], kind="retrieval_report")
+
+
+def test_phase73_resident_can_reject_pending_task_plan_without_execution(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": _compound_research_write_intake()}, journal=journal)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+    )
+    runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-plan-reject", journal=journal)
+    queue.enqueue(thread_id="resident-plan-thread", text="compound plan request", message_id="in-plan")
+
+    first = runtime.run_once()
+    queue.enqueue(thread_id="resident-plan-thread", text="拒绝", message_id="in-plan-reject")
+    second = runtime.run_once()
+
+    outboxes = {item.in_reply_to: item for item in queue.outbox_messages()}
+    pending = outboxes["in-plan"]
+    rejected = outboxes["in-plan-reject"]
+    assert first.status == "processed"
+    assert second.status == "processed"
+    assert pending.status == "answered"
+    assert rejected.status == "ready"
+    assert second.payload["chat_route"] == "answer_pending_question"
+    assert second.payload["command_result"]["result"]["decision"] == "rejected"
+    assert second.payload["answered_pending_outbox_ids"] == [pending.outbox_id]
+    assert not journal.records(kind="retrieval_report")
+
+
 def test_phase73_answered_marker_does_not_mark_current_pending_outbox(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     old = queue.append_outbox(
@@ -735,4 +795,37 @@ def _workspace_read_intake() -> dict:
         "warnings": [],
         "response_hint": None,
         "clarification_question": None,
+    }
+
+
+def _compound_research_write_intake() -> dict:
+    return {
+        "primary_intent": "retrieval_research",
+        "suggested_mode": "clarify_first",
+        "compound": True,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "retrieval_research",
+                "text": "research resident plan evidence",
+                "sequence_index": 1,
+                "required_capabilities": ["retrieval.run"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "workspace_write",
+                "text": "write a local report after research",
+                "sequence_index": 2,
+                "required_capabilities": ["workspace:write"],
+                "risk": "write",
+                "status": "needs_permission",
+                "metadata": {},
+            },
+        ],
+        "blocked_capabilities": ["workspace:write"],
+        "warnings": ["model_detected_compound_task"],
+        "response_hint": None,
+        "clarification_question": "Confirm the resident task plan.",
     }
