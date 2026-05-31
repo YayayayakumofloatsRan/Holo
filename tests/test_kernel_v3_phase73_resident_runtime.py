@@ -5,6 +5,7 @@ from kernel_v3 import cli
 from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
 from kernel_v3.trace import TraceRenderer
 
@@ -165,6 +166,51 @@ def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuatio
     assert len(queue.outbox_messages()) == 1
 
 
+def test_phase73_resident_worker_can_use_configured_model_semantic_chat(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "retrieval_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "retrieval_research",
+                        "text": "research resident evidence",
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+    )
+    queue.enqueue(thread_id="resident-model-thread", text="unseen resident research request", message_id="in-model")
+
+    result = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-model", journal=journal).run_once()
+
+    outbox = queue.outbox_messages()[0]
+    assert result.status == "processed"
+    assert outbox.status == "ready"
+    assert outbox.payload["final_answer"]["citation_refs"]
+    assert journal.records(task_id=outbox.task_id, kind="processor_result")[0].data["task_type"] == "semantic.intake"
+
+
 def test_phase73_bounded_run_loop_processes_until_idle(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
@@ -288,6 +334,32 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     assert "resident_inbox_enqueued" in trace
     assert "resident_outbox_ack" in trace
     assert outbox_id in trace
+
+
+def test_phase73_cli_resident_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "--resident-db",
+            str(resident_db),
+            "resident",
+            "run-once",
+            "--semantic-intake",
+            "model",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
 
 
 class _RaisingChatRuntime:

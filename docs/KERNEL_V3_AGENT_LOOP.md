@@ -54,6 +54,24 @@ new run id. Runtime decisions that can affect completion are run-scoped:
 This prevents a later failed resume from completing with stale evidence from an
 earlier successful run.
 
+## Chat And Resident Model Path
+
+`ChatRuntime` and the resident worker are routing shells around
+`AgentRuntime`; they are not separate decision layers. They can now pass the
+same Phase5 execution modes used by `holo-v3 agent`:
+
+- `planner_mode`
+- `evaluator_mode`
+- `synthesizer_mode`
+- `semantic_mode`
+
+The default remains fully offline fake mode. CLI model modes for `holo-v3 chat`
+and `holo-v3 resident run/run-once` are gated by `HOLO_V3_LIVE_MODEL=1`, then
+use the configured provider fabric. This lets a resident worker use model-backed
+semantic intake or planner/evaluator/synthesizer behavior without letting the
+worker execute tools directly, bypass PolicyGate, or become a transport-level
+decision maker.
+
 ## Iteration 2026-05-31
 
 Hardening completed in this iteration:

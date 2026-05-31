@@ -3,9 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors.testing import fake_fabric
 
 
 def test_phase62_two_turns_share_thread_id():
@@ -146,6 +148,45 @@ def test_phase62_no_durable_memory_is_written():
     assert not forbidden.intersection({record.kind for record in journal.records()})
 
 
+def test_phase62_chat_passes_model_semantic_mode_to_agent_runtime():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "retrieval_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "retrieval_research",
+                        "text": "research current external evidence",
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    agent = AgentRuntime(journal=journal, processor_fabric=fabric)
+    chat = ChatRuntime(journal=journal, agent_runtime=agent, semantic_mode="model")
+
+    result = chat.receive("an unseen request that needs current evidence", thread_id="thread-model-chat")
+
+    assert result.status == "completed"
+    assert result.final_answer is not None
+    assert result.final_answer["citation_refs"]
+    assert journal.records(task_id=result.task_id, kind="processor_result")[0].data["task_type"] == "semantic.intake"
+
+
 def test_phase62_cli_chat_once_status_and_summary(tmp_path: Path):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -162,6 +203,32 @@ def test_phase62_cli_chat_once_status_and_summary(tmp_path: Path):
     summary = _run_cli("--journal", str(journal), "--index", str(index), "chat-summary", "cli-thread")
     summary_payload = json.loads(summary.stdout)
     assert "hello cli" in summary_payload["recent_turns"][-1]["text_preview"]
+
+
+def test_phase62_cli_chat_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--thread",
+            "cli-model-thread",
+            "--once",
+            "hello",
+            "--semantic-intake",
+            "model",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:

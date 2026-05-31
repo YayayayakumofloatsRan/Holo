@@ -27,11 +27,19 @@ class ChatRuntime:
         journal: JournalStore | None = None,
         agent_runtime: AgentRuntime | None = None,
         memory_store: MemoryStore | None = None,
+        planner_mode: str = "fake",
+        evaluator_mode: str = "fake",
+        synthesizer_mode: str = "fake",
+        semantic_mode: str = "fake",
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.agent_runtime = agent_runtime or AgentRuntime(journal=self.journal, workspace_root=Path.cwd())
         self.memory_store = memory_store if memory_store is not None else getattr(self.agent_runtime, "memory_store", None)
         self.memory_pipeline = MemoryPipeline(store=self.memory_store, journal=self.journal) if self.memory_store is not None else None
+        self.planner_mode = planner_mode
+        self.evaluator_mode = evaluator_mode
+        self.synthesizer_mode = synthesizer_mode
+        self.semantic_mode = semantic_mode
 
     def receive(self, message: str, *, thread_id: str = "default") -> ChatRuntimeResult:
         normalized_thread = _normalize_thread_id(thread_id)
@@ -88,6 +96,10 @@ class ChatRuntime:
                 message,
                 thread_id=normalized_thread,
                 mode=_resume_mode_for_input(self.journal, pending.task_id),
+                planner_mode=self.planner_mode,
+                evaluator_mode=self.evaluator_mode,
+                synthesizer_mode=self.synthesizer_mode,
+                semantic_mode=self.semantic_mode,
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         elif decision.route == "continue_task":
@@ -97,11 +109,23 @@ class ChatRuntime:
                 message,
                 thread_id=normalized_thread,
                 mode=_mode_for_task(self.journal, task_id),
+                planner_mode=self.planner_mode,
+                evaluator_mode=self.evaluator_mode,
+                synthesizer_mode=self.synthesizer_mode,
+                semantic_mode=self.semantic_mode,
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         else:
             mode = "clarify_first" if "continue_without_active_task" in decision.reasons else "auto"
-            agent_result = self.agent_runtime.run(message, thread_id=normalized_thread, mode=mode)
+            agent_result = self.agent_runtime.run(
+                message,
+                thread_id=normalized_thread,
+                mode=mode,
+                planner_mode=self.planner_mode,
+                evaluator_mode=self.evaluator_mode,
+                synthesizer_mode=self.synthesizer_mode,
+                semantic_mode=self.semantic_mode,
+            )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         self.journal.append(
             task_id=result.task_id,
@@ -250,7 +274,15 @@ class ChatRuntime:
         if name == "/new" and args:
             command = self._append_command(turn, name=name, args=args, status="ok", result={"started_new_task": True})
             goal = " ".join(args)
-            agent_result = self.agent_runtime.run(goal, thread_id=state.thread_id, mode="auto")
+            agent_result = self.agent_runtime.run(
+                goal,
+                thread_id=state.thread_id,
+                mode="auto",
+                planner_mode=self.planner_mode,
+                evaluator_mode=self.evaluator_mode,
+                synthesizer_mode=self.synthesizer_mode,
+                semantic_mode=self.semantic_mode,
+            )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
             return _replace_command_result(result, command.result)
         if name == "/cancel":

@@ -68,6 +68,14 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser = sub.add_parser("chat")
     chat_parser.add_argument("--thread", default="default")
     chat_parser.add_argument("--once", default=None)
+    chat_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
+    chat_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
+    chat_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
+    chat_parser.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
+    chat_parser.add_argument("--model", default=None)
+    chat_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    chat_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
 
     chat_status_parser = sub.add_parser("chat-status")
     chat_status_parser.add_argument("thread_id")
@@ -107,11 +115,27 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--worker-id", default="resident-worker-1")
     resident_run_once.add_argument("--max-attempts", type=int, default=3)
     resident_run_once.add_argument("--retry-backoff-ms", type=int, default=1000)
+    resident_run_once.add_argument("--planner", choices=["fake", "model"], default="fake")
+    resident_run_once.add_argument("--evaluator", choices=["fake", "model"], default="fake")
+    resident_run_once.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
+    resident_run_once.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
+    resident_run_once.add_argument("--model", default=None)
+    resident_run_once.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    resident_run_once.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_run = resident_sub.add_parser("run")
     resident_run.add_argument("--worker-id", default="resident-worker-1")
     resident_run.add_argument("--max-iterations", type=int, default=10)
     resident_run.add_argument("--max-attempts", type=int, default=3)
     resident_run.add_argument("--retry-backoff-ms", type=int, default=1000)
+    resident_run.add_argument("--planner", choices=["fake", "model"], default="fake")
+    resident_run.add_argument("--evaluator", choices=["fake", "model"], default="fake")
+    resident_run.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
+    resident_run.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
+    resident_run.add_argument("--model", default=None)
+    resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    resident_run.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
@@ -234,7 +258,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "chat":
-        runtime = _chat_runtime(journal, memory_store=_memory_store(args, create_default=False))
+        if _agent_uses_live_model(args) and os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
+            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+            return 1
+        runtime = _chat_runtime(
+            journal,
+            memory_store=_memory_store(args, create_default=False),
+            live_model=_agent_uses_live_model(args),
+            model=args.model,
+            profile=args.profile,
+            thinking=_thinking_override(args.thinking),
+            reasoning_effort=args.reasoning_effort,
+            planner_mode=args.planner,
+            evaluator_mode=args.evaluator,
+            synthesizer_mode=args.synthesizer,
+            semantic_mode=args.semantic_intake,
+        )
         if args.once is not None:
             payload = runtime.receive(args.once, thread_id=args.thread)
             print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
@@ -265,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload.get("status") != "failed" else 1
 
     if args.command == "resident":
+        if (
+            getattr(args, "resident_command", None) in {"run", "run-once"}
+            and _agent_uses_live_model(args)
+            and os.environ.get("HOLO_V3_LIVE_MODEL") != "1"
+        ):
+            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+            return 1
         payload = _resident_command(args, journal)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0 if payload.get("status") not in {"failed", "blocked"} else 1
@@ -500,11 +546,36 @@ def _agent_runtime(
     )
 
 
-def _chat_runtime(journal: JournalStore, *, memory_store: MemoryStore | None = None) -> ChatRuntime:
+def _chat_runtime(
+    journal: JournalStore,
+    *,
+    memory_store: MemoryStore | None = None,
+    live_model: bool = False,
+    model: str | None = None,
+    profile: str = "balanced",
+    thinking: str | None = None,
+    reasoning_effort: str = "high",
+    planner_mode: str = "fake",
+    evaluator_mode: str = "fake",
+    synthesizer_mode: str = "fake",
+    semantic_mode: str = "fake",
+) -> ChatRuntime:
     return ChatRuntime(
         journal=journal,
-        agent_runtime=_agent_runtime(journal, live_model=False, memory_store=memory_store),
+        agent_runtime=_agent_runtime(
+            journal,
+            live_model=live_model,
+            model=model,
+            profile=profile,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+            memory_store=memory_store,
+        ),
         memory_store=memory_store,
+        planner_mode=planner_mode,
+        evaluator_mode=evaluator_mode,
+        synthesizer_mode=synthesizer_mode,
+        semantic_mode=semantic_mode,
     )
 
 
@@ -590,7 +661,19 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         memory_store = _memory_store(args, create_default=False)
         runtime = ResidentRuntime(
             queue=queue,
-            chat_runtime=_chat_runtime(journal, memory_store=memory_store),
+            chat_runtime=_chat_runtime(
+                journal,
+                memory_store=memory_store,
+                live_model=_agent_uses_live_model(args),
+                model=getattr(args, "model", None),
+                profile=getattr(args, "profile", "balanced"),
+                thinking=_thinking_override(getattr(args, "thinking", "auto")),
+                reasoning_effort=getattr(args, "reasoning_effort", "high"),
+                planner_mode=getattr(args, "planner", "fake"),
+                evaluator_mode=getattr(args, "evaluator", "fake"),
+                synthesizer_mode=getattr(args, "synthesizer", "fake"),
+                semantic_mode=getattr(args, "semantic_intake", "fake"),
+            ),
             worker_id=args.worker_id,
             max_attempts=args.max_attempts,
             retry_backoff_ms=args.retry_backoff_ms,
