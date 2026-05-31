@@ -20,6 +20,10 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
     prior_node_id: str | None = None
     for index, intent in enumerate(_intent_dicts(intake), start=1):
         kind = _intent_kind(intent)
+        capabilities = _string_list(intent.get("required_capabilities"))
+        metadata = _metadata(intent)
+        metadata.setdefault("semantic_label", kind)
+        metadata.setdefault("capability_plan", _capability_plan(capabilities))
         node_id = _node_id(index, kind)
         depends_on = _depends_on(intent, default=prior_node_id)
         node = TaskGraphNode(
@@ -28,12 +32,12 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
             goal=str(intent.get("text") or intake.goal),
             sequence_index=_sequence_index(intent, default=index),
             depends_on=depends_on,
-            required_capabilities=_string_list(intent.get("required_capabilities")),
-            suggested_mode=_mode_for_kind(kind),
-            evidence_required=kind in {"retrieval_research", "workspace_read"},
-            citations_required=kind == "retrieval_research",
+            required_capabilities=capabilities,
+            suggested_mode=_mode_for_intent(kind, capabilities, metadata=metadata),
+            evidence_required=_evidence_required(kind, capabilities, metadata=metadata),
+            citations_required=_citations_required(kind, capabilities, metadata=metadata),
             status=str(intent.get("status") or "ready"),
-            metadata=_metadata(intent),
+            metadata=metadata,
         )
         nodes.append(node)
         prior_node_id = node_id
@@ -73,7 +77,7 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
         needs_user_confirmation=bool(intake.requires_clarification),
         clarification_question=intake.clarification_question,
         max_steps=max(1, len(nodes) + 1),
-        max_tool_calls=sum(1 for node in nodes if node.kind in {"retrieval_research", "workspace_read"}),
+        max_tool_calls=sum(1 for node in nodes if _action_kind_for_node(node) == "tool"),
         metadata={"source": "semantic_intake", "primary_intent": intake.primary_intent},
     )
 
@@ -227,7 +231,19 @@ def _metadata(intent: JsonObject) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _mode_for_kind(kind: str) -> str:
+def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject) -> str:
+    requested = metadata.get("suggested_mode")
+    if isinstance(requested, str) and requested in {
+        "direct_answer",
+        "retrieval_answer",
+        "workspace_answer",
+        "clarify_first",
+    }:
+        return requested
+    if "retrieval.run" in capabilities:
+        return "retrieval_answer"
+    if any(capability in capabilities for capability in {"workspace.search", "file.read", "workspace:read"}):
+        return "workspace_answer"
     if kind == "retrieval_research":
         return "retrieval_answer"
     if kind == "workspace_read":
@@ -238,19 +254,67 @@ def _mode_for_kind(kind: str) -> str:
 
 
 def _action_kind_for_node(node: TaskGraphNode) -> str:
-    if node.kind in {"retrieval_research", "workspace_read"}:
+    if _tool_for_node(node) is not None:
         return "tool"
-    if node.kind == "clarification":
+    if node.kind == "clarification" or node.status == "needs_user_input":
         return "ask_user"
     return "respond"
 
 
 def _tool_for_node(node: TaskGraphNode) -> str | None:
+    capabilities = set(node.required_capabilities)
+    if "retrieval.run" in capabilities:
+        return "retrieval.run"
+    if {"workspace.search", "file.read"}.issubset(capabilities):
+        return "workspace.search,file.read"
+    if "workspace.search" in capabilities:
+        return "workspace.search"
+    if "file.read" in capabilities:
+        return "file.read"
     if node.kind == "retrieval_research":
         return "retrieval.run"
     if node.kind == "workspace_read":
         return "workspace.search,file.read"
     return None
+
+
+def _capability_plan(capabilities: list[str]) -> JsonObject:
+    if not capabilities:
+        return {"action_family": "respond", "tools": [], "requires_evidence": False}
+    tools = [
+        capability
+        for capability in capabilities
+        if capability in {"retrieval.run", "workspace.search", "file.read"}
+    ]
+    return {
+        "action_family": "tool" if tools else "host_capability",
+        "tools": tools,
+        "requires_evidence": any(
+            capability in capabilities
+            for capability in {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
+        ),
+    }
+
+
+def _evidence_required(kind: str, capabilities: list[str], *, metadata: JsonObject) -> bool:
+    value = metadata.get("evidence_required")
+    if isinstance(value, bool):
+        return value
+    if any(
+        capability in capabilities
+        for capability in {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
+    ):
+        return True
+    return kind in {"retrieval_research", "workspace_read"}
+
+
+def _citations_required(kind: str, capabilities: list[str], *, metadata: JsonObject) -> bool:
+    value = metadata.get("citations_required")
+    if isinstance(value, bool):
+        return value
+    if "retrieval.run" in capabilities:
+        return True
+    return kind == "retrieval_research"
 
 
 def _step_status(
@@ -263,10 +327,10 @@ def _step_status(
         return "invalid"
     if node.status in {"blocked", "needs_permission", "needs_review"}:
         return "blocked"
-    if validation.needs_user_confirmation:
-        return "needs_confirmation"
     if any(_is_blocked(capability) for capability in node.required_capabilities):
         return "blocked"
+    if validation.needs_user_confirmation:
+        return "needs_confirmation"
     return "ready"
 
 

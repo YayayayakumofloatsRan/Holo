@@ -140,6 +140,8 @@ compound boolean, requires_clarification boolean, intents array, blocked_capabil
 warnings string array, response_hint string or null, clarification_question string or null.
 Each intent object should include: kind, text, sequence_index, required_capabilities, risk, status, metadata.
 Use broad semantic judgment instead of keyword matching. Split compound user requests into ordered intents.
+The intent kind may be an open semantic label; executable routing comes from
+required_capabilities and host validation, not from a fixed phrase table.
 The model classifies and proposes structure only. The host validates capabilities, policy, execution, memory, and stop.
 Do not request live transports, direct tool execution, memory writes, or unavailable tools as executable actions."""
 

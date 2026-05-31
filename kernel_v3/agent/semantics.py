@@ -147,6 +147,10 @@ def _semantic_prompt(goal: str) -> str:
         "host_rules": [
             "Split compound requests into ordered intents.",
             "Use broad semantic judgment instead of sample-specific phrase matching.",
+            (
+                "Use open semantic labels when useful; required_capabilities "
+                "are the executable ABI the host validates."
+            ),
             "Classify role/persona requests as roleplay scoped to the current thread.",
             "Classify transport/account/client control as transport_control and blocked.",
             "Classify unavailable tool, device, account, or execution requests as blocked capabilities instead of pretending they ran.",
@@ -221,7 +225,8 @@ def _model_intents(value: object) -> list[TaskIntent]:
     for index, item in enumerate(value, start=1):
         if not isinstance(item, dict):
             continue
-        kind = _normalize_intent_kind(str(item.get("kind") or "direct_answer"))
+        raw_kind = str(item.get("kind") or item.get("semantic_label") or "direct_answer")
+        kind = _normalize_intent_kind(raw_kind)
         text = str(item.get("text") or "")
         capabilities = _string_list(item.get("required_capabilities"))
         if kind == "memory_write":
@@ -229,6 +234,10 @@ def _model_intents(value: object) -> list[TaskIntent]:
         risk = str(item.get("risk") or _risk_for_kind(kind))
         status = str(item.get("status") or _status_for_kind(kind))
         metadata = item.get("metadata")
+        normalized_metadata = metadata if isinstance(metadata, dict) else {}
+        normalized_metadata = dict(normalized_metadata)
+        normalized_metadata.setdefault("semantic_label", raw_kind.strip() or kind)
+        normalized_metadata.setdefault("host_semantic_label", kind)
         intents.append(
             _intent(
                 index,
@@ -237,7 +246,7 @@ def _model_intents(value: object) -> list[TaskIntent]:
                 capabilities=capabilities,
                 risk=risk,
                 status=status,
-                metadata=metadata if isinstance(metadata, dict) else {},
+                metadata=normalized_metadata,
             )
         )
     return intents
@@ -419,26 +428,20 @@ def _normalize_primary(value: str, intents: list[TaskIntent]) -> str:
     kind = _normalize_intent_kind(value)
     if kind == "direct_answer" and any(intent.kind != "direct_answer" for intent in intents):
         return _primary_intent(intents)
-    if kind != "direct_answer" or value == "direct_answer":
+    if kind != "direct_answer" or value.strip() == "direct_answer":
         return kind
     return _primary_intent(intents)
 
 
 def _normalize_intent_kind(value: str) -> str:
-    allowed = {
-        "transport_control",
-        *_host_boundary_kinds(),
-        "noop",
-        "retrieval_research",
-        "workspace_write",
-        "workspace_read",
-        "synthesis",
-        "memory_write",
-        "roleplay",
-        "clarification",
-        "direct_answer",
-    }
-    return value if value in allowed else "direct_answer"
+    cleaned = value.strip()
+    if not cleaned:
+        return "direct_answer"
+    safe = "".join(
+        ch if ch.isalnum() or ch in {"_", "-", ".", ":"} else "_"
+        for ch in cleaned
+    ).strip("_")
+    return safe or "direct_answer"
 
 
 def _risk_for_kind(kind: str) -> str:

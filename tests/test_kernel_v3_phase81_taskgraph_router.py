@@ -115,6 +115,100 @@ def test_phase81_simple_retrieval_graph_selects_retrieval_recipe():
     assert journal.records(task_id=result.task_id, kind="retrieval_report")
 
 
+def test_phase81_open_semantic_label_routes_by_capability_not_intent_table():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "市场态势梳理",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "市场态势梳理",
+                        "text": "compare current market signals from evidence",
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {"success_criteria": ["grounded answer"]},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "unseen market landscape request",
+        mode="auto",
+        semantic_mode="model",
+    )
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+
+    assert result.mode == "retrieval_answer"
+    assert result.status == "completed"
+    assert graph["proposal"]["nodes"][0]["kind"] == "市场态势梳理"
+    assert graph["proposal"]["nodes"][0]["metadata"]["semantic_label"] == "市场态势梳理"
+    assert graph["validation"]["selected_mode"] == "retrieval_answer"
+    assert plan["steps"][0]["action_kind"] == "tool"
+    assert plan["steps"][0]["tool_name"] == "retrieval.run"
+    assert plan["steps"][0]["evidence_required"] is True
+    assert plan["steps"][0]["citations_required"] is True
+    assert journal.records(task_id=result.task_id, kind="retrieval_report")
+
+
+def test_phase81_unknown_semantic_label_with_blocked_capability_is_not_executable():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "任意本地产物生成",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "任意本地产物生成",
+                        "text": "create a local report",
+                        "sequence_index": 1,
+                        "required_capabilities": ["workspace:write"],
+                        "risk": "write",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "unseen local artifact request",
+        mode="auto",
+        semantic_mode="model",
+    )
+    validation = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data["validation"]
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+
+    assert result.status == "needs_user_input"
+    assert validation["blocked_capabilities"] == ["workspace:write"]
+    assert validation["selected_mode"] == "clarify_first"
+    assert plan["steps"][0]["kind"] == "任意本地产物生成"
+    assert plan["steps"][0]["status"] == "blocked"
+    assert not journal.records(task_id=result.task_id, kind="tool_call")
+
+
 def test_phase81_blocked_capability_in_model_graph_cannot_select_tool_recipe():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(

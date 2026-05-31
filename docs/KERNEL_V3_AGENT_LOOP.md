@@ -44,6 +44,17 @@ This is the anti-table path for compound and open-ended requests. The fake
 semantic fallback stays conservative, while model mode can propose broad task
 structure through JSON and the host validates it before anything runs.
 
+Semantic intake is intentionally capability-driven. Model mode may emit an
+open `kind` / semantic label such as a domain-specific research or operator
+task; the host no longer collapses unknown labels into `direct_answer`. The
+task graph preserves that label for audit, then compiles execution from
+`required_capabilities` such as `retrieval.run`, `workspace.search`, or
+`file.read`. Unknown labels with safe read capabilities can still select the
+right recipe, while unknown labels that request blocked capabilities remain
+non-executable and require user confirmation or scope reduction. This keeps
+open-ended semantics in the processor layer and keeps permissions, tools,
+evidence, and termination in the host layer.
+
 ## Plan Review Commands
 
 `ChatRuntime` exposes `/plan` as a host-owned review surface for the latest
