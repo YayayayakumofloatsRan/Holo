@@ -223,6 +223,20 @@ Agent execution has a second, separate gate. Even if a host injects a live
 
 Model planner payloads can request retrieval arguments, but they cannot grant
 `network:fetch`. That permission is derived only from host execution metadata.
+The CLI exposes this as an explicit live agent flag:
+
+```bash
+HOLO_V3_LIVE_RETRIEVAL=1 \
+HOLO_V3_LIVE_SEARCH_ENDPOINT=https://... \
+holo-v3 agent "AAPL 2024 revenue" \
+  --mode retrieval \
+  --live-retrieval \
+  --live-max-network-fetches 1 \
+  --research-profile finance_fundamentals
+```
+
+If the env gate or endpoint is missing, the command returns a blocked payload
+before constructing a live retrieval operator or starting the agent loop.
 
 Provider inspection is also available before a run starts:
 

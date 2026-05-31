@@ -79,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     agent_parser.add_argument("--citations-required", action="store_true")
     agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    agent_parser.add_argument("--live-retrieval", action="store_true")
+    agent_parser.add_argument("--live-max-network-fetches", type=int, default=3)
 
     answer_parser = sub.add_parser("answer")
     answer_parser.add_argument("goal")
@@ -318,6 +320,10 @@ def main(argv: list[str] | None = None) -> int:
         if _agent_uses_live_model(args) and os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
             print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
             return 1
+        live_retrieval = _live_retrieval_config_for_args(args)
+        if isinstance(live_retrieval, dict):
+            print(json.dumps(live_retrieval, ensure_ascii=False, sort_keys=True))
+            return 1
         runtime = _agent_runtime(
             journal,
             live_model=_agent_uses_live_model(args),
@@ -328,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
             artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
             research_corpus_store=_runtime_corpus_store(args),
+            retrieval_operator=live_retrieval.build_operator() if live_retrieval is not None else None,
         )
         payload = runtime.run(
             args.goal,
@@ -664,6 +671,7 @@ def _agent_runtime(
     artifact_store: ArtifactStore | None = None,
     memory_store: MemoryStore | None = None,
     research_corpus_store: ResearchCorpusStore | None = None,
+    retrieval_operator: RetrievalOperator | None = None,
 ) -> AgentRuntime:
     fabric = (
         _live_processor_fabric(
@@ -681,6 +689,7 @@ def _agent_runtime(
         journal=journal,
         artifact_store=artifact_store,
         processor_fabric=fabric,
+        retrieval_operator=retrieval_operator,
         workspace_root=Path.cwd(),
         memory_store=memory_store,
         research_corpus_store=research_corpus_store,
@@ -750,10 +759,35 @@ def _runtime_corpus_store(args) -> ResearchCorpusStore | None:
 
 
 def _runtime_execution_metadata(args) -> JsonObject | None:
+    metadata: JsonObject = {}
     research_profile = getattr(args, "research_profile", None)
-    if not isinstance(research_profile, str) or not research_profile:
+    if isinstance(research_profile, str) and research_profile:
+        metadata.setdefault("retrieval", {})["metadata"] = {"research_profile": research_profile}
+    if bool(getattr(args, "live_retrieval", False)):
+        retrieval = metadata.setdefault("retrieval", {})
+        retrieval["allow_network"] = True
+        retrieval["max_network_fetches"] = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
+        retrieval["max_fetches"] = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
+    return metadata or None
+
+
+def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | None:
+    if not bool(getattr(args, "live_retrieval", False)):
         return None
-    return {"retrieval": {"metadata": {"research_profile": research_profile}}}
+    config = LiveRetrievalConfig.from_env()
+    if not config.enabled:
+        return {
+            "status": "blocked",
+            "reason": "live_retrieval_not_enabled",
+            "live_config": config.safe_diagnostics(),
+        }
+    if not config.search.configured:
+        return {
+            "status": "blocked",
+            "reason": "live_search_endpoint_not_configured",
+            "live_config": config.safe_diagnostics(),
+        }
+    return config
 
 
 def _artifact_store(args, *, create_default: bool) -> ArtifactStore | None:
