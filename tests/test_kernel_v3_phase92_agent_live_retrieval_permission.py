@@ -283,6 +283,107 @@ def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
     assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
 
 
+def test_phase92_cli_chat_live_retrieval_forces_retrieval_recipe(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    search_transport, fetch_transport = _live_success_transports()
+    monkeypatch.setattr(
+        cli.LiveRetrievalConfig,
+        "build_operator",
+        lambda _self: _live_operator(search_transport=search_transport, fetch_transport=fetch_transport),
+    )
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "chat",
+                "--thread",
+                "live-chat",
+                "--once",
+                "research AAPL revenue",
+                "--live-retrieval",
+                "--live-max-network-fetches",
+                "1",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    journal = JournalStore(journal_path, index_path=index_path)
+
+    assert payload["status"] == "completed"
+    assert len(search_transport.calls) == 1
+    assert len(fetch_transport.calls) == 1
+    recipe = journal.records(task_id=payload["task_id"], kind="agent_recipe")[-1].data
+    assert recipe["mode"] == "retrieval_answer"
+    assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
+
+
+def test_phase92_cli_resident_live_retrieval_processes_retrieval_task(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    search_transport, fetch_transport = _live_success_transports()
+    monkeypatch.setattr(
+        cli.LiveRetrievalConfig,
+        "build_operator",
+        lambda _self: _live_operator(search_transport=search_transport, fetch_transport=fetch_transport),
+    )
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    base = [
+        "--journal",
+        str(journal_path),
+        "--index",
+        str(index_path),
+        "--resident-db",
+        str(resident_db),
+    ]
+
+    assert cli.main([*base, "resident", "enqueue", "research AAPL revenue", "--thread", "live-resident"]) == 0
+    capsys.readouterr()
+    assert (
+        cli.main(
+            [
+                *base,
+                "resident",
+                "run-once",
+                "--worker-id",
+                "worker-live",
+                "--live-retrieval",
+                "--live-max-network-fetches",
+                "1",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    journal = JournalStore(journal_path, index_path=index_path)
+
+    assert payload["status"] == "processed"
+    assert len(search_transport.calls) == 1
+    assert len(fetch_transport.calls) == 1
+    recipe = journal.records(kind="agent_recipe")[-1].data
+    assert recipe["mode"] == "retrieval_answer"
+    assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
+
+
 class _Transport:
     def __init__(self, response: HttpTransportResponse) -> None:
         self.response = response
@@ -314,6 +415,25 @@ def _live_operator(*, search_transport: _Transport, fetch_transport: _Transport)
             transport=fetch_transport,
         ),
     )
+
+
+def _live_success_transports() -> tuple[_Transport, _Transport]:
+    search_transport = _Transport(
+        HttpTransportResponse(
+            status_code=200,
+            body=(
+                b'{"results": [{"url": "https://docs.example.com/aapl", '
+                b'"title": "AAPL filing", "snippet": "AAPL revenue evidence"}]}'
+            ),
+        )
+    )
+    fetch_transport = _Transport(
+        HttpTransportResponse(
+            status_code=200,
+            body=b"AAPL revenue evidence from a live-configured HTTP provider.",
+        )
+    )
+    return search_transport, fetch_transport
 
 
 def _clear_live_env(monkeypatch) -> None:

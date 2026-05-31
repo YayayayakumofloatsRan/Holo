@@ -397,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
             synthesizer_mode=args.synthesizer,
             semantic_mode=args.semantic_intake,
             turn_router_mode=args.turn_router,
+            default_mode=_chat_default_mode(args),
             execution_metadata=_runtime_execution_metadata(args),
         )
         if args.once is not None:
@@ -725,6 +726,7 @@ def _chat_runtime(
     synthesizer_mode: str = "fake",
     semantic_mode: str = "fake",
     turn_router_mode: str = "fake",
+    default_mode: str = "auto",
     execution_metadata: JsonObject | None = None,
 ) -> ChatRuntime:
     return ChatRuntime(
@@ -747,6 +749,7 @@ def _chat_runtime(
         synthesizer_mode=synthesizer_mode,
         semantic_mode=semantic_mode,
         turn_router_mode=turn_router_mode,
+        default_mode=default_mode,
         execution_metadata=execution_metadata,
     )
 
@@ -1124,6 +1127,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 synthesizer_mode=getattr(args, "synthesizer", "fake"),
                 semantic_mode=getattr(args, "semantic_intake", "fake"),
                 turn_router_mode=getattr(args, "turn_router", "fake"),
+                default_mode=_chat_default_mode(args),
                 execution_metadata=_runtime_execution_metadata(args),
             ),
             worker_id=args.worker_id,
@@ -1189,6 +1193,12 @@ def _agent_mode(args) -> str:
     if mode == "auto" and getattr(args, "research_profile", None):
         return "retrieval"
     return str(mode)
+
+
+def _chat_default_mode(args) -> str:
+    if bool(getattr(args, "live_retrieval", False)) or getattr(args, "research_profile", None):
+        return "retrieval"
+    return "auto"
 
 
 def _workloop_payload(journal: JournalStore, task_id: str) -> dict[str, object]:

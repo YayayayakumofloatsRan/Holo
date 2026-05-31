@@ -47,6 +47,7 @@ class ChatRuntime:
         synthesizer_mode: str = "fake",
         semantic_mode: str = "fake",
         turn_router_mode: str = "fake",
+        default_mode: str = "auto",
         execution_metadata: JsonObject | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
@@ -58,6 +59,7 @@ class ChatRuntime:
         self.synthesizer_mode = synthesizer_mode
         self.semantic_mode = semantic_mode
         self.turn_router_mode = turn_router_mode
+        self.default_mode = _normalize_default_mode(default_mode)
         self.execution_metadata = dict(execution_metadata or {})
 
     def receive(self, message: str, *, thread_id: str = "default") -> ChatRuntimeResult:
@@ -156,7 +158,7 @@ class ChatRuntime:
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         else:
-            mode = "clarify_first" if "continue_without_active_task" in decision.reasons else "auto"
+            mode = "clarify_first" if "continue_without_active_task" in decision.reasons else self.default_mode
             agent_result = self.agent_runtime.run(
                 message,
                 thread_id=normalized_thread,
@@ -333,7 +335,7 @@ class ChatRuntime:
             agent_result = self.agent_runtime.run(
                 goal,
                 thread_id=state.thread_id,
-                mode="auto",
+                mode=self.default_mode,
                 planner_mode=self.planner_mode,
                 evaluator_mode=self.evaluator_mode,
                 synthesizer_mode=self.synthesizer_mode,
@@ -1833,6 +1835,19 @@ def _parse_command(text: str) -> tuple[str, list[str]]:
 def _normalize_thread_id(thread_id: str) -> str:
     normalized = thread_id.strip()
     return normalized or "default"
+
+
+def _normalize_default_mode(mode: str) -> str:
+    aliases = {
+        "direct": "direct_answer",
+        "retrieval": "retrieval_answer",
+        "workspace": "workspace_answer",
+        "clarify": "clarify_first",
+    }
+    normalized = aliases.get(str(mode or "auto"), str(mode or "auto"))
+    if normalized in {"auto", "direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}:
+        return normalized
+    return "auto"
 
 
 def _chat_run_id(thread_id: str) -> str:

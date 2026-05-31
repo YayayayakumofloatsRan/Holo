@@ -251,6 +251,10 @@ holo-v3 resident run-once \
 
 If the env gate or endpoint is missing, the command returns a blocked payload
 before constructing a live retrieval operator or starting the agent loop.
+For chat and resident runs, `--live-retrieval` or `--research-profile` also
+sets the host-owned default new-task mode to retrieval. This avoids a resident
+research worker silently answering directly just because fake semantic intake
+does not classify open-ended language as retrieval.
 
 Provider inspection is also available before a run starts:
 
