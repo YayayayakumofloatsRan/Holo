@@ -20,7 +20,8 @@ can support a final answer.
 `finance_fundamentals` is the first profile. It prefers primary sources:
 
 - regulatory filings
-- exchange filings
+- exchange filings, including SEC/exchange and China disclosure hosts such as
+  CNINFO, SSE, SZSE, and HKEX
 - company investor relations
 - earnings releases
 - government statistics
@@ -29,6 +30,11 @@ Secondary sources such as reputable news and market data can provide context,
 but they do not replace primary evidence for fundamental claims. Weak sources
 such as blogs, forums, social posts, generic domains, or unknown sources cannot
 by themselves make a finance retrieval report sufficient.
+
+Known official, news, and market-data families are matched by host and
+subdomain, so provider URLs such as `static.cninfo.com.cn`,
+`markets.reuters.com`, or `quote.eastmoney.com` classify consistently without
+live network access.
 
 ## Retrieval Integration
 

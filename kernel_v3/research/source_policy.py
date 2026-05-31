@@ -34,6 +34,15 @@ _REGULATORY_DOMAINS = {
     "edgar.sec.gov",
 }
 _EXCHANGE_DOMAINS = {
+    "cninfo.com.cn",
+    "www.cninfo.com.cn",
+    "static.cninfo.com.cn",
+    "sse.com.cn",
+    "www.sse.com.cn",
+    "static.sse.com.cn",
+    "szse.cn",
+    "www.szse.cn",
+    "disclosure.szse.cn",
     "nasdaq.com",
     "www.nasdaq.com",
     "nyse.com",
@@ -52,6 +61,8 @@ _GOVERNMENT_STAT_DOMAINS = {
 }
 _MARKET_DATA_DOMAINS = {
     "finance.yahoo.com",
+    "eastmoney.com",
+    "www.eastmoney.com",
     "macrotrends.net",
     "www.macrotrends.net",
 }
@@ -149,15 +160,15 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
     path = parsed.path.lower()
     title_l = title.lower()
 
-    if host in _REGULATORY_DOMAINS:
+    if _host_matches(host, _REGULATORY_DOMAINS):
         return "regulatory_filing", "recognized_regulatory_domain"
-    if host in _EXCHANGE_DOMAINS:
+    if _host_matches(host, _EXCHANGE_DOMAINS):
         return "exchange_filing", "recognized_exchange_domain"
-    if host in _GOVERNMENT_STAT_DOMAINS:
+    if _host_matches(host, _GOVERNMENT_STAT_DOMAINS):
         return "government_statistic", "recognized_government_statistic_domain"
-    if host in _MARKET_DATA_DOMAINS:
+    if _host_matches(host, _MARKET_DATA_DOMAINS):
         return "market_data_provider", "recognized_market_data_domain"
-    if host in _REPUTABLE_NEWS_DOMAINS:
+    if _host_matches(host, _REPUTABLE_NEWS_DOMAINS):
         return "reputable_news", "recognized_reputable_news_domain"
     if _looks_like_company_ir(host, path):
         return "company_ir", "recognized_company_ir_pattern"
@@ -181,6 +192,10 @@ def source_authority_summary(assessments: list[SourceAssessment]) -> JsonObject:
         "best_authority_score": max([item.authority_score for item in assessments], default=0.0),
         "source_families": [item.source_family for item in assessments],
     }
+
+
+def _host_matches(host: str, domains: set[str]) -> bool:
+    return any(host == domain or host.endswith(f".{domain}") for domain in domains)
 
 
 def _looks_like_company_ir(host: str, path: str) -> bool:

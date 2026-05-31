@@ -163,6 +163,49 @@ def test_phase82_source_family_can_be_declared_by_provider_metadata() -> None:
     assert assessment.reasons[0] == "metadata_source_family"
 
 
+def test_phase82_finance_profile_treats_china_exchange_disclosure_as_primary() -> None:
+    assessment = assess_search_source(
+        _source(
+            "src-cninfo",
+            "https://static.cninfo.com.cn/finalpage/2025-04-01/annual-report.pdf",
+            "年度报告",
+            "公司年度报告披露收入与利润。",
+        ),
+        profile=finance_fundamentals_profile(),
+    )
+
+    assert assessment.source_family == "exchange_filing"
+    assert assessment.authority_level == "primary"
+    assert assessment.usable_as_primary is True
+    assert assessment.reasons[0] == "recognized_exchange_domain"
+
+
+def test_phase82_source_policy_matches_known_finance_subdomains() -> None:
+    news = assess_search_source(
+        _source(
+            "src-reuters-subdomain",
+            "https://markets.reuters.com/world/us/aapl",
+            "Reuters Apple market report",
+            "Reuters report.",
+        ),
+        profile=finance_fundamentals_profile(),
+    )
+    market_data = assess_search_source(
+        _source(
+            "src-eastmoney-data",
+            "https://quote.eastmoney.com/us/AAPL.html",
+            "AAPL market data",
+            "AAPL market data.",
+        ),
+        profile=finance_fundamentals_profile(),
+    )
+
+    assert news.source_family == "reputable_news"
+    assert news.authority_level == "secondary"
+    assert market_data.source_family == "market_data_provider"
+    assert market_data.authority_level == "secondary"
+
+
 def test_phase82_model_taskgraph_capability_args_reach_retrieval_without_agent_domain_logic() -> None:
     goal = "AAPL 2024 10-K revenue"
     journal = JournalStore.in_memory()
