@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from kernel_v3.agent.contracts import AgentRuntimeResult, FailureReport, FinalAnswer, SemanticIntake, TaskRecipe
-from kernel_v3.agent.semantics import analyze_goal
+from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
@@ -49,6 +49,7 @@ class AgentRuntime:
         planner_mode: str = "fake",
         evaluator_mode: str = "fake",
         synthesizer_mode: str = "fake",
+        semantic_mode: str = "fake",
         citations_required: bool | None = None,
     ) -> AgentRuntimeResult:
         return self._execute(
@@ -58,6 +59,7 @@ class AgentRuntime:
             planner_mode=planner_mode,
             evaluator_mode=evaluator_mode,
             synthesizer_mode=synthesizer_mode,
+            semantic_mode=semantic_mode,
             citations_required=citations_required,
             task_id=None,
         )
@@ -72,6 +74,7 @@ class AgentRuntime:
         planner_mode: str = "fake",
         evaluator_mode: str = "fake",
         synthesizer_mode: str = "fake",
+        semantic_mode: str = "fake",
         citations_required: bool | None = None,
     ) -> AgentRuntimeResult:
         return self._execute(
@@ -81,6 +84,7 @@ class AgentRuntime:
             planner_mode=planner_mode,
             evaluator_mode=evaluator_mode,
             synthesizer_mode=synthesizer_mode,
+            semantic_mode=semantic_mode,
             citations_required=citations_required,
             task_id=task_id,
         )
@@ -94,10 +98,11 @@ class AgentRuntime:
         planner_mode: str,
         evaluator_mode: str,
         synthesizer_mode: str,
+        semantic_mode: str,
         citations_required: bool | None,
         task_id: str | None,
     ) -> AgentRuntimeResult:
-        intake = analyze_goal(goal)
+        intake = self._semantic_intake(goal, semantic_mode=semantic_mode, task_id=task_id)
         selected_mode = intake.suggested_mode if mode == "auto" else _select_mode(goal, mode)
         if selected_mode == "workspace_answer" and not _file_target(goal):
             selected_mode = "clarify_first"
@@ -397,6 +402,21 @@ class AgentRuntime:
             report=report,
             evidence=evidence,
             citations=citations,
+        )
+
+    def _semantic_intake(self, goal: str, *, semantic_mode: str, task_id: str | None) -> SemanticIntake:
+        if semantic_mode == "fake":
+            return analyze_goal(goal)
+        if semantic_mode != "model":
+            raise ValueError(f"unsupported semantic_mode: {semantic_mode}")
+        if self.processor_fabric is None:
+            raise ValueError("model semantic intake requires processor_fabric")
+        return analyze_goal_with_processor(
+            goal,
+            fabric=self.processor_fabric,
+            task_id=task_id,
+            run_id="semantic-intake",
+            context_id=f"ctx-semantic-{task_id or 'new'}",
         )
 
     def _append_recipe(self, recipe: TaskRecipe, *, task_id: str, run_id: str) -> None:

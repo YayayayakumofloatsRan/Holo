@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
+    agent_parser.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--model", default=None)
     agent_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -162,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
             planner_mode=args.planner,
             evaluator_mode=args.evaluator,
             synthesizer_mode=args.synthesizer,
+            semantic_mode=args.semantic_intake,
             citations_required=True if args.citations_required else None,
         )
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
@@ -432,6 +434,7 @@ def _agent_uses_live_model(args) -> bool:
             getattr(args, "planner", "fake"),
             getattr(args, "evaluator", "fake"),
             getattr(args, "synthesizer", "fake"),
+            getattr(args, "semantic_intake", "fake"),
         )
     )
 

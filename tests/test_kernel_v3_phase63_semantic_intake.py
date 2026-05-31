@@ -1,5 +1,6 @@
 from kernel_v3.agent import AgentRuntime, analyze_goal
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors.testing import fake_fabric
 
 
 def test_phase63_roleplay_request_is_scoped_direct_response_not_echo():
@@ -44,13 +45,22 @@ def test_phase63_transport_control_request_is_refused_without_tool_execution():
     assert result.status == "completed"
     assert result.mode == "direct_answer"
     assert result.final_answer is not None
-    assert "不接管 WeChat" in result.final_answer["answer"]
+    assert "不接管" in result.final_answer["answer"]
+    assert "live transport" in result.final_answer["answer"]
     assert _action_names(journal, result.task_id) == ["respond"]
     assert not [name for name in _action_names(journal, result.task_id) if name not in {"respond"}]
     intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
     assert intake["primary_intent"] == "transport_control"
     assert intake["blocked_capabilities"] == ["live_transport:wechat"]
     assert "live_transports_are_not_kernel_v3_decision_makers" in intake["warnings"]
+
+
+def test_phase63_roleplay_extracts_role_without_known_role_table():
+    intake = analyze_goal("请扮演Ada Lovelace来解释这个系统")
+
+    assert intake.primary_intent == "roleplay"
+    assert intake.intents[0]["metadata"]["role"] == "Ada Lovelace"
+    assert intake.suggested_mode == "direct_answer"
 
 
 def test_phase63_noop_request_does_not_execute_tools():
@@ -73,6 +83,69 @@ def test_phase63_semantic_intake_preserves_simple_retrieval_route():
     assert intake.suggested_mode == "retrieval_answer"
     assert intake.requires_clarification is False
     assert intake.compound is False
+
+
+def test_phase63_model_semantic_intake_drives_open_ended_decomposition():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "retrieval_research",
+                "suggested_mode": "clarify_first",
+                "compound": True,
+                "requires_clarification": True,
+                "intents": [
+                    {
+                        "kind": "retrieval_research",
+                        "text": "research a current API surface",
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {"topic": "api docs"},
+                    },
+                    {
+                        "kind": "workspace_write",
+                        "text": "write a local report",
+                        "sequence_index": 2,
+                        "required_capabilities": ["workspace:write"],
+                        "risk": "write",
+                        "status": "needs_permission",
+                        "metadata": {},
+                    },
+                    {
+                        "kind": "roleplay",
+                        "text": "answer in a named assistant style",
+                        "sequence_index": 3,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {"role": "custom assistant"},
+                    },
+                ],
+                "blocked_capabilities": ["workspace:write"],
+                "warnings": ["model_detected_compound_task"],
+                "response_hint": None,
+                "clarification_question": "Confirm the ordered plan and write permission before execution.",
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "A broad multi-step request the fallback has never seen",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "needs_user_input"
+    assert result.mode == "clarify_first"
+    assert not journal.records(task_id=result.task_id, kind="retrieval_report")
+    intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
+    assert intake["intents"][0]["text"] == "research a current API surface"
+    assert "workspace:write" in intake["blocked_capabilities"]
+    assert "model_detected_compound_task" in intake["warnings"]
+    assert any(record.data["task_type"] == "semantic.intake" for record in journal.records(kind="processor_result"))
 
 
 def _action_names(journal: JournalStore, task_id: str) -> list[str]:

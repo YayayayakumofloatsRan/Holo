@@ -96,6 +96,32 @@ SYNTHESIZER_SCHEMA = JsonSchema(
 )
 
 
+SEMANTIC_INTAKE_SCHEMA = JsonSchema(
+    name="semantic.intake",
+    required={
+        "primary_intent": "str",
+        "suggested_mode": "str",
+        "compound": "bool",
+        "requires_clarification": "bool",
+        "intents": "list",
+        "blocked_capabilities": "list",
+        "warnings": "list",
+        "response_hint": "str|null",
+        "clarification_question": "str|null",
+    },
+)
+
+
+SEMANTIC_INTAKE_PROMPT_CONTRACT = """Return one JSON object matching semantic.intake.
+Fields: primary_intent string, suggested_mode one of direct_answer/retrieval_answer/workspace_answer/clarify_first,
+compound boolean, requires_clarification boolean, intents array, blocked_capabilities string array,
+warnings string array, response_hint string or null, clarification_question string or null.
+Each intent object should include: kind, text, sequence_index, required_capabilities, risk, status, metadata.
+Use broad semantic judgment instead of keyword matching. Split compound user requests into ordered intents.
+The model classifies and proposes structure only. The host validates capabilities, policy, execution, memory, and stop.
+Do not request live transports, direct tool execution, memory writes, or unavailable tools as executable actions."""
+
+
 PLANNER_PROMPT_CONTRACT = """Return one JSON object matching planner.propose.
 Fields: action_id string, kind one of respond/tool/ask_user, name string or null,
 description string, payload object, score number 0..1, reasons string array,
