@@ -62,6 +62,7 @@ class ContextPackCompiler:
         durable_memory_store: MemoryStore | None = None,
         durable_memory_limit: int = 5,
         include_sensitive_memory: bool = False,
+        durable_memory_user_id: str = "local:user",
     ) -> None:
         if budget_mode not in {"fail", "truncate"}:
             raise ValueError("budget_mode must be 'fail' or 'truncate'")
@@ -76,6 +77,7 @@ class ContextPackCompiler:
         self.durable_memory_store = durable_memory_store
         self.durable_memory_limit = durable_memory_limit
         self.include_sensitive_memory = include_sensitive_memory
+        self.durable_memory_user_id = durable_memory_user_id
 
     def compile(
         self,
@@ -105,6 +107,7 @@ class ContextPackCompiler:
             durable_memory = _recall_durable_memory(
                 self.durable_memory_store,
                 task=task,
+                user_id=self.durable_memory_user_id,
                 project_id=self.project_profile.project_id,
                 limit=self.durable_memory_limit,
                 include_sensitive=self.include_sensitive_memory,
@@ -532,6 +535,7 @@ def _recall_durable_memory(
     store: MemoryStore | None,
     *,
     task: TaskState,
+    user_id: str,
     project_id: str,
     limit: int,
     include_sensitive: bool,
@@ -540,7 +544,7 @@ def _recall_durable_memory(
 ) -> JsonObject:
     if store is None or limit <= 0:
         return {"query": None, "scope": {"thread_id": task.thread_id}, "items": [], "total": 0, "filtered": {}}
-    scope = _durable_memory_recall_scope(task=task, project_id=project_id)
+    scope = _durable_memory_recall_scope(task=task, user_id=user_id, project_id=project_id)
     return store.recall(
         query=None,
         scope=scope,
@@ -558,10 +562,11 @@ def _recall_durable_memory(
     ).to_dict()
 
 
-def _durable_memory_recall_scope(*, task: TaskState, project_id: str) -> JsonObject:
+def _durable_memory_recall_scope(*, task: TaskState, user_id: str, project_id: str) -> JsonObject:
+    base_scope: JsonObject = {"user_id": user_id} if user_id else {}
     if project_id and project_id != "local":
-        return {"project_id": project_id}
-    return {"thread_id": task.thread_id}
+        return {**base_scope, "project_id": project_id}
+    return {**base_scope, "thread_id": task.thread_id}
 
 
 def _compact_durable_memory_item(item: JsonObject) -> JsonObject:

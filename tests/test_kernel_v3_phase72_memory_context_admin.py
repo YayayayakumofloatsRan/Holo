@@ -35,8 +35,10 @@ def test_phase72_context_injects_project_memory_across_threads():
     store = MemoryStore.in_memory(clock_ms=_clock())
     same_project = _memory_item(summary="项目默认中文短答", thread_id="thread-old")
     other_project = _memory_item(summary="other project memory", thread_id="thread-other", project_id="other-project")
+    other_user = _memory_item(summary="other user same project memory", thread_id="thread-other-user", user_id="other:user")
     store.commit(same_project)
     store.commit(other_project)
+    store.commit(other_user)
     task = _task(thread_id="thread-new")
     profile = ProjectProfile(
         project_id="holo-kernel-v3",
@@ -53,10 +55,24 @@ def test_phase72_context_injects_project_memory_across_threads():
 
     durable = next(section for section in pack.sections if section["name"] == "durable_memory")
     assert [item["memory_id"] for item in durable["items"]] == [same_project.memory_id]
-    assert durable["scope"] == {"project_id": "holo-kernel-v3"}
+    assert durable["scope"] == {"user_id": "local:user", "project_id": "holo-kernel-v3"}
     access_event = [event for event in store.audit_records() if event["event_type"] == "memory_items_recalled"][-1]
-    assert access_event["payload"]["scope"] == {"project_id": "holo-kernel-v3"}
+    assert access_event["payload"]["scope"] == {"user_id": "local:user", "project_id": "holo-kernel-v3"}
     assert access_event["payload"]["memory_ids"] == [same_project.memory_id]
+
+
+def test_phase72_context_fallback_thread_memory_is_user_scoped():
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    current_user = _memory_item(summary="current user thread memory", thread_id="thread-1")
+    other_user = _memory_item(summary="other user thread memory", thread_id="thread-1", user_id="other:user")
+    store.commit(current_user)
+    store.commit(other_user)
+
+    pack = ContextPackCompiler(durable_memory_store=store).compile(_task(thread_id="thread-1"), JournalStore.in_memory())
+
+    durable = next(section for section in pack.sections if section["name"] == "durable_memory")
+    assert [item["memory_id"] for item in durable["items"]] == [current_user.memory_id]
+    assert durable["scope"] == {"user_id": "local:user", "thread_id": "thread-1"}
 
 
 def test_phase72_context_injection_audits_memory_access_without_changing_snapshot_hash():
@@ -244,11 +260,12 @@ def _memory_item(
     *,
     summary: str,
     thread_id: str,
+    user_id: str = "local:user",
     project_id: str = "holo-kernel-v3",
     expires_at_ms: int | None = None,
     privacy_class: str = "project_internal",
 ) -> MemoryItem:
-    scope = {"user_id": "local:user", "project_id": project_id, "thread_id": thread_id}
+    scope = {"user_id": user_id, "project_id": project_id, "thread_id": thread_id}
     dedupe_key = f"user_preference:{summary}"
     return MemoryItem(
         memory_id=stable_memory_id(kind="user_preference", scope=scope, dedupe_key=dedupe_key, summary=summary),
