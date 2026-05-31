@@ -5,6 +5,7 @@ from typing import Callable
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.context import ArtifactStore
+from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
 from kernel_v3.research import ResearchCorpusStore
 from kernel_v3.resident.contracts import ResidentDoctorReport
@@ -18,6 +19,7 @@ class ResidentDoctor:
         *,
         queue: ResidentQueue,
         scheduler: ResidentScheduler,
+        journal: JournalStore | None = None,
         artifact_store: ArtifactStore | None = None,
         memory_store: MemoryStore | None = None,
         corpus_store: ResearchCorpusStore | None = None,
@@ -25,6 +27,7 @@ class ResidentDoctor:
     ) -> None:
         self.queue = queue
         self.scheduler = scheduler
+        self.journal = journal
         self.artifact_store = artifact_store
         self.memory_store = memory_store
         self.corpus_store = corpus_store
@@ -33,7 +36,15 @@ class ResidentDoctor:
     def inspect(self, *, sample_limit: int = 5) -> ResidentDoctorReport:
         queue_inspection = self.queue.inspect(sample_limit=sample_limit)
         schedule_inspection = self.scheduler.inspect(sample_limit=sample_limit)
-        memory_inspection = self.memory_store.inspect(sample_limit=sample_limit) if self.memory_store is not None else None
+        memory_inspection = (
+            self.memory_store.inspect(
+                sample_limit=sample_limit,
+                journal=self.journal,
+                artifact_store=self.artifact_store,
+            )
+            if self.memory_store is not None
+            else None
+        )
         corpus_inspection = (
             self.corpus_store.inspect(sample_limit=sample_limit, artifact_store=self.artifact_store)
             if self.corpus_store is not None
@@ -87,6 +98,11 @@ def _component_issues(component: str, issues: list[JsonObject]) -> list[JsonObje
 
 def _memory_issues(memory_inspection: JsonObject) -> list[JsonObject]:
     issues: list[JsonObject] = []
+    raw_issues = memory_inspection.get("issues")
+    if isinstance(raw_issues, list):
+        for issue in raw_issues:
+            if isinstance(issue, dict):
+                issues.append({**issue, "component": "memory"})
     proposal_counts = memory_inspection.get("proposal_counts")
     pending = int(proposal_counts.get("pending", 0)) if isinstance(proposal_counts, dict) else 0
     if pending:

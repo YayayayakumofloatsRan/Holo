@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 from kernel_v3 import cli
+from kernel_v3.context import ArtifactStore
+from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryProposal, MemoryStore, stable_memory_id, stable_proposal_id
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentScheduler
 
@@ -36,6 +38,37 @@ def test_phase77_resident_doctor_aggregates_queue_schedule_and_memory(tmp_path: 
     assert "resident run --max-iterations <n>" in report.recommended_actions
     assert "resident run --tick-schedules --max-iterations <n>" in report.recommended_actions
     assert "memory proposals" in report.recommended_actions
+
+
+def test_phase77_resident_doctor_reports_memory_reference_integrity(tmp_path: Path) -> None:
+    queue = ResidentQueue(tmp_path / "resident-integrity.sqlite", clock_ms=_clock())
+    scheduler = ResidentScheduler(queue=queue, clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    memory = MemoryStore.in_memory(clock_ms=_clock())
+    memory.commit(
+        _memory_item(
+            summary="broken doctor memory",
+            thread_id="doctor-integrity",
+            provenance_refs=["ledger-missing"],
+            artifact_refs=["artifact-missing"],
+        )
+    )
+
+    report = ResidentDoctor(
+        queue=queue,
+        scheduler=scheduler,
+        journal=journal,
+        artifact_store=artifacts,
+        memory_store=memory,
+    ).inspect(sample_limit=1)
+
+    assert report.status == "error"
+    assert report.memory_inspection is not None
+    assert report.memory_inspection["provenance_consistency"]["missing_provenance_refs"] == 1
+    issue_codes = {issue["code"] for issue in report.issues}
+    assert {"missing_memory_provenance", "missing_memory_artifacts"}.issubset(issue_codes)
+    assert "repair artifact store or delete affected memory" in report.recommended_actions
 
 
 def test_phase77_cli_resident_doctor_includes_configured_memory_and_corpus(tmp_path: Path, capsys) -> None:
@@ -99,7 +132,13 @@ def test_phase77_cli_resident_doctor_includes_configured_memory_and_corpus(tmp_p
     assert doctor["corpus_inspection"]["issues"][0]["code"] == "empty_corpus"
 
 
-def _memory_item(*, summary: str, thread_id: str) -> MemoryItem:
+def _memory_item(
+    *,
+    summary: str,
+    thread_id: str,
+    provenance_refs: list[str] | None = None,
+    artifact_refs: list[str] | None = None,
+) -> MemoryItem:
     scope = {"user_id": "local:user", "project_id": "holo-kernel-v3", "thread_id": thread_id}
     dedupe_key = f"user_preference:{summary}"
     return MemoryItem(
@@ -116,8 +155,8 @@ def _memory_item(*, summary: str, thread_id: str) -> MemoryItem:
         expires_at_ms=None,
         dedupe_key=dedupe_key,
         conflict_keys=[dedupe_key],
-        provenance_refs=[],
-        artifact_refs=[],
+        provenance_refs=list(provenance_refs or []),
+        artifact_refs=list(artifact_refs or []),
         state="active",
         approved_by="test",
         created_at_ms=1_000,

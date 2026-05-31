@@ -815,7 +815,11 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
             proposals = [proposal for proposal in proposals if proposal.get("source_thread_id") == args.thread]
         return {"status": "ok", "proposals": proposals}
     if command == "inspect":
-        inspection = store.inspect(sample_limit=args.sample_limit)
+        inspection = store.inspect(
+            sample_limit=args.sample_limit,
+            journal=journal,
+            artifact_store=_artifact_store(args, create_default=False),
+        )
         return {"status": inspection.status, "inspection": inspection.to_dict()}
     pipeline = MemoryPipeline(store=store, journal=journal)
     if command == "propose":
@@ -915,6 +919,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         report = ResidentDoctor(
             queue=queue,
             scheduler=scheduler,
+            journal=journal,
             artifact_store=_artifact_store(args, create_default=False),
             memory_store=memory_store,
             corpus_store=corpus_store,

@@ -70,6 +70,12 @@ shadow-candidate, tombstone, and audit-record counts, plus small safe samples
 and recommended operator actions. It does not approve proposals, commit memory,
 delete memory, or expose raw secret-like rejected payloads.
 
+When a journal and artifact store are configured, the same inspection also
+checks committed memory references without reading raw artifact payloads:
+provenance refs must point at existing journal records, and artifact refs must
+still have artifact metadata and blob payloads. Missing refs are reported as
+inspection issues with bounded samples and repair recommendations.
+
 The same surface is available in thread chat:
 
 ```text
@@ -84,4 +90,5 @@ For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured
 research-corpus inspections. The doctor report is an operator snapshot only: it
 does not approve proposals, write durable memory, enqueue work, retrieve
-documents, or execute tools.
+documents, or execute tools. If memory and artifact stores are configured, the
+doctor report includes the same memory provenance/artifact consistency check.

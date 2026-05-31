@@ -4,6 +4,8 @@ from pathlib import Path
 from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.chat import ChatRuntime
+from kernel_v3.context import ArtifactStore
+from kernel_v3.contracts import ArtifactRef
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryProposal, MemoryStore, stable_memory_id, stable_proposal_id
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
@@ -36,6 +38,65 @@ def test_phase75_memory_store_inspect_reports_reviewable_state() -> None:
     assert "memory export <memory_id>" in inspection.recommended_actions
     assert len(inspection.samples["active_items"]) == 2
     assert inspection.samples["pending_proposals"][0]["proposal_id"] == "memprop-pending"
+
+
+def test_phase75_memory_inspect_checks_provenance_and_artifact_refs() -> None:
+    journal = JournalStore.in_memory()
+    source = journal.append(
+        task_id="task-memory-audit",
+        run_id="run-memory-audit",
+        step_id=None,
+        kind="memory_source",
+        data={"summary": "auditable memory source"},
+    )
+    artifacts = ArtifactStore.in_memory()
+    good_artifact = artifacts.write_blob(kind="memory-source", payload="auditable artifact body")
+    artifacts.put(
+        ArtifactRef(
+            artifact_id="artifact-ref-only",
+            kind="memory-source",
+            uri="artifact-blob://artifact-ref-only",
+            payload_hash="hash-ref-only",
+            metadata={"preview": "ref without blob"},
+        )
+    )
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    store.commit(
+        _memory_item(
+            summary="auditable preference",
+            thread_id="thread-memory-audit",
+            provenance_refs=[source.record_id],
+            artifact_refs=[good_artifact.artifact_id],
+        )
+    )
+
+    healthy = store.inspect(journal=journal, artifact_store=artifacts)
+
+    assert healthy.status == "ok"
+    assert healthy.issues == []
+    assert healthy.provenance_consistency["checked_journal"] is True
+    assert healthy.provenance_consistency["checked_artifacts"] is True
+    assert healthy.provenance_consistency["missing_provenance_refs"] == 0
+    assert healthy.provenance_consistency["missing_artifact_refs"] == 0
+    assert healthy.provenance_consistency["missing_artifact_blobs"] == 0
+
+    store.commit(
+        _memory_item(
+            summary="broken preference",
+            thread_id="thread-memory-audit",
+            provenance_refs=["ledger-missing"],
+            artifact_refs=["artifact-missing", "artifact-ref-only"],
+        )
+    )
+    broken = store.inspect(journal=journal, artifact_store=artifacts, sample_limit=2)
+
+    assert broken.status == "error"
+    issue_codes = {issue["code"] for issue in broken.issues}
+    assert {"missing_memory_provenance", "missing_memory_artifacts"}.issubset(issue_codes)
+    assert broken.provenance_consistency["missing_provenance_refs"] == 1
+    assert broken.provenance_consistency["missing_artifact_refs"] == 1
+    assert broken.provenance_consistency["missing_artifact_blobs"] == 1
+    assert "repair artifact store or delete affected memory" in broken.recommended_actions
 
 
 def test_phase75_chat_memory_inspect_returns_auditable_summary() -> None:
@@ -118,6 +179,8 @@ def _memory_item(
     thread_id: str,
     expires_at_ms: int | None = None,
     privacy_class: str = "project_internal",
+    provenance_refs: list[str] | None = None,
+    artifact_refs: list[str] | None = None,
 ) -> MemoryItem:
     scope = {"user_id": "local:user", "project_id": "holo-kernel-v3", "thread_id": thread_id}
     dedupe_key = f"user_preference:{summary}"
@@ -135,8 +198,8 @@ def _memory_item(
         expires_at_ms=expires_at_ms,
         dedupe_key=dedupe_key,
         conflict_keys=[dedupe_key],
-        provenance_refs=[],
-        artifact_refs=[],
+        provenance_refs=list(provenance_refs or []),
+        artifact_refs=list(artifact_refs or []),
         state="active",
         approved_by="test",
         created_at_ms=1_000,

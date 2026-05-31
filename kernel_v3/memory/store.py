@@ -6,7 +6,7 @@ import sqlite3
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.memory.contracts import (
@@ -18,7 +18,17 @@ from kernel_v3.memory.contracts import (
     MemoryTombstone,
     ShadowCandidate,
 )
+from kernel_v3.memory.inspection import (
+    inspect_memory_references,
+    inspection_issues,
+    inspection_status,
+    reference_recommendations,
+)
 from kernel_v3.memory.privacy import validate_memory_item
+
+if TYPE_CHECKING:
+    from kernel_v3.context import ArtifactStore
+    from kernel_v3.journal import JournalStore
 
 
 def stable_memory_id(*, kind: str, scope: JsonObject, dedupe_key: str, summary: str = "") -> str:
@@ -249,7 +259,14 @@ class MemoryStore:
     def audit_records(self) -> list[JsonObject]:
         return [dict(event) for event in self._events]
 
-    def inspect(self, *, sample_limit: int = 5, now_ms: int | None = None) -> MemoryInspection:
+    def inspect(
+        self,
+        *,
+        sample_limit: int = 5,
+        now_ms: int | None = None,
+        journal: "JournalStore | None" = None,
+        artifact_store: "ArtifactStore | None" = None,
+    ) -> MemoryInspection:
         timestamp = now_ms if now_ms is not None else self._now_ms()
         active_items: list[MemoryItem] = []
         expired_items: list[MemoryItem] = []
@@ -281,7 +298,15 @@ class MemoryStore:
             expired_count=len(expired_items),
             sensitive_count=len(sensitive_items),
         )
-        status = "needs_review" if recommendations else "ok"
+        consistency = inspect_memory_references(
+            active_items,
+            journal=journal,
+            artifact_store=artifact_store,
+            sample_limit=sample_limit,
+        )
+        issues = inspection_issues(consistency)
+        recommendations = _unique([*recommendations, *reference_recommendations(issues)])
+        status = inspection_status(issues=issues, recommended_actions=recommendations)
         return MemoryInspection(
             status=status,
             active_count=len(active_items),
@@ -292,6 +317,8 @@ class MemoryStore:
             shadow_candidate_count=len(self._candidates),
             tombstone_count=len(self._tombstones),
             audit_record_count=len(self._events),
+            issues=issues,
+            provenance_consistency=consistency,
             samples={
                 "active_items": [_memory_sample(item) for item in _take_sorted_items(active_items, sample_limit)],
                 "pending_proposals": [

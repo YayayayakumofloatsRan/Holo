@@ -233,6 +233,10 @@ aggregates queue inspection, schedule inspection, and any configured durable
 memory or research corpus inspections into one status, issue list, and action
 list. It does not create memory/corpus stores unless their CLI paths are
 configured, and it does not enqueue, approve memory, retrieve, or execute tools.
+When the journal and artifact store are configured, doctor also asks durable
+memory inspection to verify committed memory provenance refs and artifact refs,
+using metadata/blob presence checks only. This keeps long-running memory
+auditable without exposing raw artifact payloads.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that

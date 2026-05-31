@@ -112,6 +112,8 @@ class MemoryInspection(Contract):
     shadow_candidate_count: int
     tombstone_count: int
     audit_record_count: int
+    issues: list[JsonObject]
+    provenance_consistency: JsonObject
     samples: JsonObject
     recommended_actions: list[str]
     generated_at_ms: int

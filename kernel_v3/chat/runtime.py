@@ -831,7 +831,7 @@ class ChatRuntime:
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_proposal_list_text(payload))
         if subcommand in {"inspect", "status"}:
-            payload = self.memory_store.inspect().to_dict()
+            payload = self.memory_store.inspect(journal=self.journal).to_dict()
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_memory_inspection_text(payload))
         if subcommand == "approve" and len(args) >= 2:
