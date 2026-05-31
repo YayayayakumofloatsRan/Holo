@@ -130,6 +130,61 @@ def test_phase4_retrieval_bounds_sources_fetches_and_spans():
     assert report.diagnostics["provider_capabilities"] == capabilities
 
 
+def test_phase4_retrieval_operator_clamps_oversized_goal_budgets():
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    sources = [
+        _source(
+            f"src-{index}",
+            f"https://example.test/kernel-v3/{index}",
+            f"Kernel v3 source {index}",
+            "Kernel v3 retrieval evidence.",
+        )
+        for index in range(30)
+    ]
+    responses = {
+        source.uri: f"Kernel v3 retrieval evidence from source {source.source_id}."
+        for source in sources
+    }
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({"Kernel v3 retrieval": sources}),
+        fetch_provider=FakeFetchProvider(responses),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-oversized-budget",
+            query="Kernel v3 retrieval",
+            max_queries=99,
+            max_sources=99,
+            max_fetches=99,
+            max_spans_per_document=99,
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-oversized-budget",
+        run_id="run-1",
+    )
+
+    plan = journal.records(task_id="task-oversized-budget", kind="retrieval_query_plan")[0].data
+    assert plan["diagnostics"]["budget"] == {
+        "max_queries": 4,
+        "max_sources": 20,
+        "max_fetches": 10,
+        "max_spans_per_document": 5,
+    }
+    assert plan["diagnostics"]["requested_budget"] == {
+        "max_queries": 99,
+        "max_sources": 99,
+        "max_fetches": 99,
+        "max_spans_per_document": 99,
+    }
+    assert plan["diagnostics"]["budget_clamped"] is True
+    assert len(journal.records(task_id="task-oversized-budget", kind="retrieval_fetch_attempt")) == 10
+    assert report.diagnostics["budget"] == plan["diagnostics"]["budget"]
+    assert report.diagnostics["requested_budget"] == plan["diagnostics"]["requested_budget"]
+
+
 def test_phase4_retrieval_deduplicates_repeated_query_terms():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()

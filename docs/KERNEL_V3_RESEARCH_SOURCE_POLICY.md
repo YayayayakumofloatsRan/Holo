@@ -58,6 +58,10 @@ the retrieval operator:
   `max_fetches` payload field) through the tool manifest so `LoopControllerV3`
   can enforce network budgets before live-capable retrieval executes, without
   dispatching on the concrete `retrieval.run` tool name
+- clamps oversized retrieval goals at the operator boundary before search or
+  fetch execution. Current host caps are 4 queries, 20 sources, 10 fetches, and
+  5 spans per document; when clamping occurs, the journal records both the
+  requested budget and the effective bounded budget.
 
 This prepares the kernel for future live web/database providers without making
 live retrieval the default.

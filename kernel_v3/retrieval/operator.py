@@ -28,6 +28,14 @@ from kernel_v3.retrieval.rank import plan_queries, rank_sources
 from kernel_v3.tools import ToolRegistry, ToolResult
 
 
+RETRIEVAL_BUDGET_CAPS = {
+    "max_queries": 4,
+    "max_sources": 20,
+    "max_fetches": 10,
+    "max_spans_per_document": 5,
+}
+
+
 class CorpusStore(Protocol):
     def record_retrieval_document(
         self,
@@ -79,6 +87,8 @@ class RetrievalOperator:
         step_id_prefix: str = "retrieval",
         action_ref: str | None = None,
     ) -> RetrievalReport:
+        requested_goal = goal
+        goal = _bounded_goal(goal)
         research_profile = _research_profile_from_goal(goal)
         queries = plan_queries(goal)
         plan = QueryPlan(
@@ -91,6 +101,7 @@ class RetrievalOperator:
                 "query_count": len(queries),
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
+                **_budget_clamp_diagnostics(requested_goal, goal),
                 "provider_capabilities": self.provider_capabilities(),
                 **({"research_profile": research_profile.profile_id} if research_profile is not None else {}),
             },
@@ -385,6 +396,7 @@ class RetrievalOperator:
                 "reason": decision.reason,
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
+                **_budget_clamp_diagnostics(requested_goal, goal),
                 "provider_capabilities": self.provider_capabilities(),
                 "search_attempt_count": len(search_attempt_ids),
                 "fetch_attempt_count": len(fetch_attempt_ids),
@@ -541,6 +553,38 @@ def _goal_budget(goal: SearchGoal) -> JsonObject:
         "max_fetches": goal.max_fetches,
         "max_spans_per_document": goal.max_spans_per_document,
     }
+
+
+def _bounded_goal(goal: SearchGoal) -> SearchGoal:
+    return SearchGoal(
+        goal_id=goal.goal_id,
+        query=goal.query,
+        max_queries=_clamp_budget(goal.max_queries, "max_queries"),
+        max_sources=_clamp_budget(goal.max_sources, "max_sources"),
+        max_fetches=_clamp_budget(goal.max_fetches, "max_fetches"),
+        max_spans_per_document=_clamp_budget(goal.max_spans_per_document, "max_spans_per_document"),
+        metadata=dict(goal.metadata),
+    )
+
+
+def _budget_clamp_diagnostics(requested: SearchGoal, effective: SearchGoal) -> JsonObject:
+    requested_budget = _goal_budget(requested)
+    effective_budget = _goal_budget(effective)
+    if requested_budget == effective_budget:
+        return {}
+    return {
+        "requested_budget": requested_budget,
+        "budget_clamped": True,
+        "budget_caps": dict(RETRIEVAL_BUDGET_CAPS),
+    }
+
+
+def _clamp_budget(value: int, key: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 0
+    return min(max(0, parsed), RETRIEVAL_BUDGET_CAPS[key])
 
 
 def _provider_search_diagnostics(provider) -> JsonObject:
