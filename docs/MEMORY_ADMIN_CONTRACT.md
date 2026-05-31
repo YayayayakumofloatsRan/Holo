@@ -113,8 +113,9 @@ and expired items are excluded, and `sensitive` memory is withheld unless the
 compiler is explicitly configured with `include_sensitive_memory=True`.
 Each durable-memory context injection records a safe `memory_items_recalled`
 event in the memory store and updates `last_accessed_ms` for the recalled
-items. The access record contains memory ids, scope, filter counts, and context
-ids; it does not contain raw artifact payloads or raw task bodies. Access
+items. The access record contains memory ids, scope, filter counts, query
+hash/length, and context ids; it does not contain raw recall queries, raw
+artifact payloads, or raw task bodies. Access
 context is passed through the shared low-sensitive audit sanitizer: known
 operator identifiers are preserved, secret-like keys are omitted, and unknown
 free-form strings are hash-only.

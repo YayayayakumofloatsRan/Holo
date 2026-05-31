@@ -72,6 +72,10 @@ def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path
     assert access_event["event_type"] == "memory_items_recalled"
     assert access_event["payload"]["memory_ids"] == [item.memory_id]
     assert access_event["payload"]["accessed_at_ms"] == 1100
+    assert access_event["payload"]["query_hash"]
+    assert access_event["payload"]["query_length"] == len("Chinese")
+    assert access_event["payload"]["query_redacted"] is True
+    assert "Chinese" not in json.dumps([access_event], ensure_ascii=False)
     assert access_event["payload"]["access_context"]["raw_body"] == "[omitted]"
     assert access_event["payload"]["access_context"]["operator_note"]["redacted"] is True
     assert "RAW_MEMORY_ACCESS_SECRET" not in json.dumps(store.audit_records(), ensure_ascii=False)
@@ -81,7 +85,9 @@ def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path
     store.recall(query="api_key=sk_12345678901234567890", record_access=True)
     secret_query_event = store.audit_records()[-1]
     dumped = json.dumps(store.audit_records(), ensure_ascii=False)
-    assert secret_query_event["payload"]["query"] == "[omitted]"
+    assert secret_query_event["payload"]["query_hash"]
+    assert secret_query_event["payload"]["query_length"] == len("api_key=sk_12345678901234567890")
+    assert secret_query_event["payload"]["query_redacted"] is True
     assert "sk_12345678901234567890" not in dumped
     assert "api_key" not in dumped
 

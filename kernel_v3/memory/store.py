@@ -486,7 +486,7 @@ class MemoryStore:
         memory_ids = [item.memory_id for item in matches]
         payload = {
             "accessed_at_ms": accessed_at_ms,
-            "query": _safe_access_text(result.query),
+            **_safe_query_diagnostics(result.query),
             "scope": dict(result.scope),
             "include_sensitive": include_sensitive,
             "limit": effective_limit,
@@ -800,12 +800,14 @@ def _clamp_limit(value: int, *, cap: int) -> int:
     return min(max(0, int(value)), cap)
 
 
-def _safe_access_text(value: str | None) -> str | None:
+def _safe_query_diagnostics(value: str | None) -> JsonObject:
     if value is None:
-        return None
-    if contains_secret_like_content(value):
-        return "[omitted]"
-    return value[:160]
+        return {"query_hash": None, "query_length": 0}
+    return {
+        "query_hash": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+        "query_length": len(value),
+        "query_redacted": True,
+    }
 
 
 def _inspection_recommendations(
