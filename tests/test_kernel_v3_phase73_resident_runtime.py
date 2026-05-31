@@ -103,6 +103,21 @@ def test_phase73_enqueue_is_idempotent_for_retried_inbound_delivery(tmp_path: Pa
     assert queue.inbox_messages()[0].message_id == "in-same"
 
 
+def test_phase73_auto_message_ids_do_not_collide_within_same_clock_tick(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=lambda: 1000)
+
+    first = queue.enqueue(thread_id="resident-thread", text="same tick", source="gateway")
+    second = queue.enqueue(thread_id="resident-thread", text="same tick", source="gateway")
+    third = queue.enqueue(thread_id="resident-thread", text="different payload", source="gateway")
+
+    messages = queue.inbox_messages()
+    assert len(messages) == 3
+    assert first.message_id.startswith("inbox-1000-")
+    assert second.message_id.startswith(first.message_id)
+    assert third.message_id.startswith("inbox-1000-")
+    assert len({message.message_id for message in messages}) == 3
+
+
 def test_phase73_enqueue_rejects_conflicting_duplicate_message_id(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
 

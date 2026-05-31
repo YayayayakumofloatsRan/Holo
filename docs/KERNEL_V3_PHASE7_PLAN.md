@@ -313,6 +313,10 @@ Implementation note:
   the same thread/source/text returns the existing inbox item instead of
   creating a duplicate task. Reusing a `message_id` with different thread,
   source, or text is rejected as a conflict.
+- If no `message_id` is supplied, the queue generates a local id from the
+  current clock tick plus a payload hash and appends a numeric suffix on
+  same-tick collisions. Explicit gateway ids keep replay idempotency; automatic
+  ids favor accepting distinct local work items over accidental collision.
 - `needs_user_input` becomes an outbox item with status `pending_user_input`;
   the worker does not fabricate the missing user answer or continue the task.
 - When a later inbound message in the same thread answers a pending question

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -37,7 +38,16 @@ class ResidentQueue:
         metadata: JsonObject | None = None,
     ) -> InboundMessage:
         now = self._now_ms()
-        message_id = message_id or f"inbox-{now}"
+        explicit_message_id = message_id is not None
+        metadata_payload = dict(metadata or {})
+        requested_message_id = message_id or _generated_inbox_message_id(
+            now_ms=now,
+            thread_id=thread_id,
+            text=text,
+            source=source,
+            metadata=metadata_payload,
+        )
+        message_id = requested_message_id
         message = InboundMessage(
             message_id=message_id,
             thread_id=thread_id,
@@ -49,11 +59,26 @@ class ResidentQueue:
             lease_until_ms=None,
             attempts=0,
             next_attempt_at_ms=None,
-            metadata=dict(metadata or {}),
+            metadata=metadata_payload,
         )
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
+            if not explicit_message_id:
+                message_id = _next_generated_inbox_message_id(conn, requested_message_id)
+                message = InboundMessage(
+                    message_id=message_id,
+                    thread_id=message.thread_id,
+                    text=message.text,
+                    source=message.source,
+                    status=message.status,
+                    created_at_ms=message.created_at_ms,
+                    lease_owner=message.lease_owner,
+                    lease_until_ms=message.lease_until_ms,
+                    attempts=message.attempts,
+                    next_attempt_at_ms=message.next_attempt_at_ms,
+                    metadata=message.metadata,
+                )
             existing = _inbox_by_id(conn, message_id)
             if existing is not None:
                 if existing.thread_id != thread_id or existing.text != text or existing.source != source:
@@ -1077,6 +1102,32 @@ def _inbox_by_id(conn: sqlite3.Connection, message_id: str) -> InboundMessage | 
     return _inbox_from_row(row) if row is not None else None
 
 
+def _generated_inbox_message_id(
+    *,
+    now_ms: int,
+    thread_id: str,
+    text: str,
+    source: str,
+    metadata: JsonObject,
+) -> str:
+    payload = {
+        "thread_id": thread_id,
+        "text": text,
+        "source": source,
+        "metadata": metadata,
+    }
+    return f"inbox-{now_ms}-{_hash(payload)[:12]}"
+
+
+def _next_generated_inbox_message_id(conn: sqlite3.Connection, base_message_id: str) -> str:
+    candidate = base_message_id
+    suffix = 2
+    while _inbox_by_id(conn, candidate) is not None:
+        candidate = f"{base_message_id}-{suffix}"
+        suffix += 1
+    return candidate
+
+
 def _json(payload: JsonObject) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -1097,3 +1148,8 @@ def _ordered_unique(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _hash(value: object) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
