@@ -6,6 +6,11 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.resident.contracts import OutboxMessage
 
 
+COMMAND_MANIFEST_TEXT_LIMIT = 160
+COMMAND_MANIFEST_LIST_LIMIT = 20
+COMMAND_MANIFEST_DEPTH_LIMIT = 5
+
+
 def resident_chat_result_payload(chat_result) -> JsonObject:
     payload: JsonObject = {
         "status": chat_result.status,
@@ -19,10 +24,11 @@ def resident_chat_result_payload(chat_result) -> JsonObject:
             "answer": "outbox_text_only",
             "summary": "manifest_only",
             "failure_report": "manifest_only",
+            "command_result": "manifest_only",
         },
     }
     if chat_result.command_result is not None:
-        payload["command_result"] = chat_result.command_result
+        payload["command_result"] = _command_result_manifest(chat_result.command_result)
     if chat_result.pending_question is not None:
         payload["pending_question"] = _pending_question_manifest(chat_result.pending_question)
     if chat_result.final_answer is not None:
@@ -106,11 +112,65 @@ def _outbox_payload_manifest(payload: JsonObject) -> JsonObject:
         "task_id": payload.get("task_id"),
         "run_id": payload.get("run_id"),
         "trace_refs": _string_list(payload.get("trace_refs")),
-        "command_result": payload.get("command_result") if isinstance(payload.get("command_result"), dict) else None,
+        "command_result": _command_result_manifest(payload.get("command_result")),
         "final_answer": payload.get("final_answer") if isinstance(payload.get("final_answer"), dict) else None,
         "failure_report": payload.get("failure_report") if isinstance(payload.get("failure_report"), dict) else None,
         "pending_question": payload.get("pending_question") if isinstance(payload.get("pending_question"), dict) else None,
-        "redaction": {"answer": "not_embedded", "summary": "manifest_only"},
+        "redaction": {"answer": "not_embedded", "summary": "manifest_only", "command_result": "manifest_only"},
+    }
+
+
+def _command_result_manifest(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    compacted = _compact_command_value(value, depth=0, key="")
+    return compacted if isinstance(compacted, dict) else {"value": compacted}
+
+
+def _compact_command_value(value: object, *, depth: int, key: str) -> object:
+    if depth > COMMAND_MANIFEST_DEPTH_LIMIT:
+        return _value_manifest(value, reason="depth_limited")
+    if isinstance(value, dict):
+        return {
+            str(child_key): _compact_command_value(child_value, depth=depth + 1, key=str(child_key))
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        items = [
+            _compact_command_value(item, depth=depth + 1, key=key)
+            for item in value[:COMMAND_MANIFEST_LIST_LIMIT]
+        ]
+        if len(value) <= COMMAND_MANIFEST_LIST_LIMIT:
+            return items
+        return {
+            "items": items,
+            "truncated_count": len(value) - COMMAND_MANIFEST_LIST_LIMIT,
+            "redaction": {"list": "truncated"},
+        }
+    if isinstance(value, str):
+        if key == "trace" or len(value) > COMMAND_MANIFEST_TEXT_LIMIT:
+            return _text_manifest(value, reason="preview_hash_only")
+        return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _value_manifest(value, reason="unsupported_type")
+
+
+def _text_manifest(text: str, *, reason: str) -> JsonObject:
+    return {
+        "preview": _preview(text, limit=COMMAND_MANIFEST_TEXT_LIMIT),
+        "length": len(text),
+        "hash": _text_hash(text),
+        "redaction": {"text": reason},
+    }
+
+
+def _value_manifest(value: object, *, reason: str) -> JsonObject:
+    text = str(value)
+    return {
+        "preview": _preview(text, limit=COMMAND_MANIFEST_TEXT_LIMIT),
+        "hash": _text_hash(text),
+        "redaction": {"value": reason},
     }
 
 

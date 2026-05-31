@@ -65,6 +65,41 @@ def test_phase73_resident_outbox_payload_and_journal_do_not_duplicate_full_answe
     assert appended["redaction"] == {"text": "preview_hash_only", "payload": "manifest_only"}
 
 
+def test_phase73_resident_trace_command_payload_is_manifest_only(tmp_path: Path):
+    marker = "RESIDENT_TRACE_COMMAND_MARKER"
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-resident-trace",
+        run_id="run-resident-trace",
+        step_id="step-trace",
+        kind="action",
+        data={
+            "kind": "tool",
+            "name": "workspace.read",
+            "payload": {"note": ("x" * 400) + marker},
+        },
+    )
+    queue.enqueue(thread_id="resident-thread", text="/trace task-resident-trace", message_id="in-trace-command")
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-trace-command",
+        journal=journal,
+    ).run_once()
+
+    outbox = queue.outbox_messages()[0]
+    appended = journal.records(kind="resident_outbox_appended")[-1].data
+    trace_manifest = outbox.payload["command_result"]["result"]["trace"]
+    assert result.status == "processed"
+    assert marker in outbox.text
+    assert trace_manifest["redaction"] == {"text": "preview_hash_only"}
+    assert marker not in json.dumps(outbox.payload, ensure_ascii=False)
+    assert marker not in json.dumps(appended, ensure_ascii=False)
+    assert appended["payload"]["redaction"]["command_result"] == "manifest_only"
+
+
 def test_phase73_worker_lease_prevents_duplicate_ownership(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
 
