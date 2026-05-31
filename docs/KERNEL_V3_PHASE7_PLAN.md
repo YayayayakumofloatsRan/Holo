@@ -249,6 +249,10 @@ Implementation note:
 - `ResidentRuntime.run_once()` claims one inbox item, calls `ChatRuntime`, writes
   exactly one outbox item, marks the inbox item completed, and releases the
   lease. It does not loop forever and does not become a separate decision layer.
+- Outbox writes are idempotent by inbound `in_reply_to`. If a worker crashes
+  after writing the outbox but before completing the inbox item, a later retry
+  reuses the existing outbox item instead of creating a duplicate outbound
+  response.
 - `needs_user_input` becomes an outbox item with status `pending_user_input`;
   the worker does not fabricate the missing user answer or continue the task.
 - `holo-v3 resident enqueue/run-once/inbox/outbox` provides the local dev/admin

@@ -53,6 +53,40 @@ def test_phase73_restart_picks_pending_inbox_item(tmp_path: Path):
     assert restarted.outbox_messages()[0].in_reply_to == "in-restart"
 
 
+def test_phase73_restart_after_partial_outbox_write_is_idempotent(tmp_path: Path):
+    db_path = tmp_path / "resident.sqlite"
+    queue = ResidentQueue(db_path, clock_ms=_clock())
+    queue.enqueue(thread_id="resident-thread", text="hello after partial crash", message_id="in-partial")
+    claimed = queue.claim_next(worker_id="crashed-worker", lease_ttl_ms=1)
+    assert claimed is not None
+    queue.append_outbox(
+        in_reply_to=claimed.message_id,
+        thread_id=claimed.thread_id,
+        text="previous outbox already written",
+        status="ready",
+        task_id="task-crash",
+        run_id="run-crash",
+        payload={"partial": True},
+    )
+
+    restarted = ResidentQueue(db_path, clock_ms=_clock(start=10_000))
+    journal = JournalStore.in_memory()
+    result = ResidentRuntime(
+        queue=restarted,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-restart",
+    ).run_once()
+
+    inbox = restarted.inbox_messages()[0]
+    outbox = restarted.outbox_messages()
+    assert result.status == "processed"
+    assert inbox.status == "completed"
+    assert inbox.attempts == 2
+    assert len(outbox) == 1
+    assert outbox[0].in_reply_to == "in-partial"
+    assert outbox[0].text == "previous outbox already written"
+
+
 def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuation(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()

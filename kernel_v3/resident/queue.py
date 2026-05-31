@@ -171,6 +171,9 @@ class ResidentQueue:
         run_id: str | None,
         payload: JsonObject | None = None,
     ) -> OutboxMessage:
+        existing = self._outbox_for_reply(in_reply_to)
+        if existing is not None:
+            return existing
         now = self._now_ms()
         message = OutboxMessage(
             outbox_id=f"outbox-{now}-{in_reply_to}",
@@ -195,6 +198,12 @@ class ResidentQueue:
                 _outbox_row(message),
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            existing = self._outbox_for_reply(in_reply_to)
+            if existing is not None:
+                return existing
+            raise
         finally:
             conn.close()
         return message
@@ -226,6 +235,24 @@ class ResidentQueue:
                 """
             ).fetchall()
             return [_outbox_from_row(row) for row in rows]
+        finally:
+            conn.close()
+
+    def _outbox_for_reply(self, in_reply_to: str) -> OutboxMessage | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
+                       task_id, run_id, payload_json
+                FROM resident_outbox
+                WHERE in_reply_to = ?
+                ORDER BY created_at_ms, outbox_id
+                LIMIT 1
+                """,
+                (in_reply_to,),
+            ).fetchone()
+            return _outbox_from_row(row) if row is not None else None
         finally:
             conn.close()
 
@@ -293,6 +320,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    _dedupe_outbox_replies(conn)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_resident_outbox_in_reply_to ON resident_outbox(in_reply_to)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS resident_leases (
@@ -301,6 +330,19 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             acquired_at_ms INTEGER NOT NULL,
             expires_at_ms INTEGER NOT NULL,
             status TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _dedupe_outbox_replies(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        DELETE FROM resident_outbox
+        WHERE rowid NOT IN (
+            SELECT MIN(rowid)
+            FROM resident_outbox
+            GROUP BY in_reply_to
         )
         """
     )
