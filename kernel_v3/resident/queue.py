@@ -574,7 +574,7 @@ class ResidentQueue:
                     "outbox_ids": failed,
                 }
             )
-            actions.append("resident ack <outbox_id> --status ready")
+            actions.append("resident retry-outbox <outbox_id> --reason delivery_retry")
         waiting_count = (
             int(status.outbox_counts.get("pending_user_input", 0))
             + int(status.outbox_counts.get("pending_user_input_delivered", 0))
@@ -618,6 +618,54 @@ class ResidentQueue:
     def mark_outbox_status(self, outbox_id: str, *, status: str) -> OutboxMessage | None:
         outbox, _reason = self.transition_outbox_status(outbox_id, status=status)
         return outbox
+
+    def retry_outbox(self, outbox_id: str, *, reason: str = "manual_retry") -> tuple[OutboxMessage | None, str | None]:
+        now = self._now_ms()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
+                       task_id, run_id, payload_json
+                FROM resident_outbox
+                WHERE outbox_id = ?
+                """,
+                (outbox_id,),
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                return None, "outbox_not_found"
+            current = _outbox_from_row(row)
+            if current.status != "delivery_failed":
+                conn.rollback()
+                return None, f"invalid_outbox_retry_status:{current.status}"
+            payload = dict(current.payload)
+            payload["requested_status"] = "ready"
+            payload["status_updated_at_ms"] = now
+            payload["retry_reason"] = reason
+            payload["retried_at_ms"] = now
+            payload["retry_count"] = int(payload.get("retry_count") or 0) + 1
+            conn.execute(
+                "UPDATE resident_outbox SET status = ?, payload_json = ? WHERE outbox_id = ?",
+                ("ready", _json(payload), outbox_id),
+            )
+            row = conn.execute(
+                """
+                SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
+                       task_id, run_id, payload_json
+                FROM resident_outbox
+                WHERE outbox_id = ?
+                """,
+                (outbox_id,),
+            ).fetchone()
+            conn.commit()
+            return (_outbox_from_row(row) if row is not None else None), None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def transition_outbox_status(self, outbox_id: str, *, status: str) -> tuple[OutboxMessage | None, str | None]:
         conn = self._connect()

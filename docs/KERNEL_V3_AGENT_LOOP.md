@@ -173,6 +173,12 @@ work, and `awaiting_user_input` when the next useful step is a user reply. This
 keeps long-running supervision from confusing "no claimable message right now"
 with a healthy completed queue.
 
+Failed delivery recovery is an explicit resident operation. `resident
+retry-outbox <outbox_id>` transitions a `delivery_failed` outbox back to
+`ready`, records retry metadata in the payload, and journals
+`resident_outbox_retried`. This keeps transport recovery auditable without
+treating it as a user acknowledgment.
+
 Natural-language turn routing is processor-shaped rather than phrase-table
 driven. A model or fake provider may emit a bounded `chat.route` proposal such
 as `summary`, `continue_task`, `continue_plan`, `answer_pending_question`, or

@@ -466,6 +466,47 @@ def test_phase73_invalid_outbox_transition_is_rejected(tmp_path: Path):
     assert queue.outbox_messages()[0].status == "ready"
 
 
+def test_phase73_delivery_failed_outbox_can_be_retried_explicitly(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-delivery-retry",
+        thread_id="resident-thread",
+        text="retry me",
+        status="delivery_failed",
+        task_id="task-delivery",
+        run_id="run-delivery",
+        payload={"delivery_error": "timeout"},
+    )
+
+    retried, reason = queue.retry_outbox(outbox.outbox_id, reason="operator_retry")
+
+    assert reason is None
+    assert retried is not None
+    assert retried.status == "ready"
+    assert retried.payload["retry_reason"] == "operator_retry"
+    assert retried.payload["retry_count"] == 1
+    assert retried.payload["delivery_error"] == "timeout"
+    assert queue.status().outbox_counts["ready"] == 1
+
+
+def test_phase73_ready_outbox_cannot_be_retried(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-ready-retry",
+        thread_id="resident-thread",
+        text="ready",
+        status="ready",
+        task_id=None,
+        run_id=None,
+    )
+
+    retried, reason = queue.retry_outbox(outbox.outbox_id, reason="operator_retry")
+
+    assert retried is None
+    assert reason == "invalid_outbox_retry_status:ready"
+    assert queue.outbox_messages()[0].status == "ready"
+
+
 def test_phase73_append_outbox_rejects_unknown_status(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
 
@@ -752,15 +793,25 @@ def test_phase73_queue_inspect_reports_actionable_health(tmp_path: Path):
         task_id="task-1",
         run_id="run-1",
     )
+    failed_outbox = queue.append_outbox(
+        in_reply_to="out-delivery-failed",
+        thread_id="resident-thread",
+        text="delivery failed",
+        status="delivery_failed",
+        task_id="task-delivery",
+        run_id="run-delivery",
+    )
 
     inspection = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock(start=10_000)).inspect(sample_limit=2)
 
     codes = {issue["code"] for issue in inspection.issues}
     assert inspection.status == "error"
-    assert {"dead_letter_inbox", "pending_inbox", "ready_outbox", "awaiting_user_input"}.issubset(codes)
+    assert {"dead_letter_inbox", "pending_inbox", "ready_outbox", "delivery_failed_outbox", "awaiting_user_input"}.issubset(codes)
     assert "resident requeue <message_id> --reason manual_review" in inspection.recommended_actions
+    assert "resident retry-outbox <outbox_id> --reason delivery_retry" in inspection.recommended_actions
     assert "resident outbox" in inspection.recommended_actions
     assert inspection.queue_status["dead_letter_count"] == 1
+    assert any(issue.get("outbox_ids") == [failed_outbox.outbox_id] for issue in inspection.issues)
     assert inspection.samples["inbox"]
     assert inspection.samples["outbox"]
 
@@ -828,6 +879,32 @@ def test_phase73_cli_resident_ack_rejects_invalid_outbox_transition(tmp_path: Pa
     assert status == 1
     assert payload["reason"] == "invalid_outbox_status_transition:ready->answered"
     assert ResidentQueue(resident_db).outbox_messages()[0].status == "ready"
+
+
+def test_phase73_cli_resident_retry_outbox_journals_recovery(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    queue = ResidentQueue(resident_db, clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-cli-delivery",
+        thread_id="resident-cli",
+        text="retry delivery",
+        status="delivery_failed",
+        task_id="task-cli-delivery",
+        run_id="run-cli-delivery",
+    )
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    assert cli.main([*base, "resident", "retry-outbox", outbox.outbox_id, "--reason", "manual_delivery_retry"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["outbox"]["status"] == "ready"
+    assert payload["outbox"]["payload"]["retry_reason"] == "manual_delivery_retry"
+    assert cli.main([*base, "resident-trace"]) == 0
+    trace = capsys.readouterr().out
+    assert "resident_outbox_retried" in trace
+    assert outbox.outbox_id in trace
 
 
 def test_phase73_cli_resident_inspect_reports_queue_health(tmp_path: Path, capsys):

@@ -153,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     resident_ack = resident_sub.add_parser("ack")
     resident_ack.add_argument("outbox_id")
     resident_ack.add_argument("--status", default="acknowledged")
+    resident_retry_outbox = resident_sub.add_parser("retry-outbox")
+    resident_retry_outbox.add_argument("outbox_id")
+    resident_retry_outbox.add_argument("--reason", default="manual_retry")
 
     inspect_run_parser = sub.add_parser("inspect-run")
     inspect_run_parser.add_argument("task_id")
@@ -752,6 +755,19 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             run_id="resident-cli",
             step_id=None,
             kind="resident_outbox_ack",
+            data=outbox.to_dict(),
+            state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
+        )
+        return {"status": "ok", "outbox": outbox.to_dict()}
+    if command == "retry-outbox":
+        outbox, reason = queue.retry_outbox(args.outbox_id, reason=args.reason)
+        if outbox is None:
+            return {"status": "failed", "reason": reason or "outbox_not_retryable_or_missing", "outbox_id": args.outbox_id}
+        journal.append(
+            task_id=outbox.task_id,
+            run_id="resident-cli",
+            step_id=None,
+            kind="resident_outbox_retried",
             data=outbox.to_dict(),
             state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
         )
