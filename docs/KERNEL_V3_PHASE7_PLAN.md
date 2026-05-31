@@ -223,6 +223,9 @@ Implementation note:
   deletion still go through host-side `MemoryPipeline` / `MemoryStore`, with
   delete decisions journaled as `memory_item_deleted` or
   `memory_item_delete_observed`.
+- Chat `chat_command` records keep durable-memory admin results as previews and
+  manifests only; full memory bodies and export payloads stay in the memory
+  store / explicit CLI export surface.
 - `holo-v3 memory propose/list/approve/reject/delete` provides a local CLI admin
   surface. Delete uses the same pipeline journaling path as chat. Ordinary CLI
   agent/chat commands do not create durable-memory files unless a memory store

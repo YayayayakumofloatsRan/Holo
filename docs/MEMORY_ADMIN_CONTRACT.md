@@ -115,6 +115,12 @@ these recall/access events for the selected item, and memory inspection samples
 surface `last_accessed_ms` so an operator can see whether durable memory is
 actually being used.
 
+Chat memory admin commands journal preview/manifest payloads only. They may
+show memory ids, summaries, proposal status, counts, provenance refs, and
+redaction metadata, but they do not copy durable memory bodies, structured
+fields, or full export payloads into `chat_command` records. Use the explicit
+CLI/store export surface for a full item export.
+
 For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured
 research-corpus inspections. The doctor report is an operator snapshot only: it

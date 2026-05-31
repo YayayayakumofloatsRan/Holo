@@ -230,6 +230,31 @@ def test_phase72_chat_memory_admin_unknown_id_is_command_failure():
     assert command["status"] == "failed"
 
 
+def test_phase72_chat_memory_admin_journals_previews_not_memory_bodies():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    item = _memory_item(summary="safe summary", thread_id="thread-memory")
+    store.commit(item)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, memory_store=store),
+        memory_store=store,
+    )
+
+    listed = chat.receive("/memory list", thread_id="thread-memory")
+    exported = chat.receive(f"/memory export {item.memory_id}", thread_id="thread-memory")
+
+    assert listed.status == "completed"
+    assert exported.status == "completed"
+    assert listed.command_result is not None
+    assert listed.command_result["result"]["items"][0]["summary"] == "safe summary"
+    assert exported.command_result is not None
+    assert exported.command_result["result"]["redaction"] == {"export_payload": "not_journaled"}
+    command_dump = json.dumps([record.data for record in journal.records(kind="chat_command")], ensure_ascii=False)
+    assert "body should not be injected: safe summary" not in command_dump
+    assert '"source": "test"' not in command_dump
+
+
 def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"

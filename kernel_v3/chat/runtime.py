@@ -824,11 +824,11 @@ class ChatRuntime:
         subcommand = args[0].lower() if args else "list"
         if subcommand == "list":
             payload = self.memory_store.recall(scope={"thread_id": state.thread_id}, limit=20).to_dict()
-            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=_memory_recall_command_result(payload))
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_memory_list_text(payload))
         if subcommand in {"proposals", "proposal"}:
             payload = {"proposals": [_proposal.to_dict() for _proposal in self.memory_store.proposals() if _proposal.source_thread_id == state.thread_id]}
-            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=_memory_proposals_command_result(payload))
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=_proposal_list_text(payload))
         if subcommand in {"inspect", "status"}:
             payload = self.memory_store.inspect(journal=self.journal).to_dict()
@@ -840,7 +840,7 @@ class ChatRuntime:
             except (KeyError, ValueError) as exc:
                 return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             payload = result.to_dict()
-            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=_memory_pipeline_command_result(payload))
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Approved {args[1]}.")
         if subcommand == "reject" and len(args) >= 2:
             reason = " ".join(args[2:]) or "user_rejected"
@@ -849,7 +849,7 @@ class ChatRuntime:
             except (KeyError, ValueError) as exc:
                 return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             payload = result.to_dict()
-            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=_memory_pipeline_command_result(payload))
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Rejected {args[1]}.")
         if subcommand == "delete" and len(args) >= 2:
             reason = " ".join(args[2:]) or "user_deleted"
@@ -880,8 +880,8 @@ class ChatRuntime:
                 )
             except (KeyError, ValueError) as exc:
                 return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
-            command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
-            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Exported {args[1]}.")
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=_memory_export_command_result(payload))
+            return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Exported {args[1]} metadata.")
         result = {"error": "invalid_memory_command", "usage": "/memory list|proposals|inspect|approve <id>|reject <id> [reason]|delete <id> [reason]|export <id>"}
         command = self._append_command(turn, name="/memory", args=args, status="failed", result=result)
         return self._command_result(turn=turn, decision=decision, status="failed", command=command, answer=result["usage"])
@@ -1879,6 +1879,40 @@ def _memory_list_text(payload: JsonObject) -> str:
     return "\n".join(lines) or "No active durable memory for this thread."
 
 
+def _memory_recall_command_result(payload: JsonObject) -> JsonObject:
+    items = payload.get("items")
+    items = items if isinstance(items, list) else []
+    return {
+        "total": payload.get("total", 0),
+        "filtered": payload.get("filtered") if isinstance(payload.get("filtered"), dict) else {},
+        "generated_at_ms": payload.get("generated_at_ms"),
+        "items": [_memory_item_command_preview(item) for item in items if isinstance(item, dict)],
+        "redaction": {
+            "item_body": "not_journaled",
+            "item_structured": "not_journaled",
+            "item_metadata": "not_journaled",
+        },
+    }
+
+
+def _memory_item_command_preview(item: JsonObject) -> JsonObject:
+    return {
+        "memory_id": item.get("memory_id"),
+        "kind": item.get("kind"),
+        "title": item.get("title"),
+        "summary": item.get("summary"),
+        "scope": item.get("scope") if isinstance(item.get("scope"), dict) else {},
+        "privacy_class": item.get("privacy_class"),
+        "confidence": item.get("confidence"),
+        "ttl_policy": item.get("ttl_policy"),
+        "expires_at_ms": item.get("expires_at_ms"),
+        "state": item.get("state"),
+        "provenance_refs": item.get("provenance_refs") if isinstance(item.get("provenance_refs"), list) else [],
+        "artifact_refs": item.get("artifact_refs") if isinstance(item.get("artifact_refs"), list) else [],
+        "last_accessed_ms": item.get("last_accessed_ms"),
+    }
+
+
 def _proposal_list_text(payload: JsonObject) -> str:
     proposals = payload.get("proposals")
     if not isinstance(proposals, list) or not proposals:
@@ -1889,6 +1923,74 @@ def _proposal_list_text(payload: JsonObject) -> str:
             continue
         lines.append(f"{proposal.get('proposal_id')}: {proposal.get('approval_status')} {proposal.get('approval_policy')}")
     return "\n".join(lines) or "No pending durable memory proposals for this thread."
+
+
+def _memory_proposals_command_result(payload: JsonObject) -> JsonObject:
+    proposals = payload.get("proposals")
+    proposals = proposals if isinstance(proposals, list) else []
+    return {
+        "proposals": [_memory_proposal_command_preview(proposal) for proposal in proposals if isinstance(proposal, dict)],
+        "redaction": {"proposed_item_body": "not_journaled", "proposal_metadata": "not_journaled"},
+    }
+
+
+def _memory_proposal_command_preview(proposal: JsonObject) -> JsonObject:
+    proposed_item = proposal.get("proposed_item")
+    proposed_item = proposed_item if isinstance(proposed_item, dict) else {}
+    return {
+        "proposal_id": proposal.get("proposal_id"),
+        "candidate_id": proposal.get("candidate_id"),
+        "operation": proposal.get("operation"),
+        "approval_policy": proposal.get("approval_policy"),
+        "approval_status": proposal.get("approval_status"),
+        "confidence": proposal.get("confidence"),
+        "source_task_id": proposal.get("source_task_id"),
+        "source_run_id": proposal.get("source_run_id"),
+        "source_thread_id": proposal.get("source_thread_id"),
+        "risk_flags": proposal.get("risk_flags") if isinstance(proposal.get("risk_flags"), list) else [],
+        "proposed_item": _memory_item_command_preview(proposed_item),
+    }
+
+
+def _memory_pipeline_command_result(payload: JsonObject) -> JsonObject:
+    shadow_candidates = payload.get("shadow_candidates")
+    proposals = payload.get("proposals")
+    committed_items = payload.get("committed_items")
+    rejected = payload.get("rejected")
+    shadow_candidates = shadow_candidates if isinstance(shadow_candidates, list) else []
+    proposals = proposals if isinstance(proposals, list) else []
+    committed_items = committed_items if isinstance(committed_items, list) else []
+    rejected = rejected if isinstance(rejected, list) else []
+    return {
+        "shadow_candidate_ids": [
+            candidate.get("candidate_id")
+            for candidate in shadow_candidates
+            if isinstance(candidate, dict) and candidate.get("candidate_id")
+        ],
+        "proposals": [_memory_proposal_command_preview(proposal) for proposal in proposals if isinstance(proposal, dict)],
+        "committed_items": [_memory_item_command_preview(item) for item in committed_items if isinstance(item, dict)],
+        "rejected": [item for item in rejected if isinstance(item, dict)],
+        "redaction": {
+            "candidate_text": "not_journaled",
+            "proposed_item_body": "not_journaled",
+            "committed_item_body": "not_journaled",
+        },
+    }
+
+
+def _memory_export_command_result(payload: JsonObject) -> JsonObject:
+    item = payload.get("item")
+    item = item if isinstance(item, dict) else {}
+    proposals = payload.get("proposals")
+    audit_records = payload.get("audit_records")
+    return {
+        "memory_id": payload.get("memory_id"),
+        "item": _memory_item_command_preview(item),
+        "proposal_count": len(proposals) if isinstance(proposals, list) else 0,
+        "has_tombstone": isinstance(payload.get("tombstone"), dict),
+        "audit_record_count": len(audit_records) if isinstance(audit_records, list) else 0,
+        "redaction": {"export_payload": "not_journaled"},
+    }
 
 
 def _memory_inspection_text(payload: JsonObject) -> str:
