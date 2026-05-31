@@ -34,9 +34,11 @@ def test_phase75_memory_store_inspect_reports_reviewable_state() -> None:
     assert inspection.sensitive_count == 1
     assert inspection.proposal_counts["pending"] == 1
     assert inspection.tombstone_count == 1
+    assert "memory_without_provenance" in {issue["code"] for issue in inspection.issues}
     assert "memory proposals" in inspection.recommended_actions
     assert "memory delete <memory_id> --reason expired" in inspection.recommended_actions
     assert "memory export <memory_id>" in inspection.recommended_actions
+    assert "review memory provenance" in inspection.recommended_actions
     assert len(inspection.samples["active_items"]) == 2
     assert inspection.samples["pending_proposals"][0]["proposal_id"] == "memprop-pending"
 
@@ -56,6 +58,9 @@ def test_phase75_memory_store_inspection_samples_are_bounded() -> None:
         len(inspection.provenance_consistency["samples"]["items_without_provenance"])
         == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
     )
+    assert inspection.issues[0]["code"] == "memory_without_provenance"
+    assert len(inspection.issues[0]["samples"]) == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
+    assert "review memory provenance" in inspection.recommended_actions
     assert inspection.samples["requested_sample_limit"] == requested_sample_limit
     assert inspection.samples["sample_limit"] == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP
     assert inspection.samples["sample_limit_cap"] == MEMORY_INSPECTION_SAMPLE_LIMIT_CAP

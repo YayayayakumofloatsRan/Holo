@@ -78,6 +78,16 @@ def inspect_memory_references(
 
 def inspection_issues(consistency: JsonObject) -> list[JsonObject]:
     issues: list[JsonObject] = []
+    items_without_provenance = int(consistency.get("items_without_provenance", 0))
+    if items_without_provenance:
+        issues.append(
+            {
+                "severity": "attention",
+                "code": "memory_without_provenance",
+                "count": items_without_provenance,
+                "samples": dict(consistency.get("samples", {})).get("items_without_provenance", []),
+            }
+        )
     missing_provenance = int(consistency.get("missing_provenance_refs", 0))
     if missing_provenance:
         issues.append(
@@ -109,6 +119,8 @@ def inspection_issues(consistency: JsonObject) -> list[JsonObject]:
 def reference_recommendations(issues: list[JsonObject]) -> list[str]:
     actions: list[str] = []
     codes = {str(issue.get("code") or "") for issue in issues}
+    if "memory_without_provenance" in codes:
+        actions.append("review memory provenance")
     if "missing_memory_provenance" in codes:
         actions.append("memory export <memory_id>")
     if "missing_memory_artifacts" in codes:

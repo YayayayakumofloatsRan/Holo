@@ -79,6 +79,9 @@ checks committed memory references without reading raw artifact payloads:
 provenance refs must point at existing journal records, and artifact refs must
 still have artifact metadata and blob payloads. Missing refs are reported as
 inspection issues with bounded samples and repair recommendations.
+Committed memory with no provenance refs is also reported as
+`memory_without_provenance`, so long-running operators can review or delete
+source-less memory instead of silently injecting it into future context.
 Journal provenance checks use record-id lookup rather than materializing the
 full journal into the inspection path when the store exposes indexed lookup.
 

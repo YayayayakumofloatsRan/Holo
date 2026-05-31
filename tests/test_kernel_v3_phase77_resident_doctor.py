@@ -33,11 +33,13 @@ def test_phase77_resident_doctor_aggregates_queue_schedule_and_memory(tmp_path: 
     assert report.memory_inspection is not None
     assert report.memory_inspection["proposal_counts"]["pending"] == 1
     assert report.corpus_inspection is None
+    assert "memory_without_provenance" in {issue["code"] for issue in report.issues}
     issue_components = {issue["component"] for issue in report.issues}
     assert {"queue", "schedule", "memory"}.issubset(issue_components)
     assert "resident run --max-iterations <n>" in report.recommended_actions
     assert "resident run --tick-schedules --max-iterations <n>" in report.recommended_actions
     assert "memory proposals" in report.recommended_actions
+    assert "review memory provenance" in report.recommended_actions
 
 
 def test_phase77_resident_doctor_reports_memory_reference_integrity(tmp_path: Path) -> None:
