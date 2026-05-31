@@ -569,6 +569,19 @@ class ResidentQueue:
                 }
             )
             actions.append("resident outbox")
+        failed_outbox_count = int(status.outbox_counts.get("failed", 0))
+        if failed_outbox_count:
+            failed = [message.outbox_id for message in outbox if message.status == "failed"][:sample_limit]
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": "failed_outbox",
+                    "count": failed_outbox_count,
+                    "outbox_ids": failed,
+                }
+            )
+            actions.append("resident outbox")
+            actions.append("resident ack <outbox_id> --status acknowledged")
         delivery_failed_count = int(status.outbox_counts.get("delivery_failed", 0))
         if delivery_failed_count:
             failed = [

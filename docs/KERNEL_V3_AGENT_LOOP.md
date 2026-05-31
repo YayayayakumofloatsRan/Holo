@@ -204,8 +204,9 @@ do not clear each other.
 
 Resident loop summaries include the queue health snapshot used to decide the
 loop result. A loop no longer reports `completed` when unresolved failed,
-dead-letter, retry-wait, delivery-failed, or pending-user-input work remains
-after an idle turn. It reports `failed` for unresolved failed/dead-letter work,
+dead-letter, failed-outbox, retry-wait, delivery-failed, or pending-user-input
+work remains after an idle turn. It reports `failed` for unresolved
+failed/dead-letter inbox work or failed agent/command outbox work,
 `delivery_failed` for failed outbox delivery, `retry_wait` for delayed retry
 work, and `awaiting_user_input` when the next useful step is a user reply. This
 keeps long-running supervision from confusing "no claimable message right now"

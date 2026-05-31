@@ -46,7 +46,8 @@ class ResidentRuntime:
         blocked = len([item for item in results if item.status == "blocked"])
         idle = len([item for item in results if item.status == "idle"])
         queue_status = self.queue.status()
-        unresolved_failed = int(queue_status.inbox_counts.get("failed", 0)) + queue_status.dead_letter_count
+        unresolved_failed_inbox = int(queue_status.inbox_counts.get("failed", 0)) + queue_status.dead_letter_count
+        unresolved_failed_outbox = int(queue_status.outbox_counts.get("failed", 0))
         unresolved_retry = int(queue_status.inbox_counts.get("retry_wait", 0))
         unresolved_delivery_failed = int(queue_status.outbox_counts.get("delivery_failed", 0))
         unresolved_user_input = int(queue_status.outbox_counts.get("pending_user_input", 0)) + int(
@@ -56,9 +57,12 @@ class ResidentRuntime:
         if blocked:
             status = "blocked"
             reason = results[-1].reason if results else "blocked"
-        elif unresolved_failed:
+        elif unresolved_failed_inbox:
             status = "failed"
             reason = "unresolved_failed_inbox"
+        elif unresolved_failed_outbox:
+            status = "failed"
+            reason = "unresolved_failed_outbox"
         elif unresolved_delivery_failed:
             status = "delivery_failed"
             reason = "unresolved_delivery_failed_outbox"

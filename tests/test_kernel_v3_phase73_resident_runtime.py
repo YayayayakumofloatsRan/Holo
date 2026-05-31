@@ -780,6 +780,30 @@ def test_phase73_run_loop_reports_delivery_failed_outbox(tmp_path: Path):
     assert result.queue_status["outbox_counts"]["delivery_failed"] == 1
 
 
+def test_phase73_run_loop_reports_failed_outbox(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    queue.append_outbox(
+        in_reply_to="in-agent-failed",
+        thread_id="resident-thread",
+        text="agent command failed",
+        status="failed",
+        task_id="task-agent-failed",
+        run_id="run-agent-failed",
+        payload={"status": "failed", "reason": "unknown proposal"},
+    )
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal)),
+        worker_id="worker-failed-outbox",
+    ).run_loop(max_iterations=1)
+
+    assert result.status == "failed"
+    assert result.reason == "unresolved_failed_outbox"
+    assert result.queue_status["outbox_counts"]["failed"] == 1
+
+
 def test_phase73_dead_letter_can_be_requeued_for_manual_recovery(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     queue.enqueue(thread_id="resident-thread", text="recover me", message_id="in-dead")
@@ -867,7 +891,7 @@ def test_phase73_queue_inspect_reports_actionable_health(tmp_path: Path):
         task_id="task-1",
         run_id="run-1",
     )
-    failed_outbox = queue.append_outbox(
+    delivery_failed_outbox = queue.append_outbox(
         in_reply_to="out-delivery-failed",
         thread_id="resident-thread",
         text="delivery failed",
@@ -875,17 +899,36 @@ def test_phase73_queue_inspect_reports_actionable_health(tmp_path: Path):
         task_id="task-delivery",
         run_id="run-delivery",
     )
+    failed_outbox = queue.append_outbox(
+        in_reply_to="out-agent-failed",
+        thread_id="resident-thread",
+        text="agent failed",
+        status="failed",
+        task_id="task-agent-failed",
+        run_id="run-agent-failed",
+    )
 
     inspection = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock(start=10_000)).inspect(sample_limit=2)
 
     codes = {issue["code"] for issue in inspection.issues}
     assert inspection.status == "error"
-    assert {"dead_letter_inbox", "pending_inbox", "ready_outbox", "delivery_failed_outbox", "awaiting_user_input"}.issubset(codes)
+    assert {
+        "dead_letter_inbox",
+        "pending_inbox",
+        "ready_outbox",
+        "failed_outbox",
+        "delivery_failed_outbox",
+        "awaiting_user_input",
+    }.issubset(codes)
     assert "resident requeue <message_id> --reason manual_review" in inspection.recommended_actions
+    assert "resident ack <outbox_id> --status acknowledged" in inspection.recommended_actions
     assert "resident retry-outbox <outbox_id> --reason delivery_retry" in inspection.recommended_actions
     assert "resident outbox" in inspection.recommended_actions
     assert inspection.queue_status["dead_letter_count"] == 1
-    assert any(issue.get("outbox_ids") == [failed_outbox.outbox_id] for issue in inspection.issues)
+    failed_issue = next(issue for issue in inspection.issues if issue.get("code") == "failed_outbox")
+    delivery_failed_issue = next(issue for issue in inspection.issues if issue.get("code") == "delivery_failed_outbox")
+    assert failed_issue["outbox_ids"] == [failed_outbox.outbox_id]
+    assert delivery_failed_issue["outbox_ids"] == [delivery_failed_outbox.outbox_id]
     assert inspection.samples["inbox"]
     assert inspection.samples["outbox"]
 
