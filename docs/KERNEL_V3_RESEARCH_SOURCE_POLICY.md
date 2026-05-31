@@ -116,7 +116,9 @@ holo-v3 \
 This command is read-only. It does not retrieve, fetch, index, or read artifact
 bodies. It reports provider capabilities, `network_access`, profile awareness,
 and operator-facing issues such as using a generic fake provider for a directed
-finance profile.
+finance profile. It also inspects composite provider configuration; for
+example, an empty fallback search chain is reported as an error before any
+resident run can mistake the configuration for a usable search provider.
 
 ## CLI Workflow
 

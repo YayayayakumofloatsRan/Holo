@@ -10,6 +10,7 @@ from kernel_v3.retrieval import (
     CorpusSearchProvider,
     FakeFetchProvider,
     FakeSearchProvider,
+    FallbackSearchProvider,
     RetrievalOperator,
     SearchSource,
     inspect_retrieval_providers,
@@ -55,6 +56,21 @@ def test_phase89_retrieval_provider_inspection_accepts_profile_aware_corpus() ->
     assert search_capability["provider_id"] == "research_corpus"
     assert search_capability["profile_aware"] is True
     assert search_capability["supported_research_profiles"] == ["*"]
+
+
+def test_phase89_retrieval_provider_inspection_flags_empty_fallback_search_chain() -> None:
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([]),
+        fetch_provider=FakeFetchProvider({}),
+    )
+
+    inspection = inspect_retrieval_providers(operator, clock_ms=lambda: 204)
+
+    assert inspection.status == "error"
+    assert inspection.generated_at_ms == 204
+    assert inspection.issues[0]["code"] == "empty_fallback_search_chain"
+    assert inspection.issues[0]["provider_id"] == "fallback_search"
+    assert "configure at least one concrete fallback search provider" in inspection.recommended_actions
 
 
 def test_phase89_cli_retrieval_providers_is_read_only(tmp_path: Path, capsys) -> None:
