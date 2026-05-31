@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from kernel_v3.audit import safe_access_context
 from kernel_v3.contracts import JsonObject
 from kernel_v3.memory.contracts import (
     MemoryItem,
@@ -488,7 +489,7 @@ class MemoryStore:
             "total": result.total,
             "filtered": dict(result.filtered),
             "memory_ids": memory_ids,
-            "access_context": _safe_metadata(dict(access_context or {})),
+            "access_context": safe_access_context(dict(access_context or {})),
         }
         self._append_event("memory_items_recalled", payload)
         for item in matches:
@@ -526,7 +527,7 @@ class MemoryStore:
             "memory_id": memory_id,
             "exported_at_ms": self._now_ms(),
             "included_audit_record_count": included_audit_record_count,
-            "access_context": _safe_metadata(dict(access_context or {})),
+            "access_context": safe_access_context(dict(access_context or {})),
             "redaction": {"export_payload": "not_embedded"},
         }
         self._append_event("memory_item_exported", payload)
@@ -785,36 +786,6 @@ def _positive_int(value: object) -> int | None:
     if isinstance(value, float) and value >= 0:
         return int(value)
     return None
-
-
-def _safe_metadata(data: JsonObject) -> JsonObject:
-    safe: JsonObject = {}
-    secret_markers = ("body", "raw", "secret", "token", "password", "api_key", "credential", "authorization", "cookie")
-    for key, value in data.items():
-        lowered = key.lower()
-        if any(marker in lowered for marker in secret_markers):
-            safe[key] = "[omitted]"
-        elif isinstance(value, str):
-            safe[key] = value[:160]
-        elif isinstance(value, (int, float, bool)) or value is None:
-            safe[key] = value
-        elif isinstance(value, dict):
-            safe[key] = _safe_metadata(value)
-        elif isinstance(value, list):
-            safe[key] = [_safe_metadata_item(item) for item in value[:10]]
-        else:
-            safe[key] = str(value)[:160]
-    return safe
-
-
-def _safe_metadata_item(value: object) -> object:
-    if isinstance(value, str):
-        return value[:160]
-    if isinstance(value, (int, float, bool)) or value is None:
-        return value
-    if isinstance(value, dict):
-        return _safe_metadata(value)
-    return str(value)[:160]
 
 
 def _safe_access_text(value: str | None) -> str | None:

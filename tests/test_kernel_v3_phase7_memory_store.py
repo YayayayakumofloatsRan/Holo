@@ -59,7 +59,11 @@ def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path
         query="Chinese",
         scope={"user_id": "local:user"},
         record_access=True,
-        access_context={"task_id": "task-memory", "raw_body": "RAW_MEMORY_ACCESS_SECRET"},
+        access_context={
+            "task_id": "task-memory",
+            "raw_body": "RAW_MEMORY_ACCESS_SECRET",
+            "operator_note": "RAW_MEMORY_ACCESS_SECRET",
+        },
     )
 
     access_event = store.audit_records()[-1]
@@ -68,6 +72,7 @@ def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path
     assert access_event["payload"]["memory_ids"] == [item.memory_id]
     assert access_event["payload"]["accessed_at_ms"] == 1100
     assert access_event["payload"]["access_context"]["raw_body"] == "[omitted]"
+    assert access_event["payload"]["access_context"]["operator_note"]["redacted"] is True
     assert "RAW_MEMORY_ACCESS_SECRET" not in json.dumps(store.audit_records(), ensure_ascii=False)
     assert store.get(item.memory_id, include_inactive=True).last_accessed_ms == 1100
     assert store.index_items()[0]["last_accessed_ms"] == 1100
@@ -114,7 +119,12 @@ def test_phase7_memory_export_can_audit_access_without_embedding_export_payload(
     first_export = store.export_item(
         item.memory_id,
         record_access=True,
-        access_context={"surface": "cli", "raw_body": "RAW_EXPORT_SECRET", "api_key": "sk_12345678901234567890"},
+        access_context={
+            "surface": "cli",
+            "raw_body": "RAW_EXPORT_SECRET",
+            "api_key": "sk_12345678901234567890",
+            "operator_note": "RAW_EXPORT_SECRET",
+        },
     )
     second_export = store.export_item(item.memory_id, record_access=True, access_context={"surface": "chat"})
 
@@ -128,6 +138,7 @@ def test_phase7_memory_export_can_audit_access_without_embedding_export_payload(
     assert export_event["payload"]["redaction"] == {"export_payload": "not_embedded"}
     assert export_event["payload"]["access_context"]["raw_body"] == "[omitted]"
     assert export_event["payload"]["access_context"]["api_key"] == "[omitted]"
+    assert export_event["payload"]["access_context"]["operator_note"]["redacted"] is True
     dumped = json.dumps(store.audit_records(), ensure_ascii=False)
     assert "RAW_EXPORT_SECRET" not in dumped
     assert "sk_12345678901234567890" not in dumped

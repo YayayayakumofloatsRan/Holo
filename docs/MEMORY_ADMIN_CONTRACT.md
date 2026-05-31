@@ -109,6 +109,9 @@ Each durable-memory context injection records a safe `memory_items_recalled`
 event in the memory store and updates `last_accessed_ms` for the recalled
 items. The access record contains memory ids, scope, filter counts, and context
 ids; it does not contain raw artifact payloads or raw task bodies. Access
+context is passed through the shared low-sensitive audit sanitizer: known
+operator identifiers are preserved, secret-like keys are omitted, and unknown
+free-form strings are hash-only.
 auditing is metadata only: it does not approve proposals, commit new memories,
 or let the model write durable state. `memory export <memory_id>` includes
 these recall/access events for the selected item, and memory inspection samples

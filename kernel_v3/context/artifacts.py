@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
+from kernel_v3.audit import safe_access_context
 from kernel_v3.contracts import ArtifactRef
 
 
@@ -219,7 +220,7 @@ class ArtifactStore:
             "payload_hash": blob.payload_hash,
             "payload_size_bytes": blob.size_bytes,
             "redaction_status": blob.redaction_status,
-            "access_context": _safe_access_context(access_context or {}),
+            "access_context": safe_access_context(access_context or {}),
             "redaction": {
                 "blob": "not_embedded",
                 "access_context": "safe_metadata_only",
@@ -246,68 +247,3 @@ def _preview_text(text: str, *, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
-
-
-_SAFE_ACCESS_CONTEXT_KEYS = {
-    "command",
-    "corpus_document_id",
-    "document_id",
-    "goal_id",
-    "mode",
-    "plan_id",
-    "profile_id",
-    "provider_id",
-    "run_id",
-    "source_id",
-    "surface",
-    "task_id",
-}
-_SENSITIVE_ACCESS_KEY_FRAGMENTS = (
-    "authorization",
-    "body",
-    "content",
-    "cookie",
-    "env",
-    "key",
-    "password",
-    "payload",
-    "raw",
-    "secret",
-    "text",
-    "token",
-)
-
-
-def _safe_access_context(context: dict[str, object]) -> dict[str, object]:
-    safe: dict[str, object] = {}
-    for key, value in context.items():
-        key_text = str(key)
-        normalized = key_text.lower()
-        if any(fragment in normalized for fragment in _SENSITIVE_ACCESS_KEY_FRAGMENTS):
-            safe[key_text] = "[omitted]"
-        elif normalized in _SAFE_ACCESS_CONTEXT_KEYS:
-            safe[key_text] = _safe_context_value(value, allow_string=True)
-        else:
-            safe[key_text] = _safe_context_value(value, allow_string=False)
-    return safe
-
-
-def _safe_context_value(value: object, *, allow_string: bool) -> object:
-    if value is None or isinstance(value, bool | int | float):
-        return value
-    if isinstance(value, str):
-        if allow_string:
-            return value if len(value) <= 128 else value[:125] + "..."
-        return {
-            "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
-            "length": len(value),
-            "redacted": True,
-        }
-    if isinstance(value, list):
-        return [_safe_context_value(item, allow_string=allow_string) for item in value[:16]]
-    if isinstance(value, dict):
-        return _safe_access_context({str(key): item for key, item in value.items()})
-    return {
-        "type": value.__class__.__name__,
-        "redacted": True,
-    }
