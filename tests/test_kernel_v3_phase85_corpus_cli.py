@@ -92,6 +92,8 @@ def test_phase85_cli_indexes_searches_and_reuses_corpus_without_network(tmp_path
     inspection_payload = json.loads(store_inspection.stdout)
     assert inspection_payload["status"] == "ok"
     assert inspection_payload["inspection"]["samples"]["documents"][0]["document_id"] == document_id
+    assert inspection_payload["inspection"]["artifact_consistency"]["checked"] is True
+    assert inspection_payload["inspection"]["artifact_consistency"]["missing_artifact_blob_count"] == 0
     assert RAW_ONLY_SENTINEL not in store_inspection.stdout
 
     assert RAW_ONLY_SENTINEL not in corpus_path.read_text(encoding="utf-8")

@@ -4,6 +4,7 @@ import time
 from typing import Callable
 
 from kernel_v3.contracts import JsonObject
+from kernel_v3.context import ArtifactStore
 from kernel_v3.memory import MemoryStore
 from kernel_v3.research import ResearchCorpusStore
 from kernel_v3.resident.contracts import ResidentDoctorReport
@@ -17,12 +18,14 @@ class ResidentDoctor:
         *,
         queue: ResidentQueue,
         scheduler: ResidentScheduler,
+        artifact_store: ArtifactStore | None = None,
         memory_store: MemoryStore | None = None,
         corpus_store: ResearchCorpusStore | None = None,
         clock_ms: Callable[[], int] | None = None,
     ) -> None:
         self.queue = queue
         self.scheduler = scheduler
+        self.artifact_store = artifact_store
         self.memory_store = memory_store
         self.corpus_store = corpus_store
         self.clock_ms = clock_ms or queue.clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
@@ -31,8 +34,13 @@ class ResidentDoctor:
         queue_inspection = self.queue.inspect(sample_limit=sample_limit)
         schedule_inspection = self.scheduler.inspect(sample_limit=sample_limit)
         memory_inspection = self.memory_store.inspect(sample_limit=sample_limit) if self.memory_store is not None else None
-        corpus_inspection = self.corpus_store.inspect(sample_limit=sample_limit) if self.corpus_store is not None else None
+        corpus_inspection = (
+            self.corpus_store.inspect(sample_limit=sample_limit, artifact_store=self.artifact_store)
+            if self.corpus_store is not None
+            else None
+        )
         configured = {
+            "artifact_store": self.artifact_store is not None,
             "memory_store": self.memory_store is not None,
             "corpus_store": self.corpus_store is not None,
             "resident_db": str(self.queue.db_path),

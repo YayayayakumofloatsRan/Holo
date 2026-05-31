@@ -11,6 +11,7 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.research.contracts import CorpusDocument, CorpusInspection, CorpusSearchResult, CorpusStatus, SourceAssessment
 
 if TYPE_CHECKING:
+    from kernel_v3.context import ArtifactStore
     from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 
 
@@ -198,11 +199,12 @@ class ResearchCorpusStore:
             latest_fetched_at_ms=max(fetched_times) if fetched_times else None,
         )
 
-    def inspect(self, *, sample_limit: int = 5) -> CorpusInspection:
+    def inspect(self, *, sample_limit: int = 5, artifact_store: "ArtifactStore | None" = None) -> CorpusInspection:
         status = self.status()
         documents = self.documents()
         issues: list[JsonObject] = []
         actions: list[str] = []
+        artifact_consistency = _artifact_consistency(documents, artifact_store=artifact_store, sample_limit=sample_limit)
         if status.document_count == 0:
             issues.append(
                 {
@@ -231,6 +233,20 @@ class ResearchCorpusStore:
                 }
             )
             actions.append("corpus list --profile finance_fundamentals")
+        if artifact_consistency.get("checked"):
+            missing_ref_count = int(artifact_consistency.get("missing_artifact_ref_count") or 0)
+            missing_blob_count = int(artifact_consistency.get("missing_artifact_blob_count") or 0)
+            if missing_ref_count or missing_blob_count:
+                issues.append(
+                    {
+                        "severity": "error",
+                        "code": "missing_corpus_artifacts",
+                        "missing_artifact_ref_count": missing_ref_count,
+                        "missing_artifact_blob_count": missing_blob_count,
+                        "document_ids": artifact_consistency.get("affected_document_ids", []),
+                    }
+                )
+                actions.append("repair artifact store or re-index affected corpus documents")
         if any(issue["severity"] == "error" for issue in issues):
             health = "error"
         elif any(issue["severity"] == "warning" for issue in issues):
@@ -245,6 +261,7 @@ class ResearchCorpusStore:
             issues=issues,
             recommended_actions=_ordered_unique(actions),
             corpus_status=status.to_dict(),
+            artifact_consistency=artifact_consistency,
             samples={"documents": [_document_sample(document) for document in documents[: max(0, sample_limit)]]},
         )
 
@@ -440,6 +457,37 @@ def _document_sample(document: CorpusDocument) -> JsonObject:
         "authority_level": assessment.get("authority_level"),
         "usable_as_primary": bool(assessment.get("usable_as_primary")),
         "fetched_at_ms": document.fetched_at_ms,
+    }
+
+
+def _artifact_consistency(
+    documents: list[CorpusDocument],
+    *,
+    artifact_store,
+    sample_limit: int,
+) -> JsonObject:
+    if artifact_store is None:
+        return {"checked": False}
+    missing_refs: list[str] = []
+    missing_blobs: list[str] = []
+    affected: list[str] = []
+    for document in documents:
+        artifact = artifact_store.get(document.artifact_id)
+        if artifact is None:
+            missing_refs.append(document.artifact_id)
+            affected.append(document.document_id)
+            continue
+        if not artifact_store.has_blob(document.artifact_id):
+            missing_blobs.append(document.artifact_id)
+            affected.append(document.document_id)
+    return {
+        "checked": True,
+        "document_count": len(documents),
+        "missing_artifact_ref_count": len(missing_refs),
+        "missing_artifact_blob_count": len(missing_blobs),
+        "missing_artifact_refs": _ordered_unique(missing_refs)[: max(0, sample_limit)],
+        "missing_artifact_blobs": _ordered_unique(missing_blobs)[: max(0, sample_limit)],
+        "affected_document_ids": _ordered_unique(affected)[: max(0, sample_limit)],
     }
 
 

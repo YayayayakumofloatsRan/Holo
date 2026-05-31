@@ -790,7 +790,10 @@ def _corpus_command(args) -> dict[str, object]:
     if command == "status":
         return {"status": "ok", "corpus": store.status().to_dict()}
     if command == "inspect-store":
-        inspection = store.inspect(sample_limit=args.sample_limit)
+        inspection = store.inspect(
+            sample_limit=args.sample_limit,
+            artifact_store=_artifact_store(args, create_default=False),
+        )
         return {"status": inspection.status, "inspection": inspection.to_dict()}
     if command == "index":
         return {"status": "ok", "documents": store.index_documents()}
@@ -912,6 +915,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         report = ResidentDoctor(
             queue=queue,
             scheduler=scheduler,
+            artifact_store=_artifact_store(args, create_default=False),
             memory_store=memory_store,
             corpus_store=corpus_store,
         ).inspect(sample_limit=args.sample_limit)

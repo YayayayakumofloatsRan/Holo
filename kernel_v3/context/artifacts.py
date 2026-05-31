@@ -164,6 +164,9 @@ class ArtifactStore:
     def get(self, artifact_id: str) -> ArtifactRef | None:
         return self._artifacts.get(artifact_id)
 
+    def has_blob(self, artifact_id: str) -> bool:
+        return artifact_id in self._blobs
+
     def list(self) -> list[ArtifactRef]:
         return [self._artifacts[key] for key in sorted(self._artifacts)]
 

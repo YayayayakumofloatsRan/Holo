@@ -90,6 +90,7 @@ def test_phase77_cli_resident_doctor_includes_configured_memory_and_corpus(tmp_p
 
     assert payload["status"] == "needs_review"
     doctor = payload["doctor"]
+    assert doctor["configured"]["artifact_store"] is False
     assert doctor["configured"]["memory_store"] is True
     assert doctor["configured"]["corpus_store"] is True
     assert doctor["queue_inspection"]["queue_status"]["claimable_count"] == 1

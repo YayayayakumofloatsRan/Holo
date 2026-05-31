@@ -188,6 +188,43 @@ def test_phase83_empty_or_weak_corpus_inspection_is_actionable() -> None:
     assert "unprofiled_documents" in codes
 
 
+def test_phase83_corpus_inspection_detects_missing_artifact_without_reading_body() -> None:
+    source = _source(
+        "src-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    store = ResearchCorpusStore.in_memory(clock_ms=lambda: 1111)
+    document = corpus_document_from_retrieval(
+        document=_document(
+            source=source,
+            artifact_id="artifact-missing",
+            payload_hash="hash-missing",
+            preview="AAPL annual report revenue preview.",
+        ),
+        source=source,
+        goal=SearchGoal(
+            goal_id="goal-aapl",
+            query="AAPL revenue",
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        task_id="task-missing-artifact",
+        run_id="run-missing-artifact",
+        fetched_at_ms=1111,
+        source_assessment=assess_search_source(source, profile=finance_fundamentals_profile()),
+    )
+    store.record_document(document)
+
+    inspection = store.inspect(artifact_store=ArtifactStore.in_memory())
+
+    assert inspection.status == "error"
+    assert inspection.artifact_consistency["checked"] is True
+    assert inspection.artifact_consistency["missing_artifact_ref_count"] == 1
+    assert inspection.issues[0]["code"] == "missing_corpus_artifacts"
+    assert "repair artifact store or re-index affected corpus documents" in inspection.recommended_actions
+
+
 def test_phase83_retrieval_indexes_fetched_documents_when_corpus_store_is_configured() -> None:
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()

@@ -86,4 +86,5 @@ class CorpusInspection(Contract):
     issues: list[JsonObject]
     recommended_actions: list[str]
     corpus_status: JsonObject
+    artifact_consistency: JsonObject = field(default_factory=dict)
     samples: JsonObject = field(default_factory=dict)
