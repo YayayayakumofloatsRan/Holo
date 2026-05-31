@@ -34,6 +34,7 @@ def finance_fundamentals_profile() -> ResearchProfile:
         citations_required=True,
         metadata={
             "default_output_boundary": "facts_inferences_risks_limitations",
+            "freshness_max_age_ms": 15552000000,
             "investment_recommendation": "not_without_explicit_user_scope_and_evidence",
         },
     )

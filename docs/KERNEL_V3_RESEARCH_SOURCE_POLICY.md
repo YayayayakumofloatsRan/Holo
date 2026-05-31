@@ -124,6 +124,12 @@ artifact log is configured, `inspect-store` also checks that corpus document
 artifact refs and blobs exist, without reading or printing raw fetched bodies;
 raw content remains in `ArtifactStore`.
 
+Profiles can also declare freshness budgets. `finance_fundamentals` currently
+marks corpus documents stale after 180 days. `corpus inspect-store` reports a
+`stale_research_corpus_documents` warning and recommends re-indexing through
+the same profile when a resident loop would otherwise keep reusing old
+financial evidence.
+
 And reused as an offline retrieval source:
 
 ```bash

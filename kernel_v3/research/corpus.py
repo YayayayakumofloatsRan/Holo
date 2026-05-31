@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.research.contracts import CorpusDocument, CorpusInspection, CorpusSearchResult, CorpusStatus, SourceAssessment
+from kernel_v3.research.profiles import profile_by_id
 
 if TYPE_CHECKING:
     from kernel_v3.context import ArtifactStore
@@ -205,6 +206,7 @@ class ResearchCorpusStore:
         issues: list[JsonObject] = []
         actions: list[str] = []
         artifact_consistency = _artifact_consistency(documents, artifact_store=artifact_store, sample_limit=sample_limit)
+        freshness_issues = _freshness_issues(documents, now_ms=status.generated_at_ms, sample_limit=sample_limit)
         if status.document_count == 0:
             issues.append(
                 {
@@ -233,6 +235,10 @@ class ResearchCorpusStore:
                 }
             )
             actions.append("corpus list --profile finance_fundamentals")
+        for issue in freshness_issues:
+            issues.append(issue)
+            profile_id = str(issue.get("profile_id") or "finance_fundamentals")
+            actions.append(f"retrieve <query> --profile {profile_id} --index-corpus")
         if artifact_consistency.get("checked"):
             missing_ref_count = int(artifact_consistency.get("missing_artifact_ref_count") or 0)
             missing_blob_count = int(artifact_consistency.get("missing_artifact_blob_count") or 0)
@@ -489,6 +495,53 @@ def _artifact_consistency(
         "missing_artifact_blobs": _ordered_unique(missing_blobs)[: max(0, sample_limit)],
         "affected_document_ids": _ordered_unique(affected)[: max(0, sample_limit)],
     }
+
+
+def _freshness_issues(documents: list[CorpusDocument], *, now_ms: int, sample_limit: int) -> list[JsonObject]:
+    issues: list[JsonObject] = []
+    by_profile: dict[str, list[CorpusDocument]] = {}
+    for document in documents:
+        profile_id = document.research_profile_id
+        if not profile_id:
+            continue
+        by_profile.setdefault(profile_id, []).append(document)
+    for profile_id, profile_documents in sorted(by_profile.items()):
+        profile = profile_by_id(profile_id)
+        if profile is None:
+            continue
+        max_age_ms = _freshness_max_age_ms(profile.metadata)
+        if max_age_ms is None:
+            continue
+        stale = [
+            document
+            for document in profile_documents
+            if now_ms - document.fetched_at_ms > max_age_ms
+        ]
+        if not stale:
+            continue
+        stale = sorted(stale, key=lambda document: (document.fetched_at_ms, document.document_id))
+        issues.append(
+            {
+                "severity": "warning",
+                "code": "stale_research_corpus_documents",
+                "profile_id": profile_id,
+                "stale_count": len(stale),
+                "document_count": len(profile_documents),
+                "max_age_ms": max_age_ms,
+                "oldest_age_ms": max(0, now_ms - stale[0].fetched_at_ms),
+                "document_ids": [document.document_id for document in stale[: max(0, sample_limit)]],
+            }
+        )
+    return issues
+
+
+def _freshness_max_age_ms(metadata: JsonObject) -> int | None:
+    value = metadata.get("freshness_max_age_ms")
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, float) and value > 0:
+        return int(value)
+    return None
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

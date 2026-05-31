@@ -151,6 +151,46 @@ def test_phase83_corpus_status_and_inspection_report_authority_health() -> None:
     assert "preview" not in inspection.samples["documents"][0]
 
 
+def test_phase83_corpus_inspection_warns_when_profile_documents_are_stale() -> None:
+    source = _source(
+        "src-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    profile = finance_fundamentals_profile()
+    max_age_ms = int(profile.metadata["freshness_max_age_ms"])
+    store = ResearchCorpusStore.in_memory(clock_ms=lambda: max_age_ms + 10_000)
+    document = corpus_document_from_retrieval(
+        document=_document(
+            source=source,
+            artifact_id="artifact-sec",
+            payload_hash="hash-sec",
+            preview=source.snippet,
+        ),
+        source=source,
+        goal=SearchGoal(
+            goal_id="goal-stale-aapl",
+            query="AAPL revenue",
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        task_id="task-stale",
+        run_id="run-stale",
+        fetched_at_ms=1,
+        source_assessment=assess_search_source(source, profile=profile),
+    )
+    store.record_document(document)
+
+    inspection = store.inspect(sample_limit=1)
+
+    assert inspection.status == "warning"
+    stale = [issue for issue in inspection.issues if issue["code"] == "stale_research_corpus_documents"][0]
+    assert stale["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert stale["stale_count"] == 1
+    assert stale["document_ids"] == [document.document_id]
+    assert f"retrieve <query> --profile {FINANCE_FUNDAMENTALS_PROFILE_ID} --index-corpus" in inspection.recommended_actions
+
+
 def test_phase83_empty_or_weak_corpus_inspection_is_actionable() -> None:
     empty = ResearchCorpusStore.in_memory(clock_ms=lambda: 1010)
     empty_inspection = empty.inspect()
