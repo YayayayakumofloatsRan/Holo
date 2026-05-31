@@ -3,6 +3,9 @@ from __future__ import annotations
 from kernel_v3.journal import JournalStore
 
 
+RESIDENT_TRACE_LIMIT_CAP = 500
+
+
 class TraceRenderer:
     def __init__(self, journal: JournalStore) -> None:
         self.journal = journal
@@ -103,9 +106,16 @@ class TraceRenderer:
                 )
         return "\n".join(lines)
 
-    def render_resident_trace(self) -> str:
-        records = [record for record in self.journal.records() if record.kind.startswith("resident_")]
-        lines = ["Resident Trace"]
+    def render_resident_trace(self, *, limit: int = 200) -> str:
+        all_records = [record for record in self.journal.records() if record.kind.startswith("resident_")]
+        effective_limit = _clamp_limit(limit, cap=RESIDENT_TRACE_LIMIT_CAP)
+        records = all_records[-effective_limit:] if effective_limit else []
+        lines = [f"Resident Trace total={len(all_records)} shown={len(records)}"]
+        if len(all_records) > len(records):
+            lines.append(
+                f"... truncated {len(all_records) - len(records)} older resident records "
+                f"(limit={effective_limit}, cap={RESIDENT_TRACE_LIMIT_CAP})"
+            )
         for record in records:
             data = record.data
             lines.append(
@@ -247,3 +257,7 @@ def _preview(text: str, limit: int) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 3)] + "..."
+
+
+def _clamp_limit(value: int, *, cap: int) -> int:
+    return min(max(0, int(value)), cap)

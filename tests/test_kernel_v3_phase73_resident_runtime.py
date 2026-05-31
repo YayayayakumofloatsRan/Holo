@@ -1034,6 +1034,26 @@ def test_phase73_resident_queue_inspection_samples_are_bounded(tmp_path: Path):
     assert inspection.samples["sample_limit_clamped"] is True
 
 
+def test_phase73_resident_trace_is_bounded_and_reports_truncation() -> None:
+    journal = JournalStore.in_memory()
+    for index in range(6):
+        journal.append(
+            task_id=None,
+            run_id="resident-test",
+            step_id=None,
+            kind="resident_inbox_enqueued",
+            data={"message_id": f"in-trace-{index}", "status": "pending"},
+        )
+
+    trace = TraceRenderer(journal).render_resident_trace(limit=2)
+
+    assert "Resident Trace total=6 shown=2" in trace
+    assert "truncated 4 older resident records" in trace
+    assert "in-trace-0" not in trace
+    assert "in-trace-4" in trace
+    assert "in-trace-5" in trace
+
+
 def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
@@ -1070,7 +1090,7 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
 
     assert cli.main([*base, "resident-trace"]) == 0
     trace = capsys.readouterr().out
-    assert "Resident Trace" in trace
+    assert "Resident Trace total=" in trace
     assert "resident_inbox_enqueued" in trace
     assert "resident_outbox_ack" in trace
     assert outbox_id in trace

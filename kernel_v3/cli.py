@@ -265,7 +265,8 @@ def main(argv: list[str] | None = None) -> int:
 
     memory_trace_parser = sub.add_parser("memory-trace")
     memory_trace_parser.add_argument("task_id")
-    sub.add_parser("resident-trace")
+    resident_trace_parser = sub.add_parser("resident-trace")
+    resident_trace_parser.add_argument("--limit", type=int, default=200)
 
     resume_parser = sub.add_parser("resume")
     resume_parser.add_argument("task_id")
@@ -512,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         print(TraceRenderer(journal).render_memory_trace(args.task_id))
         return 0
     if args.command == "resident-trace":
-        print(TraceRenderer(journal).render_resident_trace())
+        print(TraceRenderer(journal).render_resident_trace(limit=args.limit))
         return 0
 
     if args.command == "context":

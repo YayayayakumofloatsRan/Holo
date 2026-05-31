@@ -230,6 +230,9 @@ after containment. `resident_inbox_failed` includes `resulting_status`,
 `attempts`, and `next_attempt_at_ms`, and its state delta uses `retry_wait`,
 `dead_letter`, or the observed queue status rather than a generic `failed`.
 This keeps resident traces aligned with the retry/dead-letter state machine.
+`resident-trace` renders a bounded tail view by default and reports how many
+older resident records were truncated, so trace inspection remains usable after
+long resident runs.
 
 The resident scheduler is deliberately below the agent loop. It stores local
 schedule records, ticks due schedules, and enqueues normal resident inbox
