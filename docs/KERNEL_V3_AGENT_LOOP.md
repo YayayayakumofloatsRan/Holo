@@ -22,6 +22,26 @@ One agent task runs through this chain:
 retrieval and workspace answering are configured by recipes, registries, and
 operators outside the controller.
 
+## Semantic Task Graph
+
+Model-backed semantic intake is now normalized into a host-visible
+`TaskGraphProposal` before an agent recipe is selected. This graph is not an
+execution engine. It is an audit and validation layer over the model's proposed
+semantic structure:
+
+- each proposed task node carries kind, goal, dependencies, capabilities,
+  evidence requirements, and a suggested recipe mode;
+- the host validates blocked capabilities, dependency integrity, node limits,
+  and whether user confirmation is required;
+- `AgentRuntime` journals `semantic_task_graph` with both the proposal and the
+  validation decision;
+- `LoopControllerV3` still receives only the selected recipe, planner,
+  PolicyGate, registry, and evaluator. It remains tool-name-agnostic.
+
+This is the anti-table path for compound and open-ended requests. The fake
+semantic fallback stays conservative, while model mode can propose broad task
+structure through JSON and the host validates it before anything runs.
+
 ## Stop Semantics
 
 The agent stops when one of these host-visible conditions is reached:

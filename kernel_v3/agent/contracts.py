@@ -37,6 +37,49 @@ class SemanticIntake(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class TaskGraphNode(Contract):
+    node_id: str
+    kind: str
+    goal: str
+    sequence_index: int
+    depends_on: list[str]
+    required_capabilities: list[str]
+    suggested_mode: str
+    evidence_required: bool
+    citations_required: bool
+    status: str
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskGraphProposal(Contract):
+    graph_id: str
+    goal: str
+    nodes: list[JsonObject]
+    blocked_capabilities: list[str]
+    warnings: list[str]
+    needs_user_confirmation: bool
+    clarification_question: str | None
+    max_steps: int
+    max_tool_calls: int
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskGraphValidation(Contract):
+    graph_id: str
+    status: str
+    selected_mode: str
+    reasons: list[str]
+    blocked_capabilities: list[str]
+    warnings: list[str]
+    allowed_node_ids: list[str]
+    rejected_node_ids: list[str]
+    needs_user_confirmation: bool
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class TaskRecipe(Contract):
     recipe_id: str
     allowed_tools: list[str]
