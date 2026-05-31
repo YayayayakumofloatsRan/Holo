@@ -35,12 +35,19 @@ class FallbackSearchProvider:
         last_empty: list[SearchSource] = []
         attempts = []
         for provider in self.providers:
-            sources = provider.search(query, goal=goal, plan=plan)
+            try:
+                sources = provider.search(query, goal=goal, plan=plan)
+                error = None
+            except Exception as exc:
+                sources = []
+                error = type(exc).__name__
             attempts.append(
                 {
                     "provider_id": getattr(provider, "provider_id", provider.__class__.__name__),
                     "source_count": len(sources),
+                    "status": "failed" if error else "ok",
                     "diagnostics": _provider_diagnostics(provider),
+                    **({"error": error} if error else {}),
                 }
             )
             if sources:

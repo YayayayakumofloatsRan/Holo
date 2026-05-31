@@ -8,6 +8,9 @@ from kernel_v3.research.source_policy import assess_search_source
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
+    FakeFetchProvider,
+    FakeSearchProvider,
+    FallbackSearchProvider,
     RetrievalOperator,
     SearchGoal,
     SearchSource,
@@ -180,6 +183,50 @@ def test_phase84_corpus_fetch_provider_fails_closed_when_artifact_is_missing() -
     assert response.diagnostics["reason"] == "missing_corpus_artifact_ref"
 
 
+def test_phase84_fallback_search_provider_continues_after_provider_exception() -> None:
+    fallback_source = _source(
+        "src-fallback-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/fallback.htm",
+        "Fallback Apple Form 10-K",
+        "AAPL fallback revenue.",
+    )
+    journal = JournalStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider(
+            [
+                _FailingSearchProvider(),
+                FakeSearchProvider({"AAPL fallback": [fallback_source]}),
+            ]
+        ),
+        fetch_provider=FakeFetchProvider({fallback_source.uri: "AAPL fallback revenue from 10-K filing."}),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-fallback-search",
+            query="AAPL fallback",
+            max_spans_per_document=1,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-fallback-search",
+        run_id="run-1",
+    )
+
+    search = journal.records(task_id="task-fallback-search", kind="retrieval_search_attempt")[0].data
+    diagnostics = search["diagnostics"]["provider_diagnostics"]
+    attempts = diagnostics["attempts"]
+    assert report.status == "sufficient"
+    assert search["status"] == "ok"
+    assert attempts[0]["provider_id"] == "failing_search"
+    assert attempts[0]["status"] == "failed"
+    assert attempts[0]["error"] == "RuntimeError"
+    assert attempts[1]["provider_id"] == "fake_search"
+    assert attempts[1]["status"] == "ok"
+    assert diagnostics["selected_provider_id"] == "fake_search"
+
+
 def _seed_document(
     *,
     artifacts: ArtifactStore,
@@ -246,3 +293,17 @@ def _plan_stub():
         max_sources=5,
         max_fetches=3,
     )
+
+
+class _FailingSearchProvider:
+    provider_id = "failing_search"
+    live_network = False
+    default_enabled = True
+    profile_aware = True
+    supported_research_profiles = [FINANCE_FUNDAMENTALS_PROFILE_ID]
+
+    def search(self, query: str, *, goal: SearchGoal, plan) -> list[SearchSource]:
+        raise RuntimeError("raw provider failure must not escape")
+
+    def search_diagnostics(self) -> dict:
+        return {"source": "test_failure"}

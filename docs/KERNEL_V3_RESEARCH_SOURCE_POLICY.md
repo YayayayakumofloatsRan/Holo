@@ -93,6 +93,12 @@ Retrieval query-plan and report diagnostics include these provider capabilities,
 so a resident operator can audit whether a run used corpus-only, fake, or
 future live-capable providers.
 
+Composite search providers fail soft across provider boundaries. If one search
+provider raises, the fallback chain records the provider id, failure status, and
+exception type in diagnostics, then tries the next provider. This keeps a
+corrupt corpus index or transient future live-provider failure from aborting a
+directed research run before another configured provider can answer.
+
 Provider inspection is also available before a run starts:
 
 ```bash
