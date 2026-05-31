@@ -125,6 +125,7 @@ class RetrievalOperator:
                 diagnostics={
                     "provider_source_count": len(provider_sources),
                     "journaled_source_count": len(bounded_sources),
+                    **_provider_search_diagnostics(self.search_provider),
                     **({"error": search_error} if search_error else {}),
                 },
             )
@@ -528,6 +529,18 @@ def _goal_budget(goal: SearchGoal) -> JsonObject:
         "max_fetches": goal.max_fetches,
         "max_spans_per_document": goal.max_spans_per_document,
     }
+
+
+def _provider_search_diagnostics(provider) -> JsonObject:
+    raw = getattr(provider, "search_diagnostics", None)
+    if callable(raw):
+        value = raw()
+        if isinstance(value, dict) and value:
+            return {"provider_diagnostics": _safe_json(dict(value))}
+    value = getattr(provider, "last_search_diagnostics", {})
+    if isinstance(value, dict) and value:
+        return {"provider_diagnostics": _safe_json(dict(value))}
+    return {}
 
 
 def _append(

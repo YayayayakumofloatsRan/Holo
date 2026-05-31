@@ -17,15 +17,35 @@ class CorpusSearchProvider:
         self.corpus_store = corpus_store
         self.provider_name = provider_name
         self.provider_id = provider_name
-        self.capability_diagnostics = {"source": "research_corpus"}
+        self.capability_diagnostics = {"source": "research_corpus", "freshness_filter": "profile_aware"}
+        self._last_search_diagnostics: JsonObject = {}
 
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
+        profile_id = _research_profile_id(goal)
+        freshness = (
+            self.corpus_store.freshness_summary(profile_id=profile_id, sample_limit=goal.max_sources)
+            if profile_id
+            else {"checked": False, "reason": "no_research_profile"}
+        )
+        freshness_now = _int_value(freshness.get("generated_at_ms"))
         result = self.corpus_store.search(
             query,
-            profile_id=_research_profile_id(goal),
+            profile_id=profile_id,
             limit=goal.max_sources,
+            exclude_stale=profile_id is not None,
+            now_ms=freshness_now,
         )
+        self._last_search_diagnostics = {
+            "provider_id": self.provider_id,
+            "profile_id": profile_id,
+            "freshness_filter_enabled": profile_id is not None,
+            "freshness": freshness,
+            "returned_count": result.total,
+        }
         return [_source_from_document(document, provider_name=self.provider_name) for document in result.documents]
+
+    def search_diagnostics(self) -> JsonObject:
+        return dict(self._last_search_diagnostics)
 
 
 class CorpusFetchProvider:
@@ -108,4 +128,12 @@ def _json_object(value: object) -> JsonObject:
 def _string_value(value: object) -> str | None:
     if isinstance(value, str) and value:
         return value
+    return None
+
+
+def _int_value(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
     return None

@@ -153,6 +153,13 @@ marks corpus documents stale after 180 days. `corpus inspect-store` reports a
 the same profile when a resident loop would otherwise keep reusing old
 financial evidence.
 
+Corpus-backed retrieval is freshness-aware for profiled research. Ordinary
+corpus inspection and corpus search can still show stale records to an
+operator, but `CorpusSearchProvider` excludes stale documents when a
+`research_profile` is present. Retrieval search-attempt diagnostics include the
+provider's freshness summary, including stale counts and sampled document ids,
+so a resident trace can explain why an indexed page was not reused as evidence.
+
 And reused as an offline retrieval source:
 
 ```bash

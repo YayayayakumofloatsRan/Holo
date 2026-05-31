@@ -150,10 +150,15 @@ class ResearchCorpusStore:
         *,
         profile_id: str | None = None,
         limit: int = 20,
+        exclude_stale: bool = False,
+        now_ms: int | None = None,
     ) -> CorpusSearchResult:
         terms = _terms(query or "")
         scored: list[tuple[float, CorpusDocument]] = []
+        timestamp = self._now_ms() if now_ms is None else now_ms
         for document in self.documents(profile_id=profile_id):
+            if exclude_stale and _document_is_stale(document, now_ms=timestamp):
+                continue
             haystack = _search_text(document)
             hits = sum(1 for term in terms if term in haystack)
             if terms and hits == 0:
@@ -173,8 +178,31 @@ class ResearchCorpusStore:
             profile_id=profile_id,
             documents=[document.to_dict() for document in ordered],
             total=len(ordered),
-            generated_at_ms=self._now_ms(),
+            generated_at_ms=timestamp,
         )
+
+    def freshness_summary(
+        self,
+        *,
+        profile_id: str | None = None,
+        sample_limit: int = 5,
+        now_ms: int | None = None,
+    ) -> JsonObject:
+        documents = self.documents(profile_id=profile_id)
+        timestamp = self._now_ms() if now_ms is None else now_ms
+        stale = [document for document in documents if _document_is_stale(document, now_ms=timestamp)]
+        stale = sorted(stale, key=lambda document: (document.fetched_at_ms, document.document_id))
+        max_ages = _freshness_max_ages(documents)
+        return {
+            "checked": True,
+            "generated_at_ms": timestamp,
+            "profile_id": profile_id,
+            "document_count": len(documents),
+            "stale_count": len(stale),
+            "max_age_ms_by_profile": max_ages,
+            "oldest_age_ms": max(0, timestamp - stale[0].fetched_at_ms) if stale else 0,
+            "document_ids": [document.document_id for document in stale[: max(0, sample_limit)]],
+        }
 
     def audit_records(self) -> list[JsonObject]:
         return [dict(event) for event in self._events]
@@ -533,6 +561,32 @@ def _freshness_issues(documents: list[CorpusDocument], *, now_ms: int, sample_li
             }
         )
     return issues
+
+
+def _document_is_stale(document: CorpusDocument, *, now_ms: int) -> bool:
+    profile_id = document.research_profile_id
+    if not profile_id:
+        return False
+    profile = profile_by_id(profile_id)
+    if profile is None:
+        return False
+    max_age_ms = _freshness_max_age_ms(profile.metadata)
+    return max_age_ms is not None and now_ms - document.fetched_at_ms > max_age_ms
+
+
+def _freshness_max_ages(documents: list[CorpusDocument]) -> JsonObject:
+    result: JsonObject = {}
+    for document in documents:
+        profile_id = document.research_profile_id
+        if not profile_id or profile_id in result:
+            continue
+        profile = profile_by_id(profile_id)
+        if profile is None:
+            continue
+        max_age_ms = _freshness_max_age_ms(profile.metadata)
+        if max_age_ms is not None:
+            result[profile_id] = max_age_ms
+    return result
 
 
 def _freshness_max_age_ms(metadata: JsonObject) -> int | None:

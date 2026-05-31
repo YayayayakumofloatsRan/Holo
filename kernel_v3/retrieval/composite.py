@@ -33,12 +33,33 @@ class FallbackSearchProvider:
 
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
         last_empty: list[SearchSource] = []
+        attempts = []
         for provider in self.providers:
             sources = provider.search(query, goal=goal, plan=plan)
+            attempts.append(
+                {
+                    "provider_id": getattr(provider, "provider_id", provider.__class__.__name__),
+                    "source_count": len(sources),
+                    "diagnostics": _provider_diagnostics(provider),
+                }
+            )
             if sources:
+                self._last_search_diagnostics = {
+                    "provider_id": self.provider_id,
+                    "selected_provider_id": getattr(provider, "provider_id", provider.__class__.__name__),
+                    "attempts": attempts,
+                }
                 return sources
             last_empty = sources
+        self._last_search_diagnostics = {
+            "provider_id": self.provider_id,
+            "selected_provider_id": None,
+            "attempts": attempts,
+        }
         return last_empty
+
+    def search_diagnostics(self):
+        return dict(getattr(self, "_last_search_diagnostics", {}))
 
 
 class RoutingFetchProvider:
@@ -92,3 +113,12 @@ def _unique(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _provider_diagnostics(provider) -> dict:
+    raw = getattr(provider, "search_diagnostics", None)
+    if callable(raw):
+        value = raw()
+        return dict(value) if isinstance(value, dict) else {}
+    value = getattr(provider, "last_search_diagnostics", {})
+    return dict(value) if isinstance(value, dict) else {}

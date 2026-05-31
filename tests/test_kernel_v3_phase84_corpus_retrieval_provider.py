@@ -116,6 +116,53 @@ def test_phase84_corpus_search_provider_filters_by_research_profile() -> None:
     assert [source.uri for source in sources] == [finance_source.uri]
 
 
+def test_phase84_corpus_search_provider_filters_stale_profile_documents_and_journals_reason() -> None:
+    artifacts = ArtifactStore.in_memory()
+    profile = finance_fundamentals_profile()
+    max_age_ms = int(profile.metadata["freshness_max_age_ms"])
+    corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: max_age_ms + 10_000)
+    stale_source = _source(
+        "src-stale-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/stale-filing.htm",
+        "Stale Apple Form 10-K",
+        "AAPL stale revenue.",
+    )
+    _seed_document(
+        artifacts=artifacts,
+        corpus=corpus,
+        source=stale_source,
+        profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID,
+        fetched_at_ms=1,
+    )
+    journal = JournalStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=CorpusSearchProvider(corpus),
+        fetch_provider=CorpusFetchProvider(artifacts),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-stale-corpus",
+            query="AAPL stale revenue",
+            max_spans_per_document=1,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-stale-corpus",
+        run_id="run-1",
+    )
+
+    search = journal.records(task_id="task-stale-corpus", kind="retrieval_search_attempt")[0].data
+    diagnostics = search["diagnostics"]["provider_diagnostics"]
+    assert report.status == "insufficient_evidence"
+    assert search["status"] == "empty"
+    assert search["sources"] == []
+    assert diagnostics["freshness_filter_enabled"] is True
+    assert diagnostics["freshness"]["stale_count"] == 1
+    assert diagnostics["freshness"]["document_ids"]
+
+
 def test_phase84_corpus_fetch_provider_fails_closed_when_artifact_is_missing() -> None:
     source = SearchSource(
         source_id="corpus-missing",
@@ -139,6 +186,7 @@ def _seed_document(
     corpus: ResearchCorpusStore,
     source: SearchSource,
     profile_id: str | None,
+    fetched_at_ms: int = 101,
 ) -> None:
     artifact = artifacts.write_blob(
         kind="retrieval_fetched_document",
@@ -157,7 +205,7 @@ def _seed_document(
             ),
             task_id=None,
             run_id="run-seed",
-            fetched_at_ms=101,
+            fetched_at_ms=fetched_at_ms,
             source_assessment=assess_search_source(source, profile=profile) if profile is not None else None,
         )
     )
