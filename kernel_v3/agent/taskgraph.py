@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from kernel_v3.agent.contracts import (
     SemanticIntake,
+    TaskExecutionPlan,
+    TaskExecutionStep,
     TaskGraphNode,
     TaskGraphProposal,
     TaskGraphValidation,
@@ -144,6 +146,55 @@ def validate_task_graph(proposal: TaskGraphProposal) -> TaskGraphValidation:
     )
 
 
+def build_task_execution_plan(
+    proposal: TaskGraphProposal,
+    validation: TaskGraphValidation,
+) -> TaskExecutionPlan:
+    graph_nodes = [TaskGraphNode.from_dict(node) for node in proposal.nodes]
+    allowed = set(validation.allowed_node_ids)
+    rejected = set(validation.rejected_node_ids)
+    steps: list[TaskExecutionStep] = []
+    for index, node in enumerate(graph_nodes, start=1):
+        status = _step_status(node, validation=validation, rejected=rejected)
+        approval_required = status in {"needs_confirmation", "blocked", "invalid"}
+        steps.append(
+            TaskExecutionStep(
+                step_id=f"plan-step-{index}",
+                node_id=node.node_id,
+                sequence_index=node.sequence_index,
+                kind=node.kind,
+                goal=node.goal,
+                mode=node.suggested_mode,
+                action_kind=_action_kind_for_node(node),
+                tool_name=_tool_for_node(node),
+                depends_on=list(node.depends_on),
+                required_capabilities=list(node.required_capabilities),
+                evidence_required=node.evidence_required,
+                citations_required=node.citations_required,
+                approval_required=approval_required,
+                status=status,
+                metadata={"node_allowed": node.node_id in allowed},
+            )
+        )
+    plan_approval_required = validation.status != "ready" or any(step.approval_required for step in steps)
+    return TaskExecutionPlan(
+        plan_id=f"plan-{proposal.graph_id}",
+        graph_id=proposal.graph_id,
+        status=validation.status,
+        selected_mode=validation.selected_mode,
+        steps=[step.to_dict() for step in steps],
+        blocked_capabilities=list(validation.blocked_capabilities),
+        warnings=list(validation.warnings),
+        approval_required=plan_approval_required,
+        confirmation_prompt=_confirmation_prompt(proposal, validation, steps),
+        metadata={
+            "source": "task_graph_validation",
+            "node_count": len(graph_nodes),
+            "ready_step_count": sum(1 for step in steps if step.status == "ready"),
+        },
+    )
+
+
 def _intent_dicts(intake: SemanticIntake) -> list[JsonObject]:
     return [dict(item) for item in intake.intents if isinstance(item, dict)]
 
@@ -184,6 +235,57 @@ def _mode_for_kind(kind: str) -> str:
     if kind == "clarification":
         return "clarify_first"
     return "direct_answer"
+
+
+def _action_kind_for_node(node: TaskGraphNode) -> str:
+    if node.kind in {"retrieval_research", "workspace_read"}:
+        return "tool"
+    if node.kind == "clarification":
+        return "ask_user"
+    return "respond"
+
+
+def _tool_for_node(node: TaskGraphNode) -> str | None:
+    if node.kind == "retrieval_research":
+        return "retrieval.run"
+    if node.kind == "workspace_read":
+        return "workspace.search,file.read"
+    return None
+
+
+def _step_status(
+    node: TaskGraphNode,
+    *,
+    validation: TaskGraphValidation,
+    rejected: set[str],
+) -> str:
+    if node.node_id in rejected or validation.status == "invalid":
+        return "invalid"
+    if node.status in {"blocked", "needs_permission", "needs_review"}:
+        return "blocked"
+    if validation.needs_user_confirmation:
+        return "needs_confirmation"
+    if any(_is_blocked(capability) for capability in node.required_capabilities):
+        return "blocked"
+    return "ready"
+
+
+def _confirmation_prompt(
+    proposal: TaskGraphProposal,
+    validation: TaskGraphValidation,
+    steps: list[TaskExecutionStep],
+) -> str | None:
+    if not validation.needs_user_confirmation and validation.status == "ready":
+        return None
+    if proposal.clarification_question:
+        return proposal.clarification_question
+    step_lines = [
+        f"{step.sequence_index}. {step.kind}: {step.goal}"
+        for step in steps[:_MAX_GRAPH_NODES]
+    ]
+    blocked = f" Blocked capabilities: {', '.join(validation.blocked_capabilities)}." if validation.blocked_capabilities else ""
+    reasons = f" Reasons: {', '.join(validation.reasons)}." if validation.reasons else ""
+    return "Confirm this host-validated task plan before execution: " + " | ".join(step_lines) + blocked + reasons
 
 
 def _selected_mode(

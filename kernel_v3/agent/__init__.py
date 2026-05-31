@@ -3,6 +3,8 @@ from kernel_v3.agent.contracts import (
     FailureReport,
     FinalAnswer,
     SemanticIntake,
+    TaskExecutionPlan,
+    TaskExecutionStep,
     TaskGraphNode,
     TaskGraphProposal,
     TaskGraphValidation,
@@ -11,7 +13,7 @@ from kernel_v3.agent.contracts import (
 )
 from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
-from kernel_v3.agent.taskgraph import task_graph_from_semantic, validate_task_graph
+from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.workloop import (
     EvidenceSufficiency,
     ProgressAssessment,
@@ -34,6 +36,9 @@ __all__ = [
     "ProgressSignal",
     "RepetitionSignal",
     "SemanticIntake",
+    "build_task_execution_plan",
+    "TaskExecutionPlan",
+    "TaskExecutionStep",
     "TaskGraphNode",
     "TaskGraphProposal",
     "TaskGraphValidation",

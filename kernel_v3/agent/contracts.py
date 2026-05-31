@@ -80,6 +80,39 @@ class TaskGraphValidation(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class TaskExecutionStep(Contract):
+    step_id: str
+    node_id: str
+    sequence_index: int
+    kind: str
+    goal: str
+    mode: str
+    action_kind: str
+    tool_name: str | None
+    depends_on: list[str]
+    required_capabilities: list[str]
+    evidence_required: bool
+    citations_required: bool
+    approval_required: bool
+    status: str
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskExecutionPlan(Contract):
+    plan_id: str
+    graph_id: str
+    status: str
+    selected_mode: str
+    steps: list[JsonObject]
+    blocked_capabilities: list[str]
+    warnings: list[str]
+    approval_required: bool
+    confirmation_prompt: str | None
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class TaskRecipe(Contract):
     recipe_id: str
     allowed_tools: list[str]

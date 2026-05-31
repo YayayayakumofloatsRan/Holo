@@ -1,4 +1,4 @@
-from kernel_v3.agent import AgentRuntime, task_graph_from_semantic, validate_task_graph
+from kernel_v3.agent import AgentRuntime, build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.contracts import SemanticIntake, TaskGraphProposal
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
@@ -48,6 +48,7 @@ def test_phase81_model_semantics_are_journaled_as_validated_task_graph():
         semantic_mode="model",
     )
     graph_record = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    plan_record = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
     proposal = graph_record["proposal"]
     validation = graph_record["validation"]
 
@@ -58,6 +59,11 @@ def test_phase81_model_semantics_are_journaled_as_validated_task_graph():
     assert validation["selected_mode"] == "clarify_first"
     assert "workspace:write" in validation["blocked_capabilities"]
     assert "user_confirmation_required" in validation["reasons"]
+    assert plan_record["status"] == "needs_user_confirmation"
+    assert plan_record["approval_required"] is True
+    assert plan_record["steps"][0]["action_kind"] == "tool"
+    assert plan_record["steps"][0]["tool_name"] == "retrieval.run"
+    assert plan_record["steps"][1]["status"] == "blocked"
     assert not journal.records(task_id=result.task_id, kind="retrieval_report")
 
 
@@ -96,11 +102,15 @@ def test_phase81_simple_retrieval_graph_selects_retrieval_recipe():
         semantic_mode="model",
     )
     validation = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data["validation"]
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
 
     assert result.mode == "retrieval_answer"
     assert result.status == "completed"
     assert validation["status"] == "ready"
     assert validation["selected_mode"] == "retrieval_answer"
+    assert plan["status"] == "ready"
+    assert plan["approval_required"] is False
+    assert plan["steps"][0]["tool_name"] == "retrieval.run"
     assert journal.records(task_id=result.task_id, kind="retrieval_report")
 
 
@@ -139,10 +149,13 @@ def test_phase81_blocked_capability_in_model_graph_cannot_select_tool_recipe():
         semantic_mode="model",
     )
     validation = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data["validation"]
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
 
     assert result.status == "needs_user_input"
     assert validation["selected_mode"] == "clarify_first"
     assert validation["blocked_capabilities"] == ["shell:exec"]
+    assert plan["approval_required"] is True
+    assert plan["steps"][0]["status"] == "blocked"
     assert not journal.records(task_id=result.task_id, kind="tool_call")
 
 
@@ -175,11 +188,15 @@ def test_phase81_task_graph_validator_rejects_invalid_dependencies():
     )
 
     validation = validate_task_graph(proposal)
+    plan = build_task_execution_plan(proposal, validation)
 
     assert validation.status == "invalid"
     assert validation.selected_mode == "clarify_first"
     assert validation.rejected_node_ids == ["node-1-direct_answer"]
     assert "invalid_task_graph_dependencies" in validation.reasons
+    assert plan.status == "invalid"
+    assert plan.steps[0]["status"] == "invalid"
+    assert plan.approval_required is True
 
 
 def test_phase81_boundary_only_fallback_still_gets_direct_graph():
@@ -199,7 +216,10 @@ def test_phase81_boundary_only_fallback_still_gets_direct_graph():
 
     proposal = task_graph_from_semantic(intake)
     validation = validate_task_graph(proposal)
+    plan = build_task_execution_plan(proposal, validation)
 
     assert proposal.nodes[0]["kind"] == "direct_answer"
     assert validation.status == "ready"
     assert validation.selected_mode == "direct_answer"
+    assert plan.status == "ready"
+    assert plan.approval_required is False

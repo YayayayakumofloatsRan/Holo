@@ -8,12 +8,13 @@ from kernel_v3.agent.contracts import (
     FailureReport,
     FinalAnswer,
     SemanticIntake,
+    TaskExecutionPlan,
     TaskGraphProposal,
     TaskGraphValidation,
     TaskRecipe,
 )
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
-from kernel_v3.agent.taskgraph import task_graph_from_semantic, validate_task_graph
+from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
@@ -118,7 +119,8 @@ class AgentRuntime:
         intake = self._semantic_intake(goal, semantic_mode=semantic_mode, task_id=task_id)
         task_graph = task_graph_from_semantic(intake)
         task_graph_validation = validate_task_graph(task_graph)
-        selected_mode = task_graph_validation.selected_mode if mode == "auto" else _select_mode(goal, mode)
+        task_plan = build_task_execution_plan(task_graph, task_graph_validation)
+        selected_mode = task_plan.selected_mode if mode == "auto" else _select_mode(goal, mode)
         if selected_mode == "workspace_answer" and not _file_target(goal):
             selected_mode = "clarify_first"
         recipe = task_recipe(
@@ -128,6 +130,7 @@ class AgentRuntime:
                 "semantic_intake": intake.to_dict(),
                 "task_graph": task_graph.to_dict(),
                 "task_graph_validation": task_graph_validation.to_dict(),
+                "task_execution_plan": task_plan.to_dict(),
             },
         )
         registry = self._registry(recipe, goal)
@@ -174,6 +177,7 @@ class AgentRuntime:
             task_id=result.task_id,
             run_id=result.run_id,
         )
+        self._append_task_plan(task_plan, task_id=result.task_id, run_id=result.run_id)
         self._maybe_propose_memory(
             intake,
             task_id=result.task_id,
@@ -501,6 +505,20 @@ class AgentRuntime:
             state_delta={
                 "task_graph": validation.status,
                 "task_graph_selected_mode": validation.selected_mode,
+            },
+        )
+
+    def _append_task_plan(self, plan: TaskExecutionPlan, *, task_id: str, run_id: str):
+        return self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="semantic_task_plan",
+            data=plan.to_dict(),
+            state_delta={
+                "task_plan": plan.status,
+                "task_plan_selected_mode": plan.selected_mode,
+                "task_plan_approval_required": plan.approval_required,
             },
         )
 

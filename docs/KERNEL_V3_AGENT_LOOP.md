@@ -25,9 +25,9 @@ operators outside the controller.
 ## Semantic Task Graph
 
 Model-backed semantic intake is now normalized into a host-visible
-`TaskGraphProposal` before an agent recipe is selected. This graph is not an
-execution engine. It is an audit and validation layer over the model's proposed
-semantic structure:
+`TaskGraphProposal` and `TaskExecutionPlan` before an agent recipe is selected.
+This graph/plan layer is not an execution engine. It is an audit and validation
+layer over the model's proposed semantic structure:
 
 - each proposed task node carries kind, goal, dependencies, capabilities,
   evidence requirements, and a suggested recipe mode;
@@ -35,6 +35,8 @@ semantic structure:
   and whether user confirmation is required;
 - `AgentRuntime` journals `semantic_task_graph` with both the proposal and the
   validation decision;
+- `AgentRuntime` journals `semantic_task_plan` with ordered host-visible steps,
+  approval requirements, blocked capabilities, and a confirmation prompt;
 - `LoopControllerV3` still receives only the selected recipe, planner,
   PolicyGate, registry, and evaluator. It remains tool-name-agnostic.
 
