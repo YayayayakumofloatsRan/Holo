@@ -97,7 +97,11 @@ Composite search providers fail soft across provider boundaries. If one search
 provider raises, the fallback chain records the provider id, failure status, and
 exception type in diagnostics, then tries the next provider. This keeps a
 corrupt corpus index or transient future live-provider failure from aborting a
-directed research run before another configured provider can answer.
+directed research run before another configured provider can answer. If every
+provider in the chain fails, the journaled retrieval search attempt is marked
+`failed` with `provider_chain_failed` rather than `empty`, so the workloop and
+resident operator can distinguish infrastructure failure from "no matching
+source".
 
 Provider inspection is also available before a run starts:
 

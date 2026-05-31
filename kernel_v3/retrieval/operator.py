@@ -115,19 +115,29 @@ class RetrievalOperator:
                 provider_sources = []
                 search_error = type(exc).__name__
             bounded_sources = _dedupe_sources(provider_sources)[: goal.max_sources]
+            provider_diagnostics = _provider_search_diagnostics(self.search_provider)
+            attempt_status = _search_attempt_status(
+                search_error=search_error,
+                bounded_sources=bounded_sources,
+                provider_diagnostics=provider_diagnostics,
+            )
+            diagnostics = {
+                "provider_source_count": len(provider_sources),
+                "journaled_source_count": len(bounded_sources),
+                **provider_diagnostics,
+            }
+            if search_error:
+                diagnostics["error"] = search_error
+            elif attempt_status == "failed":
+                diagnostics["error"] = "provider_chain_failed"
             attempt = SearchAttempt(
                 attempt_id=f"search-{goal.goal_id}-{index}",
                 goal_id=goal.goal_id,
                 plan_id=plan.plan_id,
                 query=query,
-                status="failed" if search_error else "ok" if bounded_sources else "empty",
+                status=attempt_status,
                 sources=[_safe_source_dict(source) for source in bounded_sources],
-                diagnostics={
-                    "provider_source_count": len(provider_sources),
-                    "journaled_source_count": len(bounded_sources),
-                    **_provider_search_diagnostics(self.search_provider),
-                    **({"error": search_error} if search_error else {}),
-                },
+                diagnostics=diagnostics,
             )
             search_attempt_ids.append(attempt.attempt_id)
             sources.extend(bounded_sources)
@@ -541,6 +551,22 @@ def _provider_search_diagnostics(provider) -> JsonObject:
     if isinstance(value, dict) and value:
         return {"provider_diagnostics": _safe_json(dict(value))}
     return {}
+
+
+def _search_attempt_status(
+    *,
+    search_error: str | None,
+    bounded_sources: list[SearchSource],
+    provider_diagnostics: JsonObject,
+) -> str:
+    if search_error:
+        return "failed"
+    if bounded_sources:
+        return "ok"
+    diagnostics = provider_diagnostics.get("provider_diagnostics")
+    if isinstance(diagnostics, dict) and diagnostics.get("status") == "failed":
+        return "failed"
+    return "empty"
 
 
 def _append(

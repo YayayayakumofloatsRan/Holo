@@ -225,6 +225,37 @@ def test_phase84_fallback_search_provider_continues_after_provider_exception() -
     assert attempts[1]["provider_id"] == "fake_search"
     assert attempts[1]["status"] == "ok"
     assert diagnostics["selected_provider_id"] == "fake_search"
+    assert diagnostics["status"] == "ok"
+
+
+def test_phase84_fallback_search_provider_reports_failed_when_all_providers_fail() -> None:
+    journal = JournalStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([_FailingSearchProvider()]),
+        fetch_provider=FakeFetchProvider({}),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-all-provider-fail",
+            query="AAPL fallback",
+            max_spans_per_document=1,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-all-provider-fail",
+        run_id="run-1",
+    )
+
+    search = journal.records(task_id="task-all-provider-fail", kind="retrieval_search_attempt")[0].data
+    diagnostics = search["diagnostics"]["provider_diagnostics"]
+    assert report.status == "insufficient_evidence"
+    assert search["status"] == "failed"
+    assert search["diagnostics"]["error"] == "provider_chain_failed"
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["selected_provider_id"] is None
+    assert diagnostics["attempts"][0]["status"] == "failed"
 
 
 def _seed_document(

@@ -53,6 +53,7 @@ class FallbackSearchProvider:
             if sources:
                 self._last_search_diagnostics = {
                     "provider_id": self.provider_id,
+                    "status": "ok",
                     "selected_provider_id": getattr(provider, "provider_id", provider.__class__.__name__),
                     "attempts": attempts,
                 }
@@ -60,6 +61,7 @@ class FallbackSearchProvider:
             last_empty = sources
         self._last_search_diagnostics = {
             "provider_id": self.provider_id,
+            "status": "failed" if _all_attempts_failed(attempts) else "empty",
             "selected_provider_id": None,
             "attempts": attempts,
         }
@@ -129,3 +131,7 @@ def _provider_diagnostics(provider) -> dict:
         return dict(value) if isinstance(value, dict) else {}
     value = getattr(provider, "last_search_diagnostics", {})
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _all_attempts_failed(attempts: list[dict]) -> bool:
+    return bool(attempts) and all(attempt.get("status") == "failed" for attempt in attempts)
