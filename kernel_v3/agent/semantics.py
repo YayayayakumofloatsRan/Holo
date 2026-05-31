@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Pattern
 
 from kernel_v3.agent.contracts import SemanticIntake, TaskIntent
 from kernel_v3.contracts import JsonObject
@@ -22,6 +23,14 @@ _NOOP_PATTERN = re.compile(
 )
 _MEMORY_WRITE_PATTERN = re.compile(
     r"(?:记住|记下|保存(?:这个)?偏好|不要忘|以后(?:都|请|用|按)|remember\b|save\s+this\s+preference|keep\s+this\s+preference|from\s+now\s+on)",
+    re.IGNORECASE,
+)
+_PRIVATE_REASONING_PATTERN = re.compile(
+    r"(?:思考过程|思维链|推理过程|内部推理|inner\s+(?:thought|reasoning)|chain[-\s]?of[-\s]?thought|show\s+.*reasoning|show\s+.*thought)",
+    re.IGNORECASE,
+)
+_SHELL_EXEC_PATTERN = re.compile(
+    r"(?:shell|bash|powershell|cmd\.exe|终端|命令行|执行命令|运行命令|run\s+(?:a\s+)?(?:shell\s+)?command|rm\s+-rf|sudo\b|chmod\b|curl\s+|wget\s+)",
     re.IGNORECASE,
 )
 _ROLE_PATTERN = re.compile(
@@ -56,6 +65,40 @@ class CapabilityRule:
         lowered = text.lower()
         return any(alias.lower() in lowered for alias in self.aliases)
 
+
+@dataclass(frozen=True)
+class HostBoundaryRule:
+    intent_kind: str
+    pattern: Pattern[str]
+    risk: str
+    status: str
+    required_capabilities: tuple[str, ...] = ()
+    warning: str | None = None
+    response_hint: str | None = None
+
+    def matches(self, text: str) -> bool:
+        return self.pattern.search(text) is not None
+
+
+_HOST_BOUNDARY_RULES = (
+    HostBoundaryRule(
+        intent_kind="private_reasoning",
+        pattern=_PRIVATE_REASONING_PATTERN,
+        risk="private_reasoning",
+        status="blocked",
+        warning="private_reasoning_is_not_exposed",
+        response_hint="我不能展示隐藏的逐步思考过程或私有推理链。可以提供简要理由、结论依据、可审计 trace、证据和下一步计划。",
+    ),
+    HostBoundaryRule(
+        intent_kind="shell_execution",
+        pattern=_SHELL_EXEC_PATTERN,
+        risk="shell",
+        status="blocked",
+        required_capabilities=("shell:exec",),
+        warning="shell_execution_requires_explicit_future_capability",
+        response_hint="当前 kernel_v3 不直接执行 shell/终端命令。需要这类能力时，应在后续工具 phase 中通过 PolicyGate、审批、artifact 记录和回滚策略显式开放。",
+    ),
+)
 
 _LIVE_TRANSPORT_RULES = (
     CapabilityRule("live_transport:wechat", ("wechat", "weixin", "微信"), "external_control", {"transport": "wechat"}),
@@ -149,8 +192,11 @@ def _semantic_prompt(goal: str) -> str:
         },
         "host_rules": [
             "Split compound requests into ordered intents.",
+            "Use broad semantic judgment instead of sample-specific phrase matching.",
             "Classify role/persona requests as roleplay scoped to the current thread.",
             "Classify transport/account/client control as transport_control and blocked.",
+            "Classify unavailable tool, device, account, or execution requests as blocked capabilities instead of pretending they ran.",
+            "Classify requests for hidden/private reasoning as private_reasoning and do not expose chain-of-thought.",
             "Classify local writing/report generation as workspace_write and needs_permission unless an explicit writable recipe is available.",
             "If a compound task includes blocked capabilities, ask for confirmation or scope reduction before execution.",
         ],
@@ -168,7 +214,7 @@ def _intake_from_model(goal: str, data: JsonObject, *, fallback: SemanticIntake)
     blocked = _ordered_unique([*model_blocked, *_blocked_capabilities(intents)])
     primary = _normalize_primary(str(data.get("primary_intent") or ""), intents)
     requires_clarification = _bool(data.get("requires_clarification"))
-    if primary == "transport_control":
+    if primary in {"transport_control", *_host_boundary_kinds()}:
         requires_clarification = False
     elif compound or blocked:
         requires_clarification = True
@@ -276,6 +322,8 @@ def _apply_hard_capability_overrides(goal: str, intents: list[TaskIntent]) -> li
             ]
     if _MEMORY_WRITE_PATTERN.search(goal):
         result = _ensure_memory_write_intent(goal, result)
+    for rule in _matching_host_boundaries(goal):
+        result = _ensure_boundary_intent(goal, result, rule)
     return result
 
 
@@ -298,6 +346,37 @@ def _ensure_memory_write_intent(goal: str, intents: list[TaskIntent]) -> list[Ta
             status="needs_review",
         ),
     ]
+
+
+def _ensure_boundary_intent(goal: str, intents: list[TaskIntent], rule: HostBoundaryRule) -> list[TaskIntent]:
+    if any(intent.kind == rule.intent_kind for intent in intents):
+        return intents
+    return [
+        *intents,
+        _intent(
+            len(intents) + 1,
+            rule.intent_kind,
+            goal,
+            capabilities=list(rule.required_capabilities),
+            risk=rule.risk,
+            status=rule.status,
+        ),
+    ]
+
+
+def _matching_host_boundaries(text: str) -> list[HostBoundaryRule]:
+    return [rule for rule in _HOST_BOUNDARY_RULES if rule.matches(text)]
+
+
+def _host_boundary_kinds() -> tuple[str, ...]:
+    return tuple(rule.intent_kind for rule in _HOST_BOUNDARY_RULES)
+
+
+def _host_boundary_for_kind(kind: str) -> HostBoundaryRule | None:
+    for rule in _HOST_BOUNDARY_RULES:
+        if rule.intent_kind == kind:
+            return rule
+    return None
 
 
 def _merge_capability(
@@ -353,6 +432,16 @@ def _classify_segment(segment: str, index: int) -> TaskIntent:
             capabilities=["durable_memory:write"],
             risk="write",
             status="needs_review",
+        )
+    boundary = _first_host_boundary(stripped)
+    if boundary is not None:
+        return _intent(
+            index,
+            boundary.intent_kind,
+            stripped,
+            capabilities=list(boundary.required_capabilities),
+            risk=boundary.risk,
+            status=boundary.status,
         )
     transport = _transport_control_rule(stripped)
     if transport is not None:
@@ -444,6 +533,13 @@ def _transport_control_rule(text: str) -> CapabilityRule | None:
     return None
 
 
+def _first_host_boundary(text: str) -> HostBoundaryRule | None:
+    for rule in _HOST_BOUNDARY_RULES:
+        if rule.matches(text):
+            return rule
+    return None
+
+
 def _role_request(text: str) -> str | None:
     match = _ROLE_PATTERN.search(text)
     if match is None:
@@ -509,12 +605,17 @@ def _warnings(intents: list[TaskIntent], *, compound: bool) -> list[str]:
         warnings.append("roleplay_scope_is_current_thread_only")
     if any(intent.kind == "transport_control" for intent in intents):
         warnings.append("live_transports_are_not_kernel_v3_decision_makers")
+    for intent in intents:
+        boundary = _host_boundary_for_kind(intent.kind)
+        if boundary is not None and boundary.warning:
+            warnings.append(boundary.warning)
     return _ordered_unique(warnings)
 
 
 def _primary_intent(intents: list[TaskIntent]) -> str:
     priority = [
         "transport_control",
+        *_host_boundary_kinds(),
         "noop",
         "memory_write",
         "retrieval_research",
@@ -541,7 +642,7 @@ def _requires_clarification(
 ) -> bool:
     if not goal.strip() or goal.strip() in {"?", "？", ".", "。"}:
         return True
-    if any(intent.kind == "transport_control" for intent in intents):
+    if any(intent.kind == "transport_control" or intent.kind in _host_boundary_kinds() for intent in intents):
         return False
     if compound:
         return True
@@ -580,6 +681,7 @@ def _normalize_primary(value: str, intents: list[TaskIntent]) -> str:
 def _normalize_intent_kind(value: str) -> str:
     allowed = {
         "transport_control",
+        *_host_boundary_kinds(),
         "noop",
         "retrieval_research",
         "workspace_write",
@@ -594,8 +696,11 @@ def _normalize_intent_kind(value: str) -> str:
 
 
 def _risk_for_kind(kind: str) -> str:
-    if kind in {"transport_control"}:
+    if kind == "transport_control":
         return "external_control"
+    boundary = _host_boundary_for_kind(kind)
+    if boundary is not None:
+        return boundary.risk
     if kind in {"workspace_write", "memory_write"}:
         return "write"
     if kind in {"retrieval_research", "workspace_read"}:
@@ -604,7 +709,7 @@ def _risk_for_kind(kind: str) -> str:
 
 
 def _status_for_kind(kind: str) -> str:
-    if kind == "transport_control":
+    if kind == "transport_control" or kind in _host_boundary_kinds():
         return "blocked"
     if kind == "workspace_write":
         return "needs_permission"
@@ -624,6 +729,9 @@ def _response_hint(primary: str, *, intents: list[TaskIntent], blocked: list[str
     if primary == "transport_control":
         transport = _first_metadata_value(intents, "transport") or "live transport"
         return f"当前 kernel_v3 不接管 {transport} 或其他 live transport。transports 不是决策层；如需后续接入，应作为独立 transport phase，并继续由宿主校验权限。"
+    boundary = _host_boundary_for_kind(primary)
+    if boundary is not None and boundary.response_hint:
+        return boundary.response_hint
     if primary == "memory_write":
         return "可以生成 durable memory 提案，但不会自动写入长期记忆；需要宿主规则和用户审批后才会提交。"
     if blocked:

@@ -189,7 +189,8 @@ def test_phase63_model_semantic_intake_response_hint_cannot_become_final_answer(
 
     assert result.status == "completed"
     assert result.final_answer is not None
-    assert result.final_answer["answer"] == "Direct answer: answer a local direct question"
+    assert "离线 host fallback" in result.final_answer["answer"]
+    assert "Direct answer:" not in result.final_answer["answer"]
     assert result.final_answer["answer"] != "UNSUPPORTED FACTUAL ANSWER FROM SEMANTIC INTAKE"
     intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
     assert intake["response_hint"] is None

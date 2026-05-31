@@ -129,7 +129,8 @@ def test_phase62_thread_summary_includes_last_answer_and_pending_question():
     summary = chat.summarize_thread("thread-state")
 
     assert summary.last_answer_preview is not None
-    assert "Direct answer: who are you" in summary.last_answer_preview
+    assert "离线 host fallback" in summary.last_answer_preview
+    assert "Direct answer:" not in summary.last_answer_preview
     assert summary.pending_question is not None
     assert summary.pending_question["question"]
 

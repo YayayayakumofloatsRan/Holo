@@ -16,7 +16,8 @@ def test_phase6_direct_answer_completes_in_one_loop_and_journals_final_answer():
 
     assert result.status == "completed"
     assert result.final_answer is not None
-    assert result.final_answer["answer"] == "Direct answer: explain Holo briefly"
+    assert "离线 host fallback" in result.final_answer["answer"]
+    assert "Direct answer:" not in result.final_answer["answer"]
     assert _action_names(journal, result.task_id) == ["respond"]
     assert journal.records(task_id=result.task_id, kind="agent_final_answer")
 

@@ -21,7 +21,8 @@ def test_phase73_resident_worker_processes_inbox_to_outbox(tmp_path: Path):
     outbox = queue.outbox_messages()[0]
     assert outbox.in_reply_to == "in-1"
     assert outbox.status == "ready"
-    assert "Direct answer: hello resident" in outbox.text
+    assert "离线 host fallback" in outbox.text
+    assert "Direct answer:" not in outbox.text
 
 
 def test_phase73_worker_lease_prevents_duplicate_ownership(tmp_path: Path):
@@ -87,7 +88,8 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     assert cli.main([*base, "resident", "outbox"]) == 0
     outbox = json.loads(capsys.readouterr().out)
     assert outbox["messages"][0]["status"] == "ready"
-    assert "Direct answer: hello cli" in outbox["messages"][0]["text"]
+    assert "离线 host fallback" in outbox["messages"][0]["text"]
+    assert "Direct answer:" not in outbox["messages"][0]["text"]
 
 
 def _clock(start: int = 1_000):

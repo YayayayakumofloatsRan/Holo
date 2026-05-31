@@ -821,7 +821,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
             name=None,
             description="answer directly",
             score=1.0,
-            payload={"text": response_hint or f"Direct answer: {goal}"},
+            payload={"text": response_hint or _direct_answer_text(goal, recipe)},
             reasons=["direct_answer recipe"],
             side_effect_class="none",
         )
@@ -900,6 +900,23 @@ def _semantic_clarification_question(recipe: TaskRecipe) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
+
+
+def _direct_answer_text(goal: str, recipe: TaskRecipe) -> str:
+    semantic = _semantic_intake_metadata(recipe)
+    primary = str(semantic.get("primary_intent") or "direct_answer")
+    if primary == "noop":
+        return "好的，我不会执行任何工具、写入或外部操作。"
+    if primary == "synthesis":
+        return "可以。我可以在已有上下文、检索证据或 workspace 观察之上做总结和比较；如果缺少证据，我会先说明限制或请求补充。"
+    cleaned = " ".join(goal.split())
+    if not cleaned:
+        return "请提供一个明确目标。"
+    return (
+        "我已收到这个直接问题，但当前运行的是离线 host fallback，"
+        "不会编造未经模型或证据支持的事实答案。请启用 model 模式，"
+        "或改用 retrieval/workspace 让宿主收集可审计证据后回答。"
+    )
 
 
 def _next_task_id(journal: JournalStore) -> str:
