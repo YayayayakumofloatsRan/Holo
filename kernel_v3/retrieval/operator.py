@@ -81,7 +81,12 @@ class RetrievalOperator:
             queries=queries,
             max_sources=goal.max_sources,
             max_fetches=goal.max_fetches,
-            diagnostics={"query_count": len(queries)},
+            diagnostics={
+                "query_count": len(queries),
+                "network_access": self.network_access,
+                "budget": _goal_budget(goal),
+                **({"research_profile": research_profile.profile_id} if research_profile is not None else {}),
+            },
         )
         _append(
             journal,
@@ -360,6 +365,8 @@ class RetrievalOperator:
             diagnostics={
                 "sufficient": decision.sufficient,
                 "reason": decision.reason,
+                "network_access": self.network_access,
+                "budget": _goal_budget(goal),
                 "search_attempt_count": len(search_attempt_ids),
                 "fetch_attempt_count": len(fetch_attempt_ids),
                 "evidence_count": len(evidence),
@@ -504,6 +511,15 @@ def _research_profile_from_goal(goal: SearchGoal) -> ResearchProfile | None:
     if not isinstance(raw_profile, str):
         return None
     return profile_by_id(raw_profile)
+
+
+def _goal_budget(goal: SearchGoal) -> JsonObject:
+    return {
+        "max_queries": goal.max_queries,
+        "max_sources": goal.max_sources,
+        "max_fetches": goal.max_fetches,
+        "max_spans_per_document": goal.max_spans_per_document,
+    }
 
 
 def _append(

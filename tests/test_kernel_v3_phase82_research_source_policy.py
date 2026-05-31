@@ -133,6 +133,11 @@ def test_phase82_finance_retrieval_accepts_primary_filing_evidence_and_journals_
 
     assert report.status == "sufficient"
     assert report.diagnostics["source_authority"]["primary_source_count"] == 1
+    assert report.diagnostics["network_access"] is False
+    assert report.diagnostics["budget"]["max_spans_per_document"] == 1
+    plan = journal.records(task_id="task-finance-sec", kind="retrieval_query_plan")[0].data
+    assert plan["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert plan["diagnostics"]["budget"]["max_fetches"] == 3
     evidence = journal.records(task_id="task-finance-sec", kind="retrieval_evidence")[0].data
     assert evidence["diagnostics"]["source_assessment"]["source_family"] == "regulatory_filing"
     assert evidence["diagnostics"]["source_assessment"]["usable_as_primary"] is True

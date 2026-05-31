@@ -46,6 +46,8 @@ the retrieval operator:
 - requires at least one primary source before returning a sufficient finance
   retrieval report
 - includes source-authority counts in the final `RetrievalReport`
+- records retrieval budgets and `network_access` in both query-plan and report
+  diagnostics
 
 This prepares the kernel for future live web/database providers without making
 live retrieval the default.

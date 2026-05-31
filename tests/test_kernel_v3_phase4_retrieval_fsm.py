@@ -107,12 +107,22 @@ def test_phase4_retrieval_bounds_sources_fetches_and_spans():
     )
 
     search = journal.records(task_id="task-bounds", kind="retrieval_search_attempt")[0]
+    plan = journal.records(task_id="task-bounds", kind="retrieval_query_plan")[0]
     ranking = journal.records(task_id="task-bounds", kind="retrieval_rank_sources")[0]
+    assert plan.data["diagnostics"]["network_access"] is False
+    assert plan.data["diagnostics"]["budget"] == {
+        "max_queries": 1,
+        "max_sources": 2,
+        "max_fetches": 1,
+        "max_spans_per_document": 1,
+    }
     assert len(search.data["sources"]) == 2
     assert len(ranking.data["ranked_sources"]) == 2
     assert len(journal.records(task_id="task-bounds", kind="retrieval_fetch_attempt")) == 1
     assert len(journal.records(task_id="task-bounds", kind="retrieval_evidence")) == 1
     assert report.diagnostics["fetch_attempt_count"] == 1
+    assert report.diagnostics["network_access"] is False
+    assert report.diagnostics["budget"]["max_fetches"] == 1
 
 
 def test_phase4_retrieval_deduplicates_repeated_query_terms():
