@@ -160,6 +160,32 @@ def test_phase71_approved_proposal_without_item_can_recover_commit():
     assert commit_records[0].state_delta["memory_item"] == "committed_recovered"
 
 
+def test_phase71_deleting_memory_is_journaled_and_repeat_is_observed():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    result = pipeline.propose_from_semantic_intake(
+        _memory_intake("remember my preference: concise Chinese replies"),
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-source",
+    )
+    approved = pipeline.approve_proposal(result.proposals[0].proposal_id, approved_by="user")
+    memory_id = approved.committed_items[0].memory_id
+
+    first = pipeline.delete_memory(memory_id, reason="user_deleted", task_id="task-1", run_id="run-1")
+    second = pipeline.delete_memory(memory_id, reason="user_deleted_again", task_id="task-1", run_id="run-1")
+
+    assert first.tombstone_id == second.tombstone_id
+    assert store.recall(query="Chinese", scope={"thread_id": "thread-1"}).total == 0
+    kinds = [record.kind for record in journal.records()]
+    assert kinds.count("memory_item_deleted") == 1
+    assert kinds.count("memory_item_delete_observed") == 1
+    assert journal.records(kind="memory_item_deleted")[0].data["memory_id"] == memory_id
+    assert journal.records(kind="memory_item_delete_observed")[0].state_delta["memory_item"] == "deleted_existing"
+
+
 def test_phase71_rejecting_proposal_leaves_no_recallable_memory():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())

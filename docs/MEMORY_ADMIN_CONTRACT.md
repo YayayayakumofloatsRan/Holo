@@ -86,6 +86,13 @@ This lets a resident worker or operator see whether memory needs review without
 making transports decision makers. Approval, rejection, delete, and export still
 go through explicit host-owned memory commands.
 
+Approval, rejection, commit, and delete are durable state transitions and must
+be visible in the main journal. Kernel-v3 memory delete goes through
+`MemoryPipeline.delete_memory`, which writes the memory-store tombstone and
+journals either `memory_item_deleted` for the first deletion or
+`memory_item_delete_observed` for an idempotent repeat. The journal record
+contains ids, reason, provenance refs, and metadata, not raw artifact payloads.
+
 The durable store treats `commit` as the final boundary, not a proposal API:
 only active items with a non-empty `approved_by` value may be committed. Pending
 or unapproved drafts must stay in the proposal/shadow pipeline until the host

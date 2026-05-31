@@ -91,13 +91,19 @@ def test_phase72_chat_memory_admin_approves_and_lists_pending_proposal():
     listed = chat.receive("/memory proposals", thread_id="thread-memory")
     approved = chat.receive(f"/memory approve {proposal_id}", thread_id="thread-memory")
     memory_list = chat.receive("/memory list", thread_id="thread-memory")
+    memory_id = store.recall(query="中文", scope={"thread_id": "thread-memory"}).items[0]["memory_id"]
+    deleted = chat.receive(f"/memory delete {memory_id} test-delete", thread_id="thread-memory")
 
     assert first.status == "needs_user_input"
     assert listed.status == "completed"
     assert proposal_id in listed.answer
     assert approved.status == "completed"
-    assert store.recall(query="中文", scope={"thread_id": "thread-memory"}).total == 1
+    assert deleted.status == "completed"
     assert "中文" in memory_list.answer
+    assert store.recall(query="中文", scope={"thread_id": "thread-memory"}).total == 0
+    delete_records = journal.records(kind="memory_item_deleted")
+    assert delete_records[-1].data["memory_id"] == memory_id
+    assert delete_records[-1].data["reason"] == "test-delete"
 
 
 def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
@@ -125,6 +131,9 @@ def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
 
     assert cli.main([*base, "memory", "delete", memory_id, "--reason", "test"]) == 0
     capsys.readouterr()
+    delete_records = JournalStore(journal, index_path=index).records(kind="memory_item_deleted")
+    assert delete_records[-1].data["memory_id"] == memory_id
+    assert delete_records[-1].data["reason"] == "test"
     assert cli.main([*base, "memory", "list", "--thread", "cli-thread"]) == 0
     listed_after_delete = json.loads(capsys.readouterr().out)
     assert listed_after_delete["result"]["total"] == 0

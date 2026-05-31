@@ -847,7 +847,13 @@ class ChatRuntime:
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Rejected {args[1]}.")
         if subcommand == "delete" and len(args) >= 2:
             reason = " ".join(args[2:]) or "user_deleted"
-            tombstone = self.memory_store.delete(args[1], reason=reason, deleted_by="user")
+            tombstone = self.memory_pipeline.delete_memory(
+                args[1],
+                reason=reason,
+                deleted_by="user",
+                task_id=turn.task_id,
+                run_id=_chat_run_id(turn.thread_id),
+            )
             payload = tombstone.to_dict()
             command = self._append_command(turn, name="/memory", args=args, status="ok", result=payload)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Deleted {args[1]}.")

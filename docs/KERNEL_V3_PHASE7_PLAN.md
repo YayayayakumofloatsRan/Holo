@@ -211,10 +211,13 @@ Implementation note:
 - `ChatRuntime` supports `/memory list`, `/memory proposals`,
   `/memory approve <id>`, `/memory reject <id> [reason]`, and
   `/memory delete <id> [reason]`. Chat only routes admin commands; approval and
-  deletion still go through host-side `MemoryPipeline` / `MemoryStore`.
+  deletion still go through host-side `MemoryPipeline` / `MemoryStore`, with
+  delete decisions journaled as `memory_item_deleted` or
+  `memory_item_delete_observed`.
 - `holo-v3 memory propose/list/approve/reject/delete` provides a local CLI admin
-  surface. Ordinary CLI agent/chat commands do not create durable-memory files
-  unless a memory store is explicitly configured.
+  surface. Delete uses the same pipeline journaling path as chat. Ordinary CLI
+  agent/chat commands do not create durable-memory files unless a memory store
+  is explicitly configured.
 - Implemented tests live in
   `tests/test_kernel_v3_phase72_memory_context_admin.py`.
 

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
-from kernel_v3.memory.contracts import MemoryItem, MemoryProposal, ShadowCandidate
+from kernel_v3.memory.contracts import MemoryItem, MemoryProposal, MemoryTombstone, ShadowCandidate
 from kernel_v3.memory.privacy import contains_secret_like_content, validate_memory_item
 from kernel_v3.memory.store import MemoryStore, stable_candidate_id, stable_memory_id, stable_proposal_id
 
@@ -253,6 +253,37 @@ class MemoryPipeline:
             committed_items=[],
             rejected=[{"proposal_id": proposal_id, "reason": reason}],
         )
+
+    def delete_memory(
+        self,
+        memory_id: str,
+        *,
+        reason: str,
+        deleted_by: str = "user",
+        deleted_at_ms: int | None = None,
+        task_id: str | None = None,
+        run_id: str = "",
+    ) -> MemoryTombstone:
+        existing = _existing_tombstone(self.store, memory_id)
+        tombstone = self.store.delete(
+            memory_id,
+            reason=reason,
+            deleted_by=deleted_by,
+            deleted_at_ms=deleted_at_ms,
+            metadata={"source": "memory_pipeline", "already_deleted": existing is not None},
+        )
+        self._journal_memory_record(
+            task_id=task_id,
+            run_id=run_id,
+            kind="memory_item_delete_observed" if existing is not None else "memory_item_deleted",
+            data=tombstone.to_dict(),
+            state_delta={
+                "memory_item": "deleted_existing" if existing is not None else "deleted",
+                "memory_id": memory_id,
+                "reason": reason,
+            },
+        )
+        return tombstone
 
     def _candidate_from_intent(
         self,
@@ -511,6 +542,13 @@ def _ordered_unique(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _existing_tombstone(store: MemoryStore, memory_id: str) -> MemoryTombstone | None:
+    for tombstone in store.tombstones():
+        if tombstone.memory_id == memory_id:
+            return tombstone
+    return None
 
 
 def _hash_text(text: str) -> str:

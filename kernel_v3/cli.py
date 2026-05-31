@@ -851,7 +851,13 @@ def _memory_command(args, journal: JournalStore) -> dict[str, object]:
         result = pipeline.reject_proposal(args.proposal_id, reason=args.reason)
         return {"status": "ok", "result": result.to_dict()}
     if command == "delete":
-        tombstone = store.delete(args.memory_id, reason=args.reason, deleted_by="user")
+        tombstone = pipeline.delete_memory(
+            args.memory_id,
+            reason=args.reason,
+            deleted_by="user",
+            task_id="task-cli-memory",
+            run_id="run-cli-memory",
+        )
         return {"status": "ok", "tombstone": tombstone.to_dict()}
     if command == "export":
         return {"status": "ok", "export": store.export_item(args.memory_id)}
