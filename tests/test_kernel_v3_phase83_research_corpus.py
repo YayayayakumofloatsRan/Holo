@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 from kernel_v3.context import ArtifactStore
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, ResearchCorpusStore, finance_fundamentals_profile
@@ -57,6 +58,48 @@ def test_phase83_corpus_store_records_rebuilds_and_searches_safe_document_metada
     assert reloaded.get(recorded.document_id) is not None
     assert reloaded.search("annual report").documents[0]["document_id"] == recorded.document_id
     assert reloaded.index_documents()[0]["usable_as_primary"] == 1
+
+
+def test_phase83_corpus_store_reobserves_same_document_without_conflict(tmp_path) -> None:
+    log_path = tmp_path / "corpus.jsonl"
+    index_path = tmp_path / "corpus.sqlite"
+    source = _source(
+        "src-sec",
+        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    document = corpus_document_from_retrieval(
+        document=_document(
+            source=source,
+            artifact_id="artifact-sec",
+            payload_hash="hash-sec",
+            preview="AAPL annual report revenue preview.",
+        ),
+        source=source,
+        goal=SearchGoal(
+            goal_id="goal-aapl",
+            query="AAPL revenue",
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        task_id="task-1",
+        run_id="run-1",
+        fetched_at_ms=101,
+        source_assessment=assess_search_source(source, profile=finance_fundamentals_profile()),
+    )
+    store = ResearchCorpusStore(log_path=log_path, index_path=index_path, clock_ms=lambda: 303)
+
+    first = store.record_document(document)
+    second = store.record_document(replace(document, task_id="task-2", run_id="run-2", fetched_at_ms=202))
+
+    assert second == first
+    assert len(store.documents()) == 1
+    assert [event["event_type"] for event in store.audit_records()] == [
+        "corpus_document_recorded",
+        "corpus_document_reobserved",
+    ]
+    reloaded = ResearchCorpusStore(log_path=log_path, index_path=index_path)
+    assert len(reloaded.documents()) == 1
 
 
 def test_phase83_retrieval_indexes_fetched_documents_when_corpus_store_is_configured() -> None:

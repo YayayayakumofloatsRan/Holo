@@ -84,3 +84,48 @@ web corpus before asking for live web access:
 
 This makes the webpage database a first-class retrieval source while preserving
 the existing PolicyGate boundary for future live network providers.
+
+## CLI Workflow
+
+The CLI exposes corpus inspection and corpus-backed retrieval without enabling
+live web access:
+
+```bash
+holo-v3 \
+  --artifact-log .state/kernel_v3/artifacts.jsonl \
+  --corpus-log .state/kernel_v3/corpus.jsonl \
+  --corpus-index .state/kernel_v3/corpus.sqlite \
+  retrieve "AAPL 2024 revenue" \
+  --uri "https://www.sec.gov/Archives/edgar/data/320193/filing.htm" \
+  --title "Apple Form 10-K" \
+  --profile finance_fundamentals \
+  --index-corpus
+```
+
+The command above still uses the bounded fake provider unless a host supplies a
+different provider in code. `--index-corpus` only persists safe corpus metadata;
+the raw body is stored in the artifact log.
+
+The indexed corpus can then be inspected:
+
+```bash
+holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus search "AAPL revenue"
+holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus list --profile finance_fundamentals
+holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus inspect <document_id>
+```
+
+And reused as an offline retrieval source:
+
+```bash
+holo-v3 \
+  --artifact-log .state/kernel_v3/artifacts.jsonl \
+  --corpus-log .state/kernel_v3/corpus.jsonl \
+  retrieve "AAPL 2024 revenue" \
+  --from-corpus \
+  --profile finance_fundamentals
+```
+
+Repeated observations of the same URI and payload hash are idempotent. The
+corpus records a safe re-observation event instead of raising a conflict or
+duplicating the document record. If the referenced artifact blob is missing,
+corpus-backed retrieval fails closed.

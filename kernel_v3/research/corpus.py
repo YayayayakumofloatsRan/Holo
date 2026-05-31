@@ -86,6 +86,23 @@ class ResearchCorpusStore:
         if existing is not None:
             if existing.to_dict() == document.to_dict():
                 return existing
+            if _same_document_identity(existing, document):
+                self._append_event(
+                    "corpus_document_reobserved",
+                    {
+                        "document_id": existing.document_id,
+                        "uri": existing.uri,
+                        "payload_hash": existing.payload_hash,
+                        "artifact_id": existing.artifact_id,
+                        "task_id": document.task_id,
+                        "run_id": document.run_id,
+                        "goal_id": document.goal_id,
+                        "fetched_at_ms": document.fetched_at_ms,
+                        "research_profile_id": document.research_profile_id,
+                        "metadata": _safe_json(document.metadata),
+                    },
+                )
+                return existing
             raise ValueError(f"corpus_document_id_conflict:{document.document_id}")
         self._documents[document.document_id] = document
         self._append_event("corpus_document_recorded", document.to_dict())
@@ -287,6 +304,15 @@ def _research_profile_id(goal: "SearchGoal") -> str | None:
 
 def _assessment(document: CorpusDocument) -> JsonObject:
     return dict(document.source_assessment or {})
+
+
+def _same_document_identity(left: CorpusDocument, right: CorpusDocument) -> bool:
+    return (
+        left.document_id == right.document_id
+        and left.uri == right.uri
+        and left.payload_hash == right.payload_hash
+        and left.artifact_id == right.artifact_id
+    )
 
 
 def _authority_score(document: CorpusDocument) -> float:

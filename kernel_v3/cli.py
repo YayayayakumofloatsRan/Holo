@@ -9,7 +9,7 @@ from pathlib import Path
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.chat import ChatRuntime
-from kernel_v3.context import ContextCompiler, ContextPackCompiler
+from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
@@ -28,7 +28,16 @@ from kernel_v3.processors import (
     run_semantic_scenarios,
     scenario_report_payload,
 )
-from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, ResearchCorpusStore
+from kernel_v3.retrieval import (
+    CorpusFetchProvider,
+    CorpusSearchProvider,
+    FakeFetchProvider,
+    FakeSearchProvider,
+    RetrievalOperator,
+    SearchGoal,
+    SearchSource,
+)
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
@@ -40,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="holo-v3")
     parser.add_argument("--journal", default="kernel_v3/.holo-v3-journal.jsonl")
     parser.add_argument("--index", default="kernel_v3/.holo-v3-journal.sqlite")
+    parser.add_argument("--artifact-log", default=None)
+    parser.add_argument("--corpus-log", default=None)
+    parser.add_argument("--corpus-index", default=None)
     parser.add_argument("--memory-log", default=None)
     parser.add_argument("--memory-index", default=None)
     parser.add_argument("--resident-db", default=None)
@@ -173,6 +185,29 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("query")
     retrieve_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     retrieve_parser.add_argument("--body", default=None)
+    retrieve_parser.add_argument("--uri", default="https://example.test/holo-v3-cli")
+    retrieve_parser.add_argument("--title", default="Holo v3 CLI evidence")
+    retrieve_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    retrieve_parser.add_argument("--max-sources", type=int, default=5)
+    retrieve_parser.add_argument("--max-fetches", type=int, default=3)
+    retrieve_parser.add_argument("--max-spans-per-document", type=int, default=1)
+    retrieve_parser.add_argument("--index-corpus", action="store_true")
+    retrieve_parser.add_argument("--from-corpus", action="store_true")
+
+    corpus_parser = sub.add_parser("corpus")
+    corpus_sub = corpus_parser.add_subparsers(dest="corpus_command", required=True)
+    corpus_list = corpus_sub.add_parser("list")
+    corpus_list.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    corpus_list.add_argument("--limit", type=int, default=20)
+    corpus_search = corpus_sub.add_parser("search")
+    corpus_search.add_argument("query")
+    corpus_search.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    corpus_search.add_argument("--limit", type=int, default=20)
+    corpus_inspect = corpus_sub.add_parser("inspect")
+    corpus_inspect.add_argument("document_id")
+    corpus_audit = corpus_sub.add_parser("audit")
+    corpus_audit.add_argument("--limit", type=int, default=20)
+    corpus_sub.add_parser("index")
 
     trace_parser = sub.add_parser("trace")
     trace_parser.add_argument("task_id")
@@ -363,9 +398,35 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload else 1
 
     if args.command == "retrieve":
-        payload = _run_retrieve(journal, query=args.query, body=args.body, synthesizer_mode=args.synthesizer)
+        payload = _run_retrieve(
+            journal,
+            query=args.query,
+            body=args.body,
+            synthesizer_mode=args.synthesizer,
+            artifact_store=_artifact_store(
+                args,
+                create_default=bool(args.artifact_log or args.index_corpus or args.from_corpus),
+            ),
+            corpus_store=_corpus_store(
+                args,
+                create_default=bool(args.corpus_log or args.index_corpus or args.from_corpus),
+            ),
+            source_uri=args.uri,
+            source_title=args.title,
+            research_profile_id=args.profile,
+            max_sources=args.max_sources,
+            max_fetches=args.max_fetches,
+            max_spans_per_document=args.max_spans_per_document,
+            from_corpus=args.from_corpus,
+            index_corpus=args.index_corpus,
+        )
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
+
+    if args.command == "corpus":
+        payload = _corpus_command(args)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload.get("status") != "failed" else 1
 
     if args.command == "resume":
         result = _loop(journal, answer=f"resumed: {args.text}").resume(args.task_id, user_input=args.text)
@@ -604,6 +665,49 @@ def _memory_store(args, *, create_default: bool) -> MemoryStore | None:
     log_path = Path(memory_log or "kernel_v3/.holo-v3-memory.jsonl")
     index_path = Path(memory_index) if memory_index is not None else log_path.with_suffix(".sqlite")
     return MemoryStore(log_path, index_path=index_path)
+
+
+def _artifact_store(args, *, create_default: bool) -> ArtifactStore | None:
+    artifact_log = getattr(args, "artifact_log", None)
+    if artifact_log is None and not create_default:
+        return None
+    return ArtifactStore(Path(artifact_log or "kernel_v3/.holo-v3-artifacts.jsonl"))
+
+
+def _corpus_store(args, *, create_default: bool) -> ResearchCorpusStore | None:
+    corpus_log = getattr(args, "corpus_log", None)
+    corpus_index = getattr(args, "corpus_index", None)
+    if corpus_log is None and not create_default:
+        return None
+    log_path = Path(corpus_log or "kernel_v3/.holo-v3-corpus.jsonl")
+    index_path = Path(corpus_index) if corpus_index is not None else log_path.with_suffix(".sqlite")
+    return ResearchCorpusStore(log_path=log_path, index_path=index_path)
+
+
+def _corpus_command(args) -> dict[str, object]:
+    store = _corpus_store(args, create_default=True)
+    if store is None:
+        return {"status": "failed", "reason": "corpus_store_not_configured"}
+    command = args.corpus_command
+    if command == "list":
+        documents = store.documents(profile_id=args.profile)[: _positive_limit(args.limit)]
+        return {"status": "ok", "documents": [document.to_dict() for document in documents]}
+    if command == "search":
+        return {
+            "status": "ok",
+            "result": store.search(args.query, profile_id=args.profile, limit=_positive_limit(args.limit)).to_dict(),
+        }
+    if command == "inspect":
+        document = store.get(args.document_id)
+        if document is None:
+            return {"status": "failed", "reason": "corpus_document_not_found", "document_id": args.document_id}
+        return {"status": "ok", "document": document.to_dict()}
+    if command == "audit":
+        records = store.audit_records()[-_positive_limit(args.limit) :]
+        return {"status": "ok", "records": records}
+    if command == "index":
+        return {"status": "ok", "documents": store.index_documents()}
+    return {"status": "failed", "reason": f"unknown_corpus_command:{command}"}
 
 
 def _memory_command(args, journal: JournalStore) -> dict[str, object]:
@@ -889,31 +993,69 @@ def _run_retrieve(
     query: str,
     body: str | None,
     synthesizer_mode: str,
+    artifact_store: ArtifactStore | None = None,
+    corpus_store: ResearchCorpusStore | None = None,
+    source_uri: str = "https://example.test/holo-v3-cli",
+    source_title: str = "Holo v3 CLI evidence",
+    research_profile_id: str | None = None,
+    max_sources: int = 5,
+    max_fetches: int = 3,
+    max_spans_per_document: int = 1,
+    from_corpus: bool = False,
+    index_corpus: bool = False,
 ) -> dict[str, object]:
-    from kernel_v3.context import ArtifactStore
-
-    artifacts = ArtifactStore.in_memory()
-    source = SearchSource(
-        source_id="src-cli-1",
-        uri="https://example.test/holo-v3-cli",
-        title="Holo v3 CLI evidence",
-        snippet=query,
-        provider="fake",
+    artifacts = artifact_store or ArtifactStore.in_memory()
+    goal = SearchGoal(
+        goal_id="goal-cli",
+        query=query,
+        max_sources=_positive_limit(max_sources),
+        max_fetches=_positive_limit(max_fetches),
+        max_spans_per_document=_positive_limit(max_spans_per_document),
+        metadata=_research_metadata(research_profile_id),
     )
-    retrieval_body = body or f"{query} evidence from a fake bounded retrieval provider."
-    operator = RetrievalOperator(
-        search_provider=FakeSearchProvider({query: [source]}),
-        fetch_provider=FakeFetchProvider({source.uri: retrieval_body}),
-    )
+    active_corpus = corpus_store if index_corpus else None
+    if from_corpus:
+        if corpus_store is None:
+            return {"status": "failed", "reason": "corpus_store_not_configured"}
+        operator = RetrievalOperator(
+            search_provider=CorpusSearchProvider(corpus_store),
+            fetch_provider=CorpusFetchProvider(artifacts),
+            corpus_store=active_corpus,
+        )
+    else:
+        source = SearchSource(
+            source_id="src-cli-1",
+            uri=source_uri,
+            title=source_title,
+            snippet=query,
+            provider="fake",
+        )
+        retrieval_body = body or f"{query} evidence from a fake bounded retrieval provider."
+        operator = RetrievalOperator(
+            search_provider=FakeSearchProvider({query: [source]}),
+            fetch_provider=FakeFetchProvider({source.uri: retrieval_body}),
+            corpus_store=active_corpus,
+        )
     report = operator.run(
-        SearchGoal(goal_id="goal-cli", query=query, max_spans_per_document=1),
+        goal,
         journal=journal,
         artifact_store=artifacts,
         task_id="task-cli-retrieve",
         run_id="run-cli-retrieve",
         step_id_prefix="cli-retrieve",
     )
-    payload: dict[str, object] = {"report": report.to_dict()}
+    payload: dict[str, object] = {
+        "status": "ok",
+        "mode": "corpus" if from_corpus else "fake",
+        "network_access": operator.network_access,
+        "report": report.to_dict(),
+    }
+    if corpus_store is not None:
+        payload["corpus_documents"] = [
+            record.data
+            for record in journal.records(task_id="task-cli-retrieve", kind="retrieval_corpus_document")
+            if isinstance(record.data, dict)
+        ]
     if synthesizer_mode == "model":
         evidence = [
             record.data
@@ -937,6 +1079,20 @@ def _run_retrieve(
         )
         payload["synthesis"] = answer.to_dict()
     return payload
+
+
+def _research_metadata(research_profile_id: str | None) -> dict[str, object]:
+    if research_profile_id is None:
+        return {}
+    return {"research_profile": research_profile_id}
+
+
+def _positive_limit(value: int, *, default: int = 20) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
 
 
 def _providers_payload() -> list[dict[str, object]]:
