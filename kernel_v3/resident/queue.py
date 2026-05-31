@@ -952,8 +952,6 @@ def _next_outbox_status(current: str, *, requested: str) -> str | None:
         if current == "answered":
             return "answered"
         return None
-    if current == "delivery_failed" and requested == "ready":
-        return "ready"
     if current in {"ready", "failed", "pending_user_input", "pending_user_input_delivered"} and requested == "delivery_failed":
         return "delivery_failed"
     if current == "pending_user_input" and requested == "pending_user_input_delivered":

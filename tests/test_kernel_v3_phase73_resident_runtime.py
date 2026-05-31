@@ -489,6 +489,26 @@ def test_phase73_delivery_failed_outbox_can_be_retried_explicitly(tmp_path: Path
     assert queue.status().outbox_counts["ready"] == 1
 
 
+def test_phase73_delivery_failed_outbox_cannot_bypass_retry_path(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-delivery-failed-generic",
+        thread_id="resident-thread",
+        text="retry only",
+        status="delivery_failed",
+        task_id="task-delivery",
+        run_id="run-delivery",
+    )
+
+    transitioned, reason = queue.transition_outbox_status(outbox.outbox_id, status="ready")
+
+    assert transitioned is None
+    assert reason == "invalid_outbox_status_transition:delivery_failed->ready"
+    current = queue.outbox_messages()[0]
+    assert current.status == "delivery_failed"
+    assert "retried_at_ms" not in current.payload
+
+
 def test_phase73_ready_outbox_cannot_be_retried(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     outbox = queue.append_outbox(
@@ -905,6 +925,32 @@ def test_phase73_cli_resident_retry_outbox_journals_recovery(tmp_path: Path, cap
     trace = capsys.readouterr().out
     assert "resident_outbox_retried" in trace
     assert outbox.outbox_id in trace
+
+
+def test_phase73_cli_resident_ack_cannot_retry_delivery_failed_outbox(tmp_path: Path, capsys):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+    queue = ResidentQueue(resident_db, clock_ms=_clock())
+    outbox = queue.append_outbox(
+        in_reply_to="in-cli-delivery-ready",
+        thread_id="resident-cli",
+        text="retry delivery",
+        status="delivery_failed",
+        task_id="task-cli-delivery",
+        run_id="run-cli-delivery",
+    )
+    base = ["--journal", str(journal), "--index", str(index), "--resident-db", str(resident_db)]
+
+    status = cli.main([*base, "resident", "ack", outbox.outbox_id, "--status", "ready"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == 1
+    assert payload["reason"] == "invalid_outbox_status_transition:delivery_failed->ready"
+    assert ResidentQueue(resident_db).outbox_messages()[0].status == "delivery_failed"
+    assert cli.main([*base, "resident-trace"]) == 0
+    trace = capsys.readouterr().out
+    assert "resident_outbox_retried" not in trace
 
 
 def test_phase73_cli_resident_inspect_reports_queue_health(tmp_path: Path, capsys):

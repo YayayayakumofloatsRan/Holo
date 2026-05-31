@@ -195,8 +195,10 @@ with a healthy completed queue.
 Failed delivery recovery is an explicit resident operation. `resident
 retry-outbox <outbox_id>` transitions a `delivery_failed` outbox back to
 `ready`, records retry metadata in the payload, and journals
-`resident_outbox_retried`. This keeps transport recovery auditable without
-treating it as a user acknowledgment.
+`resident_outbox_retried`. Generic `resident ack --status ready` is not a retry
+path for failed delivery, so operators cannot bypass the retry audit record by
+using a broad status transition. This keeps transport recovery auditable
+without treating it as a user acknowledgment.
 
 Natural-language turn routing is processor-shaped rather than phrase-table
 driven. A model or fake provider may emit a bounded `chat.route` proposal such
