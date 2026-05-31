@@ -51,6 +51,7 @@ def _provider_issues(
         issues.append({"severity": "error", "code": "missing_search_provider"})
     if not _providers_by_kind(capabilities, "fetch"):
         issues.append({"severity": "error", "code": "missing_fetch_provider"})
+    issues.extend(_composite_provider_issues(raw_capabilities))
     if network_access:
         issues.append({"severity": "attention", "code": "live_retrieval_provider_present"})
     for capability in capabilities:
@@ -63,7 +64,6 @@ def _provider_issues(
                     "provider_kind": str(capability.get("provider_kind") or ""),
                 }
             )
-    issues.extend(_composite_provider_issues(raw_capabilities))
     if research_profile_id and not _has_profile_aware_search_provider(capabilities, research_profile_id):
         issues.append(
             {
@@ -89,6 +89,20 @@ def _composite_provider_issues(capabilities: list[JsonObject]) -> list[JsonObjec
                     "severity": "error",
                     "code": "empty_fallback_search_chain",
                     "provider_id": provider_id,
+                }
+            )
+        if (
+            provider_kind == "search"
+            and provider_id == "fallback_search"
+            and int(diagnostics.get("provider_count") or 0) > 0
+            and int(diagnostics.get("enabled_provider_count") or 0) == 0
+        ):
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": "no_enabled_fallback_search_provider",
+                    "provider_id": provider_id,
+                    "disabled_provider_ids": _string_list(diagnostics.get("disabled_provider_ids")),
                 }
             )
     return issues
@@ -132,6 +146,8 @@ def _recommended_actions(issues: list[JsonObject]) -> list[str]:
         actions.append("explicitly enable retrieval providers before using them")
     if "empty_fallback_search_chain" in codes:
         actions.append("configure at least one concrete fallback search provider")
+    if "no_enabled_fallback_search_provider" in codes:
+        actions.append("enable at least one concrete fallback search provider")
     if "research_profile_not_provider_native" in codes:
         actions.append("prefer a profile-aware corpus or retrieval provider for directed research")
     return _ordered_unique(actions)

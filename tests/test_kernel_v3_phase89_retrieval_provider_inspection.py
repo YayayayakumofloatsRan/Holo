@@ -11,7 +11,9 @@ from kernel_v3.retrieval import (
     FakeFetchProvider,
     FakeSearchProvider,
     FallbackSearchProvider,
+    QueryPlan,
     RetrievalOperator,
+    SearchGoal,
     SearchSource,
     inspect_retrieval_providers,
 )
@@ -71,6 +73,48 @@ def test_phase89_retrieval_provider_inspection_flags_empty_fallback_search_chain
     assert inspection.issues[0]["code"] == "empty_fallback_search_chain"
     assert inspection.issues[0]["provider_id"] == "fallback_search"
     assert "configure at least one concrete fallback search provider" in inspection.recommended_actions
+
+
+def test_phase89_fallback_search_skips_disabled_default_providers() -> None:
+    disabled = _DisabledSearchProvider()
+    enabled_source = SearchSource(
+        source_id="src-enabled",
+        uri="https://example.test/enabled",
+        title="Enabled",
+        snippet="enabled source",
+        provider="enabled_search",
+    )
+    enabled = FakeSearchProvider({"AAPL revenue": [enabled_source]})
+    provider = FallbackSearchProvider([disabled, enabled])
+
+    sources = provider.search(
+        "AAPL revenue",
+        goal=_search_goal(),
+        plan=_query_plan(),
+    )
+    diagnostics = provider.search_diagnostics()
+
+    assert sources == [enabled_source]
+    assert disabled.called is False
+    assert diagnostics["status"] == "ok"
+    assert diagnostics["attempts"][0]["status"] == "skipped"
+    assert diagnostics["attempts"][0]["reason"] == "disabled_by_default"
+    assert diagnostics["selected_provider_id"] == "fake_search"
+
+
+def test_phase89_retrieval_provider_inspection_flags_fallback_chain_without_enabled_provider() -> None:
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([_DisabledSearchProvider()]),
+        fetch_provider=FakeFetchProvider({}),
+    )
+
+    inspection = inspect_retrieval_providers(operator, clock_ms=lambda: 205)
+
+    assert inspection.status == "error"
+    assert inspection.issues[0]["code"] == "no_enabled_fallback_search_provider"
+    assert any(issue["code"] == "retrieval_provider_disabled_by_default" for issue in inspection.issues)
+    assert any(issue["code"] == "no_enabled_fallback_search_provider" for issue in inspection.issues)
+    assert "enable at least one concrete fallback search provider" in inspection.recommended_actions
 
 
 def test_phase89_cli_retrieval_providers_is_read_only(tmp_path: Path, capsys) -> None:
@@ -198,3 +242,32 @@ def _fake_operator() -> RetrievalOperator:
         search_provider=FakeSearchProvider({"inspection": [source]}),
         fetch_provider=FakeFetchProvider({source.uri: "inspection fixture"}),
     )
+
+
+def _search_goal() -> SearchGoal:
+    return SearchGoal(goal_id="goal-disabled-provider", query="AAPL revenue")
+
+
+def _query_plan() -> QueryPlan:
+    return QueryPlan(
+        plan_id="plan-disabled-provider",
+        goal_id="goal-disabled-provider",
+        queries=["AAPL revenue"],
+        max_sources=5,
+        max_fetches=3,
+    )
+
+
+class _DisabledSearchProvider:
+    provider_id = "disabled_search"
+    live_network = True
+    default_enabled = False
+    profile_aware = True
+    supported_research_profiles = [FINANCE_FUNDAMENTALS_PROFILE_ID]
+
+    def __init__(self) -> None:
+        self.called = False
+
+    def search(self, query: str, *, goal, plan):
+        self.called = True
+        raise AssertionError("disabled search provider should not be called")

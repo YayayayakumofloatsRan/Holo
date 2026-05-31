@@ -126,6 +126,10 @@ provider in the chain fails, the journaled retrieval search attempt is marked
 `failed` with `provider_chain_failed` rather than `empty`, so the workloop and
 resident operator can distinguish infrastructure failure from "no matching
 source".
+Providers marked `default_enabled=False` are not called by the fallback chain.
+They remain visible in provider capabilities and diagnostics, and inspection
+reports an error when every concrete fallback provider is disabled. This keeps
+future live search providers opt-in even if they are present in the process.
 
 Provider inspection is also available before a run starts:
 

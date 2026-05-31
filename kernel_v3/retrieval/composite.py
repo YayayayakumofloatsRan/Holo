@@ -13,7 +13,7 @@ class FallbackSearchProvider:
     def __init__(self, providers: list[SearchProvider]) -> None:
         self.providers = list(providers)
         self.live_network = any(bool(getattr(provider, "live_network", False)) for provider in self.providers)
-        self.default_enabled = all(bool(getattr(provider, "default_enabled", True)) for provider in self.providers)
+        self.default_enabled = any(bool(getattr(provider, "default_enabled", True)) for provider in self.providers)
         self.profile_aware = any(bool(getattr(provider, "profile_aware", False)) for provider in self.providers)
         self.supported_research_profiles = _unique(
             [
@@ -25,6 +25,12 @@ class FallbackSearchProvider:
         )
         self.capability_diagnostics = {
             "provider_count": len(self.providers),
+            "enabled_provider_count": sum(1 for provider in self.providers if _provider_enabled(provider)),
+            "disabled_provider_ids": [
+                getattr(provider, "provider_id", provider.__class__.__name__)
+                for provider in self.providers
+                if not _provider_enabled(provider)
+            ],
             "providers": [
                 provider_capability(provider, provider_kind="search").to_dict()
                 for provider in self.providers
@@ -35,6 +41,18 @@ class FallbackSearchProvider:
         last_empty: list[SearchSource] = []
         attempts = []
         for provider in self.providers:
+            provider_id = getattr(provider, "provider_id", provider.__class__.__name__)
+            if not _provider_enabled(provider):
+                attempts.append(
+                    {
+                        "provider_id": provider_id,
+                        "source_count": 0,
+                        "status": "skipped",
+                        "reason": "disabled_by_default",
+                        "diagnostics": _provider_diagnostics(provider),
+                    }
+                )
+                continue
             try:
                 sources = provider.search(query, goal=goal, plan=plan)
                 error = None
@@ -43,7 +61,7 @@ class FallbackSearchProvider:
                 error = type(exc).__name__
             attempts.append(
                 {
-                    "provider_id": getattr(provider, "provider_id", provider.__class__.__name__),
+                    "provider_id": provider_id,
                     "source_count": len(sources),
                     "status": "failed" if error else "ok",
                     "diagnostics": _provider_diagnostics(provider),
@@ -61,7 +79,7 @@ class FallbackSearchProvider:
             last_empty = sources
         self._last_search_diagnostics = {
             "provider_id": self.provider_id,
-            "status": "failed" if _all_attempts_failed(attempts) else "empty",
+            "status": _empty_status(attempts),
             "selected_provider_id": None,
             "attempts": attempts,
         }
@@ -133,5 +151,21 @@ def _provider_diagnostics(provider) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _provider_enabled(provider) -> bool:
+    return bool(getattr(provider, "default_enabled", True))
+
+
 def _all_attempts_failed(attempts: list[dict]) -> bool:
     return bool(attempts) and all(attempt.get("status") == "failed" for attempt in attempts)
+
+
+def _all_attempts_skipped(attempts: list[dict]) -> bool:
+    return bool(attempts) and all(attempt.get("status") == "skipped" for attempt in attempts)
+
+
+def _empty_status(attempts: list[dict]) -> str:
+    if _all_attempts_failed(attempts):
+        return "failed"
+    if _all_attempts_skipped(attempts):
+        return "skipped"
+    return "empty"
