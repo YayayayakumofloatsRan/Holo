@@ -183,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_doctor = resident_sub.add_parser("doctor")
     resident_doctor.add_argument("--sample-limit", type=int, default=5)
     resident_doctor.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    _add_live_retrieval_args(resident_doctor)
     resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
     resident_sub.add_parser("outbox")
@@ -439,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         payload = _resident_command(args, journal)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 0 if payload.get("status") not in {"failed", "blocked"} else 1
+        return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
 
     if args.command == "inspect-run":
         renderer = TraceRenderer(journal)
@@ -807,6 +808,49 @@ def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | 
     return config
 
 
+def _live_retrieval_doctor_config(args) -> JsonObject:
+    if not bool(getattr(args, "live_retrieval", False)):
+        return {"requested": False, "config": None, "issues": [], "operator": None}
+    config = LiveRetrievalConfig.from_env()
+    issues: list[JsonObject] = []
+    operator: RetrievalOperator | None = None
+    if not config.enabled:
+        issues.append(
+            {
+                "component": "retrieval",
+                "severity": "attention",
+                "code": "live_retrieval_not_enabled",
+            }
+        )
+    if not config.search.configured:
+        issues.append(
+            {
+                "component": "retrieval",
+                "severity": "error",
+                "code": "live_search_endpoint_not_configured",
+            }
+        )
+    else:
+        operator = config.build_operator()
+    return {
+        "requested": True,
+        "config": config.safe_diagnostics(),
+        "issues": issues,
+        "operator": operator,
+    }
+
+
+def _live_retrieval_doctor_status(issues: list[JsonObject]) -> str:
+    severities = {str(issue.get("severity") or "attention") for issue in issues}
+    if "error" in severities:
+        return "error"
+    if "warning" in severities:
+        return "warning"
+    if "attention" in severities:
+        return "attention"
+    return "ok"
+
+
 def _artifact_store(args, *, create_default: bool) -> ArtifactStore | None:
     artifact_log = getattr(args, "artifact_log", None)
     if artifact_log is None and not create_default:
@@ -1045,6 +1089,8 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         memory_store = _memory_store(args, create_default=_memory_configured(args))
         corpus_store = _corpus_store(args, create_default=_corpus_configured(args))
         artifact_store = _artifact_store(args, create_default=False)
+        live_retrieval = _live_retrieval_doctor_config(args)
+        live_operator = live_retrieval["operator"]
         report = ResidentDoctor(
             queue=queue,
             scheduler=scheduler,
@@ -1052,13 +1098,26 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             artifact_store=artifact_store,
             memory_store=memory_store,
             corpus_store=corpus_store,
-            retrieval_operator=_inspectable_retrieval_operator(
+            retrieval_operator=live_operator
+            or _inspectable_retrieval_operator(
                 artifact_store=artifact_store or ArtifactStore.in_memory(),
                 corpus_store=corpus_store,
             ),
             research_profile_id=args.research_profile,
         ).inspect(sample_limit=args.sample_limit)
-        return {"status": report.status, "doctor": report.to_dict()}
+        live_status = _live_retrieval_doctor_status(live_retrieval["issues"])
+        return {
+            "status": _combined_health(report.status, live_status),
+            "doctor": report.to_dict(),
+            **(
+                {
+                    "live_retrieval_config": live_retrieval["config"],
+                    "live_retrieval_issues": live_retrieval["issues"],
+                }
+                if live_retrieval["requested"]
+                else {}
+            ),
+        }
     if command == "schedule-add":
         scheduler = ResidentScheduler(queue=queue, journal=journal)
         schedule = scheduler.add_schedule(
@@ -1170,7 +1229,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
 
 
 def _combined_health(*statuses: str) -> str:
-    order = {"ok": 0, "attention": 1, "warning": 2, "error": 3}
+    order = {"ok": 0, "attention": 1, "needs_review": 2, "warning": 3, "error": 4}
     highest = max(statuses, key=lambda status: order.get(status, 1))
     return highest if highest in order else "attention"
 

@@ -256,6 +256,17 @@ sets the host-owned default new-task mode to retrieval. This avoids a resident
 research worker silently answering directly just because fake semantic intake
 does not classify open-ended language as retrieval.
 
+Resident preflight can inspect the same live configuration without making a
+network call:
+
+```bash
+holo-v3 resident doctor --live-retrieval --research-profile finance_fundamentals
+```
+
+The doctor output includes `live_retrieval_config`,
+`live_retrieval_issues`, and normal retrieval provider inspection. Missing live
+env gates or endpoints are reported before a worker is started.
+
 Provider inspection is also available before a run starts:
 
 ```bash

@@ -219,6 +219,83 @@ def test_phase92_cli_resident_live_retrieval_blocks_without_env_gate(tmp_path: P
     assert [record.kind for record in records] == ["resident_inbox_enqueued"]
 
 
+def test_phase92_cli_resident_doctor_reports_live_retrieval_config_gap(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "--resident-db",
+                str(resident_db),
+                "resident",
+                "doctor",
+                "--live-retrieval",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "error"
+    issue_codes = {issue["code"] for issue in payload["live_retrieval_issues"]}
+    assert {"live_retrieval_not_enabled", "live_search_endpoint_not_configured"}.issubset(issue_codes)
+    assert payload["live_retrieval_config"]["enabled"] is False
+    assert payload["doctor"]["retrieval_provider_inspection"] is not None
+    assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
+def test_phase92_cli_resident_doctor_inspects_live_retrieval_without_network(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+    resident_db = tmp_path / "resident.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "--resident-db",
+                str(resident_db),
+                "resident",
+                "doctor",
+                "--live-retrieval",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "attention"
+    assert payload["live_retrieval_issues"] == []
+    assert payload["live_retrieval_config"]["enabled"] is True
+    provider_ids = {
+        item["provider_id"]
+        for item in payload["doctor"]["retrieval_provider_inspection"]["diagnostics"]["provider_chain"]
+    }
+    assert {"live_json_http_search", "live_http_fetch"}.issubset(provider_ids)
+    assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
 def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
     tmp_path: Path,
     capsys,
