@@ -1,4 +1,9 @@
-from kernel_v3.research.contracts import ResearchProfile, SourceAssessment
+from kernel_v3.research.contracts import CorpusDocument, CorpusSearchResult, ResearchProfile, SourceAssessment
+from kernel_v3.research.corpus import (
+    ResearchCorpusStore,
+    corpus_document_from_retrieval,
+    stable_corpus_document_id,
+)
 from kernel_v3.research.profiles import FINANCE_FUNDAMENTALS_PROFILE_ID, finance_fundamentals_profile, profile_by_id
 from kernel_v3.research.source_policy import (
     assess_evidence_source,
@@ -9,12 +14,17 @@ from kernel_v3.research.source_policy import (
 
 __all__ = [
     "FINANCE_FUNDAMENTALS_PROFILE_ID",
+    "CorpusDocument",
+    "CorpusSearchResult",
     "ResearchProfile",
+    "ResearchCorpusStore",
     "SourceAssessment",
     "assess_evidence_source",
     "assess_search_source",
     "classify_source_family",
+    "corpus_document_from_retrieval",
     "finance_fundamentals_profile",
     "profile_by_id",
     "source_authority_summary",
+    "stable_corpus_document_id",
 ]

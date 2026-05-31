@@ -31,3 +31,33 @@ class SourceAssessment(Contract):
     reasons: list[str]
     warnings: list[str]
     metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CorpusDocument(Contract):
+    document_id: str
+    uri: str
+    title: str
+    source_id: str
+    provider: str
+    artifact_id: str
+    payload_hash: str
+    preview: str
+    mime_type: str
+    size_bytes: int
+    fetched_at_ms: int
+    task_id: str | None
+    run_id: str
+    goal_id: str
+    research_profile_id: str | None
+    source_assessment: JsonObject | None
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CorpusSearchResult(Contract):
+    query: str | None
+    profile_id: str | None
+    documents: list[JsonObject]
+    total: int
+    generated_at_ms: int

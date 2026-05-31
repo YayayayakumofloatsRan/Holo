@@ -49,3 +49,23 @@ the retrieval operator:
 
 This prepares the kernel for future live web/database providers without making
 live retrieval the default.
+
+## Research Corpus
+
+`ResearchCorpusStore` is the local webpage/database foundation for later live
+web retrieval. It is optional and disabled unless the host passes a store into
+`RetrievalOperator`.
+
+Rules:
+
+- raw fetched bodies remain in `ArtifactStore`
+- corpus records contain document ids, URIs, artifact refs, payload hashes,
+  previews, source assessment, profile ids, and retrieval provenance
+- corpus writes are append-only and rebuildable into SQLite
+- retrieval journals `retrieval_corpus_document` only when a corpus store is
+  configured
+- default tests use fake providers and do not require network access
+
+This keeps the future live web path auditable: provider output becomes fetched
+artifact, source-assessed evidence, citation, and corpus metadata instead of an
+untracked page blob.

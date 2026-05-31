@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from typing import Protocol
+
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import CandidateAction, JsonObject, Observation, ToolManifest
 from kernel_v3.journal import JournalStore
-from kernel_v3.research import profile_by_id
-from kernel_v3.research.contracts import ResearchProfile, SourceAssessment
+from kernel_v3.research.contracts import CorpusDocument, ResearchProfile, SourceAssessment
+from kernel_v3.research.profiles import profile_by_id
 from kernel_v3.research.source_policy import assess_search_source, source_authority_summary
 from kernel_v3.retrieval.citations import citation_from_evidence
 from kernel_v3.retrieval.contracts import (
@@ -26,6 +28,20 @@ from kernel_v3.retrieval.rank import plan_queries, rank_sources
 from kernel_v3.tools import ToolRegistry, ToolResult
 
 
+class CorpusStore(Protocol):
+    def record_retrieval_document(
+        self,
+        *,
+        document: FetchedDocument,
+        source: SearchSource,
+        goal: SearchGoal,
+        task_id: str | None,
+        run_id: str,
+        source_assessment: SourceAssessment | None = None,
+    ) -> CorpusDocument:
+        ...
+
+
 class RetrievalOperator:
     def __init__(
         self,
@@ -34,11 +50,13 @@ class RetrievalOperator:
         fetch_provider: FetchProvider,
         evaluator: EvidenceEvaluator | None = None,
         preview_chars: int = 160,
+        corpus_store: CorpusStore | None = None,
     ) -> None:
         self.search_provider = search_provider
         self.fetch_provider = fetch_provider
         self.evaluator = evaluator or EvidenceEvaluator()
         self.preview_chars = preview_chars
+        self.corpus_store = corpus_store
         self.network_access = bool(
             getattr(search_provider, "live_network", False)
             or getattr(fetch_provider, "live_network", False)
@@ -186,6 +204,25 @@ class RetrievalOperator:
                 )
                 documents.append((document, response.body))
                 artifact_refs.append(artifact.artifact_id)
+                corpus_document = self._record_corpus_document(
+                    document=document,
+                    source=source,
+                    goal=goal,
+                    task_id=task_id,
+                    run_id=run_id,
+                    source_assessment=source_assessments.get(document.source_id),
+                )
+                if corpus_document is not None:
+                    _append(
+                        journal,
+                        task_id,
+                        run_id,
+                        f"{step_id_prefix}-corpus-{index}",
+                        "retrieval_corpus_document",
+                        corpus_document.to_dict(),
+                        action_ref=action_ref,
+                        artifact_refs=[document.artifact_id],
+                    )
                 attempt = FetchAttempt(
                     fetch_id=fetch_id,
                     goal_id=goal.goal_id,
@@ -348,6 +385,27 @@ class RetrievalOperator:
             artifact_refs=report.artifact_refs,
         )
         return report
+
+    def _record_corpus_document(
+        self,
+        *,
+        document: FetchedDocument,
+        source: SearchSource,
+        goal: SearchGoal,
+        task_id: str | None,
+        run_id: str,
+        source_assessment: SourceAssessment | None,
+    ) -> CorpusDocument | None:
+        if self.corpus_store is None:
+            return None
+        return self.corpus_store.record_retrieval_document(
+            document=document,
+            source=source,
+            goal=goal,
+            task_id=task_id,
+            run_id=run_id,
+            source_assessment=source_assessment,
+        )
 
 
 def register_retrieval_tool(
