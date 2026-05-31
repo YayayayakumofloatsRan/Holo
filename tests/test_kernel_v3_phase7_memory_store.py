@@ -68,6 +68,27 @@ def test_phase7_memory_recall_can_audit_access_and_replay_last_accessed(tmp_path
     assert reloaded.index_items()[0]["last_accessed_ms"] == 1100
 
 
+def test_phase7_memory_export_includes_recall_access_for_that_item_only():
+    store = MemoryStore.in_memory(clock_ms=_sequence_clock([1000, 1100, 1200, 1300]))
+    first = _memory_item(summary="User prefers concise Chinese answers.")
+    second = _memory_item(summary="Project uses kernel-v3 branch for harness work.")
+    store.commit(first)
+    store.commit(second)
+
+    store.recall(query="Chinese", scope={"user_id": "local:user"}, record_access=True)
+
+    first_export = store.export_item(first.memory_id)
+    second_export = store.export_item(second.memory_id)
+
+    first_events = [event["event_type"] for event in first_export["audit_records"]]
+    second_events = [event["event_type"] for event in second_export["audit_records"]]
+    access_event = [event for event in first_export["audit_records"] if event["event_type"] == "memory_items_recalled"][0]
+    assert "memory_items_recalled" in first_events
+    assert "memory_items_recalled" not in second_events
+    assert access_event["payload"]["memory_ids"] == [first.memory_id]
+    assert first_export["item"]["last_accessed_ms"] == 1200
+
+
 def test_phase7_memory_store_rebuilds_index_and_state_from_append_only_log(tmp_path):
     log_path = tmp_path / "memory_log.jsonl"
     index_path = tmp_path / "memory_index.sqlite3"

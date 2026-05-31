@@ -150,6 +150,18 @@ def test_phase75_cli_memory_inspect_reports_store_health(tmp_path: Path, capsys)
     assert payload["inspection"]["samples"]["active_items"][0]["memory_id"] == item.memory_id
 
 
+def test_phase75_memory_inspect_samples_show_last_accessed_timestamp() -> None:
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    item = _memory_item(summary="accessed preference", thread_id="thread-memory-inspect")
+    store.commit(item)
+
+    store.recall(query="accessed", scope={"thread_id": "thread-memory-inspect"}, record_access=True)
+    inspection = store.inspect(sample_limit=1)
+
+    assert inspection.samples["active_items"][0]["memory_id"] == item.memory_id
+    assert inspection.samples["active_items"][0]["last_accessed_ms"] is not None
+
+
 def test_phase75_resident_can_surface_memory_inspection(tmp_path: Path) -> None:
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()

@@ -813,6 +813,7 @@ def _memory_sample(item: MemoryItem) -> JsonObject:
         "state": item.state,
         "scope": dict(item.scope),
         "expires_at_ms": item.expires_at_ms,
+        "last_accessed_ms": item.last_accessed_ms,
     }
 
 
@@ -867,6 +868,9 @@ def _event_mentions_memory(event: JsonObject, memory_id: str) -> bool:
         return True
     proposed = payload.get("proposed_item")
     if isinstance(proposed, dict) and proposed.get("memory_id") == memory_id:
+        return True
+    memory_ids = payload.get("memory_ids")
+    if isinstance(memory_ids, list) and memory_id in {value for value in memory_ids if isinstance(value, str)}:
         return True
     return False
 
