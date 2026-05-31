@@ -129,6 +129,18 @@ class MemoryPipeline:
             raise KeyError(f"unknown proposal_id: {proposal_id}")
         if proposal.approval_policy in {"reject"}:
             raise ValueError(f"proposal_not_approvable:{proposal_id}")
+        if proposal.approval_status == "approved":
+            committed = self._committed_item_for_approved_proposal(
+                proposal,
+                approved_by=approved_by,
+                decided_at_ms=decided_at_ms,
+            )
+            return MemoryPipelineResult(
+                shadow_candidates=[],
+                proposals=[proposal],
+                committed_items=[committed],
+                rejected=[],
+            )
         if proposal.approval_status in {"rejected", "expired"}:
             raise ValueError(f"proposal_already_closed:{proposal_id}")
         timestamp = decided_at_ms if decided_at_ms is not None else self._now_ms()
@@ -166,6 +178,40 @@ class MemoryPipeline:
             committed_items=[committed],
             rejected=[],
         )
+
+    def _committed_item_for_approved_proposal(
+        self,
+        proposal: MemoryProposal,
+        *,
+        approved_by: str,
+        decided_at_ms: int | None,
+    ) -> MemoryItem:
+        memory_id = str(proposal.proposed_item.get("memory_id") or "")
+        existing = self.store.get(memory_id, include_inactive=True) if memory_id else None
+        if existing is not None:
+            return existing
+        if decided_at_ms is not None:
+            timestamp = decided_at_ms
+        elif proposal.decided_at_ms is not None:
+            timestamp = proposal.decided_at_ms
+        else:
+            timestamp = self._now_ms()
+        item = MemoryItem.from_dict(proposal.proposed_item)
+        committed = replace(
+            item,
+            approved_by=approved_by,
+            state="active",
+            updated_at_ms=timestamp,
+        )
+        committed = self.store.commit(committed)
+        self._journal_memory_record(
+            task_id=proposal.source_task_id,
+            run_id=proposal.source_run_id or "",
+            kind="memory_item_committed",
+            data=committed.to_dict(),
+            state_delta={"memory_item": "committed_recovered"},
+        )
+        return committed
 
     def reject_proposal(
         self,

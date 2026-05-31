@@ -111,6 +111,55 @@ def test_phase71_approving_proposal_commits_memory_item():
     assert {"memory_proposal_approved", "memory_item_committed"}.issubset({record.kind for record in journal.records()})
 
 
+def test_phase71_approving_proposal_twice_is_idempotent():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    result = pipeline.propose_from_semantic_intake(
+        _memory_intake("remember my preference: concise Chinese replies"),
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-source",
+    )
+    proposal_id = result.proposals[0].proposal_id
+
+    first = pipeline.approve_proposal(proposal_id, approved_by="user")
+    second = pipeline.approve_proposal(proposal_id, approved_by="user")
+
+    assert first.committed_items[0].memory_id == second.committed_items[0].memory_id
+    assert first.proposals[0].approval_status == "approved"
+    assert second.proposals[0].approval_status == "approved"
+    assert store.recall(query="Chinese", scope={"thread_id": "thread-1"}).total == 1
+    kinds = [record.kind for record in journal.records()]
+    assert kinds.count("memory_proposal_approved") == 1
+    assert kinds.count("memory_item_committed") == 1
+
+
+def test_phase71_approved_proposal_without_item_can_recover_commit():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    result = pipeline.propose_from_semantic_intake(
+        _memory_intake("remember my preference: concise Chinese replies"),
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-source",
+    )
+    proposal_id = result.proposals[0].proposal_id
+    store.decide_proposal(proposal_id, approval_status="approved", decided_at_ms=2_000)
+
+    recovered = pipeline.approve_proposal(proposal_id, approved_by="user")
+
+    assert recovered.proposals[0].approval_status == "approved"
+    assert recovered.committed_items[0].state == "active"
+    assert store.recall(query="Chinese", scope={"thread_id": "thread-1"}).total == 1
+    commit_records = journal.records(kind="memory_item_committed")
+    assert len(commit_records) == 1
+    assert commit_records[0].state_delta["memory_item"] == "committed_recovered"
+
+
 def test_phase71_rejecting_proposal_leaves_no_recallable_memory():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())

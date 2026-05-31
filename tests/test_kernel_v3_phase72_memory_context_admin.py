@@ -92,6 +92,10 @@ def test_phase72_cli_memory_propose_approve_list_delete(tmp_path: Path, capsys):
     approved = json.loads(capsys.readouterr().out)
     memory_id = approved["result"]["committed_items"][0]["memory_id"]
 
+    assert cli.main([*base, "memory", "approve", proposal_id]) == 0
+    approved_again = json.loads(capsys.readouterr().out)
+    assert approved_again["result"]["committed_items"][0]["memory_id"] == memory_id
+
     assert cli.main([*base, "memory", "list", "--thread", "cli-thread"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["result"]["total"] == 1

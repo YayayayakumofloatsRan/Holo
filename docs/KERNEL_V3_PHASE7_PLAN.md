@@ -154,6 +154,11 @@ Implementation note:
   append-only memory log and replays them on reload. Candidate/proposal writes
   are tolerant of duplicate stable ids so resume and resident retries can stay
   idempotent.
+- `MemoryPipeline.approve_proposal()` is idempotent for already approved
+  proposals. A repeated CLI/chat approval returns the existing committed item
+  without appending duplicate approval or commit journal records. If a crash
+  left an approved proposal without its committed item, the second approval
+  repairs the missing commit while preserving the original proposal decision.
 - Secret-like candidate text is rejected before writing a shadow candidate,
   proposal, or committed item. The journal records only hashes, risk flags, and
   redaction metadata for that path.
