@@ -68,6 +68,16 @@ class HttpFetchProvider:
         }
 
     def fetch(self, source: SearchSource) -> FetchResponse:
+        if not self.default_enabled:
+            return FetchResponse(
+                status="failed",
+                body="",
+                diagnostics={
+                    "reason": "disabled_by_default",
+                    "source": "http_fetch",
+                    **_safe_url_diagnostics(source.uri),
+                },
+            )
         validation = _validate_url(
             source.uri,
             allowed_schemes=self.allowed_schemes,
@@ -177,6 +187,15 @@ class JsonHttpSearchProvider:
         }
 
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
+        if not self.default_enabled:
+            self._last_search_diagnostics = {
+                "status": "failed",
+                "reason": "disabled_by_default",
+                "source": "json_http_search",
+                **_safe_url_diagnostics(self.endpoint_url),
+                "query_hash": _text_hash(query),
+            }
+            return []
         url = _url_with_query(self.endpoint_url, self.query_param, query, max_results=goal.max_sources)
         validation = _validate_url(
             url,

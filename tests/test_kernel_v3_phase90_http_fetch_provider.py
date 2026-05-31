@@ -33,7 +33,7 @@ def test_phase90_http_fetch_provider_is_live_and_disabled_by_default() -> None:
 
 def test_phase90_http_fetch_provider_fails_closed_without_allowed_host() -> None:
     transport = _Transport()
-    provider = HttpFetchProvider(transport=transport)
+    provider = HttpFetchProvider(enabled=True, transport=transport)
 
     response = provider.fetch(_source("https://example.com/report"))
 
@@ -43,6 +43,20 @@ def test_phase90_http_fetch_provider_fails_closed_without_allowed_host() -> None
     assert transport.calls == []
     dumped = json.dumps(response.diagnostics, ensure_ascii=False)
     assert "example.com" not in dumped
+    assert "https://example.com/report" not in dumped
+
+
+def test_phase90_http_fetch_provider_fails_closed_when_disabled() -> None:
+    transport = _Transport()
+    provider = HttpFetchProvider(allowed_hosts=["example.com"], transport=transport)
+
+    response = provider.fetch(_source("https://example.com/report"))
+
+    assert response.status == "failed"
+    assert response.body == ""
+    assert response.diagnostics["reason"] == "disabled_by_default"
+    assert transport.calls == []
+    dumped = json.dumps(response.diagnostics, ensure_ascii=False)
     assert "https://example.com/report" not in dumped
 
 
@@ -133,7 +147,7 @@ def test_phase90_json_http_search_provider_is_live_and_disabled_by_default() -> 
 
 def test_phase90_json_http_search_provider_fails_closed_without_allowed_host() -> None:
     transport = _Transport()
-    provider = JsonHttpSearchProvider(endpoint_url="https://api.example.com/search", transport=transport)
+    provider = JsonHttpSearchProvider(endpoint_url="https://api.example.com/search", enabled=True, transport=transport)
 
     sources = provider.search("DeepSeek API docs", goal=_goal(), plan=_plan())
 
@@ -145,6 +159,26 @@ def test_phase90_json_http_search_provider_fails_closed_without_allowed_host() -
     dumped = json.dumps(diagnostics, ensure_ascii=False)
     assert "api.example.com" not in dumped
     assert "https://api.example.com/search" not in dumped
+    assert "DeepSeek API docs" not in dumped
+
+
+def test_phase90_json_http_search_provider_fails_closed_when_disabled() -> None:
+    transport = _Transport()
+    provider = JsonHttpSearchProvider(
+        endpoint_url="https://api.example.com/search",
+        allowed_hosts=["api.example.com"],
+        transport=transport,
+    )
+
+    sources = provider.search("DeepSeek API docs", goal=_goal(), plan=_plan())
+
+    assert sources == []
+    assert transport.calls == []
+    diagnostics = provider.search_diagnostics()
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["reason"] == "disabled_by_default"
+    dumped = json.dumps(diagnostics, ensure_ascii=False)
+    assert "api.example.com" not in dumped
     assert "DeepSeek API docs" not in dumped
 
 

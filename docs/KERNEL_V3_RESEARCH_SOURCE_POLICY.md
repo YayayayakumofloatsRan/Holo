@@ -137,6 +137,8 @@ future live search providers opt-in even if they are present in the process.
 not part of the default CLI or unit-test path:
 
 - it reports `live_network=True` and `default_enabled=False`
+- it returns `disabled_by_default` without calling transport when invoked while
+  disabled
 - it fails closed unless the host explicitly enables it and configures either an
   allowed-host list or `allow_all_hosts=True`
 - it rejects non-allowed URL schemes, URLs without hosts, and URLs with
@@ -157,6 +159,8 @@ HTTP/JSON search APIs. It is infrastructure only; it is not part of the default
 CLI or unit-test path.
 
 - it reports `live_network=True` and `default_enabled=False`
+- it returns `disabled_by_default` without calling transport when invoked while
+  disabled
 - it calls no network path unless the host constructs it and the fallback chain
   considers it enabled
 - it fails closed unless the endpoint host is explicitly allowed or
