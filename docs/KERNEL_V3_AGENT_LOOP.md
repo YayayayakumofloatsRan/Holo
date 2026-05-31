@@ -55,6 +55,14 @@ non-executable and require user confirmation or scope reduction. This keeps
 open-ended semantics in the processor layer and keeps permissions, tools,
 evidence, and termination in the host layer.
 
+When a semantic node needs concrete tool arguments, model mode can place them in
+`metadata.capability_args` keyed by capability name. For example,
+`{"workspace.search":{"query":"overview"},"file.read":{"path":"README.md"}}`
+lets the host run a workspace read without guessing a filename from free text.
+These arguments are still only proposals: the plan records them for audit, the
+recipe turns them into bounded `CandidateAction` payloads, and `PolicyGate` plus
+`ToolRegistry` remain responsible for validation and execution.
+
 ## Plan Review Commands
 
 `ChatRuntime` exposes `/plan` as a host-owned review surface for the latest

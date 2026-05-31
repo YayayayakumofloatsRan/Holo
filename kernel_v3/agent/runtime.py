@@ -121,7 +121,7 @@ class AgentRuntime:
         task_graph_validation = validate_task_graph(task_graph)
         task_plan = build_task_execution_plan(task_graph, task_graph_validation)
         selected_mode = task_plan.selected_mode if mode == "auto" else _select_mode(goal, mode)
-        if selected_mode == "workspace_answer" and not _file_target(goal):
+        if selected_mode == "workspace_answer" and _workspace_target(goal, task_plan) is None:
             selected_mode = "clarify_first"
         recipe = task_recipe(
             selected_mode,
@@ -831,9 +831,10 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
             )
         ]
     if recipe.mode == "workspace_answer":
-        target = _file_target(goal)
+        target = _workspace_target(goal, _task_execution_plan_metadata(recipe))
         if target is None:
             return _recipe_actions(goal, task_recipe("clarify_first"))
+        query, path = target
         return [
             CandidateAction(
                 action_id="act-agent-workspace-search",
@@ -841,7 +842,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
                 name="workspace.search",
                 description="search workspace for requested file",
                 score=1.0,
-                payload={"query": target},
+                payload={"query": query},
                 reasons=["workspace_answer recipe"],
                 side_effect_class="read",
             ),
@@ -851,7 +852,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
                 name="file.read",
                 description="read workspace file for grounded answer",
                 score=1.0,
-                payload={"path": target},
+                payload={"path": path},
                 reasons=["workspace_answer recipe"],
                 side_effect_class="read",
             ),
@@ -930,6 +931,11 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
 
 def _semantic_intake_metadata(recipe: TaskRecipe) -> JsonObject:
     value = recipe.metadata.get("semantic_intake")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _task_execution_plan_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = recipe.metadata.get("task_execution_plan")
     return dict(value) if isinstance(value, dict) else {}
 
 
@@ -1028,6 +1034,67 @@ def _file_target(goal: str) -> str | None:
         lowered = token.lower()
         if lowered.endswith((".md", ".txt", ".py", ".json", ".toml", ".yaml", ".yml")):
             return token
+    return None
+
+
+def _workspace_target(goal: str, plan: TaskExecutionPlan | JsonObject | None) -> tuple[str, str] | None:
+    capability_args = _workspace_capability_args(plan)
+    search_args = _nested_json(capability_args, "workspace.search")
+    read_args = _nested_json(capability_args, "file.read")
+    query = _string_value(search_args.get("query"))
+    path = _string_value(read_args.get("path"))
+    fallback = _file_target(goal)
+    if path is None:
+        path = fallback
+    if query is None:
+        query = path or fallback
+    if path is None:
+        return None
+    return query or path, path
+
+
+def _workspace_capability_args(plan: TaskExecutionPlan | JsonObject | None) -> JsonObject:
+    if plan is None:
+        return {}
+    steps: object
+    if isinstance(plan, TaskExecutionPlan):
+        steps = plan.steps
+    elif isinstance(plan, dict):
+        steps = plan.get("steps")
+    else:
+        return {}
+    if not isinstance(steps, list):
+        return {}
+    for raw_step in steps:
+        if not isinstance(raw_step, dict):
+            continue
+        capabilities = raw_step.get("required_capabilities")
+        if not isinstance(capabilities, list) or not any(
+            capability in {"workspace.search", "file.read", "workspace:read"}
+            for capability in capabilities
+            if isinstance(capability, str)
+        ):
+            continue
+        metadata = raw_step.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        capability_args = metadata.get("capability_args")
+        if isinstance(capability_args, dict):
+            return dict(capability_args)
+        node_metadata = metadata.get("node_metadata")
+        if isinstance(node_metadata, dict) and isinstance(node_metadata.get("capability_args"), dict):
+            return dict(node_metadata["capability_args"])
+    return {}
+
+
+def _nested_json(data: JsonObject, key: str) -> JsonObject:
+    value = data.get(key)
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _string_value(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return None
 
 

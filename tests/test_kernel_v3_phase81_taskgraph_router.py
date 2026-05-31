@@ -209,6 +209,65 @@ def test_phase81_unknown_semantic_label_with_blocked_capability_is_not_executabl
     assert not journal.records(task_id=result.task_id, kind="tool_call")
 
 
+def test_phase81_workspace_capability_args_replace_filename_phrase_parsing():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "project_overview_read",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "project_overview_read",
+                        "text": "inspect the project overview artifact",
+                        "sequence_index": 1,
+                        "required_capabilities": ["workspace.search", "file.read"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "workspace.search": {"query": "overview"},
+                                "file.read": {"path": "docs/overview.holo"},
+                            }
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    runtime = AgentRuntime(
+        journal=journal,
+        processor_fabric=fabric,
+        workspace_files={"docs/overview.holo": "Workspace capability args grounded this answer."},
+    )
+
+    result = runtime.run(
+        "inspect the project overview artifact",
+        mode="auto",
+        semantic_mode="model",
+    )
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    actions = [record.data for record in journal.records(task_id=result.task_id, kind="action")]
+
+    assert result.status == "completed"
+    assert result.mode == "workspace_answer"
+    assert graph["proposal"]["nodes"][0]["kind"] == "project_overview_read"
+    assert plan["steps"][0]["metadata"]["capability_args"]["file.read"]["path"] == "docs/overview.holo"
+    assert [action["name"] for action in actions] == ["workspace.search", "file.read"]
+    assert actions[0]["payload"] == {"query": "overview"}
+    assert actions[1]["payload"] == {"path": "docs/overview.holo"}
+    assert result.final_answer is not None
+    assert "Workspace capability args" in result.final_answer["answer"]
+
+
 def test_phase81_blocked_capability_in_model_graph_cannot_select_tool_recipe():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(

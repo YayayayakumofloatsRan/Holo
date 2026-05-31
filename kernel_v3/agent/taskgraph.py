@@ -177,7 +177,12 @@ def build_task_execution_plan(
                 citations_required=node.citations_required,
                 approval_required=approval_required,
                 status=status,
-                metadata={"node_allowed": node.node_id in allowed},
+                metadata={
+                    "node_allowed": node.node_id in allowed,
+                    "node_metadata": dict(node.metadata),
+                    "capability_args": _capability_args(node.metadata),
+                    "capability_plan": _json_object(node.metadata.get("capability_plan")),
+                },
             )
         )
     plan_approval_required = validation.status != "ready" or any(step.approval_required for step in steps)
@@ -228,6 +233,22 @@ def _sequence_index(intent: JsonObject, *, default: int) -> int:
 
 def _metadata(intent: JsonObject) -> JsonObject:
     value = intent.get("metadata")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _capability_args(metadata: JsonObject) -> JsonObject:
+    value = metadata.get("capability_args")
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for key, payload in value.items():
+        if not isinstance(key, str) or not isinstance(payload, dict):
+            continue
+        result[key] = dict(payload)
+    return result
+
+
+def _json_object(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 

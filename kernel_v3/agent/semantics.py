@@ -151,6 +151,10 @@ def _semantic_prompt(goal: str) -> str:
                 "Use open semantic labels when useful; required_capabilities "
                 "are the executable ABI the host validates."
             ),
+            (
+                "Place structured tool arguments in intent.metadata.capability_args "
+                "keyed by capability name."
+            ),
             "Classify role/persona requests as roleplay scoped to the current thread.",
             "Classify transport/account/client control as transport_control and blocked.",
             "Classify unavailable tool, device, account, or execution requests as blocked capabilities instead of pretending they ran.",
