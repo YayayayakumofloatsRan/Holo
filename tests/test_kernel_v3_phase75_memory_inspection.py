@@ -67,6 +67,37 @@ def test_phase75_memory_store_inspection_samples_are_bounded() -> None:
     assert inspection.samples["sample_limit_clamped"] is True
 
 
+def test_phase75_memory_store_inspection_samples_are_manifests() -> None:
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    marker = "RAW_MEMORY_INSPECTION_MARKER_SHOULD_NOT_APPEAR"
+    summary = ("memory-inspection-summary " * 12) + marker
+    deleted_summary = ("deleted-memory-inspection-summary " * 8) + marker
+    active = _memory_item(summary=summary, thread_id="thread-inspect-manifest")
+    deleted = _memory_item(summary=deleted_summary, thread_id="thread-inspect-manifest")
+    store.commit(active)
+    store.commit(deleted)
+    store.delete(deleted.memory_id, reason="test-delete", deleted_at_ms=1_100)
+    store.record_proposal(_proposal(active, proposal_id="memprop-inspect-manifest"))
+
+    inspection = store.inspect(sample_limit=5, now_ms=1_200)
+    serialized_samples = json.dumps(inspection.samples, ensure_ascii=False)
+    active_sample = next(item for item in inspection.samples["active_items"] if item["memory_id"] == active.memory_id)
+    proposal_sample = inspection.samples["pending_proposals"][0]
+    deleted_sample = inspection.samples["deleted_items"][0]
+
+    assert marker not in serialized_samples
+    assert active_sample["summary_length"] == len(summary)
+    assert active_sample["summary_truncated"] is True
+    assert active_sample["redaction"] == {"summary": "preview_hash_only"}
+    assert "summary" not in active_sample
+    assert proposal_sample["summary_length"] == len(summary)
+    assert proposal_sample["summary_truncated"] is True
+    assert proposal_sample["redaction"] == {"summary": "preview_hash_only"}
+    assert "summary" not in proposal_sample
+    assert deleted_sample["summary_length"] == len(deleted_summary)
+    assert deleted_sample["summary_truncated"] is True
+
+
 def test_phase75_memory_inspect_checks_provenance_and_artifact_refs() -> None:
     journal = JournalStore.in_memory()
     source = journal.append(

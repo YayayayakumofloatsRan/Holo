@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 MEMORY_INSPECTION_SAMPLE_LIMIT_CAP = 20
+MEMORY_INSPECTION_TEXT_PREVIEW_CHARS = 160
 MEMORY_RECALL_LIMIT_CAP = 50
 
 
@@ -833,23 +834,26 @@ def _memory_sample(item: MemoryItem) -> JsonObject:
     return {
         "memory_id": item.memory_id,
         "kind": item.kind,
-        "summary": item.summary,
         "privacy_class": item.privacy_class,
         "state": item.state,
         "scope": dict(item.scope),
         "expires_at_ms": item.expires_at_ms,
         "last_accessed_ms": item.last_accessed_ms,
+        **_text_projection(prefix="summary", text=item.summary),
+        "redaction": {"summary": "preview_hash_only"},
     }
 
 
 def _proposal_sample(proposal: MemoryProposal) -> JsonObject:
+    summary = str(proposal.proposed_item.get("summary") or "")
     return {
         "proposal_id": proposal.proposal_id,
         "approval_policy": proposal.approval_policy,
         "approval_status": proposal.approval_status,
         "source_thread_id": proposal.source_thread_id,
-        "summary": str(proposal.proposed_item.get("summary") or ""),
         "risk_flags": list(proposal.risk_flags),
+        **_text_projection(prefix="summary", text=summary),
+        "redaction": {"summary": "preview_hash_only"},
     }
 
 
@@ -896,6 +900,15 @@ def _take_sorted_items(items: list[MemoryItem], limit: int) -> list[MemoryItem]:
 
 def _take_sorted_proposals(items: list[MemoryProposal], limit: int) -> list[MemoryProposal]:
     return sorted(items, key=lambda item: (item.created_at_ms, item.proposal_id))[: max(0, limit)]
+
+
+def _text_projection(*, prefix: str, text: str) -> JsonObject:
+    return {
+        f"{prefix}_preview": text[:MEMORY_INSPECTION_TEXT_PREVIEW_CHARS],
+        f"{prefix}_length": len(text),
+        f"{prefix}_hash": _hash(text),
+        f"{prefix}_truncated": len(text) > MEMORY_INSPECTION_TEXT_PREVIEW_CHARS,
+    }
 
 
 def _unique(values: list[str]) -> list[str]:

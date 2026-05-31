@@ -80,6 +80,9 @@ metadata. Shadow candidates, proposals, committed items, and tombstones do not
 duplicate full candidate text, proposed item bodies, or deletion reasons into
 the main Journal. Approval is still host controlled, and secret-like candidates
 are rejected before a shadow candidate or proposal is recorded.
+`MemoryStore.inspect()` follows the same operator-facing rule: active, expired,
+deleted, and pending proposal samples expose ids, state, scope, and
+summary preview/hash metadata rather than full summaries.
 
 ## Plan Review Commands
 
