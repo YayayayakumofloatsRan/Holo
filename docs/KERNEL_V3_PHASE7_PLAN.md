@@ -204,6 +204,10 @@ Implementation note:
   is absent, existing context sections are unchanged. When present, the compiler
   adds a separate `durable_memory` section with compact summaries, ids,
   provenance refs, artifact refs, confidence, privacy class, and payload hashes.
+- Durable memory recall is project-scoped when the project profile has a real
+  `project_id`, so approved same-project memory can flow across threads. When
+  no real project profile is available, recall falls back to the current
+  `thread_id` to preserve the narrower pre-Phase7 behavior.
 - The older `memory_refs` section remains journal-derived episodic evidence and
   is not overloaded with committed durable memory.
 - `AgentRuntime` passes its optional `MemoryStore` into the context compiler, so

@@ -105,6 +105,7 @@ class ContextPackCompiler:
             durable_memory = _recall_durable_memory(
                 self.durable_memory_store,
                 task=task,
+                project_id=self.project_profile.project_id,
                 limit=self.durable_memory_limit,
                 include_sensitive=self.include_sensitive_memory,
                 context_id=f"ctx-{task.task_id}-{task.run_id}-{target_step}",
@@ -531,6 +532,7 @@ def _recall_durable_memory(
     store: MemoryStore | None,
     *,
     task: TaskState,
+    project_id: str,
     limit: int,
     include_sensitive: bool,
     context_id: str,
@@ -538,9 +540,10 @@ def _recall_durable_memory(
 ) -> JsonObject:
     if store is None or limit <= 0:
         return {"query": None, "scope": {"thread_id": task.thread_id}, "items": [], "total": 0, "filtered": {}}
+    scope = _durable_memory_recall_scope(task=task, project_id=project_id)
     return store.recall(
         query=None,
-        scope={"thread_id": task.thread_id},
+        scope=scope,
         include_sensitive=include_sensitive,
         limit=limit,
         record_access=True,
@@ -553,6 +556,12 @@ def _recall_durable_memory(
             "step_id": step_id,
         },
     ).to_dict()
+
+
+def _durable_memory_recall_scope(*, task: TaskState, project_id: str) -> JsonObject:
+    if project_id and project_id != "local":
+        return {"project_id": project_id}
+    return {"thread_id": task.thread_id}
 
 
 def _compact_durable_memory_item(item: JsonObject) -> JsonObject:
