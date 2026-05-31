@@ -111,6 +111,44 @@ def test_phase71_approving_proposal_commits_memory_item():
     assert {"memory_proposal_approved", "memory_item_committed"}.issubset({record.kind for record in journal.records()})
 
 
+def test_phase71_memory_pipeline_journals_manifests_not_raw_memory_text():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    marker = "RAW_MEMORY_JOURNAL_MARKER_SHOULD_NOT_APPEAR"
+    text = ("remember my preference: concise Chinese replies " * 8) + marker
+    delete_reason = ("operator cleanup after review " * 8) + marker
+    result = pipeline.propose_from_semantic_intake(
+        _memory_intake(text),
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-source",
+    )
+    approved = pipeline.approve_proposal(result.proposals[0].proposal_id, approved_by="user")
+
+    pipeline.delete_memory(approved.committed_items[0].memory_id, reason=delete_reason, task_id="task-1", run_id="run-1")
+
+    dumped = json.dumps([record.to_dict() for record in journal.records()], ensure_ascii=False)
+    candidate = journal.records(kind="memory_shadow_candidate")[-1].data
+    proposal = journal.records(kind="memory_proposal")[-1].data
+    committed = journal.records(kind="memory_item_committed")[-1].data
+    deleted = journal.records(kind="memory_item_deleted")[-1].data
+
+    assert marker not in dumped
+    assert candidate["candidate_text_length"] == len(text)
+    assert candidate["redaction"] == {"candidate_text": "preview_hash_only", "metadata": "manifest_only"}
+    assert "candidate_text" not in candidate
+    assert proposal["proposed_item"]["body_length"] == len(text)
+    assert proposal["redaction"]["proposed_item"] == "manifest_only"
+    assert "body" not in proposal["proposed_item"]
+    assert committed["body_length"] == len(text)
+    assert committed["redaction"]["body"] == "preview_hash_only"
+    assert "body" not in committed
+    assert deleted["reason_length"] == len(delete_reason)
+    assert deleted["redaction"] == {"reason": "preview_hash_only", "metadata": "manifest_only"}
+
+
 def test_phase71_approving_proposal_twice_is_idempotent():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory(clock_ms=_clock())

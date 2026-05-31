@@ -69,6 +69,18 @@ These arguments are still only proposals: the plan records them for audit, the
 recipe turns them into bounded `CandidateAction` payloads, and `PolicyGate` plus
 `ToolRegistry` remain responsible for validation and execution.
 
+## Durable Memory Boundary
+
+Durable memory uses a split audit model. `MemoryStore` is the memory subsystem's
+append-only fact log and can retain the approved memory item/proposal payloads
+needed for replay and export. The task Journal remains the agent run audit
+surface, so `MemoryPipeline` journals only memory manifests: ids, scope,
+state, provenance refs, risk flags, preview/hash/length fields, and redaction
+metadata. Shadow candidates, proposals, committed items, and tombstones do not
+duplicate full candidate text, proposed item bodies, or deletion reasons into
+the main Journal. Approval is still host controlled, and secret-like candidates
+are rejected before a shadow candidate or proposal is recorded.
+
 ## Plan Review Commands
 
 `ChatRuntime` exposes `/plan` as a host-owned review surface for the latest

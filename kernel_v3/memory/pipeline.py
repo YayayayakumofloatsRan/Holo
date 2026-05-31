@@ -10,6 +10,12 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory.contracts import MemoryItem, MemoryProposal, MemoryTombstone, ShadowCandidate
 from kernel_v3.memory.privacy import contains_secret_like_content, validate_memory_item
+from kernel_v3.memory.projection import (
+    memory_item_event,
+    memory_proposal_event,
+    memory_tombstone_event,
+    shadow_candidate_event,
+)
 from kernel_v3.memory.store import MemoryStore, stable_candidate_id, stable_memory_id, stable_proposal_id
 
 if TYPE_CHECKING:
@@ -85,7 +91,7 @@ class MemoryPipeline:
                 task_id=task_id,
                 run_id=run_id,
                 kind="memory_shadow_candidate",
-                data=candidate.to_dict(),
+                data=shadow_candidate_event(candidate),
                 state_delta={"memory_candidate": candidate.status},
             )
             candidates.append(candidate)
@@ -102,7 +108,7 @@ class MemoryPipeline:
                     task_id=task_id,
                     run_id=run_id,
                     kind="memory_proposal",
-                    data=proposal_or_rejection.to_dict(),
+                    data=memory_proposal_event(proposal_or_rejection),
                     state_delta={"memory_proposal": proposal_or_rejection.approval_status},
                 )
                 proposals.append(proposal_or_rejection)
@@ -162,14 +168,14 @@ class MemoryPipeline:
             task_id=task_id or decided.source_task_id,
             run_id=run_id or decided.source_run_id or "",
             kind="memory_proposal_approved",
-            data=decided.to_dict(),
+            data=memory_proposal_event(decided),
             state_delta={"memory_proposal": "approved"},
         )
         self._journal_memory_record(
             task_id=task_id or decided.source_task_id,
             run_id=run_id or decided.source_run_id or "",
             kind="memory_item_committed",
-            data=committed.to_dict(),
+            data=memory_item_event(committed),
             state_delta={"memory_item": "committed"},
         )
         return MemoryPipelineResult(
@@ -208,7 +214,7 @@ class MemoryPipeline:
             task_id=proposal.source_task_id,
             run_id=proposal.source_run_id or "",
             kind="memory_item_committed",
-            data=committed.to_dict(),
+            data=memory_item_event(committed),
             state_delta={"memory_item": "committed_recovered"},
         )
         return committed
@@ -244,8 +250,8 @@ class MemoryPipeline:
             task_id=task_id or decided.source_task_id,
             run_id=run_id or decided.source_run_id or "",
             kind="memory_proposal_rejected",
-            data=decided.to_dict(),
-            state_delta={"memory_proposal": "rejected", "reason": reason},
+            data=memory_proposal_event(decided),
+            state_delta={"memory_proposal": "rejected", "reason_hash": _hash_text(reason)},
         )
         return MemoryPipelineResult(
             shadow_candidates=[],
@@ -276,11 +282,11 @@ class MemoryPipeline:
             task_id=task_id,
             run_id=run_id,
             kind="memory_item_delete_observed" if existing is not None else "memory_item_deleted",
-            data=tombstone.to_dict(),
+            data=memory_tombstone_event(tombstone),
             state_delta={
                 "memory_item": "deleted_existing" if existing is not None else "deleted",
                 "memory_id": memory_id,
-                "reason": reason,
+                "reason_hash": _hash_text(reason),
             },
         )
         return tombstone
