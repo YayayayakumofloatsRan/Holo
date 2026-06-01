@@ -22,6 +22,22 @@ One agent task runs through this chain:
 retrieval and workspace answering are configured by recipes, registries, and
 operators outside the controller.
 
+## Adaptive Processor Generation
+
+Live processor calls pass through a host-owned generation policy before the
+request reaches a provider. In `--generation-mode auto`, the policy derives a
+small `generation_policy` diagnostic from processor task type, prompt length,
+and `--latency-target fast|balanced|quality|thorough`, then adjusts thinking,
+reasoning effort, temperature, and timeout for that call. Short routing and
+planning packets stay fast by default; larger semantic/evaluation/synthesis
+packets can receive stronger reasoning. Explicit controls such as
+`--generation-mode manual`, `--thinking enabled|disabled`, or `--temperature`
+remain user overrides.
+
+This is not an intent table. It does not classify user phrases. It only tunes
+provider packet shape after the host has already chosen the processor task and
+compiled the prompt.
+
 Tool execution is bound to the policy decision for the exact action. A
 `PolicyDecision` with `allowed=True` cannot be reused for a different
 `action_id`; `ToolRegistry` blocks that as `policy_decision_action_mismatch`

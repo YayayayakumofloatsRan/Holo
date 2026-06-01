@@ -827,6 +827,125 @@ def test_phase5_deepseek_provider_payload_uses_component_route_tuning(monkeypatc
     assert "temperature" not in provider.payload
 
 
+def test_phase5_adaptive_generation_raises_reasoning_for_large_quality_planner(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    class CapturingDeepSeekProvider(DeepSeekProvider):
+        def __init__(self):
+            super().__init__(enabled=True)
+            self.payload = None
+
+        def _post_json(self, url, api_key, payload, timeout_seconds):
+            self.payload = dict(payload)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action_id": "act-adaptive",
+                                    "kind": "respond",
+                                    "name": None,
+                                    "description": "adaptive response",
+                                    "payload": {"text": "ok"},
+                                    "score": 0.9,
+                                    "reasons": ["adaptive generation"],
+                                    "side_effect_class": "none",
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    provider = CapturingDeepSeekProvider()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=deepseek_v4_router(
+            profile="balanced",
+            max_output_tokens="provider",
+            generation_mode="auto",
+            latency_target="quality",
+        ),
+    )
+
+    outcome = fabric.run_json(
+        task_type="planner.propose",
+        run_id="run-adaptive-quality",
+        context_id="ctx-adaptive-quality",
+        prompt="large planner context\n" + ("x" * 25_000),
+        schema=PLANNER_SCHEMA,
+    )
+
+    assert outcome.result.status == "ok"
+    assert outcome.request.parameters["generation_policy"]["mode"] == "auto"
+    assert outcome.request.parameters["generation_policy"]["assessment"]["complexity_band"] == "large"
+    assert outcome.request.parameters["thinking"] == "enabled"
+    assert outcome.request.parameters["reasoning_effort"] == "high"
+    assert outcome.request.parameters["timeout_seconds"] == 90
+    assert provider.payload["thinking"] == {"type": "enabled"}
+    assert provider.payload["reasoning_effort"] == "high"
+    assert provider.payload["temperature"] == 0.0
+    assert "max_tokens" not in provider.payload
+
+
+def test_phase5_adaptive_generation_respects_explicit_thinking_override(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    class CapturingDeepSeekProvider(DeepSeekProvider):
+        def __init__(self):
+            super().__init__(enabled=True)
+            self.payload = None
+
+        def _post_json(self, url, api_key, payload, timeout_seconds):
+            self.payload = dict(payload)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "status": "continue",
+                                    "answer": None,
+                                    "stop_reason": None,
+                                    "missing_evidence": ["evidence"],
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    provider = CapturingDeepSeekProvider()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=deepseek_v4_router(
+            profile="quality",
+            thinking="disabled",
+            generation_mode="auto",
+            latency_target="thorough",
+        ),
+    )
+
+    outcome = fabric.run_json(
+        task_type="evaluator.assess",
+        run_id="run-adaptive-locked",
+        context_id="ctx-adaptive-locked",
+        prompt="evaluator context",
+        schema=EVALUATOR_SCHEMA,
+    )
+
+    assert outcome.result.status == "ok"
+    assert outcome.request.parameters["generation_policy"]["thinking_locked"] is True
+    assert outcome.request.parameters["thinking"] == "disabled"
+    assert "reasoning_effort" not in outcome.request.parameters
+    assert outcome.request.parameters["timeout_seconds"] == 120
+    assert provider.payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in provider.payload
+
+
 def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets(monkeypatch):
     secret = "packet-preview-secret"
     monkeypatch.setenv("DEEPSEEK_API_KEY", secret)

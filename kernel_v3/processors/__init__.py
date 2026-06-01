@@ -17,6 +17,7 @@ from kernel_v3.processors.contracts import (
 )
 from kernel_v3.processors.adapters import ModelEvaluator, ModelPlanner, Synthesizer
 from kernel_v3.processors.fabric import ProcessorFabric
+from kernel_v3.processors.generation import LATENCY_TARGETS, adapt_generation_parameters
 from kernel_v3.processors.providers import (
     DeepSeekProvider,
     FakeJsonProvider,
@@ -56,6 +57,7 @@ __all__ = [
     "FakeTimeoutProvider",
     "FinalAnswer",
     "JsonSchema",
+    "LATENCY_TARGETS",
     "ModelEvaluator",
     "ModelPlanner",
     "OpenAICompatibleProvider",
@@ -69,6 +71,7 @@ __all__ = [
     "ProcessorRouter",
     "SEMANTIC_INTAKE_PROMPT_CONTRACT",
     "SEMANTIC_INTAKE_SCHEMA",
+    "adapt_generation_parameters",
     "deepseek_v4_router",
     "deepseek_v4_routes",
     "SYNTHESIZER_PROMPT_CONTRACT",

@@ -31,6 +31,7 @@ from kernel_v3.processors import (
     ProcessorFabric,
     ProcessorRouter,
     Synthesizer,
+    adapt_generation_parameters,
     deepseek_v4_router,
     run_semantic_scenarios,
     scenario_report_payload,
@@ -98,6 +99,18 @@ def _add_context_budget_args(command_parser: argparse.ArgumentParser, *, default
 
 
 def _add_generation_args(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--generation-mode",
+        choices=["auto", "manual"],
+        default="auto",
+        help="auto lets the host adapt thinking/reasoning/temperature/timeout per processor call; manual preserves route/user settings.",
+    )
+    command_parser.add_argument(
+        "--latency-target",
+        choices=["fast", "balanced", "quality", "thorough"],
+        default="balanced",
+        help="Adaptive generation target used when --generation-mode auto.",
+    )
     command_parser.add_argument(
         "--max-output-tokens",
         default="provider",
@@ -381,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
     model_smoke.add_argument("--model", default=None)
     model_smoke.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     model_smoke.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_generation_args(model_smoke)
 
     model_scenarios = sub.add_parser("model-scenarios")
     model_scenarios.add_argument("--provider", choices=["deepseek", "openai_compatible"], required=True)
@@ -388,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     model_scenarios.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     model_scenarios.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     model_scenarios.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_generation_args(model_scenarios)
 
     model_packet = sub.add_parser("model-packet")
     model_packet.add_argument("--provider", choices=["deepseek", "openai_compatible"], default="deepseek")
@@ -403,8 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     model_packet.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     model_packet.add_argument("--timeout-seconds", type=int, default=None)
     model_packet.add_argument("--max-tokens", type=int, default=None)
-    model_packet.add_argument("--max-output-tokens", default="auto")
-    model_packet.add_argument("--temperature", type=float, default=None)
+    _add_generation_args(model_packet)
     model_packet.add_argument("--show-prompt", action="store_true")
 
     journal_parser = sub.add_parser("journal")
@@ -436,6 +450,8 @@ def main(argv: list[str] | None = None) -> int:
             reasoning_effort=args.reasoning_effort,
             max_output_tokens=args.max_output_tokens,
             temperature=args.temperature,
+            generation_mode=args.generation_mode,
+            latency_target=args.latency_target,
             response_language=_response_language_for_args(args),
             artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
@@ -494,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
             reasoning_effort=args.reasoning_effort,
             max_output_tokens=args.max_output_tokens,
             temperature=args.temperature,
+            generation_mode=args.generation_mode,
+            latency_target=args.latency_target,
             response_language=_response_language_for_args(args),
             planner_mode=_processor_mode(args, "planner"),
             evaluator_mode=_processor_mode(args, "evaluator"),
@@ -701,6 +719,10 @@ def main(argv: list[str] | None = None) -> int:
             profile="fast",
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            max_output_tokens=args.max_output_tokens,
+            temperature=args.temperature,
+            generation_mode=args.generation_mode,
+            latency_target=args.latency_target,
         )
         outcome = fabric.run_json(
             task_type="planner.propose",
@@ -726,6 +748,10 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            max_output_tokens=args.max_output_tokens,
+            temperature=args.temperature,
+            generation_mode=args.generation_mode,
+            latency_target=args.latency_target,
         )
         results = run_semantic_scenarios(
             fabric,
@@ -790,6 +816,8 @@ def _agent_runtime(
     reasoning_effort: str = "high",
     max_output_tokens: object = "auto",
     temperature: float | None = None,
+    generation_mode: str = "auto",
+    latency_target: str = "balanced",
     response_language: str | None = None,
     artifact_store: ArtifactStore | None = None,
     memory_store: MemoryStore | None = None,
@@ -806,6 +834,8 @@ def _agent_runtime(
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
             temperature=temperature,
+            generation_mode=generation_mode,
+            latency_target=latency_target,
         )
         if live_model
         else None
@@ -836,6 +866,8 @@ def _chat_runtime(
     reasoning_effort: str = "high",
     max_output_tokens: object = "auto",
     temperature: float | None = None,
+    generation_mode: str = "auto",
+    latency_target: str = "balanced",
     response_language: str | None = None,
     planner_mode: str = "fake",
     evaluator_mode: str = "fake",
@@ -856,6 +888,8 @@ def _chat_runtime(
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
             temperature=temperature,
+            generation_mode=generation_mode,
+            latency_target=latency_target,
             response_language=response_language,
             artifact_store=artifact_store,
             memory_store=memory_store,
@@ -1387,6 +1421,8 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 reasoning_effort=getattr(args, "reasoning_effort", "high"),
                 max_output_tokens=getattr(args, "max_output_tokens", "provider"),
                 temperature=getattr(args, "temperature", None),
+                generation_mode=getattr(args, "generation_mode", "auto"),
+                latency_target=getattr(args, "latency_target", "balanced"),
                 response_language=_response_language_for_args(args),
                 planner_mode=_processor_mode(args, "planner"),
                 evaluator_mode=_processor_mode(args, "evaluator"),
@@ -1560,6 +1596,8 @@ def _live_processor_fabric(
     reasoning_effort: str = "high",
     max_output_tokens: object = "auto",
     temperature: float | None = None,
+    generation_mode: str = "auto",
+    latency_target: str = "balanced",
 ) -> ProcessorFabric:
     providers = {
         "deepseek": DeepSeekProvider(enabled=True, model=model),
@@ -1572,6 +1610,8 @@ def _live_processor_fabric(
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
             temperature=temperature,
+            generation_mode=generation_mode,
+            latency_target=latency_target,
         )
     else:
         router = ProcessorRouter(default_provider=provider, default_model=providers[provider].model)
@@ -1592,6 +1632,8 @@ def _model_packet_payload(args) -> dict[str, object]:
             reasoning_effort=getattr(args, "reasoning_effort", "high"),
             max_output_tokens=getattr(args, "max_output_tokens", "auto"),
             temperature=getattr(args, "temperature", None),
+            generation_mode=getattr(args, "generation_mode", "auto"),
+            latency_target=getattr(args, "latency_target", "balanced"),
         )
         provider = DeepSeekProvider(enabled=True, model=getattr(args, "model", None))
     else:
@@ -1605,12 +1647,18 @@ def _model_packet_payload(args) -> dict[str, object]:
         timeout_seconds=getattr(args, "timeout_seconds", None),
     )
     parameters: JsonObject = dict(route.parameters)
+    parameters.setdefault("generation_mode", getattr(args, "generation_mode", "auto"))
+    parameters.setdefault("latency_target", getattr(args, "latency_target", "balanced"))
+    if thinking is not None:
+        parameters["thinking"] = thinking
+        parameters["thinking_locked"] = True
     max_tokens = getattr(args, "max_tokens", None)
     if max_tokens is not None:
         parameters["max_tokens"] = max_tokens
     temperature = getattr(args, "temperature", None)
     if temperature is not None:
         parameters["temperature"] = temperature
+        parameters["temperature_locked"] = True
     parameters.update(
         {
             "task_type": task_type,
@@ -1619,11 +1667,16 @@ def _model_packet_payload(args) -> dict[str, object]:
             "timeout_seconds": route.timeout_seconds,
         }
     )
+    prompt = _packet_prompt(task_type, str(getattr(args, "goal", "")))
+    parameters = adapt_generation_parameters(task_type=task_type, prompt=prompt, parameters=parameters)
+    parameters["task_type"] = task_type
+    parameters["provider"] = route.provider
+    parameters["model"] = route.model
     request = ProcessorRequest(
         request_id="proc-packet-preview",
         run_id="run-packet-preview",
         processor=task_type,
-        prompt=_packet_prompt(task_type, str(getattr(args, "goal", ""))),
+        prompt=prompt,
         context_id="ctx-packet-preview",
         parameters=parameters,
     )
@@ -1967,6 +2020,8 @@ def _providers_payload() -> list[dict[str, object]]:
             },
             "thinking": {"default": "auto", "choices": ["auto", "enabled", "disabled"]},
             "reasoning_effort": {"default": "high", "choices": ["low", "medium", "high", "max"]},
+            "generation_mode": {"default": "auto", "choices": ["auto", "manual"]},
+            "latency_target": {"default": "balanced", "choices": ["fast", "balanced", "quality", "thorough"]},
             "packet_inspection": "holo-v3 model-packet --provider deepseek --task-type planner.propose --goal '<goal>'",
         },
         {

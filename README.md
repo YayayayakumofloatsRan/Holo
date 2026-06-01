@@ -114,14 +114,18 @@ controls. `--context-profile large` is the default for live interactive runs;
 model can handle them. `--max-output-tokens provider` omits the provider
 `max_tokens` field, while `auto` uses Holo's route defaults and an integer sets
 an explicit output cap.
+Generation defaults to host-adaptive mode: `--generation-mode auto` adjusts
+thinking, reasoning effort, temperature, and timeout from the processor task,
+prompt size, and `--latency-target fast|balanced|quality|thorough`. Use
+`--generation-mode manual` or explicit `--thinking/--temperature` overrides
+when a run needs fixed generation behavior.
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "inspect a large workspace file" \
   --online \
   --context-profile huge \
+  --latency-target thorough \
   --max-output-tokens provider \
-  --thinking enabled \
-  --reasoning-effort max \
   --temperature 0.2
 ```
 

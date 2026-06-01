@@ -9,6 +9,7 @@ from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.processors.contracts import JsonSchema, ProcessorOutcome, ProcessorProvider
+from kernel_v3.processors.generation import adapt_generation_parameters
 from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.routing import ProcessorRouter
 from kernel_v3.processors.usage import coerce_usage
@@ -243,6 +244,10 @@ class ProcessorFabric:
             "model": route_model,
             "timeout_seconds": timeout_seconds,
         }
+        merged = adapt_generation_parameters(task_type=task_type, prompt=prompt, parameters=merged)
+        merged["task_type"] = task_type
+        merged["provider"] = route_provider
+        merged["model"] = route_model
         return ProcessorRequest(
             request_id=f"proc-{run_id}-{self._counter}",
             run_id=run_id,
