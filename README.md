@@ -15,7 +15,8 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/loop.py`: generic `LoopControllerV3`; it must stay
   tool-name-agnostic.
 - `kernel_v3/agent/`: single-agent runtime, task recipes, semantic task graph,
-  workloop termination, and final answer/failure report assembly.
+  semantic state profiles, workloop termination, and final answer/failure
+  report assembly.
 - `kernel_v3/capabilities.py`: host-visible capability/state catalog spanning
   conversation, roleplay, document/report work, workspace, retrieval, web
   research, finance, memory, artifact, data, code, project, resident,
@@ -79,6 +80,13 @@ Kernel v3 currently contains the infrastructure for:
 - planner-visible semantic state axes beyond workspace, including autonomy,
   world model, resource kind, action phase, temporal status, source authority,
   identity boundary, communication channel, and risk;
+- per-intent semantic state profiles in the task graph. Each node now carries
+  host-visible `domain`, `activity`, `resource`, `execution_surface`,
+  `permission_state`, `route_class`, capability families/statuses, evidence
+  posture, output contract, autonomy, and risk posture, so broad model packets
+  preserve finance, database, cloud, workflow, knowledge-base, multimodal,
+  resident, transport, calendar, system, and security state without pretending
+  those categories are executable tools;
 - multi-turn chat over journal-derived thread state;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;

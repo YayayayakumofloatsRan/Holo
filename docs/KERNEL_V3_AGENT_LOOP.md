@@ -129,7 +129,8 @@ This graph/plan layer is not an execution engine. It is an audit and validation
 layer over the model's proposed semantic structure:
 
 - each proposed task node carries kind, goal, dependencies, capabilities,
-  evidence requirements, and a suggested recipe mode;
+  evidence requirements, a suggested recipe mode, and a host-derived
+  semantic `state_profile`;
 - the host validates blocked capabilities, dependency integrity, node limits,
   and whether user confirmation is required;
 - `AgentRuntime` journals `semantic_task_graph` with both the proposal and the
@@ -190,9 +191,10 @@ the workloop returns a failure report instead of running forever.
 
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, roleplay, document/report work,
-workspace, retrieval, web research, finance, memory, artifact, data, code,
-project, resident, transport, calendar, browser/session boundaries, system,
-and security families with statuses such as `enabled`,
+workspace, retrieval, web research, finance, memory, artifact, data, database,
+code, cloud, workflow, knowledge-base, multimodal, project, resident,
+transport, calendar, browser/session boundaries, system, and security families
+with statuses such as `enabled`,
 `available_with_permission`, `not_configured`, `planned`, and `host_only`. It
 also exposes state axes such as intent scope, execution surface, evidence,
 permissions, output contract, resident state, user control, autonomy, world
@@ -204,6 +206,15 @@ state to `workspace:*`. This is not a phrase table: the model chooses broad
 semantic labels and capability ids; the host maps only known executable
 capability families to recipes and keeps planned, host-only, credential,
 transport, browser, and device boundaries out of `ToolRegistry`.
+
+Each task-graph node also gets a compact `metadata.state_profile`. The profile
+records `domain`, `activity`, `resource`, `execution_surface`,
+`permission_state`, `route_class`, capability families/statuses, evidence
+posture, output contract, autonomy, and risk posture. `AgentRuntime` passes a
+`semantic_state_profile_summary` into planner context. This gives model-backed
+planning a richer state interface than the recipe mode alone: a single node can
+carry, for example, both `workflow` and `knowledge_base` capability families,
+while the host still marks `knowledge_base.maintain` as planned/non-executable.
 
 Non-workspace research capabilities can still become executable when there is
 a safe host route. For example, `web.research`, `finance.market_news`,

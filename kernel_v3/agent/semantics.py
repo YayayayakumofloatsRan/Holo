@@ -147,6 +147,11 @@ def _semantic_prompt(goal: str, *, response_language: str | None = None) -> str:
                 "Place structured tool arguments in intent.metadata.capability_args "
                 "keyed by capability name."
             ),
+            (
+                "When useful, place broad state hints in intent.metadata.domain, "
+                "activity, resource, and execution_surface; these are state "
+                "coordinates, not permissions."
+            ),
             "Classify role/persona requests as roleplay scoped to the current thread.",
             "Classify transport/account/client control as transport_control and blocked.",
             "Classify unavailable tool, device, account, or execution requests as blocked capabilities instead of pretending they ran.",

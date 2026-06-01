@@ -155,6 +155,12 @@ represent that boundary in required_capabilities/status/warnings instead of
 pretending it is executable.
 When a capability needs structured arguments, put them under metadata.capability_args,
 keyed by capability name, for example {"file.read":{"path":"README.md"}}.
+When useful, include metadata.domain, metadata.activity, metadata.resource, and
+metadata.execution_surface to preserve broad agent state such as finance,
+database, cloud, workflow, knowledge_base, multimodal, resident, transport,
+calendar, security, or physical-world boundaries. These metadata fields do not
+grant permission; they help the host preserve state instead of collapsing all
+work into workspace.
 For host-state questions such as current time, environment facts, or runtime status, use
 suggested_mode=system_answer and required_capabilities such as ["system.time"]; put
 optional arguments under metadata.capability_args, for example {"system.time":{"timezone":"Asia/Shanghai"}}.

@@ -135,6 +135,15 @@
   `aggregate`, `structured`, or `crawl`. The provider only selects among
   configured providers; PolicyGate, fetch allowlists, artifact storage,
   sufficiency checks, and termination remain host-owned.
+- The semantic task graph now attaches a `state_profile` to every node instead
+  of relying only on `mode` or `workspace:*` tool names. Each profile records
+  domain, activity, resource, execution surface, permission state, route class,
+  capability families/statuses, evidence posture, output contract, autonomy,
+  and risk posture. Planner context receives a compact
+  `semantic_state_profile_summary`, so a model can distinguish finance,
+  database, cloud, workflow, knowledge-base, multimodal, resident, transport,
+  calendar, system, security, and physical-world boundary state while the host
+  still decides what can execute.
 
 ## Validation
 
@@ -147,7 +156,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-487 passed
+489 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -207,6 +216,10 @@ Additional deterministic coverage now includes:
 - adaptive search strategy tests show that planner metadata can switch from
   `corpus_only` to `aggregate` after source-authority feedback, producing a
   second retrieval loop that finds a primary SEC source and finalizes.
+- semantic state-profile tests show that broad domains such as finance,
+  database, workflow, and knowledge-base are preserved in task graph node
+  metadata and planner context instead of being collapsed into workspace mode;
+  planned or not-configured capabilities remain host boundaries.
 
 Live model scenarios:
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent import AgentRuntime, SemanticIntake, task_graph_from_semantic
 from kernel_v3.capabilities import semantic_capability_catalog
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
@@ -151,6 +151,120 @@ def test_phase94_semantic_capability_catalog_is_not_workspace_only():
     assert "report_generation" in catalog["task_domains"]
     assert "long_running_monitoring" in catalog["task_domains"]
     assert "browser_navigation_boundary" in catalog["task_domains"]
+    assert "database" in families
+    assert "cloud" in families
+    assert "workflow" in families
+    assert "knowledge_base" in families
+    assert "multimodal" in families
+    assert "database_query" in catalog["task_domains"]
+    assert "workflow_automation" in catalog["task_domains"]
+    assert "portfolio_risk_research" in catalog["task_domains"]
+    assert "database.query" in catalog["not_default_or_requires_configuration"]
+    assert "cloud.resource.inspect" in catalog["not_default_or_requires_configuration"]
+    assert "workflow.automation.run" in catalog["not_default_or_requires_configuration"]
+
+
+def test_phase94_task_graph_nodes_preserve_broad_state_profiles():
+    intake = SemanticIntake(
+        intake_id="semantic-intake-1",
+        goal="research a company, inspect database assumptions, and plan an automation",
+        primary_intent="compound_research_operations",
+        suggested_mode="retrieval_answer",
+        compound=True,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "finance_fundamentals",
+                "text": "research company fundamentals",
+                "sequence_index": 1,
+                "required_capabilities": ["finance.fundamentals_research", "web.research"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {"domain": "finance", "activity": "research"},
+            },
+            {
+                "kind": "database_query",
+                "text": "inspect valuation assumptions in the warehouse",
+                "sequence_index": 2,
+                "required_capabilities": ["database.query"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "workflow_automation",
+                "text": "plan a recurring report workflow",
+                "sequence_index": 3,
+                "required_capabilities": ["workflow.automation.plan"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+
+    graph = task_graph_from_semantic(intake)
+
+    profiles = [node["metadata"]["state_profile"] for node in graph.nodes]
+    assert [profile["domain"] for profile in profiles] == ["finance", "database", "workflow"]
+    assert "retrieval" in profiles[0]["execution_surface"]
+    assert profiles[1]["route_class"] == "planned_or_not_configured_boundary"
+    assert profiles[1]["permission_state"] == "planned"
+    assert profiles[2]["route_class"] == "host_capability_or_response"
+    assert {"finance", "retrieval", "database", "workflow"}.issubset(
+        set(graph.metadata["state_profile_summary"]["domains"])
+    )
+    assert "workspace" not in graph.metadata["state_profile_summary"]["domains"]
+
+
+def test_phase94_agent_context_exposes_state_profile_summary_to_planner():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "knowledge_base_maintenance",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "knowledge_base_maintenance",
+                        "text": "draft a maintenance plan for a knowledge base",
+                        "sequence_index": 1,
+                        "required_capabilities": ["workflow.automation.plan", "knowledge_base.maintain"],
+                        "risk": "write",
+                        "status": "ready",
+                        "metadata": {"activity": "write"},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "给知识库维护流程做一个自动化规划",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "needs_user_input"
+    context = journal.records(task_id=result.task_id, kind="context")[0].data["state"]
+    summary = context["agent_runtime_directive"]["semantic_state_profile_summary"]
+    assert summary["domains"] == ["workflow", "knowledge_base"]
+    assert "planned_or_not_configured_boundary" in summary["route_classes"]
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    profile = plan["steps"][0]["metadata"]["node_metadata"]["state_profile"]
+    assert profile["resource"] == "queue_message"
+    assert profile["execution_surface"] == "resident_queue"
 
 
 def test_phase94_broad_direct_capabilities_do_not_collapse_to_workspace():

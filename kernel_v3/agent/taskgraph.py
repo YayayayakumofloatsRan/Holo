@@ -8,6 +8,7 @@ from kernel_v3.agent.contracts import (
     TaskGraphProposal,
     TaskGraphValidation,
 )
+from kernel_v3.agent.state_space import profile_intent_state, summarize_state_profiles
 from kernel_v3.capabilities import SAFE_SEMANTIC_CAPABILITIES
 from kernel_v3.contracts import JsonObject
 
@@ -20,10 +21,14 @@ _RETRIEVAL_CAPABILITIES = {
     "finance.competitive_landscape",
     "retrieval.run",
     "web.research",
+    "web.search",
+    "web.fetch",
+    "web.crawl",
+    "browser.page.open",
 }
 _WORKSPACE_READ_CAPABILITIES = {"workspace.search", "file.read", "workspace:read"}
 _WORKSPACE_WRITE_CAPABILITIES = {"workspace.write", "workspace:write"}
-_SYSTEM_CAPABILITIES = {"system.time"}
+_SYSTEM_CAPABILITIES = {"system.time", "system.environment", "system.process"}
 _EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace.write", "system.time"}
 
 
@@ -38,6 +43,19 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
         metadata.setdefault("capability_plan", _capability_plan(capabilities))
         node_id = _node_id(index, kind)
         depends_on = _depends_on(intent, default=prior_node_id)
+        evidence_required = _evidence_required(kind, capabilities, metadata=metadata)
+        citations_required = _citations_required(kind, capabilities, metadata=metadata)
+        state_profile = profile_intent_state(
+            profile_id=f"profile-{node_id}",
+            intent_kind=kind,
+            capabilities=capabilities,
+            metadata=metadata,
+            evidence_required=evidence_required,
+            citations_required=citations_required,
+            risk=str(intent.get("risk") or ""),
+            status=str(intent.get("status") or "ready"),
+        )
+        metadata["state_profile"] = state_profile.to_dict()
         node = TaskGraphNode(
             node_id=node_id,
             kind=kind,
@@ -46,8 +64,8 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
             depends_on=depends_on,
             required_capabilities=capabilities,
             suggested_mode=_mode_for_intent(kind, capabilities, metadata=metadata),
-            evidence_required=_evidence_required(kind, capabilities, metadata=metadata),
-            citations_required=_citations_required(kind, capabilities, metadata=metadata),
+            evidence_required=evidence_required,
+            citations_required=citations_required,
             status=str(intent.get("status") or "ready"),
             metadata=metadata,
         )
@@ -80,6 +98,13 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
             ],
         ]
     )
+    state_profile_summary = summarize_state_profiles(
+        [
+            dict(node.metadata["state_profile"])
+            for node in nodes
+            if isinstance(node.metadata.get("state_profile"), dict)
+        ]
+    )
     return TaskGraphProposal(
         graph_id="task-graph-1",
         goal=intake.goal,
@@ -90,7 +115,11 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
         clarification_question=intake.clarification_question,
         max_steps=max(1, len(nodes) + 1),
         max_tool_calls=sum(1 for node in nodes if _action_kind_for_node(node) == "tool"),
-        metadata={"source": "semantic_intake", "primary_intent": intake.primary_intent},
+        metadata={
+            "source": "semantic_intake",
+            "primary_intent": intake.primary_intent,
+            "state_profile_summary": state_profile_summary,
+        },
     )
 
 

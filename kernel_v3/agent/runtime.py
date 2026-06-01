@@ -1625,6 +1625,7 @@ def _action_plan_preview(action: CandidateAction) -> JsonObject:
 def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     semantic = _semantic_intake_metadata(recipe)
     preferences = _interaction_preferences_metadata(recipe)
+    state_profile_summary = _state_profile_summary_metadata(recipe)
     if recipe.mode == "retrieval_answer":
         return {
             "mode": recipe.mode,
@@ -1650,6 +1651,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "forbidden": ["web_search", "page_open", "network.fetch"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
+            "semantic_state_profile_summary": state_profile_summary,
         }
     if recipe.mode == "workspace_answer":
         return {
@@ -1672,6 +1674,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "workspace.write"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
+            "semantic_state_profile_summary": state_profile_summary,
         }
     if recipe.mode == "workspace_write":
         return {
@@ -1703,6 +1706,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "shell.exec"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
+            "semantic_state_profile_summary": state_profile_summary,
         }
     if recipe.mode == "clarify_first":
         return {
@@ -1712,6 +1716,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "forbidden": ["all tool actions"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
+            "semantic_state_profile_summary": state_profile_summary,
         }
     if recipe.mode == "system_answer":
         return {
@@ -1726,6 +1731,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "forbidden": ["workspace.write", "network.fetch", "shell.exec", "live_transport:*"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
+            "semantic_state_profile_summary": state_profile_summary,
         }
     return {
         "mode": recipe.mode,
@@ -1734,6 +1740,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         "forbidden": ["all tool actions"],
         "interaction_preferences": preferences,
         "semantic_intake": semantic,
+        "semantic_state_profile_summary": state_profile_summary,
     }
 
 
@@ -1745,6 +1752,49 @@ def _semantic_intake_metadata(recipe: TaskRecipe) -> JsonObject:
 def _task_execution_plan_metadata(recipe: TaskRecipe) -> JsonObject:
     value = recipe.metadata.get("task_execution_plan")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _state_profile_summary_metadata(recipe: TaskRecipe) -> JsonObject:
+    task_graph = recipe.metadata.get("task_graph")
+    if isinstance(task_graph, dict):
+        metadata = task_graph.get("metadata")
+        if isinstance(metadata, dict) and isinstance(metadata.get("state_profile_summary"), dict):
+            return dict(metadata["state_profile_summary"])
+    task_plan = _task_execution_plan_metadata(recipe)
+    profiles: list[JsonObject] = []
+    steps = task_plan.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            metadata = step.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            node_metadata = metadata.get("node_metadata")
+            if not isinstance(node_metadata, dict):
+                continue
+            profile = node_metadata.get("state_profile")
+            if isinstance(profile, dict):
+                profiles.append(dict(profile))
+    return {
+        "domains": _ordered_unique(
+            [
+                *[str(item["domain"]) for item in profiles if isinstance(item.get("domain"), str)],
+                *[
+                    str(family)
+                    for item in profiles
+                    for family in item.get("capability_families", [])
+                    if isinstance(family, str) and family
+                ],
+            ]
+        ),
+        "execution_surfaces": _ordered_unique(
+            [str(item["execution_surface"]) for item in profiles if isinstance(item.get("execution_surface"), str)]
+        ),
+        "route_classes": _ordered_unique(
+            [str(item["route_class"]) for item in profiles if isinstance(item.get("route_class"), str)]
+        ),
+    }
 
 
 def _execution_metadata(recipe: TaskRecipe) -> JsonObject:

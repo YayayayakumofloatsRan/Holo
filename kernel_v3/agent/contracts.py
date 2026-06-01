@@ -30,6 +30,25 @@ class TaskIntent(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class SemanticStateProfile(Contract):
+    profile_id: str
+    intent_kind: str
+    domain: str
+    activity: str
+    resource: str
+    execution_surface: str
+    permission_state: str
+    route_class: str
+    capability_families: list[str]
+    capability_statuses: list[JsonObject]
+    evidence_posture: str
+    output_contract: str
+    autonomy: str
+    risk_posture: str
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, kw_only=True)
 class SemanticIntake(Contract):
     intake_id: str
     goal: str
