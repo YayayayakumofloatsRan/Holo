@@ -146,7 +146,11 @@ def main(argv: list[str] | None = None) -> int:
 
     agent_parser = sub.add_parser("agent")
     agent_parser.add_argument("goal")
-    agent_parser.add_argument("--mode", choices=["direct", "retrieval", "workspace", "write", "system", "time", "auto"], default="auto")
+    agent_parser.add_argument(
+        "--mode",
+        choices=["direct", "semantic", "retrieval", "workspace", "write", "system", "time", "auto"],
+        default="auto",
+    )
     agent_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")

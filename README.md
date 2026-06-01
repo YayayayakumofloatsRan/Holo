@@ -223,6 +223,7 @@ Run from the repository root:
 ```bash
 python3 holo-v3 tools
 python3 holo-v3 agent "explain kernel v3" --mode direct
+python3 holo-v3 agent "扮演一个谨慎的初级律师，说明你会怎么做" --mode semantic
 python3 holo-v3 agent "what time is it in UTC?" --mode system
 python3 holo-v3 chat --thread demo --once "what can you do?"
 python3 holo-v3 providers
@@ -237,6 +238,12 @@ Live model calls are gated:
 ```bash
 HOLO_V3_LIVE_MODEL=1 python3 holo-v3 model-packet --provider deepseek --task-type semantic.intake --goal "search today's news" --show-prompt
 ```
+
+`--mode semantic` is the broad safe non-tool recipe for roleplay, professional
+framing, strategy, project planning, communication drafting, product/risk
+review, and other semantic work that should not be collapsed into workspace.
+It grants no tools and no external side effects; model packets can still carry
+rich state profiles while the host validates policy, journals, and stops.
 
 Interactive model-backed runs default user-visible text to Chinese when the user
 does not clearly request another language. Override this per run with

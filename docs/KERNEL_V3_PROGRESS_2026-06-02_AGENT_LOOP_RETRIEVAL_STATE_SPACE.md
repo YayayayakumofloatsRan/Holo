@@ -488,3 +488,68 @@ be considered reliable. The SEC provider is a useful primary-source brick, not a
 complete financial research stack: richer issuer identity resolution,
 exchange-specific filing adapters, current-market/news search, and deeper
 crawler/readability quality remain open capability layers.
+
+## Semantic State Space Follow-Up
+
+The runtime now includes `semantic_answer` as a first-class broad safe non-tool
+recipe. This is the state-space path for roleplay, professional framing,
+strategy, operations planning, communication drafting, product/risk review,
+project planning, and similar semantic work that should not be forced into
+workspace or retrieval.
+
+Important boundary:
+
+- `semantic_answer` does not grant any tool.
+- It does not enable network, shell, browser, transport, device control, or
+  durable-memory commit.
+- Model-backed `semantic.intake` may choose it by emitting
+  `suggested_mode="semantic_answer"`; explicit CLI can select it with
+  `--mode semantic`.
+- The host still validates, journals, and stops. The model only proposes a
+  structured respond/ask_user packet.
+
+Validation added:
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase108_semantic_answer_state_space.py \
+  tests/test_kernel_v3_phase94_capability_space_and_long_loop.py \
+  tests/test_kernel_v3_phase63_semantic_intake.py \
+  tests/test_kernel_v3_phase81_taskgraph_router.py
+```
+
+Result:
+
+```text
+60 passed
+```
+
+Live DeepSeek semantic-answer smoke:
+
+```bash
+HOLO_V3_LIVE_MODEL=1 \
+.venv/bin/python -m kernel_v3.cli \
+  --journal /tmp/holo-v3-semantic-agent-journal.jsonl \
+  --index /tmp/holo-v3-semantic-agent-index.sqlite \
+  agent "扮演一个谨慎的初出茅庐的律师，你会怎么做" \
+  --online \
+  --mode semantic \
+  --thinking disabled \
+  --reasoning-effort low \
+  --generation-mode manual \
+  --temperature 0.2 \
+  --max-output-tokens 1024 \
+  --response-language zh
+```
+
+Result:
+
+```text
+completed; mode=semantic_answer; recipe_id=recipe-semantic-answer
+```
+
+The live trace showed DeepSeek returning `semantic.intake`,
+`planner.propose`, and `evaluator.assess` JSON packets. The planner emitted a
+single `respond` action, `allowed_tools` was empty, no workspace/retrieval/tool
+action ran, and processor prompts/results were journaled with preview/hash
+redaction rather than raw secret values.

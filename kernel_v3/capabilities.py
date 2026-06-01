@@ -103,7 +103,15 @@ def capability_catalog(
 def semantic_capability_catalog() -> JsonObject:
     return {
         "version": 1,
-        "modes": ["direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"],
+        "modes": [
+            "direct_answer",
+            "semantic_answer",
+            "retrieval_answer",
+            "workspace_answer",
+            "workspace_write",
+            "system_answer",
+            "clarify_first",
+        ],
         "core_rule": "The model proposes capabilities/actions; the host validates policy, executes tools, journals, and stops.",
         "catalog_rule": (
             "Choose semantic intent labels freely, but use these capability ids "
@@ -534,6 +542,7 @@ def semantic_capability_catalog() -> JsonObject:
             "security": ["credential.read", "secret.store", "browser.session.attach", "device.input.control"],
         },
         "executable_tools_by_recipe": {
+            "semantic_answer": [],
             "retrieval_answer": ["retrieval.run"],
             "workspace_answer": ["workspace.search", "file.read"],
             "workspace_write": ["workspace.search", "file.read", "workspace.write"],

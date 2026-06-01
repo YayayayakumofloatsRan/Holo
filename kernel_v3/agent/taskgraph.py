@@ -42,6 +42,8 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
         metadata = _metadata(intent)
         metadata.setdefault("semantic_label", kind)
         metadata.setdefault("capability_plan", _capability_plan(capabilities))
+        if intake.suggested_mode == "semantic_answer" and _is_non_tool_semantic_node(capabilities):
+            metadata.setdefault("suggested_mode", "semantic_answer")
         node_id = _node_id(index, kind)
         depends_on = _depends_on(intent, default=prior_node_id)
         evidence_required = _evidence_required(kind, capabilities, metadata=metadata)
@@ -301,6 +303,7 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
     requested = metadata.get("suggested_mode")
     if isinstance(requested, str) and requested in {
         "direct_answer",
+        "semantic_answer",
         "retrieval_answer",
         "workspace_answer",
         "workspace_write",
@@ -456,6 +459,18 @@ def _is_blocked(capability: str) -> bool:
 
 def _has_any(capabilities: list[str], markers: set[str]) -> bool:
     return bool(set(capabilities) & markers)
+
+
+def _is_non_tool_semantic_node(capabilities: list[str]) -> bool:
+    if not capabilities:
+        return True
+    tool_capabilities = (
+        _RETRIEVAL_CAPABILITIES
+        | _WORKSPACE_READ_CAPABILITIES
+        | _WORKSPACE_WRITE_CAPABILITIES
+        | _SYSTEM_CAPABILITIES
+    )
+    return not any(capability in tool_capabilities for capability in capabilities)
 
 
 def _string_list(value: object) -> list[str]:

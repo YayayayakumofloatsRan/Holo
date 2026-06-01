@@ -378,7 +378,7 @@ def assess_evidence_sufficiency(
     missing: list[str] = []
     sufficient = True
     reason = "sufficient"
-    if recipe.mode == "direct_answer" and not recipe.citations_required:
+    if recipe.mode in {"direct_answer", "semantic_answer"} and not recipe.citations_required:
         return EvidenceSufficiency(
             sufficiency_id=f"evidence-{run_id}-{step_id or 'final'}",
             task_id=task_id,
@@ -390,7 +390,7 @@ def assess_evidence_sufficiency(
             citation_count=len(citation_refs),
             valid_citation_refs=_ordered_unique(citation_refs),
             missing=[],
-            reason="direct_answer_does_not_require_evidence",
+            reason=f"{recipe.mode}_does_not_require_evidence",
         )
     if recipe.citations_required and not citation_refs:
         sufficient = False
@@ -482,7 +482,13 @@ def decide_termination(
         if "remaining_plan_actions" in feedback.missing_evidence:
             decision = "continue"
             reason = "planned_actions_remaining"
-        elif evidence.sufficient and recipe.mode in {"retrieval_answer", "workspace_answer", "workspace_write", "system_answer"}:
+        elif evidence.sufficient and recipe.mode in {
+            "semantic_answer",
+            "retrieval_answer",
+            "workspace_answer",
+            "workspace_write",
+            "system_answer",
+        }:
             decision = "final_answer"
             reason = "evidence_sufficient_overrode_continue"
             override = True

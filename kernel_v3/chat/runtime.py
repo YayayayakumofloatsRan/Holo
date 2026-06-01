@@ -5,6 +5,7 @@ from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import AgentRuntimeResult, FinalAnswer
+from kernel_v3.capabilities import SAFE_SEMANTIC_CAPABILITIES
 from kernel_v3.chat.contracts import (
     ChatCommand,
     ChatRuntimeResult,
@@ -41,7 +42,15 @@ _PLAN_SAFE_CAPABILITIES = {
     "workspace:write",
     "system.time",
 }
-_PLAN_ALLOWED_MODES = {"direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"}
+_PLAN_ALLOWED_MODES = {
+    "direct_answer",
+    "semantic_answer",
+    "retrieval_answer",
+    "workspace_answer",
+    "workspace_write",
+    "system_answer",
+    "clarify_first",
+}
 
 
 class ChatRuntime:
@@ -1693,7 +1702,10 @@ def _is_safe_plan_step(step: JsonObject) -> bool:
 
 def _safe_plan_capabilities(step: JsonObject) -> bool:
     capabilities = _string_values(step.get("required_capabilities"))
-    return all(capability in _PLAN_SAFE_CAPABILITIES for capability in capabilities)
+    return all(
+        capability in _PLAN_SAFE_CAPABILITIES or capability in SAFE_SEMANTIC_CAPABILITIES
+        for capability in capabilities
+    )
 
 
 def _plan_step_mode(step: JsonObject) -> str:
@@ -1895,12 +1907,13 @@ def _normalize_thread_id(thread_id: str) -> str:
 def _normalize_default_mode(mode: str) -> str:
     aliases = {
         "direct": "direct_answer",
+        "semantic": "semantic_answer",
         "retrieval": "retrieval_answer",
         "workspace": "workspace_answer",
         "clarify": "clarify_first",
     }
     normalized = aliases.get(str(mode or "auto"), str(mode or "auto"))
-    if normalized in {"auto", "direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}:
+    if normalized in {"auto", "direct_answer", "semantic_answer", "retrieval_answer", "workspace_answer", "clarify_first"}:
         return normalized
     return "auto"
 

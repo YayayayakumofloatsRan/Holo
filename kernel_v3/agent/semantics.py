@@ -421,15 +421,38 @@ def _suggested_mode(primary: str, *, requires_clarification: bool) -> str:
         return "workspace_write"
     if primary == "system_time":
         return "system_answer"
+    if _semantic_mode_primary(primary):
+        return "semantic_answer"
     return "direct_answer"
 
 
 def _normalize_mode(value: str, *, primary: str, requires_clarification: bool) -> str:
     if requires_clarification:
         return "clarify_first"
-    if value in {"direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"}:
+    if value in {
+        "direct_answer",
+        "semantic_answer",
+        "retrieval_answer",
+        "workspace_answer",
+        "workspace_write",
+        "system_answer",
+        "clarify_first",
+    }:
         return value
     return _suggested_mode(primary, requires_clarification=requires_clarification)
+
+
+def _semantic_mode_primary(primary: str) -> bool:
+    return primary not in {
+        "direct_answer",
+        "clarification",
+        "retrieval_research",
+        "workspace_read",
+        "workspace_write",
+        "system_time",
+        "transport_control",
+        *_host_boundary_kinds(),
+    }
 
 
 def _has_non_ready_intent(intents: list[TaskIntent]) -> bool:

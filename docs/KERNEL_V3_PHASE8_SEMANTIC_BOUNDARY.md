@@ -88,3 +88,22 @@ capabilities when they appear in structured model output:
 Tests for memory writes, live transport control, no-op behavior, roleplay, and
 compound decomposition now inject structured `semantic.intake` JSON through
 `FakeJsonProvider` instead of relying on sample-specific user phrases.
+
+## Iteration 2026-06-02
+
+The broad state space now has a first-class safe non-tool runtime recipe:
+`semantic_answer`.
+
+- `semantic_answer` is exposed in `AgentMode`, the semantic capability catalog,
+  CLI `--mode semantic`, task graph validation, chat resume mode normalization,
+  planner directives, and workloop evidence/termination semantics.
+- It is not a new permission surface. It has no allowed tools, no network,
+  no shell, no transport, no memory commit, and no external side effects.
+- It exists so model-backed semantic intake can preserve broad categories such
+  as roleplay, professional framing, operations planning, strategy,
+  communication drafting, project/product/risk review, and other safe semantic
+  work without collapsing those tasks into `workspace_answer`.
+- The host does not automatically override an explicit model
+  `suggested_mode="direct_answer"` into `semantic_answer`; the model or operator
+  must choose the broad semantic mode. This keeps the LLM as the semantic
+  decider while preserving host-owned validation and stop control.

@@ -165,6 +165,16 @@ resident/background work, preference application, human-world requests, and
 unconfigured connectors without inventing tools. The host still decides which
 parts can execute, which require approval, and when the loop should stop.
 
+`semantic_answer` is the broad safe non-tool recipe. It is used when model
+semantic intake explicitly chooses a broad semantic task surface, or when the
+operator selects `--mode semantic`. It does not grant tools, network, memory
+commit, transport, browser, shell, or device access. Its purpose is to stop
+collapsing roleplay, professional framing, operations planning, product/risk
+review, communication drafting, project planning, and other Hermes-level
+semantic categories into either `workspace_answer` or a generic direct fallback.
+The planner still emits a normal `respond`/`ask_user` packet, and the host still
+owns validation, journal, progress, and termination.
+
 When a semantic node needs concrete tool arguments, model mode can place them in
 `metadata.capability_args` keyed by capability name. For example,
 `{"workspace.search":{"query":"overview"},"file.read":{"path":"README.md"}}`
@@ -838,6 +848,9 @@ Hardening completed in this iteration:
   retrieval, finance, memory, resident, transport, and system families;
 - added `system_answer` and `system.time` as an executable non-workspace state
   path;
+- added `semantic_answer` as a first-class broad non-tool semantic recipe so
+  safe professional, planning, roleplay, communication, product/risk, and
+  strategy work can preserve rich state profiles without becoming workspace;
 - allowed semantic `capability_args` lists to expand into many ordered tool
   actions, enabling 10+ iteration work plans from one model packet;
 - added `agent_work_plan` and incremental `agent_work_plan_update` audit records

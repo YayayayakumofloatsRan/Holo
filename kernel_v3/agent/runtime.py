@@ -374,7 +374,7 @@ class AgentRuntime:
         loop_stop_reason: str | None,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
-        if recipe.mode == "direct_answer":
+        if recipe.mode in {"direct_answer", "semantic_answer"}:
             if recipe.citations_required:
                 return None, self._failure(
                     task_id,
@@ -392,7 +392,7 @@ class AgentRuntime:
                     citation_refs=[],
                     used_evidence=[],
                     limitations=[],
-                    confidence=0.6,
+                    confidence=0.68 if recipe.mode == "semantic_answer" else 0.6,
                     task_id=task_id,
                     run_id=run_id,
                     trace_refs=_trace_refs(self.journal, task_id),
@@ -1244,6 +1244,21 @@ def task_recipe(
             mode=normalized,
             metadata=recipe_metadata,
         )
+    if normalized == "semantic_answer":
+        return TaskRecipe(
+            recipe_id="recipe-semantic-answer",
+            allowed_tools=[],
+            max_steps=2,
+            max_tool_calls=0,
+            max_network_fetches=0,
+            max_total_artifact_bytes=256_000,
+            permission_profile="read_only",
+            citations_required=bool(required),
+            finalizer="semantic_observation",
+            context_budget_mode="truncate",
+            mode=normalized,
+            metadata=recipe_metadata,
+        )
     return TaskRecipe(
         recipe_id="recipe-direct-answer",
         allowed_tools=[],
@@ -1308,6 +1323,7 @@ def _expected_action_count(recipe: TaskRecipe) -> int:
 def _select_mode(goal: str, mode: str) -> str:
     aliases = {
         "direct": "direct_answer",
+        "semantic": "semantic_answer",
         "retrieval": "retrieval_answer",
         "workspace": "workspace_answer",
         "write": "workspace_write",
@@ -1318,7 +1334,15 @@ def _select_mode(goal: str, mode: str) -> str:
     }
     normalized = aliases.get(mode, mode)
     if normalized != "auto":
-        if normalized not in {"direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"}:
+        if normalized not in {
+            "direct_answer",
+            "semantic_answer",
+            "retrieval_answer",
+            "workspace_answer",
+            "workspace_write",
+            "system_answer",
+            "clarify_first",
+        }:
             raise ValueError(f"unsupported agent mode: {mode}")
         return normalized
     if not goal.strip() or goal.strip() in {"?", "？", ".", "。"}:
@@ -1457,6 +1481,20 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
                 score=1.0,
                 payload={"question": question},
                 reasons=["clarification_required"],
+                side_effect_class="none",
+            )
+        ]
+    if recipe.mode == "semantic_answer":
+        response_hint = _semantic_response_hint(recipe)
+        return [
+            CandidateAction(
+                action_id="act-agent-semantic",
+                kind="respond",
+                name=None,
+                description="answer through broad semantic state without tool execution",
+                score=1.0,
+                payload={"text": response_hint or _semantic_answer_text(goal, recipe)},
+                reasons=["semantic_answer recipe"],
                 side_effect_class="none",
             )
         ]
@@ -1780,6 +1818,22 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
+        }
+    if recipe.mode == "semantic_answer":
+        return {
+            "mode": recipe.mode,
+            "required_first_action": {"kind": "respond", "name": None, "side_effect_class": "none"},
+            "allowed_tools": [],
+            "forbidden": ["all tool actions", "memory writes", "external side effects"],
+            "interaction_preferences": preferences,
+            "semantic_intake": semantic,
+            "semantic_state_profile_summary": state_profile_summary,
+            "state_space_rule": (
+                "Preserve broad semantic domains and limitations. Do not collapse "
+                "professional, planning, communication, data, resident, transport, "
+                "memory, or boundary tasks into workspace unless the host plan "
+                "explicitly asks for workspace tools."
+            ),
         }
     if recipe.mode == "clarify_first":
         return {
@@ -2719,6 +2773,23 @@ def _direct_answer_text(goal: str, recipe: TaskRecipe) -> str:
         "我已收到这个直接问题，但当前运行的是离线 host fallback，"
         "不会编造未经模型或证据支持的事实答案。请启用 model 模式，"
         "或改用 retrieval/workspace 让宿主收集可审计证据后回答。"
+    )
+
+
+def _semantic_answer_text(goal: str, recipe: TaskRecipe) -> str:
+    summary = _state_profile_summary_metadata(recipe)
+    domains = ", ".join(str(item) for item in summary.get("domains", [])[:8]) if isinstance(summary, dict) else ""
+    activities = ", ".join(str(item) for item in summary.get("activities", [])[:6]) if isinstance(summary, dict) else ""
+    prefix = "我已将这个请求保留为广义语义任务"
+    if domains:
+        prefix += f"；状态域包括：{domains}"
+    if activities:
+        prefix += f"；活动包括：{activities}"
+    return (
+        prefix
+        + "。当前是离线 host fallback，不会替模型编造完整内容；"
+        "启用 model planner 后，LLM 会在这个结构化状态包内生成回应，"
+        "宿主仍负责权限、工具、journal 和终止判断。"
     )
 
 

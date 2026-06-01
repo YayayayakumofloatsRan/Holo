@@ -135,14 +135,14 @@ unfinished plans, and execution. Never request tool execution or memory writes h
 
 
 SEMANTIC_INTAKE_PROMPT_CONTRACT = """Return one JSON object matching semantic.intake.
-Fields: primary_intent string, suggested_mode one of direct_answer/retrieval_answer/workspace_answer/workspace_write/system_answer/clarify_first,
+Fields: primary_intent string, suggested_mode one of direct_answer/semantic_answer/retrieval_answer/workspace_answer/workspace_write/system_answer/clarify_first,
 compound boolean, requires_clarification boolean, intents array, blocked_capabilities string array,
 warnings string array, response_hint string or null, clarification_question string or null.
 Each intent object should include: kind, text, sequence_index, required_capabilities, risk, status, metadata.
 Example shape:
 {"primary_intent":"roleplay","suggested_mode":"direct_answer","compound":false,"requires_clarification":false,"intents":[{"kind":"roleplay","text":"Act as a cautious legal intern","sequence_index":1,"required_capabilities":[],"risk":"none","status":"ready","metadata":{"style":"legal intern"}}],"blocked_capabilities":[],"warnings":[],"response_hint":null,"clarification_question":null}
 Use broad semantic judgment instead of keyword matching. Split compound user requests into ordered intents.
-Do not require user clarification merely because there are multiple safe steps. For safe read-only compound tasks with clear arguments, set requires_clarification=false and keep the executable mode. Ask the user only when critical scope/tool arguments are missing, a capability is blocked, or the user explicitly requests interruption/confirmation.
+Do not require user clarification merely because there are multiple safe steps. For safe read-only compound tasks with clear arguments, set requires_clarification=false and keep the executable mode. Use semantic_answer for broad safe non-tool work such as roleplay, professional framing, education, communication drafting, operations planning, product/risk review, strategy, project planning, and other host-visible semantic work that should not collapse to workspace. Ask the user only when critical scope/tool arguments are missing, a capability is blocked, or the user explicitly requests interruption/confirmation.
 For local file/report generation, use suggested_mode=workspace_write and required_capabilities including workspace.write or workspace:write when the host can validate a concrete workspace-relative path and text payload. Put {"workspace.write":{"path":"...","text":"..."}} under metadata.capability_args when available.
 The intent kind may be an open semantic label; executable routing comes from
 required_capabilities and host validation, not from a fixed phrase table.

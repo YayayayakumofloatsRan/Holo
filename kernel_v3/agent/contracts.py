@@ -8,6 +8,7 @@ from kernel_v3.contracts import Contract, JsonObject
 
 AgentMode = Literal[
     "direct_answer",
+    "semantic_answer",
     "retrieval_answer",
     "workspace_answer",
     "workspace_write",
