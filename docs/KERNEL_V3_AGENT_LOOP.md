@@ -54,6 +54,18 @@ raw data hash. The in-process action/observation objects still flow through
 PolicyGate, ToolRegistry, and evaluators unchanged; the durable audit record
 does not persist the secret text.
 
+`ChatRuntime` uses the same shared journal redaction helper for chat turns,
+routing decisions, command records, pending-user answers, agent results,
+semantic task-plan decisions, and thread summaries. This keeps thread continuity
+auditable without letting chat history or summaries become a second secret
+storage path.
+
+Processor adapters redact prompt payloads before serialization, and
+`ProcessorFabric` runs processor request/result journal projections through the
+same helper. Live providers therefore do not receive obvious secret-like URL
+tokens from planner/evaluator/synthesizer context, and processor trace records
+keep only bounded previews, hashes, usage, and redaction metadata.
+
 ## Semantic Task Graph
 
 Model-backed semantic intake is now normalized into a host-visible

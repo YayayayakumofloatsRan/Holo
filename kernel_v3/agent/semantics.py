@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Pattern
 
 from kernel_v3.agent.contracts import SemanticIntake, TaskIntent
+from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import JsonObject
 from kernel_v3.processors.contracts import SEMANTIC_INTAKE_PROMPT_CONTRACT, SEMANTIC_INTAKE_SCHEMA
 from kernel_v3.processors.fabric import ProcessorFabric
@@ -164,7 +165,9 @@ def _semantic_prompt(goal: str) -> str:
             "If unsure, preserve uncertainty in clarification_question instead of forcing a keyword-style class.",
         ],
     }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    redacted, _markers = Redactor().redact(payload)
+    safe = redacted if isinstance(redacted, dict) else {"user_goal": "[REDACTED:SECRET]"}
+    return json.dumps(safe, ensure_ascii=False, sort_keys=True)
 
 
 def _intake_from_model(goal: str, data: JsonObject, *, fallback: SemanticIntake) -> SemanticIntake:

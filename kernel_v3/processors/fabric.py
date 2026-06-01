@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
+from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.processors.contracts import JsonSchema, ProcessorOutcome, ProcessorProvider
 from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.routing import ProcessorRouter
@@ -256,7 +257,7 @@ class ProcessorFabric:
     ) -> None:
         if self.journal is None:
             return
-        data = _safe_request(request)
+        data = redact_journal_data(_safe_request(request))
         self.journal.append(
             task_id=task_id,
             run_id=run_id,
@@ -281,7 +282,9 @@ class ProcessorFabric:
     ) -> None:
         if self.journal is None:
             return
-        data = _safe_result(result, provider=provider, model=model, task_type=task_type, duration_ms=duration_ms)
+        data = redact_journal_data(
+            _safe_result(result, provider=provider, model=model, task_type=task_type, duration_ms=duration_ms)
+        )
         self.journal.append(
             task_id=task_id,
             run_id=run_id,

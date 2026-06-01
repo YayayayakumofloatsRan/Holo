@@ -22,6 +22,32 @@ def test_phase62_two_turns_share_thread_id():
     assert {record.data["thread_id"] for record in journal.records(kind="chat_turn")} == {"thread-a"}
 
 
+def test_phase62_chat_journal_redacts_secret_like_turn_text_before_summary():
+    secret_url = "https://example.test/report?access_token=chat-secret-token-1234567890"
+    journal = JournalStore.in_memory()
+    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+
+    result = chat.receive(f"please inspect {secret_url}", thread_id="thread-secret")
+    summary = chat.summarize_thread("thread-secret")
+
+    assert result.thread_id == "thread-secret"
+    turn = journal.records(kind="chat_turn")[0].data
+    thread_summary = journal.records(kind="thread_summary")[-1].data
+    assert turn["text"] == "[REDACTED:SECRET]"
+    assert turn["redaction"]["journal_data"] == "secret_like_fields_redacted"
+    assert summary.recent_turns[-1]["text_preview"] == "[REDACTED:SECRET]"
+    encoded = json.dumps(
+        {
+            "journal": [record.to_dict() for record in journal.records()],
+            "summary": summary.to_dict(),
+            "thread_summary": thread_summary,
+        },
+        ensure_ascii=False,
+    )
+    assert "chat-secret-token" not in encoded
+    assert "access_token" not in encoded
+
+
 def test_phase62_ask_user_result_creates_pending_question():
     journal = JournalStore.in_memory()
     chat = _chat_with_semantic(journal, [_workspace_read_intake()])

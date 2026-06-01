@@ -26,6 +26,7 @@ from kernel_v3.chat.memory_admin import (
 )
 from kernel_v3.contracts import JsonObject, LedgerRecord
 from kernel_v3.journal import JournalStore
+from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.processors.contracts import CHAT_ROUTE_PROMPT_CONTRACT, CHAT_ROUTE_SCHEMA
 from kernel_v3.trace import TraceRenderer
@@ -80,7 +81,7 @@ class ChatRuntime:
             run_id=_chat_run_id(normalized_thread),
             step_id=None,
             kind="chat_turn",
-            data=turn.to_dict(),
+            data=redact_journal_data(turn.to_dict()),
             state_delta={"thread_id": normalized_thread, "chat_role": "user"},
         )
         decision = self.route_turn(message, state=before, turn_id=turn.turn_id)
@@ -89,7 +90,7 @@ class ChatRuntime:
             run_id=_chat_run_id(normalized_thread),
             step_id=None,
             kind="chat_routing_decision",
-            data=decision.to_dict(),
+            data=redact_journal_data(decision.to_dict()),
             state_delta={"thread_id": normalized_thread, "chat_route": decision.route},
         )
         if decision.route == "command":
@@ -105,13 +106,15 @@ class ChatRuntime:
                 run_id=_chat_run_id(normalized_thread),
                 step_id=None,
                 kind="chat_pending_answer",
-                data={
-                    "thread_id": normalized_thread,
-                    "turn_id": turn.turn_id,
-                    "pending_id": pending.pending_id,
-                    "task_id": pending.task_id,
-                    "answer_preview": _preview(message),
-                },
+                data=redact_journal_data(
+                    {
+                        "thread_id": normalized_thread,
+                        "turn_id": turn.turn_id,
+                        "pending_id": pending.pending_id,
+                        "task_id": pending.task_id,
+                        "answer_preview": _preview(message),
+                    }
+                ),
                 state_delta={"thread_id": normalized_thread, "pending_answered": pending.pending_id},
             )
             plan_record = _latest_task_plan_record(self.journal, normalized_thread, task_id=pending.task_id)
@@ -175,7 +178,7 @@ class ChatRuntime:
             run_id=result.run_id or _chat_run_id(normalized_thread),
             step_id=None,
             kind="chat_agent_result",
-            data=result.to_dict(),
+            data=redact_journal_data(result.to_dict()),
             state_delta={"thread_id": normalized_thread, "chat_result_status": result.status},
         )
         self._append_thread_summary(normalized_thread)
@@ -784,7 +787,7 @@ class ChatRuntime:
             run_id=plan_record.run_id,
             step_id=None,
             kind="semantic_task_plan_final_answer",
-            data=final_answer.to_dict(),
+            data=redact_journal_data(final_answer.to_dict()),
             state_delta={"thread_id": turn.thread_id, "task_plan_final_answer": "ok"},
         )
         return final_answer, record, None, False
@@ -817,7 +820,7 @@ class ChatRuntime:
             run_id=plan_record.run_id,
             step_id=None,
             kind="semantic_task_plan_decision",
-            data=data,
+            data=redact_journal_data(data),
             state_delta={"thread_id": turn.thread_id, "task_plan_decision": decision},
         )
 
@@ -1044,7 +1047,7 @@ class ChatRuntime:
             run_id=_chat_run_id(turn.thread_id),
             step_id=None,
             kind="chat_command",
-            data=command.to_dict(),
+            data=redact_journal_data(command.to_dict()),
             state_delta={"thread_id": turn.thread_id, "chat_command": name},
         )
         return command
@@ -1056,7 +1059,7 @@ class ChatRuntime:
             run_id=_chat_run_id(summary.thread_id),
             step_id=None,
             kind="thread_summary",
-            data=summary.to_dict(),
+            data=redact_journal_data(summary.to_dict()),
             state_delta={"thread_id": summary.thread_id, "thread_summary": summary.summary_id},
         )
         return ThreadSummary(

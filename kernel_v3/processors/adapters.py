@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
 from kernel_v3.processors.contracts import (
     EVALUATOR_PROMPT_CONTRACT,
@@ -160,7 +161,7 @@ def _planner_prompt(context: ContextBundle, feedback: Feedback | None) -> str:
         "context": _compact_context(context),
         "feedback": feedback.to_dict() if feedback is not None else None,
     }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
 
 
 def _evaluator_prompt(context: ContextBundle, observation: Observation) -> str:
@@ -169,7 +170,7 @@ def _evaluator_prompt(context: ContextBundle, observation: Observation) -> str:
         "context": _compact_context(context),
         "observation": _compact_observation_for_provider(observation),
     }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
 
 
 def _synthesizer_prompt(
@@ -183,7 +184,12 @@ def _synthesizer_prompt(
         "evidence": [_compact_evidence_for_provider(item) for item in evidence],
         "citations": [_compact_citation_for_provider(item) for item in citations],
     }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
+
+
+def _redacted_prompt_payload(payload: JsonObject) -> JsonObject:
+    redacted, _markers = Redactor().redact(payload)
+    return redacted if isinstance(redacted, dict) else {"value": redacted}
 
 
 def _compact_context(context: ContextBundle) -> JsonObject:

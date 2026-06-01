@@ -383,6 +383,50 @@ def test_phase5_evaluator_prompt_uses_observation_previews_not_raw_bodies():
     assert "text_hash" in provider.last_prompt
 
 
+def test_phase5_model_planner_redacts_secret_like_context_before_provider_and_journal():
+    secret_url = "https://example.test/report?access_token=planner-secret-token-1234567890"
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "planner.propose": {
+                "action_id": "act-redacted",
+                "kind": "respond",
+                "name": None,
+                "description": "respond safely",
+                "payload": {"text": "ok"},
+                "score": 1.0,
+                "reasons": [],
+                "side_effect_class": "none",
+            }
+        }
+    )
+    planner = ModelPlanner(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    )
+    context = _context(
+        state={
+            "task_id": "task-secret-context",
+            "run_id": "run-secret-context",
+            "input_text": f"inspect {secret_url}",
+            "sections": [{"name": "user_event", "records": [{"text": secret_url}]}],
+        }
+    )
+
+    action = planner.propose(context)
+
+    assert action.action_id == "act-redacted"
+    assert "[REDACTED:SECRET]" in provider.last_prompt
+    encoded = json.dumps([record.to_dict() for record in journal.records()], ensure_ascii=False)
+    assert "planner-secret-token" not in provider.last_prompt
+    assert "access_token" not in provider.last_prompt
+    assert "planner-secret-token" not in encoded
+    assert "access_token" not in encoded
+
+
 def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_bodies():
     raw = "RAW_PROVIDER_EGRESS_EVIDENCE_" + ("y" * 900)
     report, evidence, citation = _retrieval_contracts()
@@ -746,7 +790,7 @@ def test_phase5_loop_controller_remains_tool_name_and_provider_agnostic():
         assert forbidden not in source
 
 
-def _context():
+def _context(state=None):
     return type(
         "TestContext",
         (),
@@ -755,7 +799,7 @@ def _context():
             "thread_key": "local:default",
             "event_ids": ["evt-1"],
             "memory_refs": [],
-            "state": {"task_id": "task-1", "run_id": "run-1", "sections": []},
+            "state": state or {"task_id": "task-1", "run_id": "run-1", "sections": []},
             "token_budget": 4096,
         },
     )()

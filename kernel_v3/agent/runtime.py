@@ -20,6 +20,7 @@ from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.journal import JournalStore
+from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.planner import Planner
@@ -492,7 +493,7 @@ class AgentRuntime:
             run_id=run_id,
             step_id=None,
             kind="agent_recipe",
-            data=recipe.to_dict(),
+            data=redact_journal_data(recipe.to_dict()),
             state_delta={"agent_recipe": recipe.recipe_id, "agent_mode": recipe.mode},
         )
 
@@ -502,7 +503,7 @@ class AgentRuntime:
             run_id=run_id,
             step_id=None,
             kind="semantic_intake",
-            data=intake.to_dict(),
+            data=redact_journal_data(intake.to_dict()),
             state_delta={
                 "primary_intent": intake.primary_intent,
                 "suggested_mode": intake.suggested_mode,
@@ -523,10 +524,12 @@ class AgentRuntime:
             run_id=run_id,
             step_id=None,
             kind="semantic_task_graph",
-            data={
-                "proposal": proposal.to_dict(),
-                "validation": validation.to_dict(),
-            },
+            data=redact_journal_data(
+                {
+                    "proposal": proposal.to_dict(),
+                    "validation": validation.to_dict(),
+                }
+            ),
             state_delta={
                 "task_graph": validation.status,
                 "task_graph_selected_mode": validation.selected_mode,
@@ -539,7 +542,7 @@ class AgentRuntime:
             run_id=run_id,
             step_id=None,
             kind="semantic_task_plan",
-            data=plan.to_dict(),
+            data=redact_journal_data(plan.to_dict()),
             state_delta={
                 "task_plan": plan.status,
                 "task_plan_selected_mode": plan.selected_mode,
@@ -584,7 +587,7 @@ class AgentRuntime:
             run_id=answer.run_id,
             step_id=None,
             kind="agent_final_answer",
-            data=answer.to_dict(),
+            data=redact_journal_data(answer.to_dict()),
             state_delta={"agent_final_answer": "ok"},
         )
         return replace(answer, trace_refs=[*answer.trace_refs, record.record_id])
@@ -615,7 +618,7 @@ class AgentRuntime:
             run_id=run_id,
             step_id=None,
             kind="agent_failure_report",
-            data=failure.to_dict(),
+            data=redact_journal_data(failure.to_dict()),
             state_delta={"agent_final_answer": "failed", "reason": reason},
         )
         return failure
@@ -665,12 +668,8 @@ class _AgentContextCompiler:
             for record in section["records"]
             if "event_id" in record
         ]
-        return ContextBundle(
-            context_id=pack.context_id,
-            thread_key=task.thread_id,
-            event_ids=event_ids,
-            memory_refs=pack.memory_refs,
-            state={
+        state = redact_journal_data(
+            {
                 "task_id": task.task_id,
                 "run_id": task.run_id,
                 "thread_id": task.thread_id,
@@ -682,7 +681,14 @@ class _AgentContextCompiler:
                 "source_refs": pack.source_refs,
                 "redactions": pack.redactions,
                 "budget": pack.budget,
-            },
+            }
+        )
+        return ContextBundle(
+            context_id=pack.context_id,
+            thread_key=task.thread_id,
+            event_ids=event_ids,
+            memory_refs=pack.memory_refs,
+            state=state,
             token_budget=int(pack.budget["token_budget"]),
         )
 
