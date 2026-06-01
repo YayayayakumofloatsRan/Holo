@@ -12,7 +12,8 @@ from kernel_v3.retrieval.http_provider import (
     HttpTransport,
     JsonHttpSearchProvider,
 )
-from kernel_v3.retrieval.composite import AggregateSearchProvider, FallbackSearchProvider
+from kernel_v3.retrieval.composite import AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
+from kernel_v3.retrieval.corpus_provider import CorpusFetchProvider, CorpusSearchProvider
 from kernel_v3.retrieval.crawl_provider import (
     BoundedCrawlSearchProvider,
     DirectUrlSearchProvider,
@@ -250,11 +251,17 @@ class LiveRetrievalConfig:
     def build_operator(
         self,
         *,
+        artifact_store: object | None = None,
+        corpus_store: object | None = None,
         search_transport: HttpTransport | None = None,
         crawl_transport: HttpTransport | None = None,
         fetch_transport: HttpTransport | None = None,
     ) -> RetrievalOperator:
-        search_providers = [DirectUrlSearchProvider()]
+        corpus_enabled = corpus_store is not None and artifact_store is not None
+        search_providers = []
+        if corpus_enabled:
+            search_providers.append(CorpusSearchProvider(corpus_store))
+        search_providers.append(DirectUrlSearchProvider())
         search_providers.append(SecEdgarSearchProvider())
         search_providers.append(ResearchSourceQuerySearchProvider())
         if self.search.configured:
@@ -270,9 +277,19 @@ class LiveRetrievalConfig:
             if self.search_strategy == "aggregate"
             else FallbackSearchProvider(search_providers)
         )
+        live_fetch_provider = self.fetch.build_provider(transport=fetch_transport)
+        fetch_provider = (
+            RoutingFetchProvider(
+                routes={"research_corpus": CorpusFetchProvider(artifact_store)},
+                fallback=live_fetch_provider,
+            )
+            if corpus_enabled
+            else live_fetch_provider
+        )
         return RetrievalOperator(
             search_provider=search_provider,
-            fetch_provider=self.fetch.build_provider(transport=fetch_transport),
+            fetch_provider=fetch_provider,
+            corpus_store=corpus_store,
         )
 
     def safe_diagnostics(self) -> JsonObject:

@@ -214,6 +214,16 @@ workspace mode. Conversely, high-risk capabilities such as
 credential reads, and shell execution remain host boundaries even if the model
 names them correctly.
 
+Live retrieval can be cache-first when a research corpus is configured. The
+live operator now accepts the same `ArtifactStore` and `ResearchCorpusStore`
+that `AgentRuntime` uses. Its search chain checks `research_corpus` before
+direct URLs, structured source providers, source-query templates, JSON HTTP
+search, crawl discovery, and source directories. Its fetch chain routes
+`research_corpus` sources back through `ArtifactStore` and uses live HTTP only
+as the fallback. Newly fetched live pages are still written to artifact blobs
+and indexed into the corpus by `RetrievalOperator`, so a later agent loop can
+reuse previously fetched evidence without another network call.
+
 Finance research capabilities share one source-directory substrate but do not
 share one sufficiency rule. `finance.fundamentals_research` keeps the strict
 primary-source requirement for filings, issuer materials, exchange disclosures,

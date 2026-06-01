@@ -122,6 +122,12 @@
   finance task produces `source_authority:primary` and `primary_source`, which
   the next planner packet can use to replan toward official filings or issuer
   materials.
+- Live retrieval now shares `ArtifactStore` and `ResearchCorpusStore` with the
+  agent runtime when a corpus is configured. The live search chain is
+  cache-first (`research_corpus`) and then falls back to direct URLs,
+  structured/source-query providers, JSON HTTP search, crawl discovery, and
+  source directories. Corpus hits fetch from artifact blobs; new live fetches
+  are indexed back into the corpus for later loops.
 
 ## Validation
 
@@ -134,7 +140,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-482 passed
+484 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -187,6 +193,10 @@ Additional deterministic coverage now includes:
 - a two-iteration retrieval loop test shows that weak-source evidence creates
   source-authority feedback, the second planner call sees that gap, and a retry
   against an SEC source finalizes with citations.
+- live retrieval/corpus bridge tests show that a configured corpus is searched
+  before live HTTP, and that an agent's first live SEC fetch is indexed into
+  corpus so a second run can answer from artifact-backed corpus evidence without
+  another network transport call.
 
 Live model scenarios:
 

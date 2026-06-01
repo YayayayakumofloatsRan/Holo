@@ -95,6 +95,10 @@ Kernel v3 currently contains the infrastructure for:
 - retrieval workloop feedback that carries missing query facets and missing
   source-authority signals into the next planner packet, allowing bounded
   replan attempts without weakening host termination guards;
+- live retrieval/corpus bridging: when corpus and artifact logs are configured,
+  Holo searches the local research corpus before live providers, fetches corpus
+  hits from artifact blobs, and indexes newly fetched live pages back into the
+  corpus for later agent loops;
 - finance fundamentals source directory entries for SEC/EDGAR, SEC structured
   data, SEC CIK/ticker mapping, SEC archives, SEC financial statement datasets,
   company IR, US/global official statistics, China/HK/UK/Canada/Australia/Japan/
@@ -224,6 +228,10 @@ The live retrieval chain is now broader than a single search endpoint:
   and only then apply the source budget. This is useful for longer research
   loops where a generic first provider should not prevent later primary or
   corpus sources from being considered.
+- if `--corpus-log`/`--corpus-index` and an artifact log are configured, the
+  same live operator becomes cache-first: `research_corpus` is searched before
+  live providers, corpus hits are fetched from artifact blobs, and new live
+  fetches are written back to the corpus.
 
 For crawl-only live inspection:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -450,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(live_retrieval, dict):
             print(json.dumps(live_retrieval, ensure_ascii=False, sort_keys=True))
             return 1
+        artifact_store = _runtime_artifact_store(args)
+        research_corpus_store = _runtime_corpus_store(args)
         runtime = _agent_runtime(
             journal,
             live_model=_agent_uses_live_model(args),
@@ -462,10 +465,16 @@ def main(argv: list[str] | None = None) -> int:
             generation_mode=args.generation_mode,
             latency_target=args.latency_target,
             response_language=_response_language_for_args(args),
-            artifact_store=_runtime_artifact_store(args),
+            artifact_store=artifact_store,
             memory_store=_memory_store(args, create_default=False),
-            research_corpus_store=_runtime_corpus_store(args),
-            retrieval_operator=live_retrieval.build_operator() if live_retrieval is not None else None,
+            research_corpus_store=research_corpus_store,
+            retrieval_operator=_build_live_retrieval_operator(
+                live_retrieval,
+                artifact_store=artifact_store,
+                corpus_store=research_corpus_store,
+            )
+            if live_retrieval is not None
+            else None,
         )
         payload = runtime.run(
             args.goal,
@@ -506,12 +515,20 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(live_retrieval, dict):
             print(json.dumps(live_retrieval, ensure_ascii=False, sort_keys=True))
             return 1
+        artifact_store = _runtime_artifact_store(args)
+        research_corpus_store = _runtime_corpus_store(args)
         runtime = _chat_runtime(
             journal,
-            artifact_store=_runtime_artifact_store(args),
+            artifact_store=artifact_store,
             memory_store=_memory_store(args, create_default=False),
-            research_corpus_store=_runtime_corpus_store(args),
-            retrieval_operator=live_retrieval.build_operator() if live_retrieval is not None else None,
+            research_corpus_store=research_corpus_store,
+            retrieval_operator=_build_live_retrieval_operator(
+                live_retrieval,
+                artifact_store=artifact_store,
+                corpus_store=research_corpus_store,
+            )
+            if live_retrieval is not None
+            else None,
             live_model=_agent_uses_live_model(args),
             model=args.model,
             profile=args.profile,
@@ -1011,6 +1028,21 @@ def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | 
     return config
 
 
+def _build_live_retrieval_operator(
+    config: LiveRetrievalConfig,
+    *,
+    artifact_store: ArtifactStore | None,
+    corpus_store: ResearchCorpusStore | None,
+) -> RetrievalOperator:
+    parameters = inspect.signature(config.build_operator).parameters
+    if "artifact_store" in parameters or "corpus_store" in parameters:
+        return config.build_operator(
+            artifact_store=artifact_store,
+            corpus_store=corpus_store,
+        )
+    return config.build_operator()
+
+
 def _live_retrieval_doctor_config(args) -> JsonObject:
     if not bool(getattr(args, "live_retrieval", False)):
         return {"requested": False, "config": None, "issues": [], "operator": None}
@@ -1423,14 +1455,22 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         if isinstance(live_retrieval, dict):
             return live_retrieval
         memory_store = _memory_store(args, create_default=False)
+        artifact_store = _runtime_artifact_store(args)
+        research_corpus_store = _runtime_corpus_store(args)
         runtime = ResidentRuntime(
             queue=queue,
             chat_runtime=_chat_runtime(
                 journal,
-                artifact_store=_runtime_artifact_store(args),
+                artifact_store=artifact_store,
                 memory_store=memory_store,
-                research_corpus_store=_runtime_corpus_store(args),
-                retrieval_operator=live_retrieval.build_operator() if live_retrieval is not None else None,
+                research_corpus_store=research_corpus_store,
+                retrieval_operator=_build_live_retrieval_operator(
+                    live_retrieval,
+                    artifact_store=artifact_store,
+                    corpus_store=research_corpus_store,
+                )
+                if live_retrieval is not None
+                else None,
                 live_model=_agent_uses_live_model(args),
                 model=getattr(args, "model", None),
                 profile=getattr(args, "profile", "balanced"),
