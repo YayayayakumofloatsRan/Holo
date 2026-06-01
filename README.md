@@ -211,6 +211,11 @@ The live retrieval chain is now broader than a single search endpoint:
   content, and they remain secondary evidence unless paired with primary
   filings, issuer materials, or official statistics;
 - configured JSON HTTP search providers can sit in the same fallback chain.
+- `aggregate_search` can be enabled for live retrieval to collect candidates
+  from multiple providers, rank them by query relevance and source authority,
+  and only then apply the source budget. This is useful for longer research
+  loops where a generic first provider should not prevent later primary or
+  corpus sources from being considered.
 
 For crawl-only live inspection:
 
@@ -221,6 +226,15 @@ HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 python3 holo-v3 retrieval-providers --mode live-http
 ```
+
+For multi-provider research, set:
+
+```bash
+HOLO_V3_LIVE_SEARCH_STRATEGY=aggregate
+HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER=3
+```
+
+The default remains `fallback` to preserve narrow live-smoke behavior.
 
 For a model-backed live retrieval run, the model still only proposes
 `retrieval.run`. The host binds execution metadata such as `max_fetches`,

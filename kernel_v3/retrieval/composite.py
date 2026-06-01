@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+from dataclasses import replace
+
+from kernel_v3.research.profiles import profile_by_id
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
+from kernel_v3.retrieval.rank import rank_sources
 
 
 class FallbackSearchProvider:
@@ -89,6 +94,108 @@ class FallbackSearchProvider:
         return dict(getattr(self, "_last_search_diagnostics", {}))
 
 
+class AggregateSearchProvider:
+    provider_id = "aggregate_search"
+    live_network = False
+    default_enabled = True
+    profile_aware = False
+
+    def __init__(
+        self,
+        providers: list[SearchProvider],
+        *,
+        max_sources_per_provider: int | None = None,
+    ) -> None:
+        self.providers = list(providers)
+        self.max_sources_per_provider = max_sources_per_provider
+        self.live_network = any(bool(getattr(provider, "live_network", False)) for provider in self.providers)
+        self.default_enabled = any(bool(getattr(provider, "default_enabled", True)) for provider in self.providers)
+        self.profile_aware = any(bool(getattr(provider, "profile_aware", False)) for provider in self.providers)
+        self.supported_research_profiles = _unique(
+            [
+                profile
+                for provider in self.providers
+                for profile in getattr(provider, "supported_research_profiles", [])
+                if isinstance(profile, str)
+            ]
+        )
+        self.capability_diagnostics = {
+            "provider_count": len(self.providers),
+            "enabled_provider_count": sum(1 for provider in self.providers if _provider_enabled(provider)),
+            "max_sources_per_provider": self.max_sources_per_provider,
+            "providers": [
+                provider_capability(provider, provider_kind="search").to_dict()
+                for provider in self.providers
+            ],
+        }
+
+    def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
+        attempts = []
+        collected: list[SearchSource] = []
+        seen_uris: set[str] = set()
+        provider_goal = _provider_goal(goal, max_sources_per_provider=self.max_sources_per_provider)
+        for provider in self.providers:
+            provider_id = getattr(provider, "provider_id", provider.__class__.__name__)
+            if not _provider_enabled(provider):
+                attempts.append(
+                    {
+                        "provider_id": provider_id,
+                        "source_count": 0,
+                        "accepted_source_count": 0,
+                        "status": "skipped",
+                        "reason": "disabled_by_default",
+                        "diagnostics": _provider_diagnostics(provider),
+                    }
+                )
+                continue
+            try:
+                sources = provider.search(query, goal=provider_goal, plan=plan)
+                error = None
+            except Exception as exc:
+                sources = []
+                error = type(exc).__name__
+            accepted = 0
+            for source in sources:
+                if source.uri in seen_uris:
+                    continue
+                seen_uris.add(source.uri)
+                collected.append(source)
+                accepted += 1
+            attempts.append(
+                {
+                    "provider_id": provider_id,
+                    "source_count": len(sources),
+                    "accepted_source_count": accepted,
+                    "status": "failed" if error else "ok",
+                    "diagnostics": _provider_diagnostics(provider),
+                    **({"error": error} if error else {}),
+                }
+            )
+        ranked = rank_sources(
+            goal,
+            collected,
+            research_profile=profile_by_id(_research_profile_id(goal)),
+        )
+        by_id = {source.source_id: source for source in collected}
+        ordered = [
+            by_id[item.source_id]
+            for item in ranked
+            if item.source_id in by_id
+        ]
+        self._last_search_diagnostics = {
+            "provider_id": self.provider_id,
+            "status": "ok" if ordered else _empty_status(attempts),
+            "attempts": attempts,
+            "collected_source_count": len(collected),
+            "returned_source_count": len(ordered[: goal.max_sources]),
+            "query_hash": _hash_text(query),
+        }
+        return ordered[: goal.max_sources]
+
+    def search_diagnostics(self):
+        return dict(getattr(self, "_last_search_diagnostics", {}))
+
+
 class RoutingFetchProvider:
     provider_id = "routing_fetch"
     live_network = False
@@ -169,3 +276,19 @@ def _empty_status(attempts: list[dict]) -> str:
     if _all_attempts_skipped(attempts):
         return "skipped"
     return "empty"
+
+
+def _provider_goal(goal: SearchGoal, *, max_sources_per_provider: int | None) -> SearchGoal:
+    if max_sources_per_provider is None:
+        return goal
+    limit = max(1, min(int(goal.max_sources), int(max_sources_per_provider)))
+    return replace(goal, max_sources=limit)
+
+
+def _research_profile_id(goal: SearchGoal) -> str | None:
+    value = goal.metadata.get("research_profile_id", goal.metadata.get("research_profile"))
+    return value if isinstance(value, str) and value else None
+
+
+def _hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()

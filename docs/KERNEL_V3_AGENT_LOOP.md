@@ -243,6 +243,16 @@ query-matching research pages over generic navigation links. This improves the
 agent loop under small `max_sources`/`max_fetches` guards without adding a
 site-specific phrase table.
 
+Live retrieval can also use an aggregate search strategy. In fallback mode, the
+first provider that returns any source wins. In aggregate mode, the host asks
+each enabled provider for a bounded number of sources, deduplicates by URI,
+then ranks the combined set by query match and research-profile source
+authority before returning sources to the retrieval operator. This prevents a
+low-authority generic result from consuming the pre-rank source budget when a
+later provider has a primary filing, corpus document, or source-directory
+entry. The mode is explicit through live retrieval config and remains host
+controlled; the model still proposes only `retrieval.run`.
+
 ## Durable Memory Boundary
 
 Durable memory uses a split audit model. `MemoryStore` is the memory subsystem's

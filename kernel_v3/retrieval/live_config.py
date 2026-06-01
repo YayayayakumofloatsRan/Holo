@@ -12,7 +12,7 @@ from kernel_v3.retrieval.http_provider import (
     HttpTransport,
     JsonHttpSearchProvider,
 )
-from kernel_v3.retrieval.composite import FallbackSearchProvider
+from kernel_v3.retrieval.composite import AggregateSearchProvider, FallbackSearchProvider
 from kernel_v3.retrieval.crawl_provider import (
     BoundedCrawlSearchProvider,
     DirectUrlSearchProvider,
@@ -39,6 +39,8 @@ LIVE_CRAWL_MAX_PAGES_ENV = "HOLO_V3_LIVE_CRAWL_MAX_PAGES"
 LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV = "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE"
 LIVE_CRAWL_INCLUDE_SITEMAPS_ENV = "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS"
 LIVE_CRAWL_MAX_SITEMAP_URLS_ENV = "HOLO_V3_LIVE_CRAWL_MAX_SITEMAP_URLS"
+LIVE_SEARCH_STRATEGY_ENV = "HOLO_V3_LIVE_SEARCH_STRATEGY"
+LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV = "HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER"
 LIVE_TIMEOUT_SECONDS_ENV = "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS"
 LIVE_MAX_BYTES_ENV = "HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES"
 
@@ -193,6 +195,8 @@ class LiveRetrievalConfig:
     search: LiveJsonHttpSearchConfig = field(default_factory=LiveJsonHttpSearchConfig)
     crawl: LiveCrawlSearchConfig = field(default_factory=LiveCrawlSearchConfig)
     fetch: LiveHttpFetchConfig = field(default_factory=LiveHttpFetchConfig)
+    search_strategy: str = "fallback"
+    max_sources_per_provider: int | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "LiveRetrievalConfig":
@@ -239,6 +243,8 @@ class LiveRetrievalConfig:
                 timeout_seconds=timeout_seconds,
                 max_bytes=max_bytes,
             ),
+            search_strategy=_search_strategy(values.get(LIVE_SEARCH_STRATEGY_ENV)),
+            max_sources_per_provider=_optional_positive_int(values.get(LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV)),
         )
 
     def build_operator(
@@ -256,8 +262,16 @@ class LiveRetrievalConfig:
         if self.crawl.configured:
             search_providers.append(self.crawl.build_provider(transport=crawl_transport))
         search_providers.append(SourceDirectorySearchProvider())
+        search_provider = (
+            AggregateSearchProvider(
+                search_providers,
+                max_sources_per_provider=self.max_sources_per_provider,
+            )
+            if self.search_strategy == "aggregate"
+            else FallbackSearchProvider(search_providers)
+        )
         return RetrievalOperator(
-            search_provider=FallbackSearchProvider(search_providers),
+            search_provider=search_provider,
             fetch_provider=self.fetch.build_provider(transport=fetch_transport),
         )
 
@@ -265,6 +279,8 @@ class LiveRetrievalConfig:
         return {
             "enabled": self.enabled,
             "env_gate": LIVE_RETRIEVAL_ENV,
+            "search_strategy": self.search_strategy,
+            "max_sources_per_provider": self.max_sources_per_provider,
             "search": self.search.safe_diagnostics(),
             "crawl": self.crawl.safe_diagnostics(),
             "fetch": self.fetch.safe_diagnostics(),
@@ -303,6 +319,22 @@ def _positive_int(value: object, *, default: int) -> int:
     except ValueError:
         return default
     return max(1, parsed)
+
+
+def _optional_positive_int(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _search_strategy(value: object) -> str:
+    normalized = str(value or "fallback").strip().lower()
+    return "aggregate" if normalized in {"aggregate", "merged", "blend", "blended"} else "fallback"
 
 
 def _safe_url_diagnostics(uri: str) -> JsonObject:

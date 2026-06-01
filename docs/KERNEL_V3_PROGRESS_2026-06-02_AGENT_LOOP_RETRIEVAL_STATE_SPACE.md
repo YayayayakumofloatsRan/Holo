@@ -101,6 +101,12 @@
   and competitive-landscape tasks set `source_authority_requirement` to
   `secondary_or_better`, allowing reputable news/market-data evidence for
   current context while preserving primary-source gating for filing claims.
+- `aggregate_search` was added as an explicit live retrieval search strategy.
+  It collects bounded candidates from every enabled search provider,
+  deduplicates by URI, and ranks the merged set by query/source authority before
+  the retrieval operator applies its source/fetch budget. This avoids a generic
+  first provider preventing later primary/corpus/source-directory candidates
+  from being considered.
 
 ## Validation
 
@@ -113,7 +119,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-477 passed
+480 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -158,6 +164,9 @@ Additional deterministic coverage now includes:
 - a two-step market-data plus market-news agent flow uses those source-query
   URLs, journals research profile/authority requirements, performs two
   retrieval loop actions, and finalizes from two citations.
+- aggregate search provider tests show that a low-authority generic web result
+  and a later SEC primary filing can be merged, ranked, and handed to the
+  agent so only the SEC filing is fetched under a one-source/one-fetch budget.
 
 Live model scenarios:
 
