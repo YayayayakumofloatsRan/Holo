@@ -15,6 +15,7 @@ from kernel_v3.processors import (
     EVALUATOR_PROMPT_CONTRACT,
     PLANNER_SCHEMA,
     PLANNER_PROMPT_CONTRACT,
+    PROCESSOR_SYSTEM_PROMPT,
     SEMANTIC_INTAKE_PROMPT_CONTRACT,
     SYNTHESIZER_PROMPT_CONTRACT,
     DeepSeekProvider,
@@ -92,6 +93,14 @@ def test_phase5_processor_prompt_contracts_include_json_examples_for_model_imita
         lowered = contract.lower()
         assert "example" in lowered
         assert "{" in contract and "}" in contract
+
+
+def test_phase5_roleplay_style_contract_avoids_parenthesized_stage_directions_by_default():
+    combined = "\n".join([PROCESSOR_SYSTEM_PROMPT, PLANNER_PROMPT_CONTRACT, SYNTHESIZER_PROMPT_CONTRACT]).lower()
+
+    assert "roleplay" in combined
+    assert "parenthesized stage directions" in combined
+    assert "unless the user explicitly" in combined
 
 
 def test_phase5_malformed_planner_json_is_rejected_and_journaled_without_crashing_loop():
@@ -737,8 +746,13 @@ def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets
     assert packet["body"]["response_format"] == {"type": "json_object"}
     assert packet["body"]["thinking"] == {"type": "disabled"}
     assert packet["body"]["temperature"] == 0.0
-    assert isinstance(packet["body"]["messages"][0]["content"], dict)
-    assert packet["body"]["messages"][0]["content"]["chars"] == len(request.prompt)
+    system_message = packet["body"]["messages"][0]
+    user_message = packet["body"]["messages"][1]
+    assert system_message["role"] == "system"
+    assert "parenthesized stage directions" in system_message["content"]
+    assert user_message["role"] == "user"
+    assert isinstance(user_message["content"], dict)
+    assert user_message["content"]["chars"] == len(request.prompt)
     assert secret not in encoded
     assert request.prompt not in encoded
 

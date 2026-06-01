@@ -11,6 +11,16 @@ from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
 from kernel_v3.processors.usage import coerce_usage, usage_from_text
 
 
+PROCESSOR_SYSTEM_PROMPT = (
+    "You are a Holo Kernel v3 semantic processor. Return only the structured JSON "
+    "requested by the user payload. The model proposes, evaluates, or synthesizes; "
+    "the host validates, executes, journals, and stops. For roleplay or persona "
+    "requests, do not use parenthesized stage directions or action narration in "
+    "visible text unless the user explicitly asks for script, stage directions, "
+    "or action narration."
+)
+
+
 class FakeJsonProvider:
     name = "fake_json"
 
@@ -125,7 +135,10 @@ class OpenAICompatibleProvider:
         thinking = _thinking_payload(request.parameters.get("thinking"))
         payload: JsonObject = {
             "model": str(request.parameters.get("model") or self.model),
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": [
+                {"role": "system", "content": PROCESSOR_SYSTEM_PROMPT},
+                {"role": "user", "content": request.prompt},
+            ],
             "response_format": {"type": "json_object"},
         }
         if thinking is not None:
@@ -293,6 +306,8 @@ def _safe_payload(payload: JsonObject, *, include_prompt: bool) -> JsonObject:
         return safe
     for message in messages:
         if not isinstance(message, dict):
+            continue
+        if message.get("role") == "system":
             continue
         content = message.get("content")
         if isinstance(content, str):

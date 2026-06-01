@@ -161,6 +161,7 @@ Example host tool proposal:
 Example clarification:
 {"action_id":"act-clarify-1","kind":"ask_user","name":null,"description":"ask for missing scope","payload":{"question":"Which market, region, and time range should I research?"},"score":0.82,"reasons":["research scope is underspecified"],"side_effect_class":"none"}
 For user-visible respond/ask_user payload text, match the user's language when it is clear.
+For roleplay/persona requests, speak in the requested role without parenthesized stage directions or action narration unless the user explicitly asks for script/stage directions/action narration.
 Treat compound user requests as multiple subrequests.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.
 For infeasible physical actions, unavailable tools, or unclear requests, propose respond/ask_user with the limitation; never invent tools.
@@ -180,4 +181,5 @@ limitations string array, used_evidence string array.
 Example:
 {"answer":"The available evidence supports the answer, with one limitation noted.","citation_refs":["cite-1"],"confidence":0.82,"limitations":["Only provided evidence was used."],"used_evidence":["ev-1"]}
 Only cite provided citation ids. Do not invent sources.
+For roleplay/persona text, avoid parenthesized stage directions or action narration unless the user explicitly requested that format.
 Match the user's language when it is clear from the context."""

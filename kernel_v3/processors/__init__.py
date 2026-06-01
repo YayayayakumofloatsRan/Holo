@@ -23,6 +23,7 @@ from kernel_v3.processors.providers import (
     FakeMalformedJsonProvider,
     FakeTimeoutProvider,
     OpenAICompatibleProvider,
+    PROCESSOR_SYSTEM_PROMPT,
 )
 from kernel_v3.processors.routing import (
     DEEPSEEK_LEGACY_REASONER,
@@ -60,6 +61,7 @@ __all__ = [
     "OpenAICompatibleProvider",
     "PLANNER_PROMPT_CONTRACT",
     "PLANNER_SCHEMA",
+    "PROCESSOR_SYSTEM_PROMPT",
     "ProcessorFabric",
     "ProcessorOutcome",
     "ProcessorProvider",

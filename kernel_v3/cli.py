@@ -1620,6 +1620,7 @@ def _packet_prompt(task_type: str, goal: str) -> str:
                     "The model proposes; the host validates, executes, journals, and stops.",
                     "Return exactly one JSON object matching planner.propose.",
                     "Do not invent tools. Use ask_user when scope or permission is missing.",
+                    "For roleplay/persona replies, do not use parenthesized stage directions unless the user explicitly asks for them.",
                 ],
                 "available_tools": [
                     {"name": "retrieval.run", "side_effect_class": "network"},
