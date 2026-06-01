@@ -84,21 +84,25 @@ Kernel v3 currently contains the infrastructure for:
   source policy instead of collapsing into workspace mode;
 - a broader semantic capability/state surface for Hermes-style growth:
   roleplay/persona, document/report/email drafting, artifact generation,
-  web/market research, finance competitive landscape, data/table analysis,
+  web/market research, finance competitive landscape, legal/contract,
+  medical-information, education, creative, communication, operations,
+  product, risk/compliance, cybersecurity-review, data/table analysis,
   code/test work, project/task status, calendar/reminder intent, transport
   boundaries, credential/secret boundaries, browser/session boundaries, and
-  device-control boundaries are represented explicitly even when they are only
-  planned or host-only;
+  device-control boundaries are represented explicitly even when they are
+  only planned or host-only;
 - planner-visible semantic state axes beyond workspace, including autonomy,
   world model, resource kind, action phase, temporal status, source authority,
   identity boundary, communication channel, and risk;
 - per-intent semantic state profiles in the task graph. Each node now carries
   host-visible `domain`, `activity`, `resource`, `execution_surface`,
   `permission_state`, `route_class`, capability families/statuses, evidence
-  posture, output contract, autonomy, and risk posture, so broad model packets
-  preserve finance, database, cloud, workflow, knowledge-base, multimodal,
-  resident, transport, calendar, system, and security state without pretending
-  those categories are executable tools;
+  posture, output contract, autonomy, risk posture, and expandable
+  `state_axes`, so broad model packets preserve finance, legal, medical,
+  education, communication, operations, product, risk, cybersecurity,
+  database, cloud, workflow, knowledge-base, multimodal, resident, transport,
+  calendar, system, and security state without pretending those categories
+  are executable tools;
 - runtime state-profile projection: every agent task journals
   `agent_state_profile`, and planner context exposes top-level
   `semantic_state_profiles` plus `semantic_state_profile_summary`. This keeps

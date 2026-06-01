@@ -156,12 +156,29 @@ def test_phase94_semantic_capability_catalog_is_not_workspace_only():
     assert "workflow" in families
     assert "knowledge_base" in families
     assert "multimodal" in families
+    assert "legal" in families
+    assert "medical" in families
+    assert "education" in families
+    assert "creative" in families
+    assert "communication" in families
+    assert "operations" in families
+    assert "product" in families
+    assert "risk" in families
+    assert "cybersecurity" in families
     assert "database_query" in catalog["task_domains"]
     assert "workflow_automation" in catalog["task_domains"]
     assert "portfolio_risk_research" in catalog["task_domains"]
+    assert "communication_drafting" in catalog["task_domains"]
+    assert "operations_planning" in catalog["task_domains"]
+    assert "product_analysis" in catalog["task_domains"]
+    assert "risk_compliance_review" in catalog["task_domains"]
+    assert "cybersecurity_review" in catalog["task_domains"]
     assert "database.query" in catalog["not_default_or_requires_configuration"]
     assert "cloud.resource.inspect" in catalog["not_default_or_requires_configuration"]
     assert "workflow.automation.run" in catalog["not_default_or_requires_configuration"]
+    assert "legal.research" in catalog["not_default_or_requires_configuration"]
+    assert "medical.research" in catalog["not_default_or_requires_configuration"]
+    assert "communication.send" in catalog["not_default_or_requires_configuration"]
 
 
 def test_phase94_task_graph_nodes_preserve_broad_state_profiles():
@@ -299,6 +316,133 @@ def test_phase94_state_profile_values_match_declared_state_space():
         assert profile["autonomy"] in dimensions["autonomy"]
         assert profile["risk_posture"] in dimensions["risk"]
         assert profile["route_class"] in dimensions["route_class"]
+        for axis, value in profile["state_axes"].items():
+            assert axis in dimensions
+            assert value in dimensions[axis]
+
+
+def test_phase94_state_profiles_cover_hermes_level_non_workspace_domains():
+    catalog = semantic_capability_catalog()
+    dimensions = catalog["state_dimensions"]
+    intake = SemanticIntake(
+        intake_id="semantic-intake-1",
+        goal="cover professional, communication, operations, product, and risk domains",
+        primary_intent="broad_professional_work",
+        suggested_mode="direct_answer",
+        compound=True,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "legal_research",
+                "text": "research a regulation",
+                "sequence_index": 1,
+                "required_capabilities": ["legal.research"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {"evidence_required": True, "citations_required": True},
+            },
+            {
+                "kind": "medical_information",
+                "text": "explain a general health concept",
+                "sequence_index": 2,
+                "required_capabilities": ["medical.information"],
+                "risk": "normal",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "education_tutoring",
+                "text": "teach a topic",
+                "sequence_index": 3,
+                "required_capabilities": ["education.tutor"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "communication_drafting",
+                "text": "draft a customer update",
+                "sequence_index": 4,
+                "required_capabilities": ["communication.draft"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "operations_planning",
+                "text": "plan an operations runbook",
+                "sequence_index": 5,
+                "required_capabilities": ["operations.plan"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "product_analysis",
+                "text": "analyze a product workflow",
+                "sequence_index": 6,
+                "required_capabilities": ["product.analysis"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "risk_compliance_review",
+                "text": "review controls and risks",
+                "sequence_index": 7,
+                "required_capabilities": ["risk.compliance_review"],
+                "risk": "normal",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "cybersecurity_review",
+                "text": "review a defensive security checklist",
+                "sequence_index": 8,
+                "required_capabilities": ["cybersecurity.review"],
+                "risk": "normal",
+                "status": "ready",
+                "metadata": {},
+            },
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+
+    graph = task_graph_from_semantic(intake)
+    profiles = [node["metadata"]["state_profile"] for node in graph.nodes]
+    summary = graph.metadata["state_profile_summary"]
+
+    assert {
+        "legal",
+        "medical",
+        "education",
+        "communication",
+        "operations",
+        "product",
+        "risk",
+        "cybersecurity",
+    }.issubset(set(summary["domains"]))
+    assert "workspace" not in summary["domains"]
+    assert "state_axes" in summary
+    assert "legal_research" in summary["state_axes"]["domain_profile"]
+    assert "medical_information" in summary["state_axes"]["domain_profile"]
+    assert "education_tutoring" in summary["state_axes"]["domain_profile"]
+    assert "communication_drafting" in summary["state_axes"]["domain_profile"]
+    assert "operations_planning" in summary["state_axes"]["domain_profile"]
+    assert "product_analysis" in summary["state_axes"]["domain_profile"]
+    assert "risk_compliance_review" in summary["state_axes"]["domain_profile"]
+    assert "cybersecurity_review" in summary["state_axes"]["domain_profile"]
+    assert "retrieval" in summary["state_axes"]["execution_surface"]
+    assert "workflow_engine" in summary["state_axes"]["execution_surface"]
+    assert "message_draft" in summary["state_axes"]["resource_kind"]
+    assert "professional_domain_role" in summary["state_axes"]["identity_boundary"]
+    for profile in profiles:
+        for axis, value in profile["state_axes"].items():
+            assert axis in dimensions
+            assert value in dimensions[axis]
 
 
 def test_phase94_agent_context_exposes_state_profile_summary_to_planner():

@@ -45,7 +45,14 @@ class SemanticStateProfile(Contract):
     output_contract: str
     autonomy: str
     risk_posture: str
+    state_axes: JsonObject = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: JsonObject):
+        payload = dict(data)
+        payload.setdefault("state_axes", {})
+        return super().from_dict(payload)
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -251,10 +251,11 @@ evidence sufficiency, and final termination.
 
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, roleplay, document/report work,
-workspace, retrieval, web research, finance, memory, artifact, data, database,
-code, cloud, workflow, knowledge-base, multimodal, project, resident,
-transport, calendar, browser/session boundaries, system, and security families
-with statuses such as `enabled`,
+workspace, retrieval, web research, finance, legal, medical, education,
+creative, communication, operations, product, risk, cybersecurity, memory,
+artifact, data, database, code, cloud, workflow, knowledge-base, multimodal,
+project, resident, transport, calendar, browser/session boundaries, system,
+and security families with statuses such as `enabled`,
 `available_with_permission`, `not_configured`, `planned`, and `host_only`. It
 also exposes state axes such as intent scope, execution surface, evidence,
 permissions, output contract, resident state, user control, autonomy, world
@@ -270,18 +271,19 @@ transport, browser, and device boundaries out of `ToolRegistry`.
 Each task-graph node also gets a compact `metadata.state_profile`. The profile
 records `domain`, `activity`, `resource`, `execution_surface`,
 `permission_state`, `route_class`, capability families/statuses, evidence
-posture, output contract, autonomy, and risk posture. `AgentRuntime` passes a
-top-level `semantic_state_profiles` list and `semantic_state_profile_summary`
-into planner context, and journals the same projection as
-`agent_state_profile`. This gives model-backed planning a richer state
-interface than the recipe mode alone: a single node can carry, for example,
-both `workflow` and `knowledge_base` capability families, while the host still
-marks `knowledge_base.maintain` as planned/non-executable. The state-profile
-vocabulary is kept in sync with the declared `semantic_state_space`, so profile
-values such as `database_table`, `cloud_resource`, `media_input`,
-`external_account_boundary`, `planned`, `host_only`, and
-`failure_or_boundary_report` are explicit host-visible states rather than
-ad-hoc strings hidden in test fixtures.
+posture, output contract, autonomy, risk posture, and expandable `state_axes`.
+`AgentRuntime` passes a top-level `semantic_state_profiles` list and
+`semantic_state_profile_summary` into planner context, and journals the same
+projection as `agent_state_profile`. This gives model-backed planning a richer
+state interface than the recipe mode alone: a single node can carry, for
+example, both `workflow` and `knowledge_base` capability families, while the
+host still marks `knowledge_base.maintain` as planned/non-executable. The
+state-profile vocabulary is kept in sync with the declared
+`semantic_state_space`, so profile values such as `legal_source`,
+`medical_source`, `message_draft`, `workflow_run`, `database_table`,
+`cloud_resource`, `media_input`, `external_account_boundary`, `planned`,
+`host_only`, and `failure_or_boundary_report` are explicit host-visible states
+rather than ad-hoc strings hidden in test fixtures.
 
 Non-workspace research capabilities can still become executable when there is
 a safe host route. For example, `web.research`, `finance.market_news`,

@@ -139,17 +139,19 @@
   of relying only on `mode` or `workspace:*` tool names. Each profile records
   domain, activity, resource, execution surface, permission state, route class,
   capability families/statuses, evidence posture, output contract, autonomy,
-  and risk posture. Planner context receives a compact
-  `semantic_state_profile_summary`, so a model can distinguish finance,
-  database, cloud, workflow, knowledge-base, multimodal, resident, transport,
-  calendar, system, security, and physical-world boundary state while the host
-  still decides what can execute.
+  risk posture, and expandable `state_axes`. Planner context receives a
+  compact `semantic_state_profile_summary`, so a model can distinguish
+  finance, legal, medical, education, communication, operations, product,
+  risk, cybersecurity, database, cloud, workflow, knowledge-base, multimodal,
+  resident, transport, calendar, system, security, and physical-world boundary
+  state while the host still decides what can execute.
 - The runtime now projects those state profiles as first-class agent state:
   `context.state.semantic_state_profiles`,
   `context.state.semantic_state_profile_summary`, and a journaled
   `agent_state_profile` record. The declared `semantic_state_space` vocabulary
-  was also made self-consistent with generated profile values, including
-  database tables, cloud resources, media inputs, external-account boundaries,
+  was also made self-consistent with generated profile values, including legal
+  sources, medical sources, message drafts, workflow runs, database tables,
+  cloud resources, media inputs, external-account boundaries,
   planned/host-only permission states, and boundary/failure output contracts.
 - Source-directory-driven crawl was added behind explicit live retrieval env
   gates. `HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1` lets the bounded crawler draw
