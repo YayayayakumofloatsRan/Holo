@@ -402,6 +402,12 @@ loop; and the synthesizer produced a Chinese answer using known citation refs.
 The journal contained processor usage and retrieval/fetch records, but not the
 DeepSeek API key or raw secret environment values.
 
+Live DeepSeek user-acceptance checks now validate host-gated route sets instead
+of a single canned route. For example, broad market-research prompts may either
+ask for essential missing scope or perform a useful bounded `retrieval.run`
+when a provider is configured; the test no longer forces `ask_user` as the only
+valid outcome.
+
 ## Remaining Boundary
 
 This iteration improves the core loop and state/capability surface. It does not
