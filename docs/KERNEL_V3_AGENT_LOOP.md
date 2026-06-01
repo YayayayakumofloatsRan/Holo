@@ -44,6 +44,28 @@ Tool execution is bound to the policy decision for the exact action. A
 before calling the tool executor. This keeps direct registry callers aligned
 with the loop's host-owned validation path.
 
+## Tool Payload Boundary
+
+Planner output is not trusted as executable tool input merely because the tool
+name is allowlisted. `ToolRegistry` validates payloads against each
+`ToolManifest.input_schema` after policy binding and before executor dispatch.
+Schemas can define required fields, simple types, bounds, and safe aliases. For
+example, `workspace.search` requires a non-empty `query` and may canonicalize a
+model-proposed `path` alias into that query; `file.read` requires a non-empty
+workspace-relative `path`.
+
+This boundary is what lets live model planning remain broad without turning
+minor JSON-shape mistakes into runaway side effects. Invalid payloads become a
+blocked observation with `reason=invalid_tool_payload`, which re-enters the
+normal evaluator/workloop path instead of bypassing host control.
+
+Workspace search is intentionally lightweight. It skips internal runtime and
+VCS directories, caps matches, and stores only preview artifacts for search
+results. Full file bodies are collected only by `file.read`, where the
+workspace finalizer can turn the read observation into evidence and citations.
+This keeps the multi-step loop from exhausting artifact budgets before the
+agent can perform the follow-up read.
+
 ## Context Redaction Boundary
 
 `ContextPackCompiler` is the last host-owned boundary before planner,

@@ -119,6 +119,10 @@ thinking, reasoning effort, temperature, and timeout from the processor task,
 prompt size, and `--latency-target fast|balanced|quality|thorough`. Use
 `--generation-mode manual` or explicit `--thinking/--temperature` overrides
 when a run needs fixed generation behavior.
+Tool calls remain host-validated after model planning: every tool payload is
+checked against the tool manifest schema before execution, and workspace search
+is bounded to preview matches so a bad query cannot exhaust the loop's artifact
+budget before a follow-up `file.read`.
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "inspect a large workspace file" \

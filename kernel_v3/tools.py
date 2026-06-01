@@ -11,6 +11,17 @@ from kernel_v3.context.artifacts import ArtifactStore
 from kernel_v3.contracts import ArtifactRef, CandidateAction, JsonObject, Observation, PolicyDecision, ToolManifest
 
 WORKSPACE_PREVIEW_CHARS = 240
+WORKSPACE_SEARCH_MAX_MATCHES = 20
+WORKSPACE_SEARCH_SKIP_DIRS = {
+    ".git",
+    ".holo_runtime",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+}
 
 
 @dataclass(frozen=True)
@@ -111,7 +122,7 @@ class ToolRegistry:
                 "network",
                 permissions_required=["network:fetch"],
                 enabled=False,
-                input_schema={"url": "str"},
+                input_schema={"url": {"type": "str", "required": True, "min_length": 1}},
             ),
         )
         return registry
@@ -203,8 +214,17 @@ class ToolRegistry:
                 {"reason": "tool_disabled", "tool": tool_name},
                 kind="policy_block",
             )
-        self.executed_actions.append(action)
-        raw = self._tools[tool_name].executor(_action_with_execution_context(action, execution_context))
+        canonical_payload, schema_error = _canonical_payload(action.payload, manifest.input_schema)
+        if schema_error is not None:
+            return _tool_result(
+                action,
+                "blocked",
+                {"reason": "invalid_tool_payload", "tool": tool_name, "error": schema_error},
+                kind="policy_block",
+            )
+        executable_action = replace(action, payload=canonical_payload)
+        self.executed_actions.append(executable_action)
+        raw = self._tools[tool_name].executor(_action_with_execution_context(executable_action, execution_context))
         result = raw if isinstance(raw, ToolResult) else _result_from_observation(raw)
         if result.artifact_refs:
             return result
@@ -303,7 +323,37 @@ def _workspace_manifest(name: str, operator_kind: str, side_effect_class: str) -
         operator_kind,
         side_effect_class,
         permissions_required=permissions,
+        input_schema=_workspace_input_schema(name),
     )
+
+
+def _workspace_input_schema(name: str) -> JsonObject:
+    if name == "workspace.search":
+        return {
+            "query": {
+                "type": "str",
+                "required": True,
+                "min_length": 1,
+                "aliases": ["path"],
+                "description": "Non-empty search query. If a target file path is known, use it as query.",
+            },
+            "max_matches": {"type": "int", "required": False, "min": 1, "max": WORKSPACE_SEARCH_MAX_MATCHES},
+        }
+    if name == "file.read":
+        return {
+            "path": {
+                "type": "str",
+                "required": True,
+                "min_length": 1,
+                "description": "Workspace-relative file path.",
+            }
+        }
+    if name == "workspace.write":
+        return {
+            "path": {"type": "str", "required": True, "min_length": 1},
+            "text": {"type": "str", "required": True},
+        }
+    return {}
 
 
 def _execute_respond(action: CandidateAction) -> Observation:
@@ -367,23 +417,116 @@ def _user_payload(payload: JsonObject) -> JsonObject:
     return {key: value for key, value in payload.items() if not str(key).startswith("_host_")}
 
 
+def _canonical_payload(payload: JsonObject, schema: JsonObject) -> tuple[JsonObject, str | None]:
+    if not schema:
+        return dict(payload), None
+    canonical = dict(payload)
+    for key, raw_spec in schema.items():
+        if str(key).startswith("_") or key in {"network_fetch_cost_field", "default_network_fetch_cost"}:
+            continue
+        spec = _schema_spec(raw_spec)
+        value = canonical.get(key)
+        if value is None:
+            for alias in spec["aliases"]:
+                if alias in canonical and canonical[alias] is not None:
+                    value = canonical[alias]
+                    break
+        if value is None:
+            if spec["required"]:
+                return canonical, f"missing_required_field:{key}"
+            continue
+        coerced, error = _coerce_schema_value(key, value, spec)
+        if error is not None:
+            return canonical, error
+        canonical[key] = coerced
+    return canonical, None
+
+
+def _schema_spec(raw_spec: object) -> JsonObject:
+    if isinstance(raw_spec, dict):
+        aliases = raw_spec.get("aliases")
+        return {
+            "type": str(raw_spec.get("type", "object")),
+            "required": bool(raw_spec.get("required", True)),
+            "min_length": raw_spec.get("min_length"),
+            "min": raw_spec.get("min"),
+            "max": raw_spec.get("max"),
+            "aliases": [str(item) for item in aliases] if isinstance(aliases, list) else [],
+        }
+    text = str(raw_spec)
+    return {
+        "type": text.split()[0],
+        "required": "optional" not in text,
+        "min_length": None,
+        "min": None,
+        "max": None,
+        "aliases": [],
+    }
+
+
+def _coerce_schema_value(key: str, value: object, spec: JsonObject) -> tuple[object, str | None]:
+    expected = str(spec["type"])
+    if expected == "str":
+        if not isinstance(value, str):
+            return value, f"invalid_field_type:{key}:str"
+        parsed = value.strip()
+        min_length = _optional_int(spec.get("min_length"))
+        if min_length is not None and len(parsed) < min_length:
+            return value, f"invalid_field_value:{key}:min_length"
+        return parsed, None
+    if expected == "int":
+        try:
+            parsed_int = int(value)
+        except (TypeError, ValueError):
+            return value, f"invalid_field_type:{key}:int"
+        min_value = _optional_int(spec.get("min"))
+        max_value = _optional_int(spec.get("max"))
+        if min_value is not None:
+            parsed_int = max(min_value, parsed_int)
+        if max_value is not None:
+            parsed_int = min(max_value, parsed_int)
+        return parsed_int, None
+    if expected in {"object", "dict"}:
+        if not isinstance(value, dict):
+            return value, f"invalid_field_type:{key}:object"
+        return value, None
+    if expected == "list[str]":
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            return value, f"invalid_field_type:{key}:list[str]"
+        return value, None
+    if expected == "list":
+        if not isinstance(value, list):
+            return value, f"invalid_field_type:{key}:list"
+        return value, None
+    return value, None
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _fake_workspace_search(files: dict[str, str], *, artifact_store: ArtifactStore | None) -> ToolExecutor:
     def execute(action: CandidateAction) -> Observation:
-        query = str(action.payload.get("query", ""))
+        query = str(action.payload.get("query", "")).strip()
+        limit = _search_limit(action.payload.get("max_matches"))
         matches = []
         artifacts: list[ArtifactRef] = []
         for path, text in files.items():
             if query.lower() not in text.lower() and query.lower() not in path.lower():
                 continue
-            artifact = _workspace_payload_artifact(
+            artifact = _workspace_search_artifact(
                 artifact_store=artifact_store,
-                kind="workspace_search_match",
                 path=path,
                 text=text,
             )
             artifacts.append(artifact)
             matches.append(_workspace_text_payload(path=path, text=text, artifact=artifact))
-        return ToolResult(observation=_tool_observation(action, "ok", {"matches": matches}), artifact_refs=artifacts)
+            if len(matches) >= limit:
+                break
+        return ToolResult(observation=_tool_observation(action, "ok", {"query": query, "matches": matches}), artifact_refs=artifacts)
 
     return execute
 
@@ -418,27 +561,31 @@ class _Workspace:
         self.artifact_store = artifact_store
 
     def search(self, action: CandidateAction) -> ToolResult:
-        query = str(action.payload.get("query", ""))
+        query = str(action.payload.get("query", "")).strip()
+        limit = _search_limit(action.payload.get("max_matches"))
+        lowered_query = query.lower()
         matches: list[JsonObject] = []
         artifacts: list[ArtifactRef] = []
         for path in sorted(self.root.rglob("*")):
-            if not path.is_file():
+            rel_path = path.relative_to(self.root)
+            if _skip_workspace_path(rel_path) or not path.is_file():
                 continue
-            rel = path.relative_to(self.root).as_posix()
+            rel = rel_path.as_posix()
             try:
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
-            if query.lower() in text.lower() or query.lower() in rel.lower():
-                artifact = _workspace_payload_artifact(
+            if lowered_query in text.lower() or lowered_query in rel.lower():
+                artifact = _workspace_search_artifact(
                     artifact_store=self.artifact_store,
-                    kind="workspace_search_match",
                     path=rel,
                     text=text,
                 )
                 artifacts.append(artifact)
                 matches.append(_workspace_text_payload(path=rel, text=text, artifact=artifact))
-        return ToolResult(observation=_tool_observation(action, "ok", {"matches": matches}), artifact_refs=artifacts)
+                if len(matches) >= limit:
+                    break
+        return ToolResult(observation=_tool_observation(action, "ok", {"query": query, "matches": matches}), artifact_refs=artifacts)
 
     def read(self, action: CandidateAction) -> ToolResult:
         rel = str(action.payload.get("path", ""))
@@ -593,6 +740,39 @@ def _workspace_payload_artifact(
     )
 
 
+def _workspace_search_artifact(
+    *,
+    artifact_store: ArtifactStore | None,
+    path: str,
+    text: str,
+) -> ArtifactRef:
+    preview = _preview_text(text, WORKSPACE_PREVIEW_CHARS)
+    payload_bytes = preview.encode("utf-8")
+    payload_hash = hashlib.sha256(f"{path}\n{preview}".encode("utf-8")).hexdigest()
+    metadata = {
+        "path": path,
+        "size_bytes": len(payload_bytes),
+        "preview": preview,
+        "full_size_bytes": len(text.encode("utf-8")),
+        "redaction_status": "search_preview_only",
+    }
+    if artifact_store is not None:
+        return artifact_store.write_blob(
+            kind="workspace_search_match",
+            payload=preview,
+            mime_type="text/plain",
+            metadata=metadata,
+            redaction_status="search_preview_only",
+        )
+    return ArtifactRef(
+        artifact_id=f"artifact-search-{payload_hash[:16]}",
+        kind="workspace_search_match",
+        uri=f"workspace://{path}",
+        payload_hash=payload_hash,
+        metadata=metadata,
+    )
+
+
 def _workspace_text_payload(*, path: str, text: str, artifact: ArtifactRef) -> JsonObject:
     size = artifact.metadata.get("size_bytes")
     preview = artifact.metadata.get("preview")
@@ -610,3 +790,14 @@ def _preview_text(text: str, limit: int) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 3)] + "..."
+
+
+def _search_limit(value: object) -> int:
+    parsed = _optional_int(value)
+    if parsed is None:
+        return WORKSPACE_SEARCH_MAX_MATCHES
+    return max(1, min(WORKSPACE_SEARCH_MAX_MATCHES, parsed))
+
+
+def _skip_workspace_path(path: Path) -> bool:
+    return any(part in WORKSPACE_SEARCH_SKIP_DIRS for part in path.parts)

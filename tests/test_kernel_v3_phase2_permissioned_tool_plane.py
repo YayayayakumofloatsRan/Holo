@@ -23,6 +23,9 @@ def test_tool_registry_exposes_stable_manifests_for_resources_and_operators():
         assert manifests["workspace.search"].operator_kind == "search"
         assert manifests["workspace.search"].side_effect_class == "read"
         assert manifests["workspace.search"].permissions_required == ["workspace:read"]
+        assert manifests["workspace.search"].input_schema["query"]["min_length"] == 1
+        assert manifests["workspace.search"].input_schema["query"]["aliases"] == ["path"]
+        assert manifests["file.read"].input_schema["path"]["min_length"] == 1
         assert manifests["workspace.write"].permissions_required == ["workspace:write"]
         assert manifests["shell.exec"].side_effect_class == "shell"
         assert manifests["network.fetch"].side_effect_class == "network"
@@ -79,6 +82,68 @@ def test_real_workspace_read_only_tools_work_under_workspace_root():
         assert raw_text not in encoded
         assert search.artifact_refs[0].payload_hash
         assert read.artifact_refs[0].artifact_id.startswith("artifact-workspace-")
+    finally:
+        _remove_dir(root)
+
+
+def test_workspace_search_payload_is_validated_canonicalized_and_bounded():
+    root = Path("kernel_v3/.test-phase2-search-schema")
+    _reset_dir(root)
+    try:
+        large_text = "needle " + ("large-body " * 2000)
+        (root / "README.md").write_text(large_text, encoding="utf-8")
+        for index in range(30):
+            (root / f"extra-{index}.txt").write_text("needle extra", encoding="utf-8")
+        (root / ".git").mkdir()
+        (root / ".git" / "hidden.txt").write_text("needle hidden", encoding="utf-8")
+        registry = ToolRegistry.with_permissioned_workspace(root=root)
+
+        missing = CandidateAction(
+            action_id="act-search-missing-query",
+            kind="tool",
+            name="workspace.search",
+            description="missing query",
+            score=1.0,
+            payload={},
+            reasons=[],
+            side_effect_class="read",
+        )
+        alias = CandidateAction(
+            action_id="act-search-path-alias",
+            kind="tool",
+            name="workspace.search",
+            description="path alias",
+            score=1.0,
+            payload={"path": "README.md"},
+            reasons=[],
+            side_effect_class="read",
+        )
+        broad = CandidateAction(
+            action_id="act-search-bounded",
+            kind="tool",
+            name="workspace.search",
+            description="bounded",
+            score=1.0,
+            payload={"query": "needle", "max_matches": 99},
+            reasons=[],
+            side_effect_class="read",
+        )
+
+        missing_result = registry.execute_with_artifacts(missing, policy_decision=_allowed_decision(missing))
+        alias_result = registry.execute_with_artifacts(alias, policy_decision=_allowed_decision(alias))
+        broad_result = registry.execute_with_artifacts(broad, policy_decision=_allowed_decision(broad))
+
+        assert missing_result.observation.status == "blocked"
+        assert missing_result.observation.content["reason"] == "invalid_tool_payload"
+        assert "missing_required_field:query" in missing_result.observation.content["error"]
+        assert alias_result.observation.status == "ok"
+        assert alias_result.observation.content["query"] == "README.md"
+        assert alias_result.observation.content["matches"][0]["path"] == "README.md"
+        assert alias_result.artifact_refs[0].kind == "workspace_search_match"
+        assert alias_result.artifact_refs[0].metadata["size_bytes"] < len(large_text.encode("utf-8"))
+        assert broad_result.observation.status == "ok"
+        assert len(broad_result.observation.content["matches"]) == 20
+        assert all(not match["path"].startswith(".git/") for match in broad_result.observation.content["matches"])
     finally:
         _remove_dir(root)
 

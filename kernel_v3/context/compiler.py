@@ -634,6 +634,7 @@ def _compact_tool_brief(brief: JsonObject) -> JsonObject:
     return {
         "name": brief.get("name"),
         "side_effect": brief.get("side_effect"),
+        "input_schema": brief.get("input_schema", {}),
     }
 
 

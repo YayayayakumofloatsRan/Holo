@@ -694,7 +694,11 @@ class _AgentContextCompiler:
             task,
             journal,
             tool_briefs=[
-                {"name": manifest.name, "side_effect": manifest.side_effect_class}
+                {
+                    "name": manifest.name,
+                    "side_effect": manifest.side_effect_class,
+                    "input_schema": manifest.input_schema,
+                }
                 for manifest in self.tool_manifests
             ],
             step_id=task.step_id,
@@ -981,8 +985,18 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         return {
             "mode": recipe.mode,
             "required_sequence": [
-                {"kind": "tool", "name": "workspace.search", "side_effect_class": "read"},
-                {"kind": "tool", "name": "file.read", "side_effect_class": "read"},
+                {
+                    "kind": "tool",
+                    "name": "workspace.search",
+                    "side_effect_class": "read",
+                    "payload_requirements": ["query: non-empty string; use the target path as query when known"],
+                },
+                {
+                    "kind": "tool",
+                    "name": "file.read",
+                    "side_effect_class": "read",
+                    "payload_requirements": ["path: non-empty workspace-relative file path"],
+                },
             ],
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "workspace.write"],

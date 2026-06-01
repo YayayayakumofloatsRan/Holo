@@ -6,6 +6,7 @@ from pathlib import Path
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
 from kernel_v3.trace import TraceRenderer
 
@@ -74,6 +75,87 @@ def test_phase6_workspace_answer_searches_reads_and_synthesizes_without_network(
     assert result.final_answer["citation_refs"] == ["workspace-cite-2"]
     assert "workspace grounded answer" in result.final_answer["answer"]
     assert not journal.records(task_id=result.task_id, kind="retrieval_report")
+
+
+def test_phase6_model_workspace_loop_recovers_path_alias_and_runs_multiple_steps():
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "planner.propose": [
+                        {
+                            "action_id": "act-search-with-path",
+                            "kind": "tool",
+                            "name": "workspace.search",
+                            "description": "search using a path alias",
+                            "payload": {"path": "docs/KERNEL_V3_AGENT_LOOP.md"},
+                            "score": 0.9,
+                            "reasons": ["locate the requested document"],
+                            "side_effect_class": "read",
+                        },
+                        {
+                            "action_id": "act-read-doc",
+                            "kind": "tool",
+                            "name": "file.read",
+                            "description": "read the requested document",
+                            "payload": {"path": "docs/KERNEL_V3_AGENT_LOOP.md"},
+                            "score": 0.9,
+                            "reasons": ["read evidence before answering"],
+                            "side_effect_class": "read",
+                        },
+                    ],
+                    "evaluator.assess": [
+                        {
+                            "status": "continue",
+                            "answer": None,
+                            "stop_reason": None,
+                            "missing_evidence": ["file.read observation"],
+                        },
+                        {
+                            "status": "final_answer_ready",
+                            "answer": "ready",
+                            "stop_reason": "completed",
+                            "missing_evidence": [],
+                        },
+                    ],
+                    "synthesizer.answer": {
+                        "answer": "Kernel v3 supports multiple loop steps and host-owned termination.",
+                        "citation_refs": ["workspace-cite-2"],
+                        "confidence": 0.9,
+                        "limitations": [],
+                        "used_evidence": ["workspace-evidence-2"],
+                    },
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    runtime = AgentRuntime(
+        journal=journal,
+        processor_fabric=fabric,
+        workspace_files={
+            "docs/KERNEL_V3_AGENT_LOOP.md": "Kernel v3 supports multiple loop steps and host-owned termination."
+        },
+    )
+
+    result = runtime.run(
+        "read docs/KERNEL_V3_AGENT_LOOP.md and summarize loop behavior",
+        mode="workspace",
+        planner_mode="model",
+        evaluator_mode="model",
+        synthesizer_mode="model",
+    )
+
+    assert result.status == "completed"
+    assert _action_names(journal, result.task_id) == ["workspace.search", "file.read"]
+    observations = journal.records(task_id=result.task_id, kind="observation")
+    assert observations[0].data["content"]["query"] == "docs/KERNEL_V3_AGENT_LOOP.md"
+    assert observations[1].data["source"] == "tool:file.read"
+    decisions = [record.data["decision"] for record in journal.records(task_id=result.task_id, kind="termination_decision")]
+    assert decisions == ["continue", "final_answer"]
+    assert result.final_answer["citation_refs"] == ["workspace-cite-2"]
 
 
 def test_phase6_workspace_resume_does_not_finalize_from_stale_file_observation():

@@ -470,7 +470,7 @@ def register_retrieval_tool(
             enabled=True,
             description="retrieval.run",
             input_schema={
-                "query": "str",
+                "query": {"type": "str", "required": True, "min_length": 1, "aliases": ["goal"]},
                 "goal_id": "str optional",
                 "max_queries": "int optional",
                 "max_sources": "int optional",
