@@ -110,6 +110,17 @@ Current finance templates include:
 - UK Companies House company search;
 - FRED series search;
 - World Bank Data search.
+- CNINFO full-text search for China exchange disclosures;
+- HKEX title search for issuer announcements;
+- ASX issuer announcement endpoint by ASX code;
+- EDINET document search for Japanese securities reports;
+- SGX company announcements.
+
+Template specificity matters. SEC EDGAR expansion is limited to SEC/EDGAR,
+10-K/10-Q, and companyfacts style signals; generic "annual report" text is not
+enough to send an ASX/HKEX/SGX issuer task to EDGAR. Exchange-code templates
+require their corresponding normalized identifier, such as `asx_code`,
+`hkex_code`, or `sgx_code`.
 
 Template rendering journals only normal retrieval search attempts and provider
 diagnostics; it does not journal API keys, raw environment values, or fetched

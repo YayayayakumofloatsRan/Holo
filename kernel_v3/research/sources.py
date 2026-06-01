@@ -37,7 +37,7 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
                         "snippet": "Official SEC EDGAR full-text search entry point for the finance query.",
                         "source_kind": "official_search",
                         "required_values": ["query"],
-                        "match_any": ["sec", "edgar", "10-k", "10-q", "filing", "annual report", "companyfacts"],
+                        "match_any": ["sec", "edgar", "10-k", "10-q", "companyfacts"],
                     }
                 ]
             },
@@ -170,6 +170,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             required_identifiers=["ticker", "company Chinese name", "report period"],
             query_hints=["{ticker} 年报 site:cninfo.com.cn", "{company} 季度报告 site:sse.com.cn"],
             crawl_notes=["Prefer original PDF disclosures and exchange-hosted pages."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "cninfo-fulltext-search",
+                        "template": "https://www.cninfo.com.cn/new/fulltextSearch?notautosubmit=&keyWord={stock_code_or_ticker_url}",
+                        "title": "CNINFO disclosure search for {stock_code_or_ticker}",
+                        "snippet": "Official CNINFO full-text search entry point for China A-share annual, quarterly, and announcement disclosures.",
+                        "source_kind": "official_search",
+                        "required_values": ["stock_code_or_ticker"],
+                        "match_any": ["cninfo", "年报", "季报", "公告", "沪深", "a-share", "china"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-hkex-disclosures",
@@ -178,11 +191,24 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             source_family="exchange_filing",
             authority_level="primary",
             base_url="https://www.hkexnews.hk/",
-            allowed_hosts=["hkexnews.hk", "www.hkexnews.hk"],
+            allowed_hosts=["hkexnews.hk", "www.hkexnews.hk", "www1.hkexnews.hk"],
             use_cases=["HK listed issuer announcements", "annual/interim reports"],
             required_identifiers=["stock code", "issuer name", "announcement category"],
             query_hints=["{stock_code} annual report site:hkexnews.hk", "{issuer} announcement HKEX"],
             crawl_notes=["Record announcement date, stock code, and issuer name."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "hkex-title-search",
+                        "template": "https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=EN&market=SEHK&category=0",
+                        "title": "HKEX title search for {hkex_code}",
+                        "snippet": "Official HKEXnews title-search entry point for stock-code announcements and reports.",
+                        "source_kind": "official_search",
+                        "required_values": ["hkex_code"],
+                        "match_any": ["hkex", "hk", "announcement", "annual report", "interim report"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-uk-companies-house-filings",
@@ -241,6 +267,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             required_identifiers=["ASX code", "issuer name", "announcement type", "date range"],
             query_hints=["{asx_code} annual report ASX announcement", "{company} ASX results announcement"],
             crawl_notes=["Prefer issuer announcement PDFs hosted or linked from ASX."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "asx-announcements-by-code",
+                        "template": "https://www.asx.com.au/asx/v2/statistics/announcements.do?asxCode={asx_code_url}&by=asxCode&timeframe=D&period=M6",
+                        "title": "ASX announcements for {asx_code}",
+                        "snippet": "Official ASX announcements endpoint for issuer announcements and reports by ASX code.",
+                        "source_kind": "official_search",
+                        "required_values": ["asx_code"],
+                        "match_any": ["asx", "announcement", "annual report", "half-year", "results"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-japan-edinet-filings",
@@ -254,6 +293,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             required_identifiers=["issuer name", "EDINET code", "document type", "period"],
             query_hints=["{company} EDINET securities report", "{edinet_code} annual securities report"],
             crawl_notes=["Record EDINET code, document type, and filing date."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "edinet-document-search",
+                        "template": "https://disclosure2.edinet-fsa.go.jp/WEEK0010.aspx",
+                        "title": "EDINET document search for {edinet_code}",
+                        "snippet": "Official EDINET document-search entry point for Japanese securities reports and quarterly reports.",
+                        "source_kind": "official_search",
+                        "required_values": ["edinet_code"],
+                        "match_any": ["edinet", "securities report", "annual securities report", "quarterly report"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-sgx-announcements",
@@ -267,6 +319,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             required_identifiers=["stock code", "issuer name", "announcement category", "date range"],
             query_hints=["{issuer} annual report SGX announcement", "{stock_code} financial results SGX"],
             crawl_notes=["Record issuer, announcement category, and publication date."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "sgx-company-announcements",
+                        "template": "https://www.sgx.com/securities/company-announcements",
+                        "title": "SGX announcements for {sgx_code}",
+                        "snippet": "Official SGX company-announcements entry point for issuer announcements and financial results.",
+                        "source_kind": "official_search",
+                        "required_values": ["sgx_code"],
+                        "match_any": ["sgx", "announcement", "annual report", "financial results"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-global-official-statistics",

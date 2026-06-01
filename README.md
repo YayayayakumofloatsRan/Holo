@@ -90,6 +90,9 @@ Kernel v3 currently contains the infrastructure for:
   company/issuer names, and selected exchange codes are normalized once and
   reused by SEC EDGAR and source-query providers instead of being guessed
   independently inside each provider.
+- Non-US official disclosure entry points for finance retrieval, including
+  CNINFO, HKEX, ASX, EDINET, and SGX source-query templates. These remain
+  candidate source URLs; network fetch still requires explicit host allowlists.
 
 Live model and live retrieval surfaces are opt-in. They are not default unit-test
 dependencies.
@@ -277,6 +280,9 @@ artifact storage, evidence sufficiency, and termination gates.
 Issuer identity normalization is still offline and deterministic: it can use
 host metadata, query text, and injected ticker-to-CIK maps, but it does not call
 external services or claim that an unresolved company has been verified.
+SEC source expansion is intentionally scoped to SEC/EDGAR/10-K/10-Q style
+queries, so generic "annual report" language for ASX/HKEX/SGX issuers does not
+silently route to EDGAR.
 
 ## Validation
 

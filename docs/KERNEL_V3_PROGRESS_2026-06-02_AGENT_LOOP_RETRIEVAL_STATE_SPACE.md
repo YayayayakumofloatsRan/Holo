@@ -47,6 +47,11 @@
   providers now reuse this resolver instead of duplicating identifier parsing.
   Non-US exchange-code patterns such as `ASX:BHP` are not treated as SEC
   tickers.
+- Finance source-query templates now cover additional official disclosure entry
+  points: CNINFO full-text search, HKEX title search, ASX issuer announcements,
+  EDINET document search, and SGX company announcements. SEC query expansion was
+  tightened so generic "annual report" language does not route non-US issuer
+  tasks to EDGAR without SEC-specific signals.
 
 ## Validation
 
@@ -59,7 +64,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-463 passed
+466 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -82,6 +87,9 @@ Additional deterministic coverage now includes:
 - guard coverage that prevents non-US exchange codes from generating SEC EDGAR
   candidates as if they were US tickers;
 - SEC EDGAR structured search using the shared identity resolver.
+- official query URL generation for ASX, HKEX, SGX, EDINET, and CNINFO;
+- a three-step exchange-disclosure agent loop that retrieves ASX, HKEX, and SGX
+  official entry points and finalizes after three citations.
 - a second multi-step finance agent loop using official Companies House and
   FRED query URLs, showing planner-intent expansion into two retrieval loop
   actions and host-owned finalization with two citations.

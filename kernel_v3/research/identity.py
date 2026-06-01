@@ -49,6 +49,7 @@ class IssuerIdentity(Contract):
     asx_code: str | None = None
     hkex_code: str | None = None
     sgx_code: str | None = None
+    edinet_code: str | None = None
     market: str | None = None
     identifiers: JsonObject = field(default_factory=dict)
     confidence: float = 0.0
@@ -66,10 +67,12 @@ def resolve_issuer_identity(query: str, metadata: JsonObject | None = None) -> I
     asx_code = _first_string(flattened, "asx_code") or _asx_from_query(query)
     hkex_code = _first_string(flattened, "hkex_code", "hk_code", "stock_code_hk") or _hk_from_query(query)
     sgx_code = _first_string(flattened, "sgx_code") or _sgx_from_query(query)
+    edinet_code = _first_string(flattened, "edinet_code")
     market = _first_string(flattened, "market", "exchange", "listing_market") or _market_from_identifiers(
         asx_code=asx_code,
         hkex_code=hkex_code,
         sgx_code=sgx_code,
+        edinet_code=edinet_code,
     )
 
     ticker = _first_string(flattened, "ticker", "sec_ticker")
@@ -104,6 +107,7 @@ def resolve_issuer_identity(query: str, metadata: JsonObject | None = None) -> I
             "asx_code": asx_code.upper() if asx_code else None,
             "hkex_code": _normalize_hk_code(hkex_code),
             "sgx_code": sgx_code.upper() if sgx_code else None,
+            "edinet_code": edinet_code.upper() if edinet_code else None,
             "market": market,
         }.items()
         if isinstance(value, str) and value
@@ -118,6 +122,7 @@ def resolve_issuer_identity(query: str, metadata: JsonObject | None = None) -> I
         asx_code=identifiers.get("asx_code"),
         hkex_code=identifiers.get("hkex_code"),
         sgx_code=identifiers.get("sgx_code"),
+        edinet_code=identifiers.get("edinet_code"),
         market=identifiers.get("market"),
         identifiers=identifiers,
         confidence=confidence,
@@ -221,13 +226,21 @@ def _ticker_cik_map(metadata: JsonObject) -> dict[str, str]:
     return result
 
 
-def _market_from_identifiers(*, asx_code: str | None, hkex_code: str | None, sgx_code: str | None) -> str | None:
+def _market_from_identifiers(
+    *,
+    asx_code: str | None,
+    hkex_code: str | None,
+    sgx_code: str | None,
+    edinet_code: str | None,
+) -> str | None:
     if asx_code:
         return "ASX"
     if hkex_code:
         return "HKEX"
     if sgx_code:
         return "SGX"
+    if edinet_code:
+        return "EDINET"
     return None
 
 
@@ -242,7 +255,7 @@ def _confidence(*, identifiers: JsonObject, sources: list[str]) -> float:
         return 0.92
     if identifiers.get("sec_cik"):
         return 0.86
-    if any(key in identifiers for key in ("ticker", "asx_code", "hkex_code", "sgx_code")):
+    if any(key in identifiers for key in ("ticker", "asx_code", "hkex_code", "sgx_code", "edinet_code")):
         return 0.74 if "query_ticker" in sources else 0.82
     if identifiers.get("company") or identifiers.get("issuer"):
         return 0.64

@@ -117,6 +117,72 @@ def test_phase99_source_query_provider_expands_macro_source_queries():
     assert fred.metadata["authority_level"] == "primary"
 
 
+def test_phase99_source_query_provider_expands_exchange_official_query_urls():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "ASX HKEX SGX EDINET announcements annual securities report financial results",
+        goal=SearchGoal(
+            goal_id="goal-source-query-exchanges",
+            query="ASX HKEX SGX EDINET announcements annual securities report financial results",
+            max_sources=20,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "asx_code": "BHP",
+                "hkex_code": "700",
+                "sgx_code": "D05",
+                "edinet_code": "E12345",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    urls = {source.uri for source in sources}
+    assert (
+        "https://www.asx.com.au/asx/v2/statistics/announcements.do?"
+        "asxCode=BHP&by=asxCode&timeframe=D&period=M6"
+    ) in urls
+    assert "https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=EN&market=SEHK&category=0" in urls
+    assert "https://www.sgx.com/securities/company-announcements" in urls
+    assert "https://disclosure2.edinet-fsa.go.jp/WEEK0010.aspx" in urls
+    assert all(source.metadata["authority_level"] == "primary" for source in sources)
+
+
+def test_phase99_source_query_provider_expands_cninfo_without_cross_market_false_positive():
+    provider = ResearchSourceQuerySearchProvider()
+
+    cninfo_sources = provider.search(
+        "CNINFO 000001 年报 公告",
+        goal=SearchGoal(
+            goal_id="goal-source-query-cninfo",
+            query="CNINFO 000001 年报 公告",
+            max_sources=10,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "stock_code": "000001",
+            },
+        ),
+        plan=_plan(),
+    )
+    asx_sources = provider.search(
+        "ASX:BHP annual report announcement",
+        goal=SearchGoal(
+            goal_id="goal-source-query-asx-only",
+            query="ASX:BHP annual report announcement",
+            max_sources=10,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            },
+        ),
+        plan=_plan(),
+    )
+
+    assert "https://www.cninfo.com.cn/new/fulltextSearch?notautosubmit=&keyWord=000001" in [
+        source.uri for source in cninfo_sources
+    ]
+    assert all("cninfo.com.cn" not in source.uri for source in asx_sources)
+
+
 def test_phase99_agent_can_use_source_query_provider_for_multi_step_finance_research():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(
@@ -200,6 +266,105 @@ def test_phase99_agent_can_use_source_query_provider_for_multi_step_finance_rese
     decisions = journal.records(task_id=result.task_id, kind="termination_decision")
     assert [record.data["decision"] for record in decisions] == ["continue", "final_answer"]
     assert len(result.final_answer["citation_refs"]) == 2
+
+
+def test_phase99_agent_can_use_exchange_query_provider_for_multi_step_finance_research():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "finance_fundamentals",
+                "suggested_mode": "retrieval_answer",
+                "compound": True,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals",
+                        "text": "ASX BHP annual report announcement",
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "ASX BHP annual report announcement",
+                                    "metadata": {"asx_code": "BHP"},
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "kind": "finance_fundamentals",
+                        "text": "HKEX 00700 annual report announcement",
+                        "sequence_index": 2,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "HKEX 00700 annual report announcement",
+                                    "metadata": {"hkex_code": "00700"},
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "kind": "finance_fundamentals",
+                        "text": "SGX D05 financial results announcement",
+                        "sequence_index": 3,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "SGX D05 financial results announcement",
+                                    "metadata": {"sgx_code": "D05"},
+                                }
+                            }
+                        },
+                    },
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    asx_url = (
+        "https://www.asx.com.au/asx/v2/statistics/announcements.do?"
+        "asxCode=BHP&by=asxCode&timeframe=D&period=M6"
+    )
+    hkex_url = "https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=EN&market=SEHK&category=0"
+    sgx_url = "https://www.sgx.com/securities/company-announcements"
+    operator = RetrievalOperator(
+        search_provider=ResearchSourceQuerySearchProvider(),
+        fetch_provider=FakeFetchProvider(
+            {
+                asx_url: "ASX BHP annual report announcement includes primary exchange filing evidence.",
+                hkex_url: "HKEX 00700 annual report announcement includes primary exchange filing evidence.",
+                sgx_url: "SGX D05 financial results announcement includes primary exchange filing evidence.",
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run("Research ASX, HKEX, and SGX issuer announcements", mode="auto", semantic_mode="model")
+
+    assert result.status == "completed"
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["name"] for record in actions] == ["retrieval.run", "retrieval.run", "retrieval.run"]
+    decisions = journal.records(task_id=result.task_id, kind="termination_decision")
+    assert [record.data["decision"] for record in decisions] == ["continue", "continue", "final_answer"]
+    assert len(result.final_answer["citation_refs"]) == 3
 
 
 def _plan() -> QueryPlan:
