@@ -64,6 +64,15 @@
   capabilities remain non-executable; they exist so model packets can describe
   broad tasks without inventing tools or collapsing everything into workspace
   mode.
+- Model planner mode now journals dynamic work plans and replan updates. Each
+  planner iteration records the latest feedback, selected action preview, and
+  revision number, so a long-running model-driven loop is inspectable instead
+  of being only a sequence of opaque processor calls.
+- Agent runtime now supports host-owned loop budget metadata and CLI flags
+  (`--max-agent-steps`, `--max-agent-tool-calls`,
+  `--max-agent-artifact-bytes`). Model-planner workspace/retrieval/write modes
+  get bounded long-loop defaults, while callers can explicitly tighten or
+  expand the guard ceilings.
 
 ## Validation
 
@@ -76,7 +85,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-469 passed
+470 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -105,6 +114,9 @@ Additional deterministic coverage now includes:
 - a second multi-step finance agent loop using official Companies House and
   FRED query URLs, showing planner-intent expansion into two retrieval loop
   actions and host-owned finalization with two citations.
+- a model-planner dynamic workspace loop that performs 11 planner/evaluator
+  processor cycles, 11 `file.read` actions, 11 work-plan updates, and then
+  finalizes from journal-derived evidence/citations.
 
 Live model scenarios:
 

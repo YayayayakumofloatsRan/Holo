@@ -62,6 +62,9 @@ Kernel v3 currently contains the infrastructure for:
   proposes a host capability and the host reads the current time;
 - semantic work plans that can expand one model-proposed capability into many
   ordered tool actions, including 10+ iteration workspace loops;
+- model-planner dynamic loops that recompile context, re-call
+  `planner.propose`, journal plan revisions, and continue for 10+ bounded
+  iterations when evaluator feedback says more work remains;
 - non-workspace profile capabilities such as `finance.fundamentals_research`,
   which compile to host-validated retrieval with the finance fundamentals
   source policy instead of collapsing into workspace mode;

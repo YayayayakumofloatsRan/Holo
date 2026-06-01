@@ -382,6 +382,101 @@ def test_phase94_agent_expands_list_capability_args_into_multiple_actions(tmp_pa
     assert journal.records(task_id=result.task_id, kind="agent_work_plan_update")[-1].data["status"] == "complete"
 
 
+def test_phase94_model_planner_can_drive_more_than_ten_dynamic_loop_actions(tmp_path):
+    files = {}
+    planner_actions = []
+    evaluator_feedback = []
+    for index in range(11):
+        path = f"docs/model-loop-{index:02d}.md"
+        files[path] = f"model-dynamic-loop-{index:02d}: evidence shard {index}\n"
+        planner_actions.append(
+            {
+                "action_id": f"act-model-dynamic-read-{index:02d}",
+                "kind": "tool",
+                "name": "file.read",
+                "description": f"read model-selected shard {index}",
+                "payload": {"path": path},
+                "score": 0.9,
+                "reasons": ["dynamic model planner selected next file"],
+                "side_effect_class": "read",
+            }
+        )
+        evaluator_feedback.append(
+            {
+                "status": "continue" if index < 10 else "final_answer_ready",
+                "answer": None,
+                "stop_reason": None if index < 10 else "completed",
+                "missing_evidence": ["remaining_plan_actions"] if index < 10 else [],
+            }
+        )
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "model_dynamic_workspace_review",
+                "suggested_mode": "workspace_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "model_dynamic_workspace_review",
+                        "text": "review all model-selected evidence shards",
+                        "sequence_index": 1,
+                        "required_capabilities": ["file.read"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            },
+            "planner.propose": planner_actions,
+            "evaluator.assess": evaluator_feedback,
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        processor_fabric=fabric,
+        workspace_files=files,
+    ).run(
+        "use model planning to inspect all evidence shards",
+        mode="auto",
+        semantic_mode="model",
+        planner_mode="model",
+        evaluator_mode="model",
+        execution_metadata={
+            "agent_loop": {
+                "max_steps": 13,
+                "max_tool_calls": 12,
+                "max_total_artifact_bytes": 2_000_000,
+            }
+        },
+    )
+
+    assert result.status == "completed"
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert len(actions) == 11
+    assert [record.data["name"] for record in actions] == ["file.read"] * 11
+    assert len(journal.records(task_id=result.task_id, kind="processor_request")) >= 22
+    work_plans = journal.records(task_id=result.task_id, kind="agent_work_plan")
+    assert work_plans[0].data["planner_mode"] == "model"
+    assert work_plans[0].data["strategy"] == "dynamic_replan_each_iteration"
+    updates = journal.records(task_id=result.task_id, kind="agent_work_plan_update")
+    assert len(updates) == 11
+    assert updates[0].data["feedback_status"] is None
+    assert updates[-1].data["revision"] == 11
+    assert updates[-1].data["selected_action"]["name"] == "file.read"
+    decisions = journal.records(task_id=result.task_id, kind="termination_decision")
+    assert [record.data["decision"] for record in decisions[:-1]] == ["continue"] * 10
+    assert decisions[-1].data["decision"] == "final_answer"
+    assert len(result.final_answer["citation_refs"]) == 11
+
+
 def test_phase94_finance_source_directory_is_structured_and_context_injected(tmp_path):
     directory = finance_fundamentals_source_directory()
     source_ids = {entry.source_id for entry in directory}

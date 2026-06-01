@@ -181,6 +181,7 @@ class AgentRuntime:
             },
         )
         recipe = _with_planned_action_count(goal, recipe)
+        recipe = _with_runtime_loop_budget(recipe, planner_mode=planner_mode)
         registry = self._registry(recipe, goal)
         planner = self._planner(goal, recipe, registry, planner_mode)
         evaluator = WorkloopEvaluator(
@@ -331,6 +332,7 @@ class AgentRuntime:
                 inner=planner,
                 goal=goal,
                 recipe=recipe,
+                journal=self.journal,
             )
         return _RecipePlanner(goal=goal, recipe=recipe, journal=self.journal)
 
@@ -854,14 +856,83 @@ class _AgentContextCompiler:
 
 
 class _RecipeBoundPlanner:
-    def __init__(self, *, inner: Planner, goal: str, recipe: TaskRecipe) -> None:
+    def __init__(self, *, inner: Planner, goal: str, recipe: TaskRecipe, journal: JournalStore | None = None) -> None:
         self.inner = inner
         self.goal = goal
         self.recipe = recipe
+        self.journal = journal
+        self._calls = 0
+        self._journaled_plan_refs: set[str] = set()
 
     def propose(self, context: ContextBundle, feedback: Feedback | None = None) -> CandidateAction:
+        self._calls += 1
+        self._journal_plan_if_needed(context)
         action = self.inner.propose(context, feedback)
-        return _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
+        bound = _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
+        self._journal_plan_update(context, bound, feedback)
+        return bound
+
+    def _journal_plan_if_needed(self, context: ContextBundle) -> None:
+        if self.journal is None:
+            return
+        task_id = str(context.state.get("task_id") or "")
+        run_id = str(context.state.get("run_id") or "")
+        plan_key = f"{task_id}:{run_id}"
+        if not task_id or plan_key in self._journaled_plan_refs:
+            return
+        self._journaled_plan_refs.add(plan_key)
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="agent_work_plan",
+            data=redact_journal_data(
+                {
+                    "plan_id": f"agent-work-plan-{run_id}",
+                    "goal": self.goal,
+                    "mode": self.recipe.mode,
+                    "revision": 1,
+                    "planner_mode": "model",
+                    "strategy": "dynamic_replan_each_iteration",
+                    "status": "model_dynamic",
+                    "max_steps": self.recipe.max_steps,
+                    "max_tool_calls": self.recipe.max_tool_calls,
+                    "allowed_tools": list(self.recipe.allowed_tools),
+                }
+            ),
+            state_delta={"agent_work_plan": "model_dynamic"},
+        )
+
+    def _journal_plan_update(self, context: ContextBundle, action: CandidateAction, feedback: Feedback | None) -> None:
+        if self.journal is None:
+            return
+        task_id = str(context.state.get("task_id") or "")
+        run_id = str(context.state.get("run_id") or "")
+        if not task_id:
+            return
+        status = "waiting_for_user" if action.kind == "ask_user" else "running"
+        if action.kind == "respond":
+            status = "candidate_final_response"
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=str(context.state.get("step_id") or ""),
+            kind="agent_work_plan_update",
+            data=redact_journal_data(
+                {
+                    "plan_id": f"agent-work-plan-{run_id}",
+                    "revision": self._calls,
+                    "planner_mode": "model",
+                    "feedback_status": feedback.status if feedback is not None else None,
+                    "feedback_stop_reason": feedback.stop_reason if feedback is not None else None,
+                    "feedback_missing_evidence": list(feedback.missing_evidence) if feedback is not None else [],
+                    "selected_action": _action_plan_preview(action),
+                    "status": status,
+                }
+            ),
+            action_ref=action.action_id,
+            state_delta={"agent_work_plan_revision": self._calls},
+        )
 
 
 class _RecipePlanner:
@@ -1129,6 +1200,28 @@ def _with_planned_action_count(goal: str, recipe: TaskRecipe) -> TaskRecipe:
         max_tool_calls=max(recipe.max_tool_calls, tool_count + 1),
         max_total_artifact_bytes=max(recipe.max_total_artifact_bytes, max(1_000_000, tool_count * 512_000)),
         metadata=metadata,
+    )
+
+
+def _with_runtime_loop_budget(recipe: TaskRecipe, *, planner_mode: str) -> TaskRecipe:
+    loop = _agent_loop_metadata(recipe)
+    model_dynamic = planner_mode == "model" and recipe.mode in {"retrieval_answer", "workspace_answer", "workspace_write"}
+    max_steps = _positive_metadata_int(loop.get("max_steps"), default=0) if loop else 0
+    max_tool_calls = _positive_metadata_int(loop.get("max_tool_calls"), default=0) if loop else 0
+    max_artifact_bytes = _positive_metadata_int(loop.get("max_total_artifact_bytes"), default=0) if loop else 0
+    if model_dynamic:
+        max_steps = max(max_steps, 12)
+        max_tool_calls = max(max_tool_calls, 10)
+        max_artifact_bytes = max(max_artifact_bytes, 4_000_000)
+    if max_steps <= 0 and max_tool_calls <= 0 and max_artifact_bytes <= 0:
+        return recipe
+    return replace(
+        recipe,
+        max_steps=max(recipe.max_steps, max_steps) if max_steps > 0 else recipe.max_steps,
+        max_tool_calls=max(recipe.max_tool_calls, max_tool_calls) if max_tool_calls > 0 else recipe.max_tool_calls,
+        max_total_artifact_bytes=max(recipe.max_total_artifact_bytes, max_artifact_bytes)
+        if max_artifact_bytes > 0
+        else recipe.max_total_artifact_bytes,
     )
 
 
@@ -1634,6 +1727,11 @@ def _task_execution_plan_metadata(recipe: TaskRecipe) -> JsonObject:
 
 def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
     value = recipe.metadata.get("execution_metadata")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _agent_loop_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("agent_loop")
     return dict(value) if isinstance(value, dict) else {}
 
 

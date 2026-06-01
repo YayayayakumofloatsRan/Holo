@@ -120,6 +120,12 @@ def _add_generation_args(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("--temperature", type=float, default=None)
 
 
+def _add_agent_loop_args(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("--max-agent-steps", type=int, default=None)
+    command_parser.add_argument("--max-agent-tool-calls", type=int, default=None)
+    command_parser.add_argument("--max-agent-artifact-bytes", type=int, default=None)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     parser = argparse.ArgumentParser(prog="holo-v3")
@@ -150,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     agent_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     _add_generation_args(agent_parser)
+    _add_agent_loop_args(agent_parser)
     _add_context_budget_args(agent_parser, default_profile="large")
     _add_response_language_arg(agent_parser)
     agent_parser.add_argument("--citations-required", action="store_true")
@@ -179,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     chat_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     _add_generation_args(chat_parser)
+    _add_agent_loop_args(chat_parser)
     _add_context_budget_args(chat_parser, default_profile="large")
     _add_response_language_arg(chat_parser)
     chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
@@ -942,6 +950,15 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
         workspace_evidence_chars=getattr(args, "workspace_evidence_chars", None),
         synthesis_evidence_preview_chars=getattr(args, "synthesis_evidence_preview_chars", None),
     )
+    loop_budget: JsonObject = {}
+    if getattr(args, "max_agent_steps", None) is not None:
+        loop_budget["max_steps"] = _positive_limit(getattr(args, "max_agent_steps"), default=1)
+    if getattr(args, "max_agent_tool_calls", None) is not None:
+        loop_budget["max_tool_calls"] = _positive_limit(getattr(args, "max_agent_tool_calls"), default=1)
+    if getattr(args, "max_agent_artifact_bytes", None) is not None:
+        loop_budget["max_total_artifact_bytes"] = _positive_limit(getattr(args, "max_agent_artifact_bytes"), default=1)
+    if loop_budget:
+        metadata["agent_loop"] = loop_budget
     research_profile = getattr(args, "research_profile", None)
     if isinstance(research_profile, str) and research_profile:
         research_depth = str(getattr(args, "research_depth", "balanced") or "balanced")

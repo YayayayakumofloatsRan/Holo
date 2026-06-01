@@ -170,6 +170,24 @@ expanded action count. This is how the current loop can run 10+ useful
 iterations from one broad instruction while still knowing when the plan is
 complete.
 
+Model planner mode can also run as a dynamic workloop instead of a pre-expanded
+static plan. In that path, every loop iteration recompiles context, sends the
+latest feedback and journal-derived state to `planner.propose`, receives one
+candidate action, and journals an `agent_work_plan_update` with the model's
+selected next action. The first planner call also journals an `agent_work_plan`
+with `strategy=dynamic_replan_each_iteration`, the allowed tools, and the host
+loop budget. This gives the model room to choose the next step from new
+observations while preserving host-owned policy checks, repetition detection,
+evidence sufficiency, loop guards, and termination.
+
+Dynamic planner loops are still bounded. Model planner mode raises the default
+workspace/retrieval/write loop ceilings enough for long tasks, and callers can
+set explicit `agent_loop` metadata or CLI flags such as `--max-agent-steps`,
+`--max-agent-tool-calls`, and `--max-agent-artifact-bytes`. These limits are
+host configuration, not model authority. If the evaluator asks to continue but
+the loop stops making progress, repeats the same payload, or exceeds a guard,
+the workloop returns a failure report instead of running forever.
+
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, workspace, retrieval, finance,
 memory, resident, transport, and system families with statuses such as
