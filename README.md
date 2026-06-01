@@ -99,6 +99,12 @@ Kernel v3 currently contains the infrastructure for:
   preserve finance, database, cloud, workflow, knowledge-base, multimodal,
   resident, transport, calendar, system, and security state without pretending
   those categories are executable tools;
+- runtime state-profile projection: every agent task journals
+  `agent_state_profile`, and planner context exposes top-level
+  `semantic_state_profiles` plus `semantic_state_profile_summary`. This keeps
+  non-workspace state such as database, cloud, multimodal, calendar, security,
+  resident, transport, and finance visible to model planning and host audit
+  without making planned/host-only categories executable;
 - multi-turn chat over journal-derived thread state;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;

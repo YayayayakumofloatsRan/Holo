@@ -17,6 +17,7 @@ from kernel_v3.agent.contracts import (
     TaskRecipe,
 )
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
+from kernel_v3.agent.state_space import summarize_state_profiles
 from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile, merge_context_budget
@@ -239,6 +240,7 @@ class AgentRuntime:
             run_id=result.run_id,
         )
         self._append_task_plan(task_plan, task_id=result.task_id, run_id=result.run_id)
+        self._append_state_profile(task_plan, task_id=result.task_id, run_id=result.run_id)
         self._maybe_propose_memory(
             intake,
             task_id=result.task_id,
@@ -723,6 +725,29 @@ class AgentRuntime:
             },
         )
 
+    def _append_state_profile(self, plan: TaskExecutionPlan, *, task_id: str, run_id: str):
+        projection = _state_profile_projection_from_plan(plan)
+        if not projection["profiles"]:
+            return None
+        summary = projection["summary"]
+        return self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="agent_state_profile",
+            data=redact_journal_data(
+                {
+                    "plan_id": plan.plan_id,
+                    "profiles": projection["profiles"],
+                    "summary": summary,
+                }
+            ),
+            state_delta={
+                "agent_state_domains": list(summary.get("domains", [])),
+                "agent_state_surfaces": list(summary.get("execution_surfaces", [])),
+            },
+        )
+
     def _maybe_propose_memory(
         self,
         intake: SemanticIntake,
@@ -848,6 +873,8 @@ class _AgentContextCompiler:
             for record in section["records"]
             if "event_id" in record
         ]
+        semantic_profiles = _state_profiles_metadata(self.recipe)
+        semantic_profile_summary = _state_profile_summary_metadata(self.recipe)
         state = redact_journal_data(
             {
                 "task_id": task.task_id,
@@ -862,6 +889,8 @@ class _AgentContextCompiler:
                     mode=self.recipe.mode,
                 ),
                 "semantic_state_space": semantic_state_space_catalog(),
+                "semantic_state_profiles": semantic_profiles,
+                "semantic_state_profile_summary": semantic_profile_summary,
                 "research_source_directory": _research_source_directory_metadata(self.recipe),
                 "agent_runtime_directive": _planner_directive(self.recipe),
                 "agent_retrieval_plan_state": _agent_retrieval_plan_state(
@@ -2137,9 +2166,24 @@ def _state_profile_summary_metadata(recipe: TaskRecipe) -> JsonObject:
         metadata = task_graph.get("metadata")
         if isinstance(metadata, dict) and isinstance(metadata.get("state_profile_summary"), dict):
             return dict(metadata["state_profile_summary"])
+    return summarize_state_profiles(_state_profiles_metadata(recipe))
+
+
+def _state_profiles_metadata(recipe: TaskRecipe) -> list[JsonObject]:
     task_plan = _task_execution_plan_metadata(recipe)
+    return _state_profiles_from_plan_steps(task_plan.get("steps"))
+
+
+def _state_profile_projection_from_plan(plan: TaskExecutionPlan) -> JsonObject:
+    profiles = _state_profiles_from_plan_steps(plan.steps)
+    return {
+        "profiles": profiles,
+        "summary": summarize_state_profiles(profiles),
+    }
+
+
+def _state_profiles_from_plan_steps(steps: object) -> list[JsonObject]:
     profiles: list[JsonObject] = []
-    steps = task_plan.get("steps")
     if isinstance(steps, list):
         for step in steps:
             if not isinstance(step, dict):
@@ -2153,25 +2197,7 @@ def _state_profile_summary_metadata(recipe: TaskRecipe) -> JsonObject:
             profile = node_metadata.get("state_profile")
             if isinstance(profile, dict):
                 profiles.append(dict(profile))
-    return {
-        "domains": _ordered_unique(
-            [
-                *[str(item["domain"]) for item in profiles if isinstance(item.get("domain"), str)],
-                *[
-                    str(family)
-                    for item in profiles
-                    for family in item.get("capability_families", [])
-                    if isinstance(family, str) and family
-                ],
-            ]
-        ),
-        "execution_surfaces": _ordered_unique(
-            [str(item["execution_surface"]) for item in profiles if isinstance(item.get("execution_surface"), str)]
-        ),
-        "route_classes": _ordered_unique(
-            [str(item["route_class"]) for item in profiles if isinstance(item.get("route_class"), str)]
-        ),
-    }
+    return profiles
 
 
 def _execution_metadata(recipe: TaskRecipe) -> JsonObject:

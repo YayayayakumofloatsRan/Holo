@@ -221,6 +221,86 @@ def test_phase94_task_graph_nodes_preserve_broad_state_profiles():
     assert "workspace" not in graph.metadata["state_profile_summary"]["domains"]
 
 
+def test_phase94_state_profile_values_match_declared_state_space():
+    catalog = semantic_capability_catalog()
+    dimensions = catalog["state_dimensions"]
+    intake = SemanticIntake(
+        intake_id="semantic-intake-1",
+        goal="inspect database, cloud, images, credentials, and reminder boundaries",
+        primary_intent="broad_boundary_audit",
+        suggested_mode="direct_answer",
+        compound=True,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "database_query",
+                "text": "inspect approved database assumptions",
+                "sequence_index": 1,
+                "required_capabilities": ["database.query"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "cloud_resource_review",
+                "text": "inspect cloud resource state",
+                "sequence_index": 2,
+                "required_capabilities": ["cloud.resource.inspect"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "multimodal_document_review",
+                "text": "analyze an uploaded document image",
+                "sequence_index": 3,
+                "required_capabilities": ["multimodal.image.analyze"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "credential_boundary",
+                "text": "read account credentials",
+                "sequence_index": 4,
+                "required_capabilities": ["credential.read"],
+                "risk": "credential",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "calendar_or_reminder",
+                "text": "schedule a reminder",
+                "sequence_index": 5,
+                "required_capabilities": ["calendar.schedule"],
+                "risk": "write",
+                "status": "ready",
+                "metadata": {},
+            },
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+
+    graph = task_graph_from_semantic(intake)
+    profiles = [node["metadata"]["state_profile"] for node in graph.nodes]
+
+    assert {"database", "cloud", "multimodal", "security", "calendar"}.issubset(
+        {profile["domain"] for profile in profiles}
+    )
+    for profile in profiles:
+        assert profile["execution_surface"] in dimensions["execution_surface"]
+        assert profile["resource"] in dimensions["resource_kind"]
+        assert profile["permission_state"] in dimensions["permissions"]
+        assert profile["evidence_posture"] in dimensions["evidence"]
+        assert profile["output_contract"] in dimensions["output_contract"]
+        assert profile["autonomy"] in dimensions["autonomy"]
+        assert profile["risk_posture"] in dimensions["risk"]
+        assert profile["route_class"] in dimensions["route_class"]
+
+
 def test_phase94_agent_context_exposes_state_profile_summary_to_planner():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(
@@ -265,6 +345,72 @@ def test_phase94_agent_context_exposes_state_profile_summary_to_planner():
     profile = plan["steps"][0]["metadata"]["node_metadata"]["state_profile"]
     assert profile["resource"] == "queue_message"
     assert profile["execution_surface"] == "resident_queue"
+
+
+def test_phase94_agent_journals_runtime_state_profile_projection():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "operator_boundary_plan",
+                "suggested_mode": "direct_answer",
+                "compound": True,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "database_query",
+                        "text": "inspect valuation assumptions in a database",
+                        "sequence_index": 1,
+                        "required_capabilities": ["database.query"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    },
+                    {
+                        "kind": "cloud_resource_review",
+                        "text": "inspect cloud resource inventory",
+                        "sequence_index": 2,
+                        "required_capabilities": ["cloud.resource.inspect"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    },
+                    {
+                        "kind": "knowledge_base_maintenance",
+                        "text": "plan a knowledge-base maintenance workflow",
+                        "sequence_index": 3,
+                        "required_capabilities": ["workflow.automation.plan", "knowledge_base.maintain"],
+                        "risk": "write",
+                        "status": "ready",
+                        "metadata": {},
+                    },
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "检查数据库、云资源，并规划知识库维护",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "needs_user_input"
+    context = journal.records(task_id=result.task_id, kind="context")[0].data["state"]
+    assert "semantic_state_profiles" in context
+    assert "semantic_state_profile_summary" in context
+    assert {"database", "cloud", "workflow", "knowledge_base"}.issubset(
+        set(context["semantic_state_profile_summary"]["domains"])
+    )
+    profile_record = journal.records(task_id=result.task_id, kind="agent_state_profile")[0].data
+    assert profile_record["summary"] == context["semantic_state_profile_summary"]
+    assert len(profile_record["profiles"]) == 3
+    assert {profile["execution_surface"] for profile in profile_record["profiles"]} != {"workspace"}
 
 
 def test_phase94_broad_direct_capabilities_do_not_collapse_to_workspace():
