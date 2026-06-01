@@ -120,6 +120,9 @@ Kernel v3 currently contains the infrastructure for:
   disclosures: raw PDF bodies remain artifacts, while readable PDF string
   literals become evidence spans; scanned/OCR-only PDFs remain insufficient
   evidence until a future OCR tool is configured;
+- structured JSON/CSV retrieval extraction for financial databases such as SEC
+  companyfacts, FRED, and Treasury/FiscalData-style responses: raw payloads
+  remain artifacts, while flattened rows/fields become readable evidence spans;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;

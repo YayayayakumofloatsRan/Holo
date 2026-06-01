@@ -184,6 +184,10 @@
   PDF literal/hex strings into `pdf_text_literals` evidence spans. Scanned or
   otherwise unreadable PDFs still yield insufficient evidence rather than an
   invented answer.
+- Structured JSON/CSV retrieval extraction now flattens SEC companyfacts-style
+  JSON path/value records and FRED/Treasury-style CSV rows into readable
+  evidence spans (`json_readable_text` / `csv_readable_text`) while keeping raw
+  payloads in ArtifactStore.
 - Retrieval replanning now has an explicit host-state packet:
   `context.state.agent_replan_hints`. It is compiled from journal records after
   each iteration and journaled in `agent_work_plan_update`. For insufficient

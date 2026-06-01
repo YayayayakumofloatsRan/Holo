@@ -108,7 +108,10 @@ class HttpFetchProvider:
         )
         if validation.get("status") != "ok":
             return FetchResponse(status="failed", body="", diagnostics=validation)
-        headers = {"User-Agent": self.user_agent, "Accept": "text/html,text/plain,application/xhtml+xml,application/pdf"}
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "text/html,text/plain,application/xhtml+xml,application/pdf,application/json,text/csv",
+        }
         try:
             response = self.transport(source.uri, headers, self.timeout_seconds, self.max_bytes)
         except Exception as exc:  # pragma: no cover - urllib transport has concrete containment below.

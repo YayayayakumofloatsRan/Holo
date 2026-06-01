@@ -158,6 +158,117 @@ def test_phase96_retrieval_journals_pdf_text_evidence_but_artifacts_keep_raw_pdf
     assert extraction["diagnostics"]["text_modes"] == ["pdf_text_literals"]
 
 
+def test_phase96_json_extraction_flattens_sec_companyfacts_for_evidence() -> None:
+    document = FetchedDocument(
+        document_id="doc-json",
+        goal_id="goal-json",
+        source_id="src-json",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        title="SEC companyfacts JSON",
+        artifact_id="artifact-json",
+        payload_hash="hash-json",
+        preview="",
+        size_bytes=0,
+        metadata={"mime_type": "application/json"},
+    )
+    body = _sec_companyfacts_json()
+
+    text, mode = readable_document_text(body, document=document)
+    spans = extract_spans(
+        goal=SearchGoal(
+            goal_id="goal-json",
+            query="AAPL revenue 10-K companyfacts",
+            max_spans_per_document=2,
+        ),
+        document=document,
+        body=body,
+    )
+
+    assert mode == "json_readable_text"
+    assert "entityName=Apple Inc." in text
+    assert "Revenues.units.USD[0]:" in text
+    assert "val=391035000000" in text
+    assert "form=10-K" in text
+    assert spans
+    assert spans[0].metadata["text_mode"] == "json_readable_text"
+    assert "companyfacts" in spans[0].text.lower() or "Revenues" in spans[0].text
+
+
+def test_phase96_csv_extraction_flattens_finance_rows_for_evidence() -> None:
+    document = FetchedDocument(
+        document_id="doc-csv",
+        goal_id="goal-csv",
+        source_id="src-csv",
+        uri="https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL",
+        title="FRED CPI CSV",
+        artifact_id="artifact-csv",
+        payload_hash="hash-csv",
+        preview="",
+        size_bytes=0,
+        metadata={"mime_type": "text/csv"},
+    )
+    body = "DATE,CPIAUCSL,source\n2024-09-01,315.301,FRED CPI inflation series\n"
+
+    text, mode = readable_document_text(body, document=document)
+    spans = extract_spans(
+        goal=SearchGoal(
+            goal_id="goal-csv",
+            query="FRED CPI inflation 2024",
+            max_spans_per_document=2,
+        ),
+        document=document,
+        body=body,
+    )
+
+    assert mode == "csv_readable_text"
+    assert "csv_header: DATE CPIAUCSL source" in text
+    assert "csv_row_1: DATE=2024-09-01 CPIAUCSL=315.301 source=FRED CPI inflation series" in text
+    assert spans
+    assert spans[0].metadata["text_mode"] == "csv_readable_text"
+    assert "FRED CPI inflation series" in spans[0].text
+
+
+def test_phase96_retrieval_journals_structured_json_evidence_but_artifacts_keep_raw_json() -> None:
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    source = SearchSource(
+        source_id="src-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        title="SEC companyfacts JSON",
+        snippet="Official SEC XBRL companyfacts JSON.",
+        provider="fake_search",
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({"AAPL revenue 10-K companyfacts": [source]}),
+        fetch_provider=FakeFetchProvider(
+            {source.uri: {"status": "ok", "body": _sec_companyfacts_json(), "mime_type": "application/json"}}
+        ),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-json-doc",
+            query="AAPL revenue 10-K companyfacts",
+            max_sources=1,
+            max_fetches=1,
+            max_spans_per_document=2,
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-json",
+        run_id="run-json",
+    )
+
+    assert report.status == "sufficient"
+    evidence = journal.records(task_id="task-json", kind="retrieval_evidence")[0].data
+    extraction = journal.records(task_id="task-json", kind="retrieval_extraction")[0].data
+    artifact_payload = artifacts.read_blob(report.artifact_refs[0])
+    assert isinstance(artifact_payload, str)
+    assert '"entityName": "Apple Inc."' in artifact_payload
+    assert evidence["text"].find("Revenues") >= 0
+    assert extraction["diagnostics"]["text_modes"] == ["json_readable_text"]
+
+
 def _docusaurus_like_html() -> str:
     return """
     <!doctype html>
@@ -192,3 +303,31 @@ def _text_pdf_like_body() -> str:
         "endstream\n"
         "%%EOF"
     )
+
+
+def _sec_companyfacts_json() -> str:
+    return """
+    {
+      "cik": 320193,
+      "entityName": "Apple Inc.",
+      "facts": {
+        "us-gaap": {
+          "Revenues": {
+            "label": "Revenue",
+            "units": {
+              "USD": [
+                {
+                  "fy": 2024,
+                  "fp": "FY",
+                  "form": "10-K",
+                  "filed": "2024-11-01",
+                  "frame": "CY2024",
+                  "val": 391035000000
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+    """

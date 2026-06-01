@@ -98,7 +98,10 @@ def test_phase90_http_fetch_provider_preserves_pdf_bytes_as_latin1_text() -> Non
     assert response.body.startswith("%PDF-1.4")
     assert "AAPL 2024 annual report revenue evidence" in response.body
     assert response.diagnostics["byte_count"] == len(pdf_bytes)
-    assert "application/pdf" in transport.calls[0]["headers"]["Accept"]
+    accept = transport.calls[0]["headers"]["Accept"]
+    assert "application/pdf" in accept
+    assert "application/json" in accept
+    assert "text/csv" in accept
 
 
 def test_phase90_http_fetch_provider_normalizes_url_form_allowed_hosts() -> None:

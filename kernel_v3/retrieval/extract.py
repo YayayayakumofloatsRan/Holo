@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
 import html
+import io
+import json
 import re
 from html.parser import HTMLParser
 
@@ -12,6 +15,10 @@ SPAN_BEFORE_CHARS = 120
 SPAN_AFTER_CHARS = 280
 HTML_MIME_MARKERS = ("html", "xhtml")
 PDF_MIME_MARKERS = ("pdf", "application/pdf")
+JSON_MIME_MARKERS = ("json", "application/json")
+CSV_MIME_MARKERS = ("csv", "comma-separated-values")
+STRUCTURED_LINE_LIMIT = 2_000
+STRUCTURED_VALUE_LIMIT = 240
 HTML_BLOCK_TAGS = {
     "article",
     "aside",
@@ -99,6 +106,14 @@ def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str
     mime_type = str(document.metadata.get("mime_type") or "").lower()
     if _looks_like_pdf(body, mime_type=mime_type):
         return _extract_pdf_text(body), "pdf_text_literals"
+    if _looks_like_json(body, mime_type=mime_type):
+        text = _extract_json_readable_text(body)
+        if text:
+            return text, "json_readable_text"
+    if _looks_like_csv(body, document=document, mime_type=mime_type):
+        text = _extract_csv_readable_text(body)
+        if text:
+            return text, "csv_readable_text"
     if _looks_like_html(body, mime_type=mime_type):
         return _extract_html_readable_text(body), "html_readable_text"
     return _normalize_span(body[:READABLE_TEXT_LIMIT]), "plain_text"
@@ -157,6 +172,126 @@ def _looks_like_pdf(body: str, *, mime_type: str) -> bool:
     if any(marker in mime_type for marker in PDF_MIME_MARKERS):
         return True
     return body[:16].lstrip().startswith("%PDF")
+
+
+def _looks_like_json(body: str, *, mime_type: str) -> bool:
+    if any(marker in mime_type for marker in JSON_MIME_MARKERS):
+        return True
+    prefix = body[:1024].lstrip()
+    return prefix.startswith("{") or prefix.startswith("[")
+
+
+def _looks_like_csv(body: str, *, document: FetchedDocument, mime_type: str) -> bool:
+    if any(marker in mime_type for marker in CSV_MIME_MARKERS):
+        return True
+    uri = document.uri.lower()
+    if uri.endswith(".csv") or ".csv?" in uri:
+        return True
+    first_line = body[:2048].splitlines()[0] if body[:2048].splitlines() else ""
+    return "," in first_line and len(first_line.split(",")) >= 2
+
+
+def _extract_json_readable_text(body: str) -> str:
+    try:
+        payload = json.loads(body[:READABLE_TEXT_LIMIT])
+    except json.JSONDecodeError:
+        return ""
+    lines: list[str] = []
+    _flatten_json(payload, path="", lines=lines, depth=0)
+    return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+
+
+def _flatten_json(value: object, *, path: str, lines: list[str], depth: int) -> None:
+    if len(lines) >= STRUCTURED_LINE_LIMIT or depth > 12:
+        return
+    if isinstance(value, dict):
+        scalar_parts = []
+        complex_items = []
+        for key, item in value.items():
+            key_text = _structured_key(key)
+            next_path = f"{path}.{key_text}" if path else key_text
+            if _is_scalar(item):
+                scalar_parts.append(f"{key_text}={_structured_value(item)}")
+            else:
+                complex_items.append((next_path, item))
+        if scalar_parts:
+            prefix = f"{path}: " if path else ""
+            lines.append(_truncate_structured_line(prefix + " ".join(scalar_parts)))
+        for next_path, item in complex_items:
+            _flatten_json(item, path=next_path, lines=lines, depth=depth + 1)
+            if len(lines) >= STRUCTURED_LINE_LIMIT:
+                break
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value[:500]):
+            next_path = f"{path}[{index}]" if path else f"[{index}]"
+            _flatten_json(item, path=next_path, lines=lines, depth=depth + 1)
+            if len(lines) >= STRUCTURED_LINE_LIMIT:
+                break
+        if len(value) > 500 and len(lines) < STRUCTURED_LINE_LIMIT:
+            lines.append(f"{path}: truncated_list_count={len(value)}")
+        return
+    if _is_scalar(value):
+        lines.append(_truncate_structured_line(f"{path}: {_structured_value(value)}" if path else _structured_value(value)))
+
+
+def _extract_csv_readable_text(body: str) -> str:
+    sample = body[:READABLE_TEXT_LIMIT]
+    try:
+        rows = list(csv.reader(io.StringIO(sample)))
+    except csv.Error:
+        return ""
+    if not rows:
+        return ""
+    header = [_structured_key(item) for item in rows[0]]
+    has_header = bool(header) and any(not _looks_numeric(item) for item in header)
+    lines: list[str] = []
+    if has_header:
+        lines.append("csv_header: " + " ".join(header))
+        data_rows = rows[1:]
+    else:
+        header = [f"column_{index + 1}" for index in range(max(len(row) for row in rows[:20]))]
+        data_rows = rows
+    for row_index, row in enumerate(data_rows[: min(500, STRUCTURED_LINE_LIMIT - len(lines))], start=1):
+        if not any(cell.strip() for cell in row):
+            continue
+        parts = []
+        for column_index, cell in enumerate(row):
+            key = header[column_index] if column_index < len(header) else f"column_{column_index + 1}"
+            parts.append(f"{key}={_structured_value(cell)}")
+        lines.append(_truncate_structured_line(f"csv_row_{row_index}: " + " ".join(parts)))
+    return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+
+
+def _is_scalar(value: object) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _structured_key(value: object) -> str:
+    text = str(value).strip()
+    return re.sub(r"\s+", "_", text)[:80] or "field"
+
+
+def _structured_value(value: object) -> str:
+    if value is None:
+        return "null"
+    text = str(value).strip()
+    return _normalize_span(text)[:STRUCTURED_VALUE_LIMIT]
+
+
+def _truncate_structured_line(text: str) -> str:
+    normalized = _normalize_span(text)
+    if len(normalized) <= 1_000:
+        return normalized
+    return normalized[:997] + "..."
+
+
+def _looks_numeric(value: object) -> bool:
+    try:
+        float(str(value).strip())
+    except ValueError:
+        return False
+    return True
 
 
 def _extract_pdf_text(body: str) -> str:
