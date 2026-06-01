@@ -595,6 +595,97 @@ def test_trace_renderer_verbose_evidence_artifacts_and_retrieval_views():
     assert "why_continue=need file.read" in retrieval
 
 
+def test_trace_renderer_redacts_secret_like_dynamic_fields():
+    journal = JournalStore.in_memory()
+    secret_url = "https://example.test/report?access_token=trace-secret-token-1234567890"
+    secret_text = "api_key=trace-secret-key-1234567890"
+    journal.append(
+        task_id="task-secret-trace",
+        run_id="run-1",
+        step_id="step-1",
+        kind="action",
+        data={
+            "action_id": "act-secret-url",
+            "kind": "tool",
+            "name": "network.fetch",
+            "payload": {"url": secret_url},
+        },
+        action_ref="act-secret-url",
+        state_delta={"url": secret_url},
+    )
+    journal.append(
+        task_id="task-secret-trace",
+        run_id="run-1",
+        step_id="step-1",
+        kind="feedback",
+        data={"status": "continue", "missing_evidence": [secret_url], "stop_reason": secret_text},
+        feedback_ref="fb-secret",
+    )
+    journal.append(
+        task_id="task-secret-trace",
+        run_id="run-1",
+        step_id="retrieval-search",
+        kind="retrieval_search_attempt",
+        data={
+            "attempt_id": "search-secret",
+            "status": "ok",
+            "query": secret_text,
+            "sources": [],
+        },
+    )
+    journal.append(
+        task_id="task-secret-trace",
+        run_id="run-1",
+        step_id="retrieval-fetch",
+        kind="retrieval_fetch_attempt",
+        data={
+            "fetch_id": "fetch-secret",
+            "status": "failed",
+            "uri": secret_url,
+            "artifact_id": None,
+            "payload_hash": None,
+            "size_bytes": 0,
+            "preview": secret_text,
+        },
+    )
+    journal.append(
+        task_id="task-secret-trace",
+        run_id="run-1",
+        step_id="retrieval-evidence",
+        kind="retrieval_evidence",
+        data={
+            "evidence_id": "ev-secret",
+            "source_id": "src",
+            "artifact_id": "artifact-secret",
+            "score": 1,
+            "text": secret_text,
+        },
+    )
+    journal.append(
+        task_id="task-secret-trace",
+        run_id="run-1",
+        step_id="retrieval-citation",
+        kind="retrieval_citation",
+        data={
+            "citation_id": "cite-secret",
+            "evidence_id": "ev-secret",
+            "artifact_id": "artifact-secret",
+            "quote": secret_text,
+        },
+    )
+
+    renderer = TraceRenderer(journal)
+    trace = renderer.render_task("task-secret-trace", verbose=True)
+    retrieval = renderer.render_retrieval_trace("task-secret-trace")
+    dumped = trace + "\n" + retrieval
+
+    assert "trace-secret-token" not in dumped
+    assert "trace-secret-key" not in dumped
+    assert "access_token" not in dumped
+    assert "api_key" not in dumped
+    assert "[REDACTED:SECRET]" in dumped
+
+
 def test_holo_v3_trace_cli_exposes_verbose_evidence_artifact_and_retrieval_views():
     journal_path = Path("kernel_v3/.test-phase31-cli-journal.jsonl")
     index_path = Path("kernel_v3/.test-phase31-cli-journal.sqlite")

@@ -40,6 +40,12 @@ provider or tool omitted a privacy projection. Raw artifact blobs remain in
 `ArtifactStore`; model context receives bounded refs, previews, hashes, and
 redacted metadata.
 
+Trace rendering uses the same secret-like redaction for dynamic operator text
+such as action payloads, retrieval query/URI fields, evidence previews,
+feedback missing-evidence entries, and guard data. The journal remains the
+source of truth, but the default inspection surface avoids turning audits into
+a secret disclosure path.
+
 ## Semantic Task Graph
 
 Model-backed semantic intake is now normalized into a host-visible

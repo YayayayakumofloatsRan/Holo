@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from kernel_v3.context.redaction import Redactor
 from kernel_v3.journal import JournalStore
 
 
 RESIDENT_TRACE_LIMIT_CAP = 500
+_TRACE_REDACTOR = Redactor()
 
 
 class TraceRenderer:
@@ -26,7 +28,7 @@ class TraceRenderer:
             ref_text = " ".join(refs)
             lines.append(
                 f"{record.run_id} {record.step_id or '-'} {record.kind} {ref_text} "
-                f"state_delta={record.state_delta}"
+                f"state_delta={_safe_trace_value(record.state_delta)}"
             )
             if verbose:
                 lines.extend(self._verbose_lines(record))
@@ -67,12 +69,12 @@ class TraceRenderer:
                 if isinstance(payload, dict) and "query" in payload:
                     lines.append(
                         f"{record.step_id or '-'} action={record.action_ref} "
-                        f"tool={record.data.get('name')} query={payload.get('query')}"
+                        f"tool={record.data.get('name')} query={_safe_trace_text(payload.get('query'))}"
                     )
                 if isinstance(payload, dict) and "url" in payload:
                     lines.append(
                         f"{record.step_id or '-'} action={record.action_ref} "
-                        f"tool={record.data.get('name')} url={payload.get('url')}"
+                        f"tool={record.data.get('name')} url={_safe_trace_text(payload.get('url'))}"
                     )
             elif record.kind == "observation":
                 data = record.data
@@ -86,10 +88,10 @@ class TraceRenderer:
             elif record.kind == "feedback":
                 missing = record.data.get("missing_evidence", [])
                 if missing:
-                    lines.append(f"{record.step_id or '-'} why_continue={', '.join(map(str, missing))}")
+                    lines.append(f"{record.step_id or '-'} why_continue={', '.join(_safe_trace_text(item) for item in missing)}")
                 stop_reason = record.data.get("stop_reason")
                 if stop_reason:
-                    lines.append(f"{record.step_id or '-'} why_stop={stop_reason}")
+                    lines.append(f"{record.step_id or '-'} why_stop={_safe_trace_text(stop_reason)}")
         return "\n".join(lines)
 
     def render_memory_trace(self, task_id: str) -> str:
@@ -123,7 +125,7 @@ class TraceRenderer:
                 f"task={record.task_id or '-'} "
                 f"message={data.get('message_id') or data.get('in_reply_to') or '-'} "
                 f"outbox={data.get('outbox_id') or '-'} "
-                f"status={data.get('status') or data.get('reason') or record.state_delta}"
+                f"status={_safe_trace_text(data.get('status') or data.get('reason') or record.state_delta)}"
             )
         return "\n".join(lines)
 
@@ -141,7 +143,7 @@ class TraceRenderer:
             sources = data.get("sources", [])
             return [
                 f"{step} search={data.get('attempt_id')} status={data.get('status')} "
-                f"query={data.get('query')} sources={len(sources) if isinstance(sources, list) else 0}"
+                f"query={_safe_trace_text(data.get('query'))} sources={len(sources) if isinstance(sources, list) else 0}"
             ]
         if kind == "retrieval_rank_sources":
             ranked = data.get("ranked_sources", [])
@@ -152,9 +154,9 @@ class TraceRenderer:
         if kind == "retrieval_fetch_attempt":
             return [
                 f"{step} fetch={data.get('fetch_id')} status={data.get('status')} "
-                f"uri={data.get('uri')} artifact={data.get('artifact_id')} "
+                f"uri={_safe_trace_text(data.get('uri'))} artifact={data.get('artifact_id')} "
                 f"hash={data.get('payload_hash')} size={data.get('size_bytes')} "
-                f"preview={_preview(str(data.get('preview', '')), 96)}"
+                f"preview={_preview(_safe_trace_text(data.get('preview', '')), 96)}"
             ]
         if kind == "retrieval_extraction":
             spans = data.get("spans", [])
@@ -168,18 +170,18 @@ class TraceRenderer:
             return [
                 f"{step} evidence={data.get('evidence_id')} source={data.get('source_id')} "
                 f"artifact={data.get('artifact_id')} score={data.get('score')} "
-                f"text={_preview(str(data.get('text', '')), 96)}"
+                f"text={_preview(_safe_trace_text(data.get('text', '')), 96)}"
             ]
         if kind == "retrieval_citation":
             return [
                 f"{step} citation={data.get('citation_id')} evidence={data.get('evidence_id')} "
-                f"artifact={data.get('artifact_id')} quote={_preview(str(data.get('quote', '')), 96)}"
+                f"artifact={data.get('artifact_id')} quote={_preview(_safe_trace_text(data.get('quote', '')), 96)}"
             ]
         if kind == "retrieval_evaluation_decision":
             return [
                 f"{step} evaluation={data.get('decision_id') or data.get('evaluation_id')} "
                 f"sufficient={data.get('sufficient')} "
-                f"reason={data.get('reason')}"
+                f"reason={_safe_trace_text(data.get('reason'))}"
             ]
         if kind == "retrieval_report":
             diagnostics = data.get("diagnostics", {})
@@ -202,16 +204,16 @@ class TraceRenderer:
         if record.kind == "feedback":
             return [
                 f"  feedback status={record.data.get('status')} "
-                f"missing_evidence={record.data.get('missing_evidence', [])} "
-                f"stop_reason={record.data.get('stop_reason')}"
+                f"missing_evidence={_safe_trace_value(record.data.get('missing_evidence', []))} "
+                f"stop_reason={_safe_trace_text(record.data.get('stop_reason'))}"
             ]
         if record.kind == "action":
             return [
                 f"  action kind={record.data.get('kind')} name={record.data.get('name')} "
-                f"payload={record.data.get('payload', {})}"
+                f"payload={_safe_trace_value(record.data.get('payload', {}))}"
             ]
         if record.kind == "guard":
-            return [f"  guard stop_reason={record.data.get('stop_reason')} data={record.data}"]
+            return [f"  guard stop_reason={_safe_trace_text(record.data.get('stop_reason'))} data={_safe_trace_value(record.data)}"]
         if record.kind == "processor_request":
             return [
                 f"  processor_request task_type={record.data.get('task_type')} "
@@ -257,6 +259,15 @@ def _preview(text: str, limit: int) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 3)] + "..."
+
+
+def _safe_trace_value(value):
+    redacted, _markers = _TRACE_REDACTOR.redact(value)
+    return redacted
+
+
+def _safe_trace_text(value) -> str:
+    return str(_safe_trace_value(value))
 
 
 def _clamp_limit(value: int, *, cap: int) -> int:
