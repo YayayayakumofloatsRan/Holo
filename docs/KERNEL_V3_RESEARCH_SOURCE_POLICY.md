@@ -126,6 +126,27 @@ Template rendering journals only normal retrieval search attempts and provider
 diagnostics; it does not journal API keys, raw environment values, or fetched
 bodies.
 
+## Structured Official Data Providers
+
+`fred_structured_search` is a structured candidate generator for official macro
+data. It is not a live fetch provider and it does not search the web. When the
+host/model payload includes `fred_series_id` or `series_id`, it emits the
+official FRED series page and `fredgraph.csv` observations URL as primary
+`government_statistic` sources. The provider rejects unsafe series ids and
+records only safe diagnostics.
+
+Macro-data finance tasks use the same `finance_fundamentals` profile, but the
+host adds `research_task_kind="macro_data"` plus preferred source families:
+government statistics, central-bank statistics, and Treasury data. That ranking
+preference prevents company-filing templates from outranking official CPI/rate
+data during the final fetch ordering step.
+
+After a FRED search-result page is fetched, the agent can derive
+`agent_replan_hints.retrieval.suggested_macro_series` from extraction spans
+such as `series_id=CPIAUCSL`. The next planner packet can use that suggested
+payload as a normal `retrieval.run` action; PolicyGate, provider ranking,
+ArtifactStore, citations, and workloop termination still remain host-owned.
+
 ## Research Corpus
 
 `ResearchCorpusStore` is the local webpage/database foundation for later live

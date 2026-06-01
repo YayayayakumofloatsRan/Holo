@@ -20,6 +20,7 @@ from kernel_v3.retrieval.crawl_provider import (
     DirectUrlSearchProvider,
     SourceDirectorySearchProvider,
 )
+from kernel_v3.retrieval.fred_provider import FredSearchProvider
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
 from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
 from kernel_v3.retrieval.operator import RetrievalOperator
@@ -278,6 +279,7 @@ class LiveRetrievalConfig:
         if corpus_enabled:
             search_providers.append(CorpusSearchProvider(corpus_store))
         search_providers.append(DirectUrlSearchProvider())
+        search_providers.append(FredSearchProvider())
         search_providers.append(SecEdgarSearchProvider())
         search_providers.append(ResearchSourceQuerySearchProvider())
         if self.search.configured:

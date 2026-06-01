@@ -173,6 +173,12 @@ Kernel v3 currently contains the infrastructure for:
   `primaryDocument`, Holo derives the official primary filing document,
   complete submission text, and filing directory URLs before generic SEC
   browse/search candidates, while rejecting unsafe document names.
+- FRED structured source generation for official macro data. When a retrieval
+  payload carries `fred_series_id` / `series_id`, Holo derives the official
+  FRED series page and CSV observations URL without doing web search itself.
+  Macro-data finance tasks also prefer government-statistic, central-bank, and
+  Treasury source families so company-filing templates do not pollute CPI/rate
+  style retrieval.
 - Template-driven official source-query expansion for finance fundamentals.
   Source directory entries can declare safe `query_url_templates`; Holo renders
   them from host metadata such as company, ticker, metric, and query, validates
@@ -284,6 +290,9 @@ The live retrieval chain is now broader than a single search endpoint:
   companyfacts, and ticker-directory candidates for finance fundamentals from
   host-supplied ticker/CIK metadata or an injected ticker-to-CIK map; it performs
   no network request by itself;
+- `fred_structured_search` generates official FRED series-page and CSV
+  observation candidates from host/model-supplied `fred_series_id` metadata. It
+  performs no network request by itself and rejects unsafe series identifiers;
 - `research_source_query_search` expands curated source-directory
   `query_url_templates` into official search URLs, such as Companies House
   company search and FRED series search, after placeholder and host validation.
@@ -448,6 +457,14 @@ accepted for news/market context but would not satisfy a primary filing claim.
 Issuer identity normalization is still offline and deterministic: it can use
 host metadata, query text, and injected ticker-to-CIK maps, but it does not call
 external services or claim that an unresolved company has been verified.
+For official macro data, a loop can first use a source-directory FRED search
+URL, then derive `agent_replan_hints.retrieval.suggested_macro_series` from
+journaled extraction spans such as `series_id=CPIAUCSL`. The next
+`planner.propose` can use that suggested payload to call `retrieval.run` with
+`fred_series_id`, and the host `fred_structured_search` provider builds the
+official series page and CSV candidates. This keeps the model in charge of the
+semantic next step while the host owns URL construction, ranking, artifacts,
+citations, and stop conditions.
 SEC source expansion is intentionally scoped to SEC/EDGAR/10-K/10-Q style
 queries, so generic "annual report" language for ASX/HKEX/SGX issuers does not
 silently route to EDGAR.

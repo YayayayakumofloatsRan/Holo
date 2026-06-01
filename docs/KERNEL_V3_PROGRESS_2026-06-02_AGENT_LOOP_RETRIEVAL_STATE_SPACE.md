@@ -47,6 +47,22 @@
   `planner.propose` call sees those SEC continuation hints in compiled context
   and uses the hinted payload to fetch the original Archives filing document.
   This is a multi-loop planner path, not a prewritten two-action recipe.
+- `fred_structured_search` was added as a finance-profile-aware structured
+  provider for official macro data. Given `fred_series_id` / `series_id`
+  metadata, it emits the official FRED series page and CSV observations URL
+  without live network access or broad search. It validates series identifiers
+  and marks the candidates as primary government-statistic sources.
+- Macro-data finance intents now have their own capability/state label
+  (`finance.macro_data` / `macro_data_research`) and host defaults. They use
+  the finance profile but prefer government-statistic, central-bank, and
+  Treasury source families, and avoid company-filing query-template expansion
+  unless the model explicitly asks for it.
+- Agent replan context now also derives
+  `retrieval.suggested_macro_series` from journaled extraction spans, for
+  example a FRED search-result span containing `series_id=CPIAUCSL`. The hint
+  exposes a suggested `retrieval.run` payload with `fred_series_id`, primary
+  source requirement, macro-data task kind, and structured search strategy.
+  Raw fetched bodies remain in ArtifactStore.
 - Live retrieval fallback construction now includes the SEC structured provider
   before generic configured search providers, so finance fundamentals tasks can
   use primary SEC URLs without relying on a broad web search API.

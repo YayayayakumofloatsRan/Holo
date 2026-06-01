@@ -58,6 +58,7 @@ _FINANCE_RESEARCH_PROFILE_CAPABILITIES = {
     "finance.fundamentals_research",
     "finance.market_news",
     "finance.market_data",
+    "finance.macro_data",
     "finance.competitive_landscape",
 }
 
@@ -1966,6 +1967,12 @@ def _retrieval_replan_hints(
         run_id=run_id,
         recipe=recipe,
     )
+    suggested_macro_series = _suggested_fred_series(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+    )
     needs_replan = bool(report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
     return {
         "needs_replan": needs_replan,
@@ -1982,6 +1989,7 @@ def _retrieval_replan_hints(
         "suggested_query_hints": query_hints,
         "suggested_source_targets": source_targets,
         "suggested_filing_documents": suggested_filing_documents,
+        "suggested_macro_series": suggested_macro_series,
         "attempted_queries": _ordered_unique([item["query"] for item in attempts if isinstance(item.get("query"), str)]),
         "attempted_search_strategies": _ordered_unique(
             [item["search_strategy"] for item in attempts if isinstance(item.get("search_strategy"), str)]
@@ -2130,6 +2138,90 @@ def _sec_filing_document_query(*, cik: str, form: str, report_date: str, accessi
         parts.append(report_date)
     parts.extend([accession, "primary filing document"])
     return " ".join(parts)
+
+
+def _suggested_fred_series(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+) -> list[JsonObject]:
+    if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID:
+        return []
+    candidates: list[JsonObject] = []
+    seen: set[str] = set()
+    for record in journal.records(task_id=task_id, kind="retrieval_extraction"):
+        if record.run_id != run_id:
+            continue
+        document = _json_object(record.data.get("document"))
+        uri = _string_value(document.get("uri"))
+        spans = record.data.get("spans")
+        span_items = spans if isinstance(spans, list) else []
+        span_text = " ".join(
+            str(span.get("text") or "")
+            for span in span_items
+            if isinstance(span, dict)
+        )
+        for series_id in _fred_series_ids_from_extracted_text(f"{uri} {span_text}"):
+            key = series_id.upper()
+            if key in seen:
+                continue
+            seen.add(key)
+            query = f"FRED series {key} official CSV observations"
+            payload_metadata = {
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "fred_series_id": key,
+                "source_authority_requirement": "primary",
+                "source_family": "government_statistic",
+                "preferred_source_families": ["government_statistic", "central_bank_statistic", "treasury_data"],
+                "research_task_kind": "macro_data",
+                "search_strategy": "structured",
+            }
+            candidates.append(
+                {
+                    "source": "fred_extracted_series_id",
+                    "source_record_id": record.record_id,
+                    "source_uri": uri,
+                    "fred_series_id": key,
+                    "query": query,
+                    "suggested_payload": {
+                        "query": query,
+                        "metadata": payload_metadata,
+                    },
+                }
+            )
+            if len(candidates) >= 5:
+                return candidates
+    return candidates
+
+
+def _fred_series_ids_from_extracted_text(text: str) -> list[str]:
+    if not text:
+        return []
+    candidates: list[str] = []
+    patterns = [
+        re.compile(r"fred\.stlouisfed\.org/series/(?P<series>[A-Za-z][A-Za-z0-9_.-]{1,63})", re.IGNORECASE),
+        re.compile(
+            r"(?:fred_series_id|series_id|series id|fred series|series)\s*[:=]\s*(?P<series>[A-Za-z][A-Za-z0-9_.-]{1,63})",
+            re.IGNORECASE,
+        ),
+    ]
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            series_id = _normalize_fred_series_id(match.group("series"))
+            if series_id:
+                candidates.append(series_id)
+    return _ordered_unique(candidates)
+
+
+def _normalize_fred_series_id(value: str) -> str | None:
+    normalized = value.strip().strip(".,;:)(").upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_.-]{1,63}", normalized):
+        return None
+    if normalized in {"FRED", "SERIES", "DATA", "SEARCH", "OFFICIAL", "CSV", "MACRO"}:
+        return None
+    return normalized
 
 
 def _feedback_hint(record) -> JsonObject:
@@ -2675,6 +2767,12 @@ def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[st
             metadata.setdefault("research_task_kind", "market_data")
         else:
             metadata.setdefault("research_task_kind", "competitive_landscape")
+    elif "finance.macro_data" in capabilities:
+        metadata.setdefault("source_authority_requirement", "primary")
+        metadata.setdefault("research_task_kind", "macro_data")
+        metadata.setdefault("preferred_source_families", ["government_statistic", "central_bank_statistic", "treasury_data"])
+        updated.setdefault("max_queries", 1)
+        updated.setdefault("query_templates", ["{query}"])
     updated["metadata"] = metadata
     return updated
 

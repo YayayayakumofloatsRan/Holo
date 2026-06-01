@@ -36,7 +36,7 @@ _FAMILY_BY_MARKER = {
         "preference",
     ),
     "retrieval": ("retrieval", "web", "browser.page", "news", "research"),
-    "finance": ("finance", "market", "filing", "fundamental", "competitive"),
+    "finance": ("finance", "market", "filing", "fundamental", "competitive", "macro", "economic_indicator"),
     "legal": ("legal", "contract", "regulation", "compliance"),
     "medical": ("medical", "health", "clinical", "diagnosis"),
     "education": ("education", "tutor", "teach", "learning"),
@@ -682,6 +682,8 @@ def _domain_profile(*, intent_kind: str, domain: str, activity: str, capabilitie
     text = " ".join([intent_kind, domain, activity, *capabilities]).lower()
     if "finance.market_news" in capabilities or "market_news" in text:
         return "market_news"
+    if "finance.macro_data" in capabilities or "macro_data" in text or "economic_indicator" in text:
+        return "macro_data_research"
     if domain == "finance" and "competitive" in text:
         return "competitive_intelligence"
     if domain == "finance":

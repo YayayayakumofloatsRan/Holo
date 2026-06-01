@@ -277,6 +277,14 @@ structured provider to the official Archives filing document. The model still
 only proposes that payload; the host validates, fetches, stores artifacts, and
 decides whether the evidence is enough.
 
+For macro-data loops, `retrieval.suggested_macro_series` follows the same
+boundary. It is derived from extraction spans such as `series_id=CPIAUCSL`, then
+offers a normal `retrieval.run` payload carrying `fred_series_id`, primary
+source requirements, macro-data task kind, and `search_strategy="structured"`.
+The `fred_structured_search` provider converts that metadata into official FRED
+series-page and CSV candidates; it does not fetch the network itself or bypass
+ranking, artifacts, citations, or termination policy.
+
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, roleplay, document/report work,
 workspace, retrieval, web research, finance, legal, medical, education,

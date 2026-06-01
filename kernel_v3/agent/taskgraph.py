@@ -18,6 +18,7 @@ _RETRIEVAL_CAPABILITIES = {
     "finance.fundamentals_research",
     "finance.market_news",
     "finance.market_data",
+    "finance.macro_data",
     "finance.competitive_landscape",
     "retrieval.run",
     "web.research",
@@ -315,7 +316,7 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         return "workspace_write"
     if _has_any(capabilities, _WORKSPACE_READ_CAPABILITIES):
         return "workspace_answer"
-    if kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research"}:
+    if kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research", "macro_data_research"}:
         return "retrieval_answer"
     if kind == "workspace_read":
         return "workspace_answer"
@@ -346,7 +347,7 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
         return "file.read"
     if capabilities & _SYSTEM_CAPABILITIES:
         return "system.time"
-    if node.kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research"}:
+    if node.kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research", "macro_data_research"}:
         return "retrieval.run"
     if node.kind == "workspace_read":
         return "workspace.search,file.read"
@@ -386,7 +387,7 @@ def _evidence_required(kind: str, capabilities: list[str], *, metadata: JsonObje
         }
     ):
         return True
-    return kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research", "workspace_read"}
+    return kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research", "macro_data_research", "workspace_read"}
 
 
 def _citations_required(kind: str, capabilities: list[str], *, metadata: JsonObject) -> bool:
@@ -395,7 +396,7 @@ def _citations_required(kind: str, capabilities: list[str], *, metadata: JsonObj
         return value
     if _has_any(capabilities, _RETRIEVAL_CAPABILITIES):
         return True
-    return kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research"}
+    return kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research", "macro_data_research"}
 
 
 def _step_status(

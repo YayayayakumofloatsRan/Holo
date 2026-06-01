@@ -18,6 +18,7 @@ from kernel_v3.retrieval.contracts import (
 from kernel_v3.retrieval.composite import AdaptiveSearchProvider, AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
 from kernel_v3.retrieval.corpus_provider import CorpusFetchProvider, CorpusSearchProvider
 from kernel_v3.retrieval.crawl_provider import BoundedCrawlSearchProvider, DirectUrlSearchProvider, SourceDirectorySearchProvider
+from kernel_v3.retrieval.fred_provider import FredSearchProvider
 from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportResponse, JsonHttpSearchProvider
 from kernel_v3.retrieval.inspection import inspect_retrieval_providers
 from kernel_v3.retrieval.live_config import LiveCrawlSearchConfig, LiveHttpFetchConfig, LiveJsonHttpSearchConfig, LiveRetrievalConfig
@@ -43,6 +44,7 @@ __all__ = [
     "FetchedDocument",
     "FetchAttempt",
     "FetchResponse",
+    "FredSearchProvider",
     "HttpFetchProvider",
     "HttpTransportResponse",
     "JsonHttpSearchProvider",

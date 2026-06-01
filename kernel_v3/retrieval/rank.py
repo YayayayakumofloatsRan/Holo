@@ -41,13 +41,19 @@ def rank_sources(
         reasons = ["query_term_match"] if hits else ["provider_result"]
         metadata = dict(source.metadata)
         source_kind_adjustment = _source_kind_score_adjustment(metadata)
+        source_family_adjustment = _source_family_preference_adjustment(goal.metadata, metadata)
         if research_profile is not None:
             assessment = assess_search_source(source, profile=research_profile)
-            score = (term_score * 0.2) + (assessment.authority_score * 0.8) + source_kind_adjustment
+            score = (
+                (term_score * 0.2)
+                + (assessment.authority_score * 0.8)
+                + source_kind_adjustment
+                + source_family_adjustment
+            )
             metadata["source_assessment"] = assessment.to_dict()
             reasons.append(f"authority:{assessment.authority_level}")
         else:
-            score = term_score + source_kind_adjustment
+            score = term_score + source_kind_adjustment + source_family_adjustment
         ranked.append(
             RankedSource(
                 source_id=source.source_id,
@@ -102,6 +108,27 @@ def _source_kind_score_adjustment(metadata: dict[str, object]) -> float:
     if source_kind in {"crawl_discovered", "crawl_sitemap", "direct_url"}:
         return 0.03
     return 0.0
+
+
+def _source_family_preference_adjustment(goal_metadata: dict[str, object], source_metadata: dict[str, object]) -> float:
+    source_family = source_metadata.get("source_family")
+    if not isinstance(source_family, str) or not source_family:
+        return 0.0
+    preferred = _preferred_source_families(goal_metadata)
+    if not preferred:
+        return 0.0
+    if source_family in preferred:
+        return 0.18
+    return -0.08
+
+
+def _preferred_source_families(metadata: dict[str, object]) -> set[str]:
+    raw = metadata.get("preferred_source_families")
+    if isinstance(raw, list):
+        return {item for item in raw if isinstance(item, str) and item}
+    if metadata.get("research_task_kind") == "macro_data":
+        return {"government_statistic", "central_bank_statistic", "treasury_data"}
+    return set()
 
 
 def _term_aliases(term: str) -> list[str]:

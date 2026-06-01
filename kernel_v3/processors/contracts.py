@@ -204,6 +204,11 @@ present, prefer one of its suggested_payload objects for the next
 retrieval.run. These are host-derived SEC filing continuations from previously
 fetched submissions metadata; still emit a normal tool proposal and let the
 host validate it.
+When context.state.agent_replan_hints.retrieval.suggested_macro_series is
+present, prefer one of its suggested_payload objects for the next
+retrieval.run. These are host-derived official macro/FRED series continuations
+from extracted spans, not raw fetched bodies; still emit a normal tool proposal
+and let the host validate it.
 For retrieval.run, payload.metadata.search_strategy may propose one of fallback, aggregate, corpus_only, fresh_live, structured, or crawl when the context exposes an adaptive search provider. This only selects among host-configured providers; it does not grant network or tool permission.
 For long tasks, continue one bounded action at a time; the host owns loop budgets, progress detection, repetition detection, and final termination.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.
