@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -1959,6 +1960,12 @@ def _retrieval_replan_hints(
         requirement=requirement,
         strategy_hints=strategy_hints,
     )
+    suggested_filing_documents = _suggested_sec_filing_documents(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+    )
     needs_replan = bool(report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
     return {
         "needs_replan": needs_replan,
@@ -1974,6 +1981,7 @@ def _retrieval_replan_hints(
         "suggested_search_strategies": strategy_hints,
         "suggested_query_hints": query_hints,
         "suggested_source_targets": source_targets,
+        "suggested_filing_documents": suggested_filing_documents,
         "attempted_queries": _ordered_unique([item["query"] for item in attempts if isinstance(item.get("query"), str)]),
         "attempted_search_strategies": _ordered_unique(
             [item["search_strategy"] for item in attempts if isinstance(item.get("search_strategy"), str)]
@@ -1989,6 +1997,139 @@ def _retrieval_replan_hints(
         "attempts": attempts[-6:],
         "do_not_finalize_until": _do_not_finalize_until(missing=missing, requirement=requirement),
     }
+
+
+def _suggested_sec_filing_documents(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+) -> list[JsonObject]:
+    if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID:
+        return []
+    candidates: list[JsonObject] = []
+    seen: set[str] = set()
+    for record in journal.records(task_id=task_id, kind="retrieval_extraction"):
+        if record.run_id != run_id:
+            continue
+        document = _json_object(record.data.get("document"))
+        uri = _string_value(document.get("uri"))
+        if "data.sec.gov/submissions/" not in uri:
+            continue
+        cik = _sec_cik_from_submissions_uri(uri)
+        if not cik:
+            continue
+        spans = record.data.get("spans")
+        span_items = spans if isinstance(spans, list) else []
+        span_text = " ".join(
+            str(span.get("text") or "")
+            for span in span_items
+            if isinstance(span, dict)
+        )
+        filings = _sec_filings_from_extracted_text(span_text)
+        for filing in filings:
+            accession = _string_value(filing.get("sec_accession_number"))
+            primary_document = _string_value(filing.get("sec_primary_document"))
+            if not accession:
+                continue
+            key = f"{cik}:{accession}:{primary_document}"
+            if key in seen:
+                continue
+            seen.add(key)
+            form = _string_value(filing.get("sec_form"))
+            report_date = _string_value(filing.get("report_date"))
+            query = _sec_filing_document_query(cik=cik, form=form, report_date=report_date, accession=accession)
+            payload_metadata = {
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "sec_cik": cik,
+                "sec_accession_number": accession,
+                **({"sec_primary_document": primary_document} if primary_document else {}),
+                **({"sec_form": form} if form else {}),
+                **({"report_date": report_date} if report_date else {}),
+                "source_authority_requirement": "primary",
+                "search_strategy": "structured",
+            }
+            candidates.append(
+                {
+                    "source": "sec_submissions_json",
+                    "source_record_id": record.record_id,
+                    "source_uri": uri,
+                    "sec_cik": cik,
+                    "sec_accession_number": accession,
+                    **({"sec_primary_document": primary_document} if primary_document else {}),
+                    **({"sec_form": form} if form else {}),
+                    **({"report_date": report_date} if report_date else {}),
+                    "query": query,
+                    "suggested_payload": {
+                        "query": query,
+                        "metadata": payload_metadata,
+                    },
+                }
+            )
+            if len(candidates) >= 5:
+                return candidates
+    return candidates
+
+
+def _sec_filings_from_extracted_text(text: str) -> list[JsonObject]:
+    if not text:
+        return []
+    by_index: dict[str, JsonObject] = {}
+    fields = {
+        "sec_form": ("form",),
+        "sec_accession_number": ("accessionNumber", "accession_number", "accession"),
+        "sec_primary_document": ("primaryDocument", "primary_document", "document_name"),
+        "report_date": ("reportDate", "report_date"),
+    }
+    for output_key, names in fields.items():
+        for name in names:
+            for match in _indexed_sec_field_pattern(name).finditer(text):
+                index = match.group("index")
+                value = match.group("value").strip()
+                if not value:
+                    continue
+                by_index.setdefault(index, {})[output_key] = _normalize_sec_field(output_key, value)
+    filings = []
+    for index in sorted(by_index, key=lambda item: int(item) if item.isdigit() else item):
+        item = by_index[index]
+        if item.get("sec_accession_number"):
+            filings.append(item)
+    return filings
+
+
+def _indexed_sec_field_pattern(field_name: str) -> re.Pattern[str]:
+    escaped = re.escape(field_name)
+    return re.compile(
+        rf"(?:^|\s)(?:[A-Za-z0-9_.]+\.)?{escaped}\[(?P<index>\d+)\]:\s*(?P<value>[^\s]+)",
+        re.IGNORECASE,
+    )
+
+
+def _normalize_sec_field(field: str, value: str) -> str:
+    if field == "sec_accession_number":
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if len(digits) >= 18:
+            compact = digits[-18:]
+            return f"{compact[:10]}-{compact[10:12]}-{compact[12:]}"
+    return value
+
+
+def _sec_cik_from_submissions_uri(uri: str) -> str | None:
+    match = re.search(r"/submissions/CIK(?P<cik>\d{1,10})\.json", uri)
+    if not match:
+        return None
+    return match.group("cik").zfill(10)
+
+
+def _sec_filing_document_query(*, cik: str, form: str, report_date: str, accession: str) -> str:
+    parts = ["SEC", "CIK", cik]
+    if form:
+        parts.append(form)
+    if report_date:
+        parts.append(report_date)
+    parts.extend([accession, "primary filing document"])
+    return " ".join(parts)
 
 
 def _feedback_hint(record) -> JsonObject:

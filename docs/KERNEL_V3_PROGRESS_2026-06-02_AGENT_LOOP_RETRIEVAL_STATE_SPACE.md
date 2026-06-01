@@ -36,6 +36,13 @@
   browse/search candidates, and rejects unsafe document names. This closes the
   common fundamentals loop from submissions metadata to the original 10-K/10-Q
   document body without embedding SEC path rules in model text.
+- Agent replan context now derives
+  `retrieval.suggested_filing_documents` from journaled extraction spans of SEC
+  submissions JSON. The hint exposes a suggested `retrieval.run` payload with
+  CIK, accession number, optional `primaryDocument`, form/report date, primary
+  source requirement, and structured search strategy. Raw JSON bodies remain in
+  ArtifactStore, and the model still has to propose a normal host-validated
+  action.
 - Live retrieval fallback construction now includes the SEC structured provider
   before generic configured search providers, so finance fundamentals tasks can
   use primary SEC URLs without relying on a broad web search API.

@@ -268,6 +268,15 @@ and host-owned payload metadata such as `search_strategy`; it does not include
 raw fetched bodies or make those sources executable without a normal
 `retrieval.run` action.
 
+For SEC fundamentals loops, the same replan packet can include
+`retrieval.suggested_filing_documents`. These are derived from journaled
+extraction spans of SEC submissions JSON, not from raw artifact bodies. Each
+entry carries CIK, accession number, optional `primaryDocument`, form/report
+date, and a suggested `retrieval.run` payload that will route through the SEC
+structured provider to the official Archives filing document. The model still
+only proposes that payload; the host validates, fetches, stores artifacts, and
+decides whether the evidence is enough.
+
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, roleplay, document/report work,
 workspace, retrieval, web research, finance, legal, medical, education,

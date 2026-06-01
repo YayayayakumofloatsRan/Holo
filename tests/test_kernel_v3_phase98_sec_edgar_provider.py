@@ -333,6 +333,13 @@ def test_phase98_agent_continues_from_sec_submissions_to_primary_filing_document
     actions = journal.records(task_id=result.task_id, kind="action")
     assert [record.data["name"] for record in actions] == ["retrieval.run", "retrieval.run"]
     assert actions[1].data["payload"]["metadata"]["sec_accession_number"] == "0000320193-24-000123"
+    contexts = journal.records(task_id=result.task_id, kind="context")
+    continuation_hints = contexts[1].data["state"]["agent_replan_hints"]["retrieval"]["suggested_filing_documents"]
+    assert continuation_hints
+    assert continuation_hints[0]["sec_accession_number"] == "0000320193-24-000123"
+    assert continuation_hints[0]["sec_primary_document"] == "aapl-20240928.htm"
+    assert continuation_hints[0]["suggested_payload"]["metadata"]["search_strategy"] == "structured"
+    assert continuation_hints[0]["suggested_payload"]["metadata"]["sec_cik"] == "0000320193"
     search_attempts = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")
     primary_attempts = [
         attempt

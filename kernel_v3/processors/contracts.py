@@ -199,6 +199,11 @@ Treat compound user requests as multiple subrequests. If the context contains a 
 When context.state.agent_retrieval_plan_state contains planned_subgoals, choose a retrieval.run goal_id from that list, usually next_recommended_goal_id, and preserve that goal_id in the payload so host coverage can track progress.
 When feedback.status is continue, inspect feedback.missing_evidence and the latest observations, then propose a materially new next action when one is available. Avoid repeating the same action payload unless the context shows new progress or the host explicitly asks for a retry.
 When context.state.agent_replan_hints.status is needs_replan, use its retrieval gaps, suggested_query_hints, suggested_search_strategies, do_not_finalize_until, and avoid_repeating fields to propose one materially different safe action. Do not answer as final while any do_not_finalize_until rule is unmet.
+When context.state.agent_replan_hints.retrieval.suggested_filing_documents is
+present, prefer one of its suggested_payload objects for the next
+retrieval.run. These are host-derived SEC filing continuations from previously
+fetched submissions metadata; still emit a normal tool proposal and let the
+host validate it.
 For retrieval.run, payload.metadata.search_strategy may propose one of fallback, aggregate, corpus_only, fresh_live, structured, or crawl when the context exposes an adaptive search provider. This only selects among host-configured providers; it does not grant network or tool permission.
 For long tasks, continue one bounded action at a time; the host owns loop budgets, progress detection, repetition detection, and final termination.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.
