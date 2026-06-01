@@ -2,8 +2,9 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+from kernel_v3 import cli
 from kernel_v3.context import ContextCompiler
-from kernel_v3.contracts import CandidateAction, Observation
+from kernel_v3.contracts import CandidateAction, Observation, ProcessorRequest
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.policy import PolicyGate
@@ -11,8 +12,11 @@ from kernel_v3.processors import (
     DEEPSEEK_V4_FLASH,
     DEEPSEEK_V4_PRO,
     EVALUATOR_SCHEMA,
+    EVALUATOR_PROMPT_CONTRACT,
     PLANNER_SCHEMA,
     PLANNER_PROMPT_CONTRACT,
+    SEMANTIC_INTAKE_PROMPT_CONTRACT,
+    SYNTHESIZER_PROMPT_CONTRACT,
     DeepSeekProvider,
     FakeJsonProvider,
     FakeMalformedJsonProvider,
@@ -74,6 +78,20 @@ def test_phase5_planner_contract_requires_explicit_handling_of_constrained_subre
     assert "multiple subrequests" in lowered
     assert "silently omitting" in lowered
     assert "never invent tools" in lowered
+
+
+def test_phase5_processor_prompt_contracts_include_json_examples_for_model_imitation():
+    contracts = [
+        SEMANTIC_INTAKE_PROMPT_CONTRACT,
+        PLANNER_PROMPT_CONTRACT,
+        EVALUATOR_PROMPT_CONTRACT,
+        SYNTHESIZER_PROMPT_CONTRACT,
+    ]
+
+    for contract in contracts:
+        lowered = contract.lower()
+        assert "example" in lowered
+        assert "{" in contract and "}" in contract
 
 
 def test_phase5_malformed_planner_json_is_rejected_and_journaled_without_crashing_loop():
@@ -339,9 +357,12 @@ def test_phase5_timeout_provider_produces_failed_processor_result():
 
     assert outcome.result.status == "failed"
     assert outcome.result.error == "TimeoutError"
+    assert outcome.result.output["error_type"] == "TimeoutError"
+    assert outcome.result.output["error_message_preview"] == "fake processor timeout"
     result_record = journal.records(task_id="task-timeout", kind="processor_result")[0]
     assert result_record.data["status"] == "failed"
     assert result_record.data["error"] == "TimeoutError"
+    assert result_record.data["output"]["error_message_preview"] == "fake processor timeout"
 
 
 def test_phase5_evaluator_prompt_uses_observation_previews_not_raw_bodies():
@@ -581,6 +602,15 @@ def test_phase5_deepseek_v4_router_exposes_user_reasoning_overrides():
     assert synthesizer.parameters["reasoning_effort"] == "max"
 
 
+def test_phase5_deepseek_v4_router_accepts_medium_reasoning_override():
+    router = deepseek_v4_router(profile="quality", thinking="enabled", reasoning_effort="medium")
+
+    evaluator = router.route("evaluator.assess")
+
+    assert evaluator.parameters["thinking"] == "enabled"
+    assert evaluator.parameters["reasoning_effort"] == "medium"
+
+
 def test_phase5_route_parameters_are_journaled_and_sent_to_provider_request():
     journal = JournalStore.in_memory()
     fabric = ProcessorFabric(
@@ -675,6 +705,82 @@ def test_phase5_deepseek_provider_payload_uses_component_route_tuning(monkeypatc
     assert provider.payload["thinking"] == {"type": "enabled"}
     assert provider.payload["reasoning_effort"] == "high"
     assert provider.payload["max_tokens"] == 768
+    assert "temperature" not in provider.payload
+
+
+def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets(monkeypatch):
+    secret = "packet-preview-secret"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+    provider = DeepSeekProvider(enabled=True)
+    request = ProcessorRequest(
+        request_id="proc-preview",
+        run_id="run-preview",
+        processor="planner.propose",
+        prompt='{"contract":"Return JSON","dialogue":[{"role":"user","content":"你是谁"}]}',
+        context_id="ctx-preview",
+        parameters={
+            "task_type": "planner.propose",
+            "provider": "deepseek",
+            "model": DEEPSEEK_V4_FLASH,
+            "thinking": "disabled",
+            "max_tokens": 256,
+            "timeout_seconds": 30,
+        },
+    )
+
+    packet = provider.packet_preview(request)
+    encoded = json.dumps(packet, ensure_ascii=False)
+
+    assert packet["method"] == "POST"
+    assert packet["headers"]["Authorization"] == "Bearer [set]"
+    assert packet["body"]["model"] == DEEPSEEK_V4_FLASH
+    assert packet["body"]["response_format"] == {"type": "json_object"}
+    assert packet["body"]["thinking"] == {"type": "disabled"}
+    assert packet["body"]["temperature"] == 0.0
+    assert isinstance(packet["body"]["messages"][0]["content"], dict)
+    assert packet["body"]["messages"][0]["content"]["chars"] == len(request.prompt)
+    assert secret not in encoded
+    assert request.prompt not in encoded
+
+
+def test_phase5_cli_model_packet_prints_routed_deepseek_request_without_live_gate(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    secret = "cli-packet-secret"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+
+    status = cli.main(
+        [
+            "--journal",
+            str(tmp_path / "journal.jsonl"),
+            "--index",
+            str(tmp_path / "journal.sqlite"),
+            "model-packet",
+            "--provider",
+            "deepseek",
+            "--task-type",
+            "planner.propose",
+            "--goal",
+            "搜索一下今天的热点新闻",
+            "--profile",
+            "balanced",
+            "--thinking",
+            "enabled",
+            "--reasoning-effort",
+            "medium",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    encoded = json.dumps(payload, ensure_ascii=False)
+    assert status == 0
+    assert payload["network_call"] is False
+    assert payload["route"]["parameters"]["thinking"] == "enabled"
+    assert payload["route"]["parameters"]["reasoning_effort"] == "medium"
+    assert payload["packet"]["body"]["response_format"] == {"type": "json_object"}
+    assert payload["packet"]["body"]["thinking"] == {"type": "enabled"}
+    assert payload["packet"]["body"]["reasoning_effort"] == "medium"
+    assert "temperature" not in payload["packet"]["body"]
+    assert secret not in encoded
 
 
 def test_phase5_secrets_do_not_appear_in_journal_context_or_trace(monkeypatch):

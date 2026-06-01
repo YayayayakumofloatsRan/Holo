@@ -257,12 +257,29 @@ same Phase5 execution modes used by `holo-v3 agent`:
 - `semantic_mode`
 - `turn_router_mode`
 
-The default remains fully offline fake mode. CLI model modes for `holo-v3 chat`
-and `holo-v3 resident run/run-once` are gated by `HOLO_V3_LIVE_MODEL=1`, then
-use the configured provider fabric. This lets a resident worker use model-backed
-semantic intake, turn routing, or planner/evaluator/synthesizer behavior
-without letting the worker execute tools directly, bypass PolicyGate, or become
-a transport-level decision maker.
+The default remains fully offline fake mode. CLI model modes for
+`holo-v3 agent`, `holo-v3 chat`, and `holo-v3 resident run/run-once` are gated
+by `HOLO_V3_LIVE_MODEL=1`, then use the configured provider fabric. Operators
+can either enable individual model-backed pieces with `--planner model`,
+`--semantic-intake model`, `--turn-router model`, and related flags, or use
+`--online` / `--live-model` to enable the model-backed semantic stack for an
+interactive run. This lets a resident worker use model-backed semantic intake,
+turn routing, or planner/evaluator/synthesizer behavior without letting the
+worker execute tools directly, bypass PolicyGate, or become a transport-level
+decision maker.
+
+`holo-v3 model-packet` renders the exact OpenAI-compatible request envelope the
+host would send for a processor task without performing a network call. It
+shows provider, model, route parameters, timeout, endpoint, redacted headers,
+`response_format={"type":"json_object"}`, optional `thinking` and
+`reasoning_effort`, plus a prompt preview/hash. Use `--show-prompt` only for a
+local debugging session where the prompt is safe to display. API keys stay in
+the process environment and are never written to journal, trace, context, or
+packet output.
+
+DeepSeek live runs read `DEEPSEEK_API_KEY` from the environment. In WSL, the
+recommended local setup is a private `~/.holo_env` file sourced by `~/.bashrc`;
+the file must remain outside the repository and mode `600`.
 
 Memory traces are structured audit views, not memory exports. `memory-trace`
 renders candidate/proposal/approval/commit/delete/migration events with ids,

@@ -4,6 +4,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import hashlib
 from collections.abc import Sequence
 
 from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
@@ -108,21 +109,7 @@ class OpenAICompatibleProvider:
         available = self.availability()
         if not available["available"]:
             return _failed_result(request, str(available["reason"]), provider=self.name, model=self.model)
-        payload = {
-            "model": str(request.parameters.get("model") or self.model),
-            "messages": [{"role": "user", "content": request.prompt}],
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
-        max_tokens = _optional_positive_int(request.parameters.get("max_tokens"))
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        thinking = _thinking_payload(request.parameters.get("thinking"))
-        if thinking is not None:
-            payload["thinking"] = thinking
-        reasoning_effort = request.parameters.get("reasoning_effort")
-        if reasoning_effort in {"high", "max"}:
-            payload["reasoning_effort"] = reasoning_effort
+        payload = self.build_payload(request)
         decoded = self._post_json(self._completion_url(), self._api_key(), payload, _timeout(request, self.timeout_seconds))
         text = _extract_chat_text(decoded)
         return ProcessorResult(
@@ -133,6 +120,44 @@ class OpenAICompatibleProvider:
             usage=coerce_usage(decoded.get("usage"), prompt=request.prompt, completion=text),
             error=None,
         )
+
+    def build_payload(self, request: ProcessorRequest) -> JsonObject:
+        thinking = _thinking_payload(request.parameters.get("thinking"))
+        payload: JsonObject = {
+            "model": str(request.parameters.get("model") or self.model),
+            "messages": [{"role": "user", "content": request.prompt}],
+            "response_format": {"type": "json_object"},
+        }
+        if thinking is not None:
+            payload["thinking"] = thinking
+        if not _thinking_enabled(thinking):
+            payload["temperature"] = _temperature(request.parameters.get("temperature"), default=0.0)
+        max_tokens = _optional_positive_int(request.parameters.get("max_tokens"))
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        reasoning_effort = request.parameters.get("reasoning_effort")
+        if reasoning_effort in {"low", "medium", "high", "max"}:
+            payload["reasoning_effort"] = str(reasoning_effort)
+        return payload
+
+    def packet_preview(self, request: ProcessorRequest, *, include_prompt: bool = False) -> JsonObject:
+        return {
+            "provider": self.name,
+            "model": str(request.parameters.get("model") or self.model),
+            "method": "POST",
+            "url": self._completion_url(),
+            "headers": {
+                "Authorization": "Bearer [set]" if self._api_key() else "Bearer [missing]",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            "timeout_seconds": _timeout(request, self.timeout_seconds),
+            "body": _safe_payload(self.build_payload(request), include_prompt=include_prompt),
+            "redaction": {
+                "api_key": "never_exposed",
+                "prompt": "full" if include_prompt else "preview_hash_only",
+            },
+        }
 
     def _api_key(self) -> str:
         return str(os.environ.get(self.api_key_env, "") or "").strip()
@@ -222,6 +247,18 @@ def _thinking_payload(value: object) -> JsonObject | None:
     return None
 
 
+def _thinking_enabled(value: JsonObject | None) -> bool:
+    return isinstance(value, dict) and value.get("type") == "enabled"
+
+
+def _temperature(value: object, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(2.0, parsed))
+
+
 def _extract_chat_text(decoded: JsonObject) -> str:
     choices = decoded.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -247,3 +284,28 @@ def _failed_result(request: ProcessorRequest, error: str, *, provider: str, mode
         usage={},
         error=error,
     )
+
+
+def _safe_payload(payload: JsonObject, *, include_prompt: bool) -> JsonObject:
+    safe = json.loads(json.dumps(payload, ensure_ascii=False))
+    messages = safe.get("messages")
+    if include_prompt or not isinstance(messages, list):
+        return safe
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = {
+                "preview": _preview(content, 640),
+                "hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "chars": len(content),
+            }
+    return safe
+
+
+def _preview(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."

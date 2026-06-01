@@ -199,6 +199,6 @@ def _deepseek_route(
 
 
 def _reasoning_effort(value: str) -> str:
-    if value == "max":
-        return "max"
+    if value in {"low", "medium", "high", "max"}:
+        return value
     return "high"

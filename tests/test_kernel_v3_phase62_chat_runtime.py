@@ -322,6 +322,123 @@ def test_phase62_cli_chat_model_mode_is_live_gated(tmp_path: Path, capsys, monke
     assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
 
 
+def test_phase62_cli_chat_online_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--thread",
+            "cli-online-thread",
+            "--once",
+            "hello",
+            "--online",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
+    assert JournalStore(journal, index_path=index).records() == []
+
+
+def test_phase62_cli_chat_online_mode_uses_model_backed_processors(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    model_action_text = "online-model-smoke-response"
+    monkeypatch.setattr(
+        cli,
+        "_live_processor_fabric",
+        lambda _provider, journal, **_kwargs: fake_fabric(
+            {
+                "chat.route": {
+                    "route": "new_task",
+                    "command": None,
+                    "target_task_id": None,
+                    "confidence": 0.95,
+                    "reasons": ["online_model_route"],
+                },
+                "semantic.intake": {
+                    "primary_intent": "roleplay",
+                    "suggested_mode": "direct_answer",
+                    "compound": False,
+                    "requires_clarification": False,
+                    "intents": [
+                        {
+                            "kind": "roleplay",
+                            "text": "扮演一个初出茅庐的律师",
+                            "sequence_index": 1,
+                            "required_capabilities": [],
+                            "risk": "none",
+                            "status": "ready",
+                            "metadata": {},
+                        }
+                    ],
+                    "blocked_capabilities": [],
+                    "warnings": [],
+                    "response_hint": None,
+                    "clarification_question": None,
+                },
+                "planner.propose": {
+                    "action_id": "act-online-direct",
+                    "kind": "respond",
+                    "name": None,
+                    "description": "online model direct answer",
+                    "payload": {"text": model_action_text},
+                    "score": 0.95,
+                    "reasons": ["online_model_direct_answer"],
+                    "side_effect_class": "none",
+                },
+                "evaluator.assess": {
+                    "status": "final_answer_ready",
+                    "answer": None,
+                    "stop_reason": "completed",
+                    "missing_evidence": [],
+                },
+            },
+            journal=journal,
+        ),
+    )
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--thread",
+            "cli-online-thread",
+            "--once",
+            "扮演一个初出茅庐的律师，你会怎么做",
+            "--online",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    records = JournalStore(journal, index_path=index).records(task_id=payload["task_id"])
+    task_types = [
+        record.data["task_type"]
+        for record in records
+        if record.kind == "processor_request" and isinstance(record.data, dict)
+    ]
+    actions = [record.data for record in records if record.kind == "action" and isinstance(record.data, dict)]
+    assert status == 0
+    assert payload["status"] == "completed"
+    assert actions[-1]["reasons"] == ["online_model_direct_answer"]
+    assert payload["answer"] == actions[-1]["payload"]["text"]
+    assert "离线 host fallback" not in payload["answer"]
+    assert {"semantic.intake", "planner.propose", "evaluator.assess"}.issubset(set(task_types))
+    assert any(record.kind == "processor_request" and record.data.get("task_type") == "chat.route" for record in JournalStore(journal, index_path=index).records())
+
+
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "kernel_v3.cli", *args],

@@ -113,7 +113,12 @@ class ProcessorFabric:
                 result_id=f"result-{request.request_id}",
                 request_id=request.request_id,
                 status="failed",
-                output={"provider": route.provider, "model": provider_model},
+                output={
+                    "provider": route.provider,
+                    "model": provider_model,
+                    "error_type": type(exc).__name__,
+                    "error_message_preview": _preview(str(exc) or type(exc).__name__, 240),
+                },
                 usage={},
                 error=type(exc).__name__,
             )

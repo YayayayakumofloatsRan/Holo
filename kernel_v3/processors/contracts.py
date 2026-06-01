@@ -139,6 +139,8 @@ Fields: primary_intent string, suggested_mode one of direct_answer/retrieval_ans
 compound boolean, requires_clarification boolean, intents array, blocked_capabilities string array,
 warnings string array, response_hint string or null, clarification_question string or null.
 Each intent object should include: kind, text, sequence_index, required_capabilities, risk, status, metadata.
+Example shape:
+{"primary_intent":"roleplay","suggested_mode":"direct_answer","compound":false,"requires_clarification":false,"intents":[{"kind":"roleplay","text":"Act as a cautious legal intern","sequence_index":1,"required_capabilities":[],"risk":"none","status":"ready","metadata":{"style":"legal intern"}}],"blocked_capabilities":[],"warnings":[],"response_hint":null,"clarification_question":null}
 Use broad semantic judgment instead of keyword matching. Split compound user requests into ordered intents.
 The intent kind may be an open semantic label; executable routing comes from
 required_capabilities and host validation, not from a fixed phrase table.
@@ -152,6 +154,12 @@ PLANNER_PROMPT_CONTRACT = """Return one JSON object matching planner.propose.
 Fields: action_id string, kind one of respond/tool/ask_user, name string or null,
 description string, payload object, score number 0..1, reasons string array,
 side_effect_class one of none/read/write/destructive/shell/network.
+Example direct answer:
+{"action_id":"act-direct-1","kind":"respond","name":null,"description":"answer within provided context","payload":{"text":"I can answer from the current context, or ask the host to use an approved tool when needed."},"score":0.86,"reasons":["no external tool required"],"side_effect_class":"none"}
+Example host tool proposal:
+{"action_id":"act-retrieval-1","kind":"tool","name":"retrieval.run","description":"collect bounded external evidence","payload":{"goal":"Find official API documentation","query":"official API documentation"},"score":0.9,"reasons":["current external evidence is required"],"side_effect_class":"network"}
+Example clarification:
+{"action_id":"act-clarify-1","kind":"ask_user","name":null,"description":"ask for missing scope","payload":{"question":"Which market, region, and time range should I research?"},"score":0.82,"reasons":["research scope is underspecified"],"side_effect_class":"none"}
 For user-visible respond/ask_user payload text, match the user's language when it is clear.
 Treat compound user requests as multiple subrequests.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.
@@ -161,11 +169,15 @@ The model only proposes. The host validates policy and executes."""
 EVALUATOR_PROMPT_CONTRACT = """Return one JSON object matching evaluator.assess.
 Fields: status one of continue/final_answer_ready/needs_user_input/blocked/failed,
 answer string or null, stop_reason string or null, missing_evidence string array.
+Example:
+{"status":"continue","answer":null,"stop_reason":null,"missing_evidence":["official source citation"]}
 Evaluate whether the latest observation is enough and whether the host should continue.
 For any user-visible answer text, match the user's language when it is clear."""
 
 SYNTHESIZER_PROMPT_CONTRACT = """Return one JSON object matching synthesizer.answer.
 Fields: answer string, citation_refs string array, confidence number 0..1,
 limitations string array, used_evidence string array.
+Example:
+{"answer":"The available evidence supports the answer, with one limitation noted.","citation_refs":["cite-1"],"confidence":0.82,"limitations":["Only provided evidence was used."],"used_evidence":["ev-1"]}
 Only cite provided citation ids. Do not invent sources.
 Match the user's language when it is clear from the context."""

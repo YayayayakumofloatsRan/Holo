@@ -10,14 +10,19 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler
-from kernel_v3.contracts import JsonObject
+from kernel_v3.contracts import JsonObject, ProcessorRequest
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import (
+    CHAT_ROUTE_PROMPT_CONTRACT,
+    EVALUATOR_PROMPT_CONTRACT,
+    EVALUATOR_SCHEMA,
     PLANNER_SCHEMA,
     PLANNER_PROMPT_CONTRACT,
+    SEMANTIC_INTAKE_PROMPT_CONTRACT,
+    SYNTHESIZER_PROMPT_CONTRACT,
     DeepSeekProvider,
     FakeJsonProvider,
     ModelPlanner,
@@ -60,6 +65,16 @@ def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("--live-max-network-fetches", type=int, default=3)
 
 
+def _add_online_model_arg(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--online",
+        "--live-model",
+        dest="online",
+        action="store_true",
+        help="Enable the model-backed semantic stack for interactive runs. Still gated by HOLO_V3_LIVE_MODEL=1.",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     parser = argparse.ArgumentParser(prog="holo-v3")
@@ -84,10 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
+    _add_online_model_arg(agent_parser)
     agent_parser.add_argument("--model", default=None)
     agent_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
-    agent_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    agent_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     agent_parser.add_argument("--citations-required", action="store_true")
     agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     agent_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
@@ -107,10 +123,11 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--turn-router", choices=["fake", "model"], default="fake")
+    _add_online_model_arg(chat_parser)
     chat_parser.add_argument("--model", default=None)
     chat_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
-    chat_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    chat_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     chat_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(chat_parser)
@@ -161,10 +178,11 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     resident_run_once.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     resident_run_once.add_argument("--turn-router", choices=["fake", "model"], default="fake")
+    _add_online_model_arg(resident_run_once)
     resident_run_once.add_argument("--model", default=None)
     resident_run_once.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
-    resident_run_once.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    resident_run_once.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_run_once.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(resident_run_once)
@@ -181,10 +199,11 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     resident_run.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     resident_run.add_argument("--turn-router", choices=["fake", "model"], default="fake")
+    _add_online_model_arg(resident_run)
     resident_run.add_argument("--model", default=None)
     resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
-    resident_run.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    resident_run.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_run.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(resident_run)
@@ -316,14 +335,31 @@ def main(argv: list[str] | None = None) -> int:
     model_smoke.add_argument("--provider", choices=["deepseek", "openai_compatible"], required=True)
     model_smoke.add_argument("--model", default=None)
     model_smoke.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
-    model_smoke.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    model_smoke.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
 
     model_scenarios = sub.add_parser("model-scenarios")
     model_scenarios.add_argument("--provider", choices=["deepseek", "openai_compatible"], required=True)
     model_scenarios.add_argument("--model", default=None)
     model_scenarios.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     model_scenarios.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
-    model_scenarios.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
+    model_scenarios.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+
+    model_packet = sub.add_parser("model-packet")
+    model_packet.add_argument("--provider", choices=["deepseek", "openai_compatible"], default="deepseek")
+    model_packet.add_argument(
+        "--task-type",
+        choices=["chat.route", "semantic.intake", "planner.propose", "evaluator.assess", "synthesizer.answer"],
+        default="planner.propose",
+    )
+    model_packet.add_argument("--goal", default="你能做什么？你是谁")
+    model_packet.add_argument("--model", default=None)
+    model_packet.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    model_packet.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    model_packet.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    model_packet.add_argument("--timeout-seconds", type=int, default=None)
+    model_packet.add_argument("--max-tokens", type=int, default=None)
+    model_packet.add_argument("--temperature", type=float, default=None)
+    model_packet.add_argument("--show-prompt", action="store_true")
 
     journal_parser = sub.add_parser("journal")
     journal_sub = journal_parser.add_subparsers(dest="journal_command", required=True)
@@ -360,10 +396,10 @@ def main(argv: list[str] | None = None) -> int:
         payload = runtime.run(
             args.goal,
             mode=_agent_mode(args),
-            planner_mode=args.planner,
-            evaluator_mode=args.evaluator,
-            synthesizer_mode=args.synthesizer,
-            semantic_mode=args.semantic_intake,
+            planner_mode=_processor_mode(args, "planner"),
+            evaluator_mode=_processor_mode(args, "evaluator"),
+            synthesizer_mode=_processor_mode(args, "synthesizer"),
+            semantic_mode=_processor_mode(args, "semantic_intake"),
             citations_required=True if args.citations_required else None,
             execution_metadata=_runtime_execution_metadata(args),
         )
@@ -406,11 +442,11 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
-            planner_mode=args.planner,
-            evaluator_mode=args.evaluator,
-            synthesizer_mode=args.synthesizer,
-            semantic_mode=args.semantic_intake,
-            turn_router_mode=args.turn_router,
+            planner_mode=_processor_mode(args, "planner"),
+            evaluator_mode=_processor_mode(args, "evaluator"),
+            synthesizer_mode=_processor_mode(args, "synthesizer"),
+            semantic_mode=_processor_mode(args, "semantic_intake"),
+            turn_router_mode=_processor_mode(args, "turn_router"),
             default_mode=_chat_default_mode(args),
             execution_metadata=_runtime_execution_metadata(args),
         )
@@ -596,6 +632,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(_outcome_payload(outcome), ensure_ascii=False, sort_keys=True))
         return 0 if outcome.result.status == "ok" else 1
+
+    if args.command == "model-packet":
+        print(json.dumps(_model_packet_payload(args), ensure_ascii=False, sort_keys=True))
+        return 0
 
     if args.command == "model-smoke":
         if os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
@@ -1265,11 +1305,11 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 profile=getattr(args, "profile", "balanced"),
                 thinking=_thinking_override(getattr(args, "thinking", "auto")),
                 reasoning_effort=getattr(args, "reasoning_effort", "high"),
-                planner_mode=getattr(args, "planner", "fake"),
-                evaluator_mode=getattr(args, "evaluator", "fake"),
-                synthesizer_mode=getattr(args, "synthesizer", "fake"),
-                semantic_mode=getattr(args, "semantic_intake", "fake"),
-                turn_router_mode=getattr(args, "turn_router", "fake"),
+                planner_mode=_processor_mode(args, "planner"),
+                evaluator_mode=_processor_mode(args, "evaluator"),
+                synthesizer_mode=_processor_mode(args, "synthesizer"),
+                semantic_mode=_processor_mode(args, "semantic_intake"),
+                turn_router_mode=_processor_mode(args, "turn_router"),
                 default_mode=_chat_default_mode(args),
                 execution_metadata=_runtime_execution_metadata(args),
             ),
@@ -1322,6 +1362,8 @@ def _combined_health(*statuses: str) -> str:
 
 
 def _agent_uses_live_model(args) -> bool:
+    if bool(getattr(args, "online", False)):
+        return True
     return any(
         value == "model"
         for value in (
@@ -1332,6 +1374,13 @@ def _agent_uses_live_model(args) -> bool:
             getattr(args, "turn_router", "fake"),
         )
     )
+
+
+def _processor_mode(args, name: str) -> str:
+    value = getattr(args, name, "fake")
+    if bool(getattr(args, "online", False)) and value == "fake":
+        return "model"
+    return value
 
 
 def _agent_mode(args) -> str:
@@ -1440,6 +1489,148 @@ def _live_processor_fabric(
         router=router,
         journal=journal,
     )
+
+
+def _model_packet_payload(args) -> dict[str, object]:
+    provider_name = str(getattr(args, "provider", "deepseek"))
+    thinking = _thinking_override(getattr(args, "thinking", "auto"))
+    if provider_name == "deepseek":
+        router = deepseek_v4_router(
+            profile=getattr(args, "profile", "balanced"),
+            thinking=thinking,
+            reasoning_effort=getattr(args, "reasoning_effort", "high"),
+        )
+        provider = DeepSeekProvider(enabled=True, model=getattr(args, "model", None))
+    else:
+        provider = OpenAICompatibleProvider(enabled=True, model=getattr(args, "model", None) or "local-model")
+        router = ProcessorRouter(default_provider=provider_name, default_model=provider.model)
+    task_type = str(getattr(args, "task_type", "planner.propose"))
+    route = router.route(
+        task_type,
+        provider=provider_name,
+        model=getattr(args, "model", None),
+        timeout_seconds=getattr(args, "timeout_seconds", None),
+    )
+    parameters: JsonObject = dict(route.parameters)
+    max_tokens = getattr(args, "max_tokens", None)
+    if max_tokens is not None:
+        parameters["max_tokens"] = max_tokens
+    temperature = getattr(args, "temperature", None)
+    if temperature is not None:
+        parameters["temperature"] = temperature
+    parameters.update(
+        {
+            "task_type": task_type,
+            "provider": route.provider,
+            "model": route.model,
+            "timeout_seconds": route.timeout_seconds,
+        }
+    )
+    request = ProcessorRequest(
+        request_id="proc-packet-preview",
+        run_id="run-packet-preview",
+        processor=task_type,
+        prompt=_packet_prompt(task_type, str(getattr(args, "goal", ""))),
+        context_id="ctx-packet-preview",
+        parameters=parameters,
+    )
+    packet = provider.packet_preview(request, include_prompt=bool(getattr(args, "show_prompt", False)))
+    return {
+        "status": "ok",
+        "network_call": False,
+        "availability": provider.availability(),
+        "route": {
+            "task_type": route.task_type,
+            "provider": route.provider,
+            "model": route.model,
+            "timeout_seconds": route.timeout_seconds,
+            "parameters": parameters,
+        },
+        "request": {
+            "request_id": request.request_id,
+            "processor": request.processor,
+            "context_id": request.context_id,
+            "prompt_chars": len(request.prompt),
+        },
+        "packet": packet,
+    }
+
+
+def _packet_prompt(task_type: str, goal: str) -> str:
+    if task_type == "chat.route":
+        payload = {
+            "contract": CHAT_ROUTE_PROMPT_CONTRACT,
+            "user_turn": goal,
+            "thread_state": {
+                "active_task_id": None,
+                "pending_question": None,
+                "last_result_status": None,
+                "recent_turns": [],
+            },
+        }
+    elif task_type == "semantic.intake":
+        payload = {
+            "contract": SEMANTIC_INTAKE_PROMPT_CONTRACT,
+            "user_goal": goal,
+            "host_capability_catalog": {
+                "modes": ["direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"],
+                "executable_tools_by_recipe": {
+                    "retrieval_answer": ["retrieval.run"],
+                    "workspace_answer": ["workspace.search", "file.read"],
+                    "direct_answer": [],
+                    "clarify_first": [],
+                },
+                "blocked_or_not_default": [
+                    "workspace:write",
+                    "shell:exec",
+                    "network.fetch",
+                    "live_transport:*",
+                    "durable_memory:write",
+                ],
+            },
+        }
+    elif task_type == "evaluator.assess":
+        payload = {
+            "contract": EVALUATOR_PROMPT_CONTRACT,
+            "context": {"goal": goal, "mode": "auto", "evidence_refs": [], "citation_refs": []},
+            "observation": {
+                "kind": "response",
+                "status": "ok",
+                "content": {"text": "Host observation preview goes here."},
+            },
+        }
+    elif task_type == "synthesizer.answer":
+        payload = {
+            "contract": SYNTHESIZER_PROMPT_CONTRACT,
+            "retrieval_report": {
+                "report_id": "report-preview",
+                "status": "sufficient",
+                "preview": "Evidence preview goes here.",
+            },
+            "evidence": [{"evidence_id": "ev-1", "text_preview": "Evidence preview goes here."}],
+            "citations": [{"citation_id": "cite-1", "evidence_id": "ev-1", "quote_preview": "Evidence preview goes here."}],
+        }
+    else:
+        payload = {
+            "contract": PLANNER_PROMPT_CONTRACT,
+            "dialogue": [{"role": "user", "content": goal}],
+            "context": {
+                "identity": "Holo Kernel v3 host-owned agent harness.",
+                "host_rules": [
+                    "The model proposes; the host validates, executes, journals, and stops.",
+                    "Return exactly one JSON object matching planner.propose.",
+                    "Do not invent tools. Use ask_user when scope or permission is missing.",
+                ],
+                "available_tools": [
+                    {"name": "retrieval.run", "side_effect_class": "network"},
+                    {"name": "workspace.search", "side_effect_class": "read"},
+                    {"name": "file.read", "side_effect_class": "read"},
+                    {"name": "respond", "side_effect_class": "none"},
+                    {"name": "ask_user", "side_effect_class": "none"},
+                ],
+            },
+        }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def _retrieval_provider_command(args) -> dict[str, object]:
@@ -1681,7 +1872,8 @@ def _providers_payload() -> list[dict[str, object]]:
                 },
             },
             "thinking": {"default": "auto", "choices": ["auto", "enabled", "disabled"]},
-            "reasoning_effort": {"default": "high", "choices": ["high", "max"]},
+            "reasoning_effort": {"default": "high", "choices": ["low", "medium", "high", "max"]},
+            "packet_inspection": "holo-v3 model-packet --provider deepseek --task-type planner.propose --goal '<goal>'",
         },
         {
             "name": "openai_compatible",
