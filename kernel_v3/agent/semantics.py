@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Pattern
 
-from kernel_v3.capabilities import semantic_capability_catalog
+from kernel_v3.capabilities import SAFE_SEMANTIC_CAPABILITIES, semantic_capability_catalog
 from kernel_v3.agent.contracts import SemanticIntake, TaskIntent
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import JsonObject
@@ -57,19 +57,6 @@ _HOST_BOUNDARY_RULES = (
         response_hint="当前 kernel_v3 不直接执行 shell/终端命令。需要这类能力时，应在后续工具 phase 中通过 PolicyGate、审批、artifact 记录和回滚策略显式开放。",
     ),
 )
-
-_SAFE_CAPABILITIES = {
-    "finance.fundamentals_research",
-    "finance.source_directory",
-    "retrieval.run",
-    "workspace.search",
-    "file.read",
-    "workspace.write",
-    "workspace:read",
-    "workspace:write",
-    "system.time",
-}
-
 
 def analyze_goal(goal: str) -> SemanticIntake:
     """Boundary-only offline intake.
@@ -354,7 +341,7 @@ def _blocked_capabilities(intents: list[TaskIntent]) -> list[str]:
 def _is_blocked_capability(capability: str) -> bool:
     if not capability:
         return False
-    if capability in _SAFE_CAPABILITIES:
+    if capability in SAFE_SEMANTIC_CAPABILITIES:
         return False
     if capability.startswith("live_transport:"):
         return True

@@ -958,10 +958,14 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
     if bool(getattr(args, "live_retrieval", False)):
         retrieval = metadata.setdefault("retrieval", {})
         retrieval["allow_network"] = True
-        retrieval["max_network_fetches"] = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
-        retrieval["max_fetches"] = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
-        if "max_queries" in retrieval and "max_fetches" in retrieval:
-            retrieval["network_fetch_count"] = int(retrieval["max_queries"]) + int(retrieval["max_fetches"])
+        total_budget = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
+        retrieval["max_network_fetches"] = total_budget
+        max_queries = _positive_limit(retrieval.get("max_queries"), default=0) if "max_queries" in retrieval else 0
+        requested_fetches = _positive_limit(retrieval.get("max_fetches"), default=total_budget) if "max_fetches" in retrieval else total_budget
+        remaining_fetch_budget = max(1, total_budget - max_queries) if max_queries else total_budget
+        retrieval["max_fetches"] = min(requested_fetches, remaining_fetch_budget)
+        if max_queries:
+            retrieval["network_fetch_count"] = max_queries + int(retrieval["max_fetches"])
     return metadata or None
 
 
@@ -977,12 +981,6 @@ def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | 
         return {
             "status": "blocked",
             "reason": "live_retrieval_not_enabled",
-            "live_config": config.safe_diagnostics(),
-        }
-    if not config.search.configured and not config.crawl.configured:
-        return {
-            "status": "blocked",
-            "reason": "live_search_endpoint_not_configured",
             "live_config": config.safe_diagnostics(),
         }
     allowed_host_issues = _live_retrieval_allowed_host_issues(config)
@@ -1010,17 +1008,8 @@ def _live_retrieval_doctor_config(args) -> JsonObject:
                 "code": "live_retrieval_not_enabled",
             }
         )
-    if not config.search.configured and not config.crawl.configured:
-        issues.append(
-            {
-                "component": "retrieval",
-                "severity": "error",
-                "code": "live_search_endpoint_not_configured",
-            }
-        )
-    else:
-        issues.extend(_live_retrieval_allowed_host_issues(config))
-        operator = config.build_operator()
+    issues.extend(_live_retrieval_allowed_host_issues(config))
+    operator = config.build_operator()
     return {
         "requested": True,
         "config": config.safe_diagnostics(),
@@ -1780,15 +1769,6 @@ def _packet_prompt(task_type: str, goal: str) -> str:
 def _retrieval_provider_command(args) -> dict[str, object]:
     if args.mode == "live-http":
         config = LiveRetrievalConfig.from_env()
-        if not config.search.configured and not config.crawl.configured:
-            return {
-                "status": "blocked",
-                "mode": "live-http",
-                "reason": "live_search_endpoint_not_configured",
-                "network_access": False,
-                "provider_capabilities": [],
-                "live_config": config.safe_diagnostics(),
-            }
         operator = config.build_operator()
         inspection = inspect_retrieval_providers(operator, research_profile_id=args.profile)
         return {

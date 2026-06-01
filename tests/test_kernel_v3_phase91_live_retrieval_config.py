@@ -118,7 +118,11 @@ def test_phase91_cli_live_retrieval_preflight_accepts_explicit_allow_all_hosts()
     assert cli._live_retrieval_allowed_host_issues(config) == []
 
 
-def test_phase91_cli_live_http_provider_inspection_blocks_without_endpoint(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_phase91_cli_live_http_provider_inspection_allows_structured_search_without_endpoint(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
     _clear_live_env(monkeypatch)
     journal_path = tmp_path / "journal.jsonl"
     index_path = tmp_path / "journal.sqlite"
@@ -135,13 +139,22 @@ def test_phase91_cli_live_http_provider_inspection_blocks_without_endpoint(tmp_p
                 "live-http",
             ]
         )
-        == 1
+        == 0
     )
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_search_endpoint_not_configured"
-    assert payload["network_access"] is False
+    assert payload["status"] == "attention"
+    assert payload["mode"] == "live-http"
+    assert payload["network_access"] is True
+    provider_ids = {
+        item["provider_id"]
+        for item in payload["inspection"]["diagnostics"]["provider_chain"]
+    }
+    assert {
+        "sec_edgar_structured_search",
+        "research_source_query_search",
+        "live_http_fetch",
+    }.issubset(provider_ids)
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 

@@ -54,16 +54,41 @@ def test_phase94_capability_catalog_exposes_broad_agent_state_space(tmp_path):
     context = journal.records(task_id=result.task_id, kind="context")[0].data["state"]
     catalog = context["capability_catalog"]
     families = set(catalog["families"])
-    assert {"conversation", "workspace", "retrieval", "finance", "memory", "resident", "transport", "system"}.issubset(families)
+    assert {
+        "conversation",
+        "workspace",
+        "retrieval",
+        "finance",
+        "memory",
+        "artifact",
+        "data",
+        "code",
+        "project",
+        "resident",
+        "transport",
+        "calendar",
+        "system",
+        "security",
+    }.issubset(families)
     capability_ids = {item["capability_id"] for item in catalog["capabilities"]}
     assert {
         "workspace.file.write",
         "web.search",
         "web.crawl",
+        "browser.page.open",
         "finance.fundamentals_research",
+        "finance.market_news",
         "durable_memory.propose",
+        "durable_memory.delete",
+        "artifact.create",
+        "data.table.analyze",
+        "code.patch",
+        "project.status",
         "resident.scheduler",
+        "calendar.schedule",
         "transport.wechat",
+        "credential.read",
+        "device.input.control",
         "system.time",
         "shell.exec",
     }.issubset(capability_ids)
@@ -78,15 +103,116 @@ def test_phase94_semantic_capability_catalog_is_not_workspace_only():
     assert "finance" in families
     assert "retrieval" in families
     assert "memory" in families
+    assert "artifact" in families
+    assert "data" in families
+    assert "code" in families
+    assert "project" in families
     assert "resident" in families
     assert "transport" in families
+    assert "calendar" in families
+    assert "security" in families
     assert "system" in families
     assert "finance_fundamentals" in catalog["task_domains"]
+    assert "data_analysis" in catalog["task_domains"]
+    assert "calendar_or_reminder" in catalog["task_domains"]
+    assert "credential_or_secret_boundary" in catalog["task_domains"]
+    assert "network" in catalog["state_dimensions"]
+    assert "artifacts" in catalog["state_dimensions"]
+    assert "external_systems" in catalog["state_dimensions"]
     assert "resident" in catalog["state_dimensions"]
     assert "tooling" in catalog["state_dimensions"]
     assert "workspace_write" in catalog["modes"]
     assert "system_answer" in catalog["modes"]
     assert catalog["executable_tools_by_recipe"]["system_answer"] == ["system.time"]
+    assert "calendar.schedule" in catalog["not_default_or_requires_configuration"]
+    assert "device.input.control" in catalog["not_default_or_requires_configuration"]
+
+
+def test_phase94_non_workspace_safe_capabilities_do_not_force_clarification():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "artifact_summary",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "artifact_summary",
+                        "text": "summarize current project status as a response artifact",
+                        "sequence_index": 1,
+                        "required_capabilities": ["artifact.create", "project.status"],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {"format": "brief_status"},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": "可以基于当前 journal/context 做简要状态汇报。",
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "汇报当前项目状态",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    assert graph["validation"]["status"] == "ready"
+    assert graph["validation"]["blocked_capabilities"] == []
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert plan["selected_mode"] == "direct_answer"
+
+
+def test_phase94_planned_broad_capability_is_not_treated_as_executable():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "calendar_or_reminder",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "calendar_or_reminder",
+                        "text": "schedule a reminder",
+                        "sequence_index": 1,
+                        "required_capabilities": ["calendar.schedule"],
+                        "risk": "write",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "明天提醒我开会",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "needs_user_input"
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    assert graph["validation"]["status"] == "needs_user_confirmation"
+    assert graph["validation"]["blocked_capabilities"] == ["calendar.schedule"]
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert plan["steps"][0]["status"] == "blocked"
+    assert all(record.data["kind"] == "ask_user" for record in journal.records(task_id=result.task_id, kind="action"))
 
 
 def test_phase94_agent_executes_system_time_as_non_workspace_capability():

@@ -146,6 +146,13 @@ Do not require user clarification merely because there are multiple safe steps. 
 For local file/report generation, use suggested_mode=workspace_write and required_capabilities including workspace.write or workspace:write when the host can validate a concrete workspace-relative path and text payload. Put {"workspace.write":{"path":"...","text":"..."}} under metadata.capability_args when available.
 The intent kind may be an open semantic label; executable routing comes from
 required_capabilities and host validation, not from a fixed phrase table.
+Use the host capability catalog as the state/capability vocabulary. Do not
+collapse broad tasks into workspace labels when a better capability family
+exists, such as finance.*, durable_memory.*, artifact.*, data.*, code.*,
+project.*, resident.*, transport.*, calendar.*, system.*, or security.*.
+If a capability is planned, host_only, not_configured, or requires permission,
+represent that boundary in required_capabilities/status/warnings instead of
+pretending it is executable.
 When a capability needs structured arguments, put them under metadata.capability_args,
 keyed by capability name, for example {"file.read":{"path":"README.md"}}.
 For host-state questions such as current time, environment facts, or runtime status, use

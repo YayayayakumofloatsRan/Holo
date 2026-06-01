@@ -8,10 +8,12 @@ from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import (
+    FakeSearchProvider,
     HttpFetchProvider,
     HttpTransportResponse,
     JsonHttpSearchProvider,
     RetrievalOperator,
+    SearchSource,
 )
 
 
@@ -137,7 +139,11 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_env_gate(tmp_path: Path
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
-def test_phase92_cli_agent_live_retrieval_blocks_without_endpoint(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_phase92_cli_agent_live_retrieval_blocks_structured_path_without_fetch_allowed_hosts(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
     _clear_live_env(monkeypatch)
     monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
     journal_path = tmp_path / "journal.jsonl"
@@ -162,8 +168,66 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_endpoint(tmp_path: Path
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_search_endpoint_not_configured"
+    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
+    issue_keys = {
+        (issue["code"], issue["provider_id"], issue["provider_kind"])
+        for issue in payload["issues"]
+    }
+    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
     assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
+def test_phase92_cli_agent_live_retrieval_allows_structured_search_without_endpoint(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS", "data.sec.gov")
+    fetch_transport = _Transport(
+        HttpTransportResponse(
+            status_code=200,
+            body=b"AAPL SEC companyfacts revenue evidence from structured live fetch.",
+        )
+    )
+    monkeypatch.setattr(
+        cli.LiveRetrievalConfig,
+        "build_operator",
+        lambda _self: _structured_live_operator(fetch_transport=fetch_transport),
+    )
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "agent",
+                "AAPL CIK0000320193 revenue",
+                "--mode",
+                "retrieval",
+                "--research-profile",
+                FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "--live-retrieval",
+                "--live-max-network-fetches",
+                "8",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    journal = JournalStore(journal_path, index_path=index_path)
+
+    assert payload["status"] == "completed"
+    assert len(fetch_transport.calls) == 1
+    action = journal.records(task_id=payload["task_id"], kind="action")[0].data
+    assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert action["payload"]["network_fetch_count"] <= action["payload"]["max_network_fetches"]
+    assert journal.records(task_id=payload["task_id"], kind="retrieval_report")[-1].data["status"] == "sufficient"
 
 
 def test_phase92_cli_agent_live_retrieval_blocks_without_allowed_hosts(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -286,14 +350,14 @@ def test_phase92_cli_resident_doctor_reports_live_retrieval_config_gap(
 
     assert payload["status"] == "error"
     issue_codes = {issue["code"] for issue in payload["live_retrieval_issues"]}
-    assert {"live_retrieval_not_enabled", "live_search_endpoint_not_configured"}.issubset(issue_codes)
+    assert {"live_retrieval_not_enabled", "live_provider_without_allowed_hosts"}.issubset(issue_codes)
     assert payload["live_retrieval_config"]["enabled"] is False
     assert payload["doctor"]["retrieval_provider_inspection"] is not None
     event = _resident_doctor_record(journal_path, index_path)
     assert event["status"] == "error"
     assert event["doctor_status"] == payload["doctor"]["status"]
     assert event["live_retrieval"]["status"] == "error"
-    assert {"live_retrieval_not_enabled", "live_search_endpoint_not_configured"}.issubset(
+    assert {"live_retrieval_not_enabled", "live_provider_without_allowed_hosts"}.issubset(
         {issue["code"] for issue in event["live_retrieval"]["issues"]}
     )
     assert event["live_retrieval"]["config"]["enabled"] is False
@@ -511,9 +575,9 @@ def test_phase92_cli_agent_live_research_depth_counts_query_and_fetch_budget(
     assert fetch_transport.calls == []
     action = journal.records(task_id=payload["task_id"], kind="action")[0].data
     guard = journal.records(task_id=payload["task_id"], kind="guard")[-1].data
-    assert action["payload"]["network_fetch_count"] == 6
+    assert action["payload"]["network_fetch_count"] == 4
     assert guard["stop_reason"] == "max_network_fetches"
-    assert guard["requested_network_fetches"] == 6
+    assert guard["requested_network_fetches"] == 4
     assert guard["max_network_fetches"] == 3
 
 
@@ -650,6 +714,34 @@ def _live_operator(*, search_transport: _Transport, fetch_transport: _Transport)
         fetch_provider=HttpFetchProvider(
             enabled=True,
             allowed_hosts=["docs.example.com"],
+            transport=fetch_transport,
+        ),
+    )
+
+
+def _structured_live_operator(*, fetch_transport: _Transport) -> RetrievalOperator:
+    return RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                "AAPL CIK0000320193 revenue": [
+                    SearchSource(
+                        source_id="src-structured-live",
+                        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+                        title="SEC companyfacts JSON",
+                        snippet="AAPL revenue companyfacts structured source.",
+                        provider="research_source_query_search",
+                        metadata={
+                            "source_family": "structured_regulatory_data",
+                            "authority_level": "primary",
+                            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                        },
+                    )
+                ]
+            }
+        ),
+        fetch_provider=HttpFetchProvider(
+            enabled=True,
+            allowed_hosts=["data.sec.gov"],
             transport=fetch_transport,
         ),
     )

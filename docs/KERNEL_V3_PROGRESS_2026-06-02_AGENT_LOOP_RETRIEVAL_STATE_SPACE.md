@@ -52,6 +52,18 @@
   EDINET document search, and SGX company announcements. SEC query expansion was
   tightened so generic "annual report" language does not route non-US issuer
   tasks to EDGAR without SEC-specific signals.
+- Live retrieval CLI network budgeting now treats `--live-max-network-fetches`
+  as the total query+fetch guard. Research-depth defaults can provide query and
+  fetch shape, but the host trims planned fetches so a live run is not rejected
+  before execution merely because profile defaults exceed the explicit total
+  budget.
+- The semantic capability/state catalog was expanded beyond workspace-centric
+  categories. It now exposes artifact, data, code, project, calendar, security,
+  browser/page, market-news/market-data, credential, and device-control
+  boundaries as first-class capability/state families. Planned or host-only
+  capabilities remain non-executable; they exist so model packets can describe
+  broad tasks without inventing tools or collapsing everything into workspace
+  mode.
 
 ## Validation
 
@@ -64,7 +76,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-466 passed
+469 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -144,6 +156,29 @@ The live trace showed semantic intake, planner, evaluator, and synthesizer
 processor calls against DeepSeek; bounded crawl/fetch against
 `api-docs.deepseek.com`; artifact-backed evidence/citations; and a host-owned
 termination decision. The DeepSeek API key was not present in the journal.
+
+Live finance retrieval smoke:
+
+```bash
+HOLO_V3_LIVE_FINANCE=1 \
+HOLO_V3_LIVE_MODEL=1 \
+.venv/bin/pytest -q tests/live/test_kernel_v3_phase101_live_finance_retrieval.py
+```
+
+Result:
+
+```text
+1 passed
+```
+
+This exercised the current finance path against actual DeepSeek processor calls
+and actual SEC HTTP fetches. The model produced a structured semantic packet and
+planner proposal; the host forced policy/budget validation; SEC structured
+source generation produced official `data.sec.gov`/`sec.gov` candidates; live
+HTTP fetch stored raw bodies as artifacts; retrieval sufficiency finalized the
+loop; and the synthesizer produced a Chinese answer using known citation refs.
+The journal contained processor usage and retrieval/fetch records, but not the
+DeepSeek API key or raw secret environment values.
 
 ## Remaining Boundary
 

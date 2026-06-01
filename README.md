@@ -17,8 +17,8 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/agent/`: single-agent runtime, task recipes, semantic task graph,
   workloop termination, and final answer/failure report assembly.
 - `kernel_v3/capabilities.py`: host-visible capability/state catalog spanning
-  conversation, workspace, retrieval, finance, memory, resident, transport,
-  and system capabilities.
+  conversation, workspace, retrieval, finance, memory, artifact, data, code,
+  project, resident, transport, calendar, system, and security capabilities.
 - `kernel_v3/chat/`: multi-turn thread runtime, routing, pending user input,
   journal-derived summaries, and memory admin surfaces.
 - `kernel_v3/processors/`: schema-first processor fabric, fake providers,
@@ -65,6 +65,11 @@ Kernel v3 currently contains the infrastructure for:
 - non-workspace profile capabilities such as `finance.fundamentals_research`,
   which compile to host-validated retrieval with the finance fundamentals
   source policy instead of collapsing into workspace mode;
+- a broader semantic capability/state surface for Hermes-style growth:
+  artifact generation, data/table analysis, code/test work, project/task
+  status, calendar/reminder intent, transport boundaries, credential/secret
+  boundaries, and device-control boundaries are represented explicitly even
+  when they are only planned or host-only;
 - multi-turn chat over journal-derived thread state;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
@@ -313,6 +318,19 @@ Targeted smoke commands:
 
 Optional live checks must be explicitly gated by environment variables and must
 not be required by CI or default test runs.
+
+Live finance smoke, gated and non-default:
+
+```bash
+HOLO_V3_LIVE_FINANCE=1 \
+HOLO_V3_LIVE_MODEL=1 \
+.venv/bin/python -m pytest -q tests/live/test_kernel_v3_phase101_live_finance_retrieval.py
+```
+
+This uses the optional DeepSeek provider plus SEC structured retrieval/fetch
+allowlists inside the test. It validates the real model-packet path, host
+network budget, SEC artifact-backed evidence, citation-gated finalization, and
+secret redaction.
 
 If `.venv/` is absent, create one and install `pytest`, then run the same
 commands through that interpreter.

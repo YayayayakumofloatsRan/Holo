@@ -8,20 +8,10 @@ from kernel_v3.agent.contracts import (
     TaskGraphProposal,
     TaskGraphValidation,
 )
+from kernel_v3.capabilities import SAFE_SEMANTIC_CAPABILITIES
 from kernel_v3.contracts import JsonObject
 
 
-_SAFE_CAPABILITIES = {
-    "finance.fundamentals_research",
-    "finance.source_directory",
-    "retrieval.run",
-    "workspace.search",
-    "file.read",
-    "workspace.write",
-    "workspace:read",
-    "workspace:write",
-    "system.time",
-}
 _MAX_GRAPH_NODES = 32
 
 
@@ -430,7 +420,7 @@ def _selected_mode(
 def _is_blocked(capability: str) -> bool:
     if not capability:
         return False
-    return capability not in _SAFE_CAPABILITIES
+    return capability not in SAFE_SEMANTIC_CAPABILITIES
 
 
 def _string_list(value: object) -> list[str]:
