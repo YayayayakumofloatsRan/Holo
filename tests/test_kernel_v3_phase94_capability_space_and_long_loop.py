@@ -222,7 +222,7 @@ def test_phase94_web_and_market_news_capabilities_route_to_retrieval_not_workspa
                 query: [
                     _source(
                         "market-news-source",
-                        "https://example.com/markets/today",
+                        "https://www.reuters.com/site-search/?query=market%20news",
                         "今天的市场热点新闻",
                         "今天的市场热点新闻包括利率、股票和大宗商品。",
                     )
@@ -231,7 +231,7 @@ def test_phase94_web_and_market_news_capabilities_route_to_retrieval_not_workspa
         ),
         fetch_provider=FakeFetchProvider(
             {
-                "https://example.com/markets/today": (
+                "https://www.reuters.com/site-search/?query=market%20news": (
                     "今天的市场热点新闻包括利率、股票和大宗商品，提供市场热点新闻的可引用证据。"
                 )
             }

@@ -90,6 +90,17 @@
   in the returned source set for provenance, but the crawler no longer spends a
   tight source budget on the first unrelated navigation links when a more
   relevant research page is present later in the page or sitemap.
+- The finance source directory now covers common secondary market-data and
+  reputable-news entry points in addition to primary filings/statistics:
+  Yahoo Finance quote/lookup, Nasdaq market activity, MarketWatch stock pages,
+  Reuters search, Bloomberg search, Financial Times search, and CNBC search.
+  These entries provide where-to-look pointers and query templates; they do
+  not cache financial content.
+- Retrieval sufficiency now distinguishes finance subtask authority needs.
+  Fundamentals keep the primary-source requirement. Market-news, market-data,
+  and competitive-landscape tasks set `source_authority_requirement` to
+  `secondary_or_better`, allowing reputable news/market-data evidence for
+  current context while preserving primary-source gating for filing claims.
 
 ## Validation
 
@@ -102,7 +113,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-474 passed
+477 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -141,6 +152,12 @@ Additional deterministic coverage now includes:
 - dangerous device-control capability remains a blocked host boundary;
 - bounded crawl query ranking preserves a relevant AAPL 10-K revenue link under
   a two-source budget even when unrelated navigation links appear first.
+- source-query expansion for market data and news renders Yahoo Finance,
+  Nasdaq, MarketWatch, Reuters, Bloomberg, FT, and CNBC entry points with host
+  validation;
+- a two-step market-data plus market-news agent flow uses those source-query
+  URLs, journals research profile/authority requirements, performs two
+  retrieval loop actions, and finalizes from two citations.
 
 Live model scenarios:
 

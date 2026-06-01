@@ -154,6 +154,9 @@ def _template_values(query: str, metadata: JsonObject) -> dict[str, str]:
             continue
         values[key] = value
         values[f"{key}_url"] = urllib.parse.quote(value, safe="")
+        lowered = value.lower()
+        values[f"{key}_lower"] = lowered
+        values[f"{key}_lower_url"] = urllib.parse.quote(lowered, safe="")
     return values
 
 

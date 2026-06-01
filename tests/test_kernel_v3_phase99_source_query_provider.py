@@ -117,6 +117,60 @@ def test_phase99_source_query_provider_expands_macro_source_queries():
     assert fred.metadata["authority_level"] == "primary"
 
 
+def test_phase99_source_query_provider_expands_common_market_data_portals():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "AAPL quote market data price market cap Nasdaq MarketWatch Yahoo",
+        goal=SearchGoal(
+            goal_id="goal-source-query-market-data",
+            query="AAPL quote market data price market cap Nasdaq MarketWatch Yahoo",
+            max_sources=20,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "ticker": "AAPL",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    urls = {source.uri for source in sources}
+    assert "https://finance.yahoo.com/quote/AAPL" in urls
+    assert "https://finance.yahoo.com/lookup?s=AAPL" in urls
+    assert "https://www.nasdaq.com/market-activity/stocks/aapl" in urls
+    assert "https://www.marketwatch.com/investing/stock/aapl" in urls
+    market_sources = [source for source in sources if source.metadata["source_family"] == "market_data_provider"]
+    assert market_sources
+    assert all(source.metadata["authority_level"] == "secondary" for source in market_sources)
+
+
+def test_phase99_source_query_provider_expands_reputable_market_news_sources():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "AAPL latest market news Reuters CNBC Bloomberg FT earnings",
+        goal=SearchGoal(
+            goal_id="goal-source-query-market-news",
+            query="AAPL latest market news Reuters CNBC Bloomberg FT earnings",
+            max_sources=20,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "company": "Apple",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    urls = {source.uri for source in sources}
+    assert "https://www.reuters.com/site-search/?query=Apple" in urls
+    assert "https://www.bloomberg.com/search?query=Apple" in urls
+    assert "https://www.ft.com/search?q=Apple" in urls
+    assert "https://www.cnbc.com/search/?query=Apple" in urls
+    news_sources = [source for source in sources if source.metadata["source_family"] == "reputable_news"]
+    assert news_sources
+    assert all(source.metadata["authority_level"] == "secondary" for source in news_sources)
+
+
 def test_phase99_source_query_provider_expands_exchange_official_query_urls():
     provider = ResearchSourceQuerySearchProvider()
 
@@ -365,6 +419,92 @@ def test_phase99_agent_can_use_exchange_query_provider_for_multi_step_finance_re
     decisions = journal.records(task_id=result.task_id, kind="termination_decision")
     assert [record.data["decision"] for record in decisions] == ["continue", "continue", "final_answer"]
     assert len(result.final_answer["citation_refs"]) == 3
+
+
+def test_phase99_agent_finance_market_news_and_data_use_source_directory_queries():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "market_news_and_data_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": True,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "market_data_research",
+                        "text": "AAPL quote market data price market cap",
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.market_data"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "AAPL quote market data price market cap",
+                                    "metadata": {"ticker": "AAPL"},
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "kind": "market_news_research",
+                        "text": "Apple latest Reuters CNBC market news earnings",
+                        "sequence_index": 2,
+                        "required_capabilities": ["finance.market_news"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "Apple latest Reuters CNBC market news earnings",
+                                    "metadata": {"company": "Apple"},
+                                }
+                            }
+                        },
+                    },
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    yahoo_url = "https://finance.yahoo.com/quote/AAPL"
+    reuters_url = "https://www.reuters.com/site-search/?query=Apple"
+    operator = RetrievalOperator(
+        search_provider=ResearchSourceQuerySearchProvider(),
+        fetch_provider=FakeFetchProvider(
+            {
+                yahoo_url: "AAPL quote market data price and market cap secondary context.",
+                reuters_url: "Apple latest Reuters market news and earnings chronology secondary context.",
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run("Research AAPL market data and current news", mode="auto", semantic_mode="model")
+
+    assert result.status == "completed"
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["name"] for record in actions] == ["retrieval.run", "retrieval.run"]
+    assert all(
+        record.data["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+        for record in actions
+    )
+    fetched = {
+        record.data["uri"]
+        for record in journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")
+        if record.data["status"] == "ok"
+    }
+    assert {yahoo_url, reuters_url}.issubset(fetched)
+    assert len(result.final_answer["citation_refs"]) == 2
 
 
 def _plan() -> QueryPlan:

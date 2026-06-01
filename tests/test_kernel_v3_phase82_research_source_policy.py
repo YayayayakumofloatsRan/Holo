@@ -276,6 +276,30 @@ def test_phase82_source_policy_matches_known_finance_subdomains() -> None:
     assert market_data.source_family == "market_data_provider"
     assert market_data.authority_level == "secondary"
 
+    marketwatch = assess_search_source(
+        _source(
+            "src-marketwatch-data",
+            "https://www.marketwatch.com/investing/stock/aapl",
+            "AAPL quote",
+            "MarketWatch quote page.",
+        ),
+        profile=finance_fundamentals_profile(),
+    )
+    cnbc = assess_search_source(
+        _source(
+            "src-cnbc-news",
+            "https://www.cnbc.com/search/?query=Apple",
+            "CNBC Apple news",
+            "CNBC market news search.",
+        ),
+        profile=finance_fundamentals_profile(),
+    )
+
+    assert marketwatch.source_family == "market_data_provider"
+    assert marketwatch.authority_level == "secondary"
+    assert cnbc.source_family == "reputable_news"
+    assert cnbc.authority_level == "secondary"
+
 
 def test_phase82_source_policy_matches_global_primary_finance_sources() -> None:
     profile = finance_fundamentals_profile()

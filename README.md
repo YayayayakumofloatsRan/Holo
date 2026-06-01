@@ -204,6 +204,12 @@ The live retrieval chain is now broader than a single search endpoint:
 - `research_source_query_search` expands curated source-directory
   `query_url_templates` into official search URLs, such as Companies House
   company search and FRED series search, after placeholder and host validation;
+- the finance source directory also exposes common secondary market-data and
+  reputable-news entry points such as Yahoo Finance quote/lookup, Nasdaq market
+  activity, MarketWatch stock pages, Reuters search, Bloomberg search, Financial
+  Times search, and CNBC search. These are source pointers, not cached financial
+  content, and they remain secondary evidence unless paired with primary
+  filings, issuer materials, or official statistics;
 - configured JSON HTTP search providers can sit in the same fallback chain.
 
 For crawl-only live inspection:
@@ -291,6 +297,12 @@ Companies House, FRED, and World Bank query URLs without hard-coding agent
 branches. Multi-intent finance plans can therefore execute multiple retrieval
 loop actions before finalization while preserving host-owned source ranking,
 artifact storage, evidence sufficiency, and termination gates.
+Market-news, market-data, and competitive-landscape finance intents use the
+same profile directory but set a different source authority requirement:
+secondary-or-better sources can satisfy those tasks, while fundamentals still
+require primary sources. The retrieval report records that requirement in
+diagnostics so an operator can see why a Reuters/Yahoo-style result was
+accepted for news/market context but would not satisfy a primary filing claim.
 Issuer identity normalization is still offline and deterministic: it can use
 host metadata, query text, and injected ticker-to-CIK maps, but it does not call
 external services or claim that an unresolved company has been verified.

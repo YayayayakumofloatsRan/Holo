@@ -210,6 +210,16 @@ workspace mode. Conversely, high-risk capabilities such as
 credential reads, and shell execution remain host boundaries even if the model
 names them correctly.
 
+Finance research capabilities share one source-directory substrate but do not
+share one sufficiency rule. `finance.fundamentals_research` keeps the strict
+primary-source requirement for filings, issuer materials, exchange disclosures,
+and official statistics. `finance.market_news`, `finance.market_data`, and
+`finance.competitive_landscape` set `source_authority_requirement` to
+`secondary_or_better`, so reputable news and market-data providers can satisfy
+current-news or quote-context tasks without being misrepresented as primary
+filing evidence. The retrieval report records the effective authority
+requirement in diagnostics.
+
 Model planner actions are also rebound to recipe constraints before execution.
 For example, a live model may propose only `{"name":"retrieval.run",
 "payload":{"query":"..."}}`; the host then merges the recipe's execution

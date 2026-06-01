@@ -123,15 +123,21 @@ class EvidenceEvaluator:
             authority_summary = source_authority_summary(assessments)
             diagnostics["research_profile"] = research_profile.profile_id
             diagnostics["source_authority"] = authority_summary
+            authority_requirement = _source_authority_requirement(goal)
+            diagnostics["source_authority_requirement"] = authority_requirement
             if not evidence:
                 sufficient = False
                 reason = "insufficient_evidence"
             elif research_profile.citations_required and not citations:
                 sufficient = False
                 reason = "citations_required_by_research_profile"
-            elif not any(item.usable_as_primary for item in assessments):
+            elif not _authority_satisfies(assessments, authority_requirement):
                 sufficient = False
-                reason = "no_primary_source_for_research_profile"
+                reason = (
+                    "no_primary_source_for_research_profile"
+                    if authority_requirement == "primary"
+                    else "no_required_authority_source_for_research_profile"
+                )
         return EvidenceEvaluationDecision(
             decision_id=f"eval-{goal.goal_id}",
             goal_id=goal.goal_id,
@@ -175,6 +181,27 @@ def query_facets(query: str) -> list[str]:
         if any(trigger.lower() in normalized for trigger in triggers)
     ]
     return _ordered_unique(facets)
+
+
+def _source_authority_requirement(goal: SearchGoal) -> str:
+    value = goal.metadata.get("source_authority_requirement")
+    if not isinstance(value, str):
+        value = goal.metadata.get("authority_requirement")
+    normalized = str(value or "primary").strip().lower()
+    if normalized in {"secondary_or_better", "secondary_allowed", "secondary"}:
+        return "secondary_or_better"
+    if normalized in {"any", "any_citable"}:
+        return "any_citable"
+    return "primary"
+
+
+def _authority_satisfies(assessments: object, requirement: str) -> bool:
+    items = list(assessments) if isinstance(assessments, list) else []
+    if requirement == "any_citable":
+        return bool(items)
+    if requirement == "secondary_or_better":
+        return any(item.usable_as_primary or item.authority_level == "secondary" for item in items)
+    return any(item.usable_as_primary for item in items)
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

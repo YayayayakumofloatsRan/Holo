@@ -50,6 +50,14 @@ from kernel_v3.session import TaskState
 from kernel_v3.tools import ToolManifest, ToolRegistry
 
 
+_FINANCE_RESEARCH_PROFILE_CAPABILITIES = {
+    "finance.fundamentals_research",
+    "finance.market_news",
+    "finance.market_data",
+    "finance.competitive_landscape",
+}
+
+
 class AgentRuntime:
     def __init__(
         self,
@@ -1757,10 +1765,10 @@ def _research_profile_id(recipe: TaskRecipe) -> str | None:
         value = semantic.get(key)
         if isinstance(value, str) and value:
             return value
-    if _semantic_has_capability(semantic, "finance.fundamentals_research"):
+    if _semantic_has_any_capability(semantic, _FINANCE_RESEARCH_PROFILE_CAPABILITIES):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
     plan = _task_execution_plan_metadata(recipe)
-    if _plan_has_capability(plan, "finance.fundamentals_research"):
+    if _plan_has_any_capability(plan, _FINANCE_RESEARCH_PROFILE_CAPABILITIES):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
     return None
 
@@ -1936,11 +1944,21 @@ def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
 
 def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) -> JsonObject:
     capabilities = set(_step_capabilities(step))
-    if "finance.fundamentals_research" not in capabilities:
+    if not capabilities.intersection(_FINANCE_RESEARCH_PROFILE_CAPABILITIES):
         return payload
     updated = dict(payload)
     metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
     metadata.setdefault("research_profile", FINANCE_FUNDAMENTALS_PROFILE_ID)
+    if capabilities.intersection({"finance.market_news", "finance.market_data", "finance.competitive_landscape"}):
+        metadata.setdefault("source_authority_requirement", "secondary_or_better")
+        updated.setdefault("max_queries", 1)
+        updated.setdefault("query_templates", ["{query}"])
+        if "finance.market_news" in capabilities:
+            metadata.setdefault("research_task_kind", "market_news")
+        elif "finance.market_data" in capabilities:
+            metadata.setdefault("research_task_kind", "market_data")
+        else:
+            metadata.setdefault("research_task_kind", "competitive_landscape")
     updated["metadata"] = metadata
     return updated
 
@@ -1954,7 +1972,7 @@ def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
     return _capability_args_from_plan(
         _task_execution_plan_metadata(recipe),
         "retrieval.run",
-        capability_markers={"retrieval.run", "finance.fundamentals_research"},
+        capability_markers={"retrieval.run", *_FINANCE_RESEARCH_PROFILE_CAPABILITIES},
     )
 
 
@@ -2121,22 +2139,30 @@ def _capability_args_from_plan(
 
 
 def _semantic_has_capability(semantic: JsonObject, capability: str) -> bool:
+    return _semantic_has_any_capability(semantic, {capability})
+
+
+def _semantic_has_any_capability(semantic: JsonObject, capabilities: set[str]) -> bool:
     intents = semantic.get("intents")
     if not isinstance(intents, list):
         return False
     return any(
-        capability in _string_list(item.get("required_capabilities"))
+        bool(capabilities.intersection(_string_list(item.get("required_capabilities"))))
         for item in intents
         if isinstance(item, dict)
     )
 
 
 def _plan_has_capability(plan: JsonObject, capability: str) -> bool:
+    return _plan_has_any_capability(plan, {capability})
+
+
+def _plan_has_any_capability(plan: JsonObject, capabilities: set[str]) -> bool:
     steps = plan.get("steps")
     if not isinstance(steps, list):
         return False
     return any(
-        capability in _step_capabilities(step)
+        bool(capabilities.intersection(_step_capabilities(step)))
         for step in steps
         if isinstance(step, dict)
     )
