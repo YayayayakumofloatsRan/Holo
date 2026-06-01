@@ -358,6 +358,11 @@ providers, then return evidence/citations into the same workloop termination
 path. Crawled HTML is stored raw as artifacts but evidence spans are extracted
 from readable body text, so downstream evaluator/synthesizer packets see
 citations instead of raw page chrome.
+Text-based PDF fetches are handled the same way: the raw PDF body remains in
+ArtifactStore, while retrieval extracts readable PDF string literals into
+evidence spans marked `pdf_text_literals`. Scanned PDFs or compressed PDFs that
+do not expose readable text simply produce insufficient evidence and must be
+handled by later OCR/readability tooling rather than guessed answers.
 
 Bounded crawl can now be seeded from the curated finance source directory when
 the host explicitly sets `HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1`. With

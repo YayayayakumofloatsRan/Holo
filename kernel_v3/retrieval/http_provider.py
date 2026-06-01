@@ -108,7 +108,7 @@ class HttpFetchProvider:
         )
         if validation.get("status") != "ok":
             return FetchResponse(status="failed", body="", diagnostics=validation)
-        headers = {"User-Agent": self.user_agent, "Accept": "text/html,text/plain,application/xhtml+xml"}
+        headers = {"User-Agent": self.user_agent, "Accept": "text/html,text/plain,application/xhtml+xml,application/pdf"}
         try:
             response = self.transport(source.uri, headers, self.timeout_seconds, self.max_bytes)
         except Exception as exc:  # pragma: no cover - urllib transport has concrete containment below.
@@ -143,7 +143,7 @@ class HttpFetchProvider:
             )
         return FetchResponse(
             status="ok",
-            body=response.body.decode("utf-8", errors="replace"),
+            body=_decode_http_body(response.body, mime_type=response.mime_type),
             mime_type=response.mime_type or "text/plain",
             diagnostics={
                 "source": "http_fetch",
@@ -310,6 +310,13 @@ def _urllib_transport(url: str, headers: dict[str, str], timeout_seconds: int, m
     except urllib.error.URLError as exc:
         raise RuntimeError(type(exc).__name__) from exc
     return HttpTransportResponse(status_code=status_code, body=body, mime_type=mime_type)
+
+
+def _decode_http_body(body: bytes, *, mime_type: str) -> str:
+    normalized = (mime_type or "").lower()
+    if "pdf" in normalized:
+        return body.decode("latin-1", errors="replace")
+    return body.decode("utf-8", errors="replace")
 
 
 def _validate_url(

@@ -80,6 +80,27 @@ def test_phase90_http_fetch_provider_allows_explicit_host_and_returns_body() -> 
     assert transport.calls[0]["url"] == "https://www.example.com/report"
 
 
+def test_phase90_http_fetch_provider_preserves_pdf_bytes_as_latin1_text() -> None:
+    pdf_bytes = b"%PDF-1.4\nBT (AAPL 2024 annual report revenue evidence) Tj ET\n%%EOF"
+    transport = _Transport(
+        response=HttpTransportResponse(
+            status_code=200,
+            body=pdf_bytes,
+            mime_type="application/pdf",
+        )
+    )
+    provider = HttpFetchProvider(enabled=True, allowed_hosts=["example.com"], transport=transport)
+
+    response = provider.fetch(_source("https://www.example.com/annual-report.pdf"))
+
+    assert response.status == "ok"
+    assert response.mime_type == "application/pdf"
+    assert response.body.startswith("%PDF-1.4")
+    assert "AAPL 2024 annual report revenue evidence" in response.body
+    assert response.diagnostics["byte_count"] == len(pdf_bytes)
+    assert "application/pdf" in transport.calls[0]["headers"]["Accept"]
+
+
 def test_phase90_http_fetch_provider_normalizes_url_form_allowed_hosts() -> None:
     transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"normalized host evidence"))
     provider = HttpFetchProvider(

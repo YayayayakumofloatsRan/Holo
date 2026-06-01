@@ -178,6 +178,12 @@
   deduplicated, ranked by source/task relevance, and only then truncated by
   `max_sources`, preventing a generic query-echo template from crowding out the
   relevant Reuters/Yahoo/Treasury/transcript/rating search URL.
+- Text-based PDF retrieval extraction was added for official reports and
+  exchange disclosures. HTTP fetch preserves `application/pdf` bytes as a
+  latin-1 text container for artifact storage; retrieval then extracts readable
+  PDF literal/hex strings into `pdf_text_literals` evidence spans. Scanned or
+  otherwise unreadable PDFs still yield insufficient evidence rather than an
+  invented answer.
 - Retrieval replanning now has an explicit host-state packet:
   `context.state.agent_replan_hints`. It is compiled from journal records after
   each iteration and journaled in `agent_work_plan_update`. For insufficient

@@ -116,6 +116,10 @@ Kernel v3 currently contains the infrastructure for:
 - bounded crawl discovery now ranks discovered page/sitemap candidates against
   the query before applying the source budget, so limited fetch budgets prefer
   relevant research pages over generic navigation links;
+- text-based PDF retrieval extraction for official reports and exchange
+  disclosures: raw PDF bodies remain artifacts, while readable PDF string
+  literals become evidence spans; scanned/OCR-only PDFs remain insufficient
+  evidence until a future OCR tool is configured;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;

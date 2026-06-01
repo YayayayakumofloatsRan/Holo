@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 from html.parser import HTMLParser
 
 from kernel_v3.retrieval.contracts import ExtractedSpan, FetchedDocument, SearchGoal
@@ -10,6 +11,7 @@ READABLE_TEXT_LIMIT = 200_000
 SPAN_BEFORE_CHARS = 120
 SPAN_AFTER_CHARS = 280
 HTML_MIME_MARKERS = ("html", "xhtml")
+PDF_MIME_MARKERS = ("pdf", "application/pdf")
 HTML_BLOCK_TAGS = {
     "article",
     "aside",
@@ -95,6 +97,8 @@ def extract_spans(
 
 def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str, str]:
     mime_type = str(document.metadata.get("mime_type") or "").lower()
+    if _looks_like_pdf(body, mime_type=mime_type):
+        return _extract_pdf_text(body), "pdf_text_literals"
     if _looks_like_html(body, mime_type=mime_type):
         return _extract_html_readable_text(body), "html_readable_text"
     return _normalize_span(body[:READABLE_TEXT_LIMIT]), "plain_text"
@@ -147,6 +151,137 @@ def _looks_like_html(body: str, *, mime_type: str) -> bool:
         return True
     prefix = body[:2048].lower()
     return "<html" in prefix or "<!doctype html" in prefix or "<body" in prefix
+
+
+def _looks_like_pdf(body: str, *, mime_type: str) -> bool:
+    if any(marker in mime_type for marker in PDF_MIME_MARKERS):
+        return True
+    return body[:16].lstrip().startswith("%PDF")
+
+
+def _extract_pdf_text(body: str) -> str:
+    sample = body[:READABLE_TEXT_LIMIT]
+    pieces = []
+    pieces.extend(_pdf_literal_strings(sample))
+    pieces.extend(_pdf_hex_strings(sample))
+    return _normalize_span(" ".join(pieces)[:READABLE_TEXT_LIMIT])
+
+
+def _pdf_literal_strings(text: str) -> list[str]:
+    pieces: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "(":
+            index += 1
+            continue
+        parsed, next_index = _parse_pdf_literal(text, index + 1)
+        if _looks_like_readable_pdf_text(parsed):
+            pieces.append(parsed)
+        index = max(next_index, index + 1)
+    return pieces
+
+
+def _parse_pdf_literal(text: str, index: int) -> tuple[str, int]:
+    depth = 1
+    pieces: list[str] = []
+    while index < len(text) and depth:
+        char = text[index]
+        if char == "\\":
+            parsed, index = _parse_pdf_escape(text, index + 1)
+            if parsed:
+                pieces.append(parsed)
+            continue
+        if char == "(":
+            depth += 1
+            pieces.append(char)
+            index += 1
+            continue
+        if char == ")":
+            depth -= 1
+            if depth:
+                pieces.append(char)
+            index += 1
+            continue
+        pieces.append(char)
+        index += 1
+    return "".join(pieces), index
+
+
+def _parse_pdf_escape(text: str, index: int) -> tuple[str, int]:
+    if index >= len(text):
+        return "", index
+    char = text[index]
+    escapes = {
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "b": "\b",
+        "f": "\f",
+        "(": "(",
+        ")": ")",
+        "\\": "\\",
+    }
+    if char in escapes:
+        return escapes[char], index + 1
+    if char in "\r\n":
+        while index < len(text) and text[index] in "\r\n":
+            index += 1
+        return "", index
+    if char in "01234567":
+        end = index
+        while end < min(len(text), index + 3) and text[end] in "01234567":
+            end += 1
+        try:
+            return chr(int(text[index:end], 8)), end
+        except ValueError:
+            return "", end
+    return char, index + 1
+
+
+def _pdf_hex_strings(text: str) -> list[str]:
+    pieces: list[str] = []
+    for match in re.finditer(r"(?<!<)<([0-9A-Fa-f\s]{4,4096})>(?!>)", text):
+        raw = "".join(match.group(1).split())
+        if len(raw) % 2:
+            raw = raw[:-1]
+        if len(raw) < 4:
+            continue
+        try:
+            data = bytes.fromhex(raw)
+        except ValueError:
+            continue
+        decoded = _decode_pdf_hex_text(data)
+        if _looks_like_readable_pdf_text(decoded):
+            pieces.append(decoded)
+    return pieces
+
+
+def _decode_pdf_hex_text(data: bytes) -> str:
+    if data.startswith(b"\xfe\xff"):
+        return data[2:].decode("utf-16-be", errors="ignore")
+    if data.startswith(b"\xff\xfe"):
+        return data[2:].decode("utf-16-le", errors="ignore")
+    if len(data) >= 4:
+        odd_nulls = sum(1 for index in range(0, len(data), 2) if data[index] == 0)
+        even_nulls = sum(1 for index in range(1, len(data), 2) if data[index] == 0)
+        if odd_nulls >= max(2, len(data) // 6):
+            return data.decode("utf-16-be", errors="ignore")
+        if even_nulls >= max(2, len(data) // 6):
+            return data.decode("utf-16-le", errors="ignore")
+    return data.decode("latin-1", errors="ignore")
+
+
+def _looks_like_readable_pdf_text(text: str) -> bool:
+    normalized = _normalize_span(text)
+    if len(normalized) < 3:
+        return False
+    content_chars = sum(1 for char in normalized if char.isalnum() or "\u4e00" <= char <= "\u9fff")
+    printable_chars = sum(1 for char in normalized if char.isprintable())
+    if content_chars < 2:
+        return False
+    if printable_chars / max(1, len(normalized)) < 0.8:
+        return False
+    return True
 
 
 def _extract_html_readable_text(body: str) -> str:
