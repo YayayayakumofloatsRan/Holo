@@ -864,7 +864,9 @@ class ChatRuntime:
             except (KeyError, ValueError) as exc:
                 return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             payload = result.to_dict()
-            command = self._append_command(turn, name="/memory", args=args, status="ok", result=memory_pipeline_command_result(payload))
+            command_result = memory_pipeline_command_result(payload)
+            command_result["resolved_pending"] = _memory_review_resolution(args[1], decision="approved")
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=command_result)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Approved {args[1]}.")
         if subcommand == "reject" and len(args) >= 2:
             reason = " ".join(args[2:]) or "user_rejected"
@@ -873,7 +875,9 @@ class ChatRuntime:
             except (KeyError, ValueError) as exc:
                 return self._memory_command_failed(turn=turn, decision=decision, args=args, error=_exception_reason(exc))
             payload = result.to_dict()
-            command = self._append_command(turn, name="/memory", args=args, status="ok", result=memory_pipeline_command_result(payload))
+            command_result = memory_pipeline_command_result(payload)
+            command_result["resolved_pending"] = _memory_review_resolution(args[1], decision="rejected")
+            command = self._append_command(turn, name="/memory", args=args, status="ok", result=command_result)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=f"Rejected {args[1]}.")
         if subcommand == "delete" and len(args) >= 2:
             reason = " ".join(args[2:]) or "user_deleted"
@@ -1938,6 +1942,14 @@ def _exception_reason(exc: Exception) -> str:
     if isinstance(exc, KeyError) and exc.args:
         return str(exc.args[0])
     return str(exc) or type(exc).__name__
+
+
+def _memory_review_resolution(proposal_id: str, *, decision: str) -> JsonObject:
+    return {
+        "pending_type": "memory_review",
+        "memory_proposal_ids": [proposal_id],
+        "decision": decision,
+    }
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

@@ -289,6 +289,12 @@ Pending plan-confirmation outboxes are marked `answered` when the user's later
 message approves or rejects the plan. Pending-user-input answer marking is
 scoped to the answered task id, so multiple waiting questions in the same thread
 do not clear each other.
+Memory-review outboxes are also cleared only by an explicit successful
+`/memory approve <proposal_id>` or `/memory reject <proposal_id>` command whose
+command result carries a `resolved_pending` manifest matching that pending
+outbox's proposal id. The queue marks those rows by exact outbox id, not by
+broad thread state, so unrelated waiting questions remain visible to the
+resident supervisor.
 
 Resident loop summaries include the queue health snapshot and scheduler health
 used to decide the loop result. A loop no longer reports `completed` when

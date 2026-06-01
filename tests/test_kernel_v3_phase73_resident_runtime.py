@@ -360,7 +360,10 @@ def test_phase73_memory_write_surfaces_reviewable_proposal_in_resident_outbox(tm
         agent_runtime=AgentRuntime(
             journal=journal,
             memory_store=memory,
-            processor_fabric=fake_fabric({"semantic.intake": _memory_write_intake("resident prefers concise Chinese")}, journal=journal),
+            processor_fabric=fake_fabric(
+                {"semantic.intake": _memory_write_intake("resident prefers concise Chinese")},
+                journal=journal,
+            ),
         ),
         memory_store=memory,
         semantic_mode="model",
@@ -380,6 +383,53 @@ def test_phase73_memory_write_surfaces_reviewable_proposal_in_resident_outbox(tm
     assert pending["memory_proposal_ids"] == [proposal_id]
     assert result.payload["pending_question"]["metadata"]["memory_proposal_ids"] == [proposal_id]
     assert memory.recall(query="resident", scope={"thread_id": "resident-memory"}).total == 0
+
+
+def test_phase73_memory_approval_command_answers_review_outbox(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    memory = MemoryStore.in_memory(clock_ms=_clock())
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(
+            journal=journal,
+            memory_store=memory,
+            processor_fabric=fake_fabric(
+                {"semantic.intake": _memory_write_intake("resident prefers concise Chinese")},
+                journal=journal,
+            ),
+        ),
+        memory_store=memory,
+        semantic_mode="model",
+    )
+    runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-memory", journal=journal)
+    queue.enqueue(thread_id="resident-memory", text="remember resident prefers concise Chinese", message_id="in-memory-review")
+
+    first = runtime.run_once()
+    proposal_id = memory.proposals()[0].proposal_id
+    pending_outbox = queue.outbox_messages()[0]
+    queue.enqueue(thread_id="resident-memory", text=f"/memory approve {proposal_id}", message_id="in-memory-approve")
+    second = runtime.run_once()
+
+    outboxes = {item.in_reply_to: item for item in queue.outbox_messages()}
+    approved = outboxes["in-memory-approve"]
+    answered = outboxes["in-memory-review"]
+    assert first.status == "processed"
+    assert second.status == "processed"
+    assert answered.outbox_id == pending_outbox.outbox_id
+    assert answered.status == "answered"
+    assert answered.payload["answered_by_message_id"] == "in-memory-approve"
+    assert approved.status == "ready"
+    assert approved.payload["command_result"]["args"] == ["approve", proposal_id]
+    assert approved.payload["command_result"]["result"]["resolved_pending"] == {
+        "pending_type": "memory_review",
+        "memory_proposal_ids": [proposal_id],
+        "decision": "approved",
+    }
+    assert second.payload["answered_pending_outbox_ids"] == [pending_outbox.outbox_id]
+    assert memory.recall(query="resident", scope={"thread_id": "resident-memory"}).total == 1
+    assert journal.records(kind="resident_pending_outbox_answered")
+    assert runtime.run_loop(max_iterations=1).status == "idle"
 
 
 def test_phase73_answering_pending_question_marks_old_outbox_answered(tmp_path: Path):
@@ -580,6 +630,39 @@ def test_phase73_answered_marker_does_not_mark_current_pending_outbox(tmp_path: 
     assert statuses[old.outbox_id] == "answered"
     assert statuses[current.outbox_id] == "pending_user_input"
     assert statuses[unrelated.outbox_id] == "pending_user_input"
+
+
+def test_phase73_answered_marker_by_outbox_id_is_exact(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    selected = queue.append_outbox(
+        in_reply_to="in-memory-question",
+        thread_id="resident-thread",
+        text="review memory proposal",
+        status="pending_user_input",
+        task_id="task-memory",
+        run_id="run-1",
+    )
+    unrelated = queue.append_outbox(
+        in_reply_to="in-file-question",
+        thread_id="resident-thread",
+        text="which file?",
+        status="pending_user_input",
+        task_id="task-file",
+        run_id="run-1",
+    )
+
+    answered = queue.mark_pending_user_input_answered_by_outbox_ids(
+        outbox_ids=[selected.outbox_id],
+        answered_by_message_id="in-memory-approve",
+        run_id=None,
+    )
+
+    statuses = {item.outbox_id: item.status for item in queue.outbox_messages()}
+    assert [item.outbox_id for item in answered] == [selected.outbox_id]
+    assert statuses[selected.outbox_id] == "answered"
+    assert statuses[unrelated.outbox_id] == "pending_user_input"
+    assert answered[0].payload["answered_task_id"] == "task-memory"
+    assert answered[0].payload["answered_by_message_id"] == "in-memory-approve"
 
 
 def test_phase73_pending_user_input_ack_preserves_waiting_semantics(tmp_path: Path):

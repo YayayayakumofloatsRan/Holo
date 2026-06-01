@@ -937,6 +937,79 @@ class ResidentQueue:
         finally:
             conn.close()
 
+    def mark_pending_user_input_answered_by_outbox_ids(
+        self,
+        *,
+        outbox_ids: list[str],
+        answered_by_message_id: str,
+        run_id: str | None,
+    ) -> list[OutboxMessage]:
+        now = self._now_ms()
+        ordered_ids = _ordered_unique([outbox_id for outbox_id in outbox_ids if outbox_id])
+        if not ordered_ids:
+            return []
+        placeholders = ", ".join("?" for _ in ordered_ids)
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""
+                SELECT outbox_id, in_reply_to, thread_id, text, status, created_at_ms,
+                       task_id, run_id, payload_json
+                FROM resident_outbox
+                WHERE outbox_id IN ({placeholders})
+                  AND status IN ('pending_user_input', 'pending_user_input_delivered')
+                """,
+                tuple(ordered_ids),
+            ).fetchall()
+            by_id = {}
+            for row in rows:
+                outbox = _outbox_from_row(row)
+                by_id[outbox.outbox_id] = outbox
+            answered: list[OutboxMessage] = []
+            for outbox_id in ordered_ids:
+                existing = by_id.get(outbox_id)
+                if existing is None:
+                    continue
+                payload = dict(existing.payload)
+                payload["answered_by_message_id"] = answered_by_message_id
+                payload["answered_at_ms"] = now
+                if existing.task_id is not None:
+                    payload["answered_task_id"] = existing.task_id
+                if run_id is not None:
+                    payload["answered_run_id"] = run_id
+                updated = conn.execute(
+                    """
+                    UPDATE resident_outbox
+                    SET status = 'answered', payload_json = ?
+                    WHERE outbox_id = ?
+                      AND status IN ('pending_user_input', 'pending_user_input_delivered')
+                    """,
+                    (_json(payload), existing.outbox_id),
+                )
+                if updated.rowcount != 1:
+                    continue
+                answered.append(
+                    OutboxMessage(
+                        outbox_id=existing.outbox_id,
+                        in_reply_to=existing.in_reply_to,
+                        thread_id=existing.thread_id,
+                        text=existing.text,
+                        status="answered",
+                        created_at_ms=existing.created_at_ms,
+                        task_id=existing.task_id,
+                        run_id=existing.run_id,
+                        payload=payload,
+                    )
+                )
+            conn.commit()
+            return answered
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _outbox_for_reply(self, in_reply_to: str) -> OutboxMessage | None:
         conn = self._connect()
         try:

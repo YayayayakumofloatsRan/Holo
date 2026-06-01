@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from kernel_v3.chat import ChatRuntime
+from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
-from kernel_v3.resident.contracts import ResidentLoopResult, ResidentRunResult
+from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, ResidentLoopResult, ResidentRunResult
 from kernel_v3.resident.projection import (
     resident_chat_result_payload,
     resident_inbox_event,
@@ -300,26 +301,18 @@ class ResidentRuntime:
                 task_id=chat_result.task_id,
                 state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
             )
-            answered_pending = []
-            if chat_result.route == "answer_pending_question":
-                answered_pending = self.queue.mark_pending_user_input_answered(
-                    thread_id=message.thread_id,
-                    answered_by_message_id=message.message_id,
-                    task_id=_answered_task_id(chat_result),
-                    run_id=chat_result.run_id,
-                    exclude_in_reply_to=message.message_id,
+            answered_pending = self._mark_answered_pending_user_input(chat_result=chat_result, message=message)
+            for answered in answered_pending:
+                self._journal_event(
+                    "resident_pending_outbox_answered",
+                    resident_outbox_event(answered),
+                    task_id=answered.task_id or chat_result.task_id,
+                    state_delta={
+                        "resident_outbox_status": answered.status,
+                        "resident_outbox_id": answered.outbox_id,
+                        "resident_answered_by_message_id": message.message_id,
+                    },
                 )
-                for answered in answered_pending:
-                    self._journal_event(
-                        "resident_pending_outbox_answered",
-                        resident_outbox_event(answered),
-                        task_id=chat_result.task_id,
-                        state_delta={
-                            "resident_outbox_status": answered.status,
-                            "resident_outbox_id": answered.outbox_id,
-                            "resident_answered_by_message_id": message.message_id,
-                        },
-                    )
             completed = self.queue.complete(message.message_id, worker_id=self.worker_id)
             if not completed:
                 self._journal_event(
@@ -441,6 +434,35 @@ class ResidentRuntime:
         except Exception as exc:  # pragma: no cover - defensive scheduler containment
             return {"status": "failed", "reason": type(exc).__name__}
 
+    def _mark_answered_pending_user_input(
+        self,
+        *,
+        chat_result: ChatRuntimeResult,
+        message: InboundMessage,
+    ) -> list[OutboxMessage]:
+        if chat_result.route == "answer_pending_question":
+            return self.queue.mark_pending_user_input_answered(
+                thread_id=message.thread_id,
+                answered_by_message_id=message.message_id,
+                task_id=_answered_task_id(chat_result),
+                run_id=chat_result.run_id,
+                exclude_in_reply_to=message.message_id,
+            )
+        proposal_ids = _resolved_memory_review_proposal_ids(chat_result)
+        if not proposal_ids:
+            return []
+        outbox_ids = _matching_memory_review_outbox_ids(
+            self.queue.outbox_messages(),
+            thread_id=message.thread_id,
+            exclude_in_reply_to=message.message_id,
+            proposal_ids=proposal_ids,
+        )
+        return self.queue.mark_pending_user_input_answered_by_outbox_ids(
+            outbox_ids=outbox_ids,
+            answered_by_message_id=message.message_id,
+            run_id=chat_result.run_id,
+        )
+
     def _journal_event(
         self,
         kind: str,
@@ -507,6 +529,52 @@ def _answered_task_id(chat_result) -> str | None:
     return chat_result.task_id
 
 
+def _resolved_memory_review_proposal_ids(chat_result: ChatRuntimeResult) -> list[str]:
+    command = chat_result.command_result
+    if not isinstance(command, dict):
+        return []
+    if command.get("status") != "ok":
+        return []
+    result = command.get("result")
+    if not isinstance(result, dict):
+        return []
+    resolved = result.get("resolved_pending")
+    if not isinstance(resolved, dict) or resolved.get("pending_type") != "memory_review":
+        return []
+    proposal_ids = resolved.get("memory_proposal_ids")
+    if not isinstance(proposal_ids, list):
+        return []
+    return _ordered_unique([str(proposal_id).strip() for proposal_id in proposal_ids if str(proposal_id).strip()])
+
+
+def _matching_memory_review_outbox_ids(
+    outboxes: list[OutboxMessage],
+    *,
+    thread_id: str,
+    exclude_in_reply_to: str,
+    proposal_ids: list[str],
+) -> list[str]:
+    wanted = set(proposal_ids)
+    matched: list[str] = []
+    for outbox in outboxes:
+        if outbox.thread_id != thread_id:
+            continue
+        if outbox.in_reply_to == exclude_in_reply_to:
+            continue
+        if outbox.status not in {"pending_user_input", "pending_user_input_delivered"}:
+            continue
+        pending = outbox.payload.get("pending_question")
+        if not isinstance(pending, dict) or pending.get("pending_type") != "memory_review":
+            continue
+        pending_ids = pending.get("memory_proposal_ids")
+        if not isinstance(pending_ids, list):
+            continue
+        normalized = {str(proposal_id) for proposal_id in pending_ids if proposal_id}
+        if normalized.intersection(wanted):
+            matched.append(outbox.outbox_id)
+    return matched
+
+
 def _with_schedule_tick(payload: JsonObject, schedule_tick: JsonObject | None) -> JsonObject:
     if schedule_tick is None:
         return payload
@@ -521,6 +589,17 @@ def _schedule_failure_reason(results: list[ResidentRunResult], schedule_status: 
         if isinstance(tick, dict) and tick.get("status") == "failed":
             return "resident_schedule_tick_failed"
     return None
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _duration_exceeded(

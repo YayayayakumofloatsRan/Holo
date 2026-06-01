@@ -333,6 +333,12 @@ Implementation note:
   payload metadata. This keeps queue status from permanently advertising a
   question that has already been answered, while preserving the original
   outbox audit record.
+- Memory-review pending outboxes follow the same audit rule after explicit
+  review commands, but with tighter matching: a successful `/memory approve` or
+  `/memory reject` emits a `resolved_pending` manifest, and resident runtime
+  clears only pending review outboxes whose payload names the reviewed proposal
+  id. The queue transition is exact by outbox id, so command handling cannot
+  accidentally clear another task's pending clarification.
 - `holo-v3 resident enqueue/run-once/run/status/inbox/outbox/requeue/ack` provides
   the local dev/admin surface. `resident enqueue --message-id` can replay a
   gateway delivery id to test idempotency. This is not a live transport
