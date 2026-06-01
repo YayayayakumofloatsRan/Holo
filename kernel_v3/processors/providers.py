@@ -154,8 +154,11 @@ class OpenAICompatibleProvider:
         }
         if thinking is not None:
             payload["thinking"] = thinking
-        if not _thinking_enabled(thinking):
-            payload["temperature"] = _temperature(request.parameters.get("temperature"), default=0.0)
+        explicit_temperature = request.parameters.get("temperature")
+        if explicit_temperature is not None:
+            payload["temperature"] = _temperature(explicit_temperature, default=0.0)
+        elif not _thinking_enabled(thinking):
+            payload["temperature"] = _temperature(None, default=0.0)
         max_tokens = _optional_positive_int(request.parameters.get("max_tokens"))
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens

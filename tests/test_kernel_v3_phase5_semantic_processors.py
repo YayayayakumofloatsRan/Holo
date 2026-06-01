@@ -717,6 +717,19 @@ def test_phase5_deepseek_v4_router_accepts_medium_reasoning_override():
     assert evaluator.parameters["reasoning_effort"] == "medium"
 
 
+def test_phase5_deepseek_v4_router_can_use_provider_default_output_tokens_and_temperature():
+    router = deepseek_v4_router(
+        profile="balanced",
+        max_output_tokens="provider",
+        temperature=0.2,
+    )
+
+    planner = router.route("planner.propose")
+
+    assert "max_tokens" not in planner.parameters
+    assert planner.parameters["temperature"] == 0.2
+
+
 def test_phase5_route_parameters_are_journaled_and_sent_to_provider_request():
     journal = JournalStore.in_memory()
     fabric = ProcessorFabric(
@@ -878,6 +891,10 @@ def test_phase5_cli_model_packet_prints_routed_deepseek_request_without_live_gat
             "enabled",
             "--reasoning-effort",
             "medium",
+            "--max-output-tokens",
+            "provider",
+            "--temperature",
+            "0.2",
         ]
     )
 
@@ -890,7 +907,8 @@ def test_phase5_cli_model_packet_prints_routed_deepseek_request_without_live_gat
     assert payload["packet"]["body"]["response_format"] == {"type": "json_object"}
     assert payload["packet"]["body"]["thinking"] == {"type": "enabled"}
     assert payload["packet"]["body"]["reasoning_effort"] == "medium"
-    assert "temperature" not in payload["packet"]["body"]
+    assert "max_tokens" not in payload["packet"]["body"]
+    assert payload["packet"]["body"]["temperature"] == 0.2
     assert secret not in encoded
 
 

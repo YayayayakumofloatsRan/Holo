@@ -108,6 +108,23 @@ does not clearly request another language. Override this per run with
 HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "read README.md and summarize it" --online --response-language zh
 ```
 
+Live agent/chat/resident runs expose both input/context and output-generation
+controls. `--context-profile large` is the default for live interactive runs;
+`huge` and `provider` allow much larger host prompt budgets when the target
+model can handle them. `--max-output-tokens provider` omits the provider
+`max_tokens` field, while `auto` uses Holo's route defaults and an integer sets
+an explicit output cap.
+
+```bash
+HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "inspect a large workspace file" \
+  --online \
+  --context-profile huge \
+  --max-output-tokens provider \
+  --thinking enabled \
+  --reasoning-effort max \
+  --temperature 0.2
+```
+
 Live retrieval is also explicit and host-allowlisted. Do not make network
 retrieval a default path.
 

@@ -16,7 +16,7 @@ from kernel_v3.agent.contracts import (
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
 from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
-from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
+from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile, merge_context_budget
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.interaction import interaction_preferences, normalize_response_language
@@ -409,7 +409,17 @@ class AgentRuntime:
         recipe: TaskRecipe,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
-        evidence, citations, report = _workspace_grounding(self.journal, task_id, run_id, artifact_store=self.artifact_store)
+        context_budget = _context_budget_metadata(recipe)
+        evidence, citations, report = _workspace_grounding(
+            self.journal,
+            task_id,
+            run_id,
+            artifact_store=self.artifact_store,
+            evidence_char_limit=int(context_budget["workspace_evidence_chars"]),
+            citation_char_limit=int(context_budget["workspace_citation_chars"]),
+            synthesis_evidence_preview_chars=int(context_budget["synthesis_evidence_preview_chars"]),
+            synthesis_citation_preview_chars=int(context_budget["synthesis_citation_preview_chars"]),
+        )
         if not evidence:
             return None, self._failure(
                 task_id,
@@ -658,6 +668,7 @@ class _AgentContextCompiler:
         self.memory_store = memory_store
 
     def compile(self, task: TaskState, journal: JournalStore) -> ContextBundle:
+        context_budget = _context_budget_metadata(self.recipe)
         pack = ContextPackCompiler(
             project_profile=ProjectProfile(
                 project_id="holo-kernel-v3",
@@ -677,6 +688,8 @@ class _AgentContextCompiler:
             },
             budget_mode=self.recipe.context_budget_mode,
             durable_memory_store=self.memory_store,
+            token_budget=int(context_budget["token_budget"]),
+            section_budget=int(context_budget["section_budget"]),
         ).compile(
             task,
             journal,
@@ -1008,6 +1021,20 @@ def _task_execution_plan_metadata(recipe: TaskRecipe) -> JsonObject:
 def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
     value = recipe.metadata.get("execution_metadata")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _context_budget_metadata(recipe: TaskRecipe) -> JsonObject:
+    metadata = _execution_metadata(recipe)
+    context = metadata.get("context_budget")
+    if isinstance(context, dict):
+        return merge_context_budget(
+            context.get("profile"),
+            token_budget=context.get("token_budget"),
+            section_budget=context.get("section_budget"),
+            workspace_evidence_chars=context.get("workspace_evidence_chars"),
+            synthesis_evidence_preview_chars=context.get("synthesis_evidence_preview_chars"),
+        )
+    return merge_context_budget("compact")
 
 
 def _recipe_allowed_permissions(recipe: TaskRecipe) -> set[str]:
@@ -1425,6 +1452,10 @@ def _workspace_grounding(
     run_id: str,
     *,
     artifact_store: ArtifactStore,
+    evidence_char_limit: int = WORKSPACE_SYNTHESIS_EVIDENCE_CHARS,
+    citation_char_limit: int = WORKSPACE_SYNTHESIS_CITATION_CHARS,
+    synthesis_evidence_preview_chars: int = 4096,
+    synthesis_citation_preview_chars: int = 2048,
 ) -> tuple[list[EvidenceItem], list[CitationItem], RetrievalReport]:
     evidence: list[EvidenceItem] = []
     citations: list[CitationItem] = []
@@ -1440,7 +1471,7 @@ def _workspace_grounding(
         if not isinstance(content, dict):
             continue
         path = str(content.get("path", "workspace"))
-        text = _workspace_observation_text(content, artifact_store=artifact_store)
+        text = _workspace_observation_text(content, artifact_store=artifact_store, evidence_char_limit=evidence_char_limit)
         evidence_id = f"workspace-evidence-{index}"
         citation_id = f"workspace-cite-{index}"
         artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or evidence_id}"
@@ -1467,9 +1498,9 @@ def _workspace_grounding(
                 artifact_id=artifact_id,
                 uri=f"workspace://{path}",
                 title=path,
-                quote=text[:WORKSPACE_SYNTHESIS_CITATION_CHARS],
+                quote=text[:citation_char_limit],
                 span_start=0,
-                span_end=min(len(text), WORKSPACE_SYNTHESIS_CITATION_CHARS),
+                span_end=min(len(text), citation_char_limit),
                 metadata={"record_ref": record.record_id},
             )
         )
@@ -1488,22 +1519,25 @@ def _workspace_grounding(
         diagnostics={
             "evidence_count": len(evidence),
             "citation_count": len(citations),
-            "workspace_evidence_char_limit": WORKSPACE_SYNTHESIS_EVIDENCE_CHARS,
+            "workspace_evidence_char_limit": evidence_char_limit,
+            "workspace_citation_char_limit": citation_char_limit,
+            "synthesis_evidence_preview_chars": synthesis_evidence_preview_chars,
+            "synthesis_citation_preview_chars": synthesis_citation_preview_chars,
         },
     )
     return evidence, citations, report
 
 
-def _workspace_observation_text(content: JsonObject, *, artifact_store: ArtifactStore) -> str:
+def _workspace_observation_text(content: JsonObject, *, artifact_store: ArtifactStore, evidence_char_limit: int) -> str:
     artifact_id = content.get("artifact_id")
     if isinstance(artifact_id, str) and artifact_store.has_blob(artifact_id):
         payload = artifact_store.read_blob(artifact_id)
         text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else payload
-        return str(text)[:WORKSPACE_SYNTHESIS_EVIDENCE_CHARS]
+        return str(text)[:evidence_char_limit]
     text_value = content.get("text")
     preview_value = content.get("text_preview")
     text = str(text_value if isinstance(text_value, str) else preview_value if isinstance(preview_value, str) else "")
-    return text[:WORKSPACE_SYNTHESIS_EVIDENCE_CHARS]
+    return text[:evidence_char_limit]
 
 
 def _grounded_answer(*, report: RetrievalReport, evidence: list[EvidenceItem], citations: list[CitationItem]) -> str:

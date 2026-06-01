@@ -9,7 +9,7 @@ from pathlib import Path
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.chat import ChatRuntime
-from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler
+from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler, merge_context_budget
 from kernel_v3.contracts import JsonObject, ProcessorRequest
 from kernel_v3.interaction import DEFAULT_RESPONSE_LANGUAGE, normalize_response_language
 from kernel_v3.journal import JournalStore
@@ -84,6 +84,28 @@ def _add_response_language_arg(command_parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_context_budget_args(command_parser: argparse.ArgumentParser, *, default_profile: str = "compact") -> None:
+    command_parser.add_argument(
+        "--context-profile",
+        choices=["compact", "large", "huge", "provider"],
+        default=default_profile,
+        help="Host prompt/input budget profile. Live model runs default to large.",
+    )
+    command_parser.add_argument("--context-token-budget", type=int, default=None)
+    command_parser.add_argument("--context-section-budget", type=int, default=None)
+    command_parser.add_argument("--workspace-evidence-chars", type=int, default=None)
+    command_parser.add_argument("--synthesis-evidence-preview-chars", type=int, default=None)
+
+
+def _add_generation_args(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--max-output-tokens",
+        default="provider",
+        help="Output token cap for live processor calls: provider/none disables max_tokens, auto uses route defaults, or pass an integer.",
+    )
+    command_parser.add_argument("--temperature", type=float, default=None)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     parser = argparse.ArgumentParser(prog="holo-v3")
@@ -113,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     agent_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_generation_args(agent_parser)
+    _add_context_budget_args(agent_parser, default_profile="large")
     _add_response_language_arg(agent_parser)
     agent_parser.add_argument("--citations-required", action="store_true")
     agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
@@ -121,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
 
     answer_parser = sub.add_parser("answer")
     answer_parser.add_argument("goal")
+    _add_context_budget_args(answer_parser)
     _add_response_language_arg(answer_parser)
     answer_parser.add_argument("--citations-required", action="store_true")
     answer_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
@@ -139,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     chat_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_generation_args(chat_parser)
+    _add_context_budget_args(chat_parser, default_profile="large")
     _add_response_language_arg(chat_parser)
     chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     chat_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
@@ -195,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run_once.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_generation_args(resident_run_once)
+    _add_context_budget_args(resident_run_once, default_profile="large")
     _add_response_language_arg(resident_run_once)
     resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_run_once.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
@@ -217,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_generation_args(resident_run)
+    _add_context_budget_args(resident_run, default_profile="large")
     _add_response_language_arg(resident_run)
     resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_run.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
@@ -372,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     model_packet.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     model_packet.add_argument("--timeout-seconds", type=int, default=None)
     model_packet.add_argument("--max-tokens", type=int, default=None)
+    model_packet.add_argument("--max-output-tokens", default="auto")
     model_packet.add_argument("--temperature", type=float, default=None)
     model_packet.add_argument("--show-prompt", action="store_true")
 
@@ -402,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            max_output_tokens=args.max_output_tokens,
+            temperature=args.temperature,
             response_language=_response_language_for_args(args),
             artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
@@ -458,6 +492,8 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            max_output_tokens=args.max_output_tokens,
+            temperature=args.temperature,
             response_language=_response_language_for_args(args),
             planner_mode=_processor_mode(args, "planner"),
             evaluator_mode=_processor_mode(args, "evaluator"),
@@ -752,6 +788,8 @@ def _agent_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    max_output_tokens: object = "auto",
+    temperature: float | None = None,
     response_language: str | None = None,
     artifact_store: ArtifactStore | None = None,
     memory_store: MemoryStore | None = None,
@@ -766,6 +804,8 @@ def _agent_runtime(
             profile=profile,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
         )
         if live_model
         else None
@@ -794,6 +834,8 @@ def _chat_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    max_output_tokens: object = "auto",
+    temperature: float | None = None,
     response_language: str | None = None,
     planner_mode: str = "fake",
     evaluator_mode: str = "fake",
@@ -812,6 +854,8 @@ def _chat_runtime(
             profile=profile,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
             response_language=response_language,
             artifact_store=artifact_store,
             memory_store=memory_store,
@@ -856,6 +900,13 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
     metadata["interaction_preferences"] = {
         "response_language": response_language,
     }
+    metadata["context_budget"] = merge_context_budget(
+        getattr(args, "context_profile", "compact"),
+        token_budget=getattr(args, "context_token_budget", None),
+        section_budget=getattr(args, "context_section_budget", None),
+        workspace_evidence_chars=getattr(args, "workspace_evidence_chars", None),
+        synthesis_evidence_preview_chars=getattr(args, "synthesis_evidence_preview_chars", None),
+    )
     research_profile = getattr(args, "research_profile", None)
     if isinstance(research_profile, str) and research_profile:
         research_depth = str(getattr(args, "research_depth", "balanced") or "balanced")
@@ -1334,6 +1385,8 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 profile=getattr(args, "profile", "balanced"),
                 thinking=_thinking_override(getattr(args, "thinking", "auto")),
                 reasoning_effort=getattr(args, "reasoning_effort", "high"),
+                max_output_tokens=getattr(args, "max_output_tokens", "provider"),
+                temperature=getattr(args, "temperature", None),
                 response_language=_response_language_for_args(args),
                 planner_mode=_processor_mode(args, "planner"),
                 evaluator_mode=_processor_mode(args, "evaluator"),
@@ -1505,13 +1558,21 @@ def _live_processor_fabric(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    max_output_tokens: object = "auto",
+    temperature: float | None = None,
 ) -> ProcessorFabric:
     providers = {
         "deepseek": DeepSeekProvider(enabled=True, model=model),
         "openai_compatible": OpenAICompatibleProvider(enabled=True, model=model or "local-model"),
     }
     if provider == "deepseek":
-        router = deepseek_v4_router(profile=profile, thinking=thinking, reasoning_effort=reasoning_effort)
+        router = deepseek_v4_router(
+            profile=profile,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+        )
     else:
         router = ProcessorRouter(default_provider=provider, default_model=providers[provider].model)
     return ProcessorFabric(
@@ -1529,6 +1590,8 @@ def _model_packet_payload(args) -> dict[str, object]:
             profile=getattr(args, "profile", "balanced"),
             thinking=thinking,
             reasoning_effort=getattr(args, "reasoning_effort", "high"),
+            max_output_tokens=getattr(args, "max_output_tokens", "auto"),
+            temperature=getattr(args, "temperature", None),
         )
         provider = DeepSeekProvider(enabled=True, model=getattr(args, "model", None))
     else:

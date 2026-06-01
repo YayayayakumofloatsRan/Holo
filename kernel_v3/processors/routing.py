@@ -46,11 +46,19 @@ def deepseek_v4_router(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    max_output_tokens: object = "auto",
+    temperature: float | None = None,
 ) -> ProcessorRouter:
     return ProcessorRouter(
         default_provider="deepseek",
         default_model=DEEPSEEK_V4_FLASH,
-        routes=deepseek_v4_routes(profile=profile, thinking=thinking, reasoning_effort=reasoning_effort),
+        routes=deepseek_v4_routes(
+            profile=profile,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+        ),
     )
 
 
@@ -59,6 +67,8 @@ def deepseek_v4_routes(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    max_output_tokens: object = "auto",
+    temperature: float | None = None,
 ) -> dict[str, ProcessorRoute]:
     effort = _reasoning_effort(reasoning_effort)
     if profile == "fast":
@@ -68,35 +78,40 @@ def deepseek_v4_routes(
                 DEEPSEEK_V4_FLASH,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=384,
+                max_tokens=_route_max_tokens(384, max_output_tokens),
+                temperature=temperature,
             ),
             "semantic.intake": _deepseek_route(
                 "semantic.intake",
                 DEEPSEEK_V4_FLASH,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=768,
+                max_tokens=_route_max_tokens(768, max_output_tokens),
+                temperature=temperature,
             ),
             "planner.propose": _deepseek_route(
                 "planner.propose",
                 DEEPSEEK_V4_FLASH,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=512,
+                max_tokens=_route_max_tokens(512, max_output_tokens),
+                temperature=temperature,
             ),
             "evaluator.assess": _deepseek_route(
                 "evaluator.assess",
                 DEEPSEEK_V4_FLASH,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=512,
+                max_tokens=_route_max_tokens(512, max_output_tokens),
+                temperature=temperature,
             ),
             "synthesizer.answer": _deepseek_route(
                 "synthesizer.answer",
                 DEEPSEEK_V4_FLASH,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=768,
+                max_tokens=_route_max_tokens(768, max_output_tokens),
+                temperature=temperature,
             ),
         }
     if profile == "quality":
@@ -106,35 +121,40 @@ def deepseek_v4_routes(
                 DEEPSEEK_V4_FLASH,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=384,
+                max_tokens=_route_max_tokens(384, max_output_tokens),
+                temperature=temperature,
             ),
             "semantic.intake": _deepseek_route(
                 "semantic.intake",
                 DEEPSEEK_V4_PRO,
                 thinking=thinking or "enabled",
                 reasoning_effort=effort,
-                max_tokens=1024,
+                max_tokens=_route_max_tokens(1024, max_output_tokens),
+                temperature=temperature,
             ),
             "planner.propose": _deepseek_route(
                 "planner.propose",
                 DEEPSEEK_V4_PRO,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=512,
+                max_tokens=_route_max_tokens(512, max_output_tokens),
+                temperature=temperature,
             ),
             "evaluator.assess": _deepseek_route(
                 "evaluator.assess",
                 DEEPSEEK_V4_PRO,
                 thinking=thinking or "enabled",
                 reasoning_effort=effort,
-                max_tokens=768,
+                max_tokens=_route_max_tokens(768, max_output_tokens),
+                temperature=temperature,
             ),
             "synthesizer.answer": _deepseek_route(
                 "synthesizer.answer",
                 DEEPSEEK_V4_PRO,
                 thinking=thinking or "disabled",
                 reasoning_effort=effort,
-                max_tokens=1024,
+                max_tokens=_route_max_tokens(1024, max_output_tokens),
+                temperature=temperature,
             ),
         }
     if profile != "balanced":
@@ -145,35 +165,40 @@ def deepseek_v4_routes(
             DEEPSEEK_V4_FLASH,
             thinking=thinking or "disabled",
             reasoning_effort=effort,
-            max_tokens=384,
+            max_tokens=_route_max_tokens(384, max_output_tokens),
+            temperature=temperature,
         ),
         "semantic.intake": _deepseek_route(
             "semantic.intake",
             DEEPSEEK_V4_PRO,
             thinking=thinking or "enabled",
             reasoning_effort=effort,
-            max_tokens=1024,
+            max_tokens=_route_max_tokens(1024, max_output_tokens),
+            temperature=temperature,
         ),
         "planner.propose": _deepseek_route(
             "planner.propose",
             DEEPSEEK_V4_FLASH,
             thinking=thinking or "disabled",
             reasoning_effort=effort,
-            max_tokens=512,
+            max_tokens=_route_max_tokens(512, max_output_tokens),
+            temperature=temperature,
         ),
         "evaluator.assess": _deepseek_route(
             "evaluator.assess",
             DEEPSEEK_V4_PRO,
             thinking=thinking or "enabled",
             reasoning_effort=effort,
-            max_tokens=768,
+            max_tokens=_route_max_tokens(768, max_output_tokens),
+            temperature=temperature,
         ),
         "synthesizer.answer": _deepseek_route(
             "synthesizer.answer",
             DEEPSEEK_V4_PRO,
             thinking=thinking or "disabled",
             reasoning_effort=effort,
-            max_tokens=1024,
+            max_tokens=_route_max_tokens(1024, max_output_tokens),
+            temperature=temperature,
         ),
     }
 
@@ -183,12 +208,17 @@ def _deepseek_route(
     model: str,
     *,
     thinking: str,
-    max_tokens: int,
+    max_tokens: int | None,
     reasoning_effort: str | None = None,
+    temperature: float | None = None,
 ) -> ProcessorRoute:
-    parameters: JsonObject = {"thinking": thinking, "max_tokens": max_tokens}
+    parameters: JsonObject = {"thinking": thinking}
+    if max_tokens is not None:
+        parameters["max_tokens"] = max_tokens
     if thinking == "enabled" and reasoning_effort:
         parameters["reasoning_effort"] = reasoning_effort
+    if temperature is not None:
+        parameters["temperature"] = temperature
     return ProcessorRoute(
         task_type=task_type,
         provider="deepseek",
@@ -202,3 +232,15 @@ def _reasoning_effort(value: str) -> str:
     if value in {"low", "medium", "high", "max"}:
         return value
     return "high"
+
+
+def _route_max_tokens(default: int, override: object) -> int | None:
+    if override is None or override == "auto":
+        return default
+    if isinstance(override, str) and override.lower() in {"none", "provider", "provider-default", "off"}:
+        return None
+    try:
+        parsed = int(override)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else None

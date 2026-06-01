@@ -167,6 +167,27 @@ def test_phase61_workspace_search_then_file_read_counts_as_progress():
     assert "new_file_read" in progress_types
 
 
+def test_phase61_context_budget_can_be_raised_for_large_live_prompts():
+    journal = JournalStore.in_memory()
+
+    result = AgentRuntime(journal=journal).run(
+        "explain context budget",
+        mode="direct",
+        execution_metadata={
+            "context_budget": {
+                "profile": "large",
+                "token_budget": 65536,
+                "section_budget": 8192,
+            }
+        },
+    )
+
+    context = journal.records(task_id=result.task_id, kind="context")[0].data
+    assert context["state"]["budget"]["token_budget"] == 65536
+    assert context["state"]["budget"]["section_limit"] == 8192
+    assert context["state"]["agent_recipe"]["metadata"]["execution_metadata"]["context_budget"]["profile"] == "large"
+
+
 def test_phase61_failed_or_blocked_observation_alone_does_not_count_as_progress():
     journal = JournalStore.in_memory()
     observation = Observation(

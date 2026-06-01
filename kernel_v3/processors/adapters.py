@@ -182,6 +182,14 @@ def _synthesizer_prompt(
     citations: list[CitationItem],
 ) -> str:
     preferences = _interaction_preferences_from_report(report)
+    evidence_preview_chars = _positive_int(
+        report.diagnostics.get("synthesis_evidence_preview_chars") if isinstance(report.diagnostics, dict) else None,
+        default=SYNTHESIS_EVIDENCE_PREVIEW_CHARS,
+    )
+    citation_preview_chars = _positive_int(
+        report.diagnostics.get("synthesis_citation_preview_chars") if isinstance(report.diagnostics, dict) else None,
+        default=SYNTHESIS_CITATION_PREVIEW_CHARS,
+    )
     payload = {
         "contract": SYNTHESIZER_PROMPT_CONTRACT,
         "task_goal": _task_goal_from_report(report),
@@ -194,8 +202,8 @@ def _synthesizer_prompt(
             "Use the response_language preference as the default user-visible language unless the user explicitly requested another language.",
         ],
         "retrieval_report": report.to_dict(),
-        "evidence": [_compact_evidence_for_provider(item) for item in evidence],
-        "citations": [_compact_citation_for_provider(item) for item in citations],
+        "evidence": [_compact_evidence_for_provider(item, preview_chars=evidence_preview_chars) for item in evidence],
+        "citations": [_compact_citation_for_provider(item, preview_chars=citation_preview_chars) for item in citations],
     }
     return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
 
@@ -242,19 +250,19 @@ def _compact_observation_for_provider(observation: Observation) -> JsonObject:
     return data
 
 
-def _compact_evidence_for_provider(item: EvidenceItem) -> JsonObject:
+def _compact_evidence_for_provider(item: EvidenceItem, *, preview_chars: int = SYNTHESIS_EVIDENCE_PREVIEW_CHARS) -> JsonObject:
     data = item.to_dict()
     text = str(data.pop("text", ""))
-    data["text_preview"] = _preview(text, SYNTHESIS_EVIDENCE_PREVIEW_CHARS)
+    data["text_preview"] = _preview(text, preview_chars)
     data["text_hash"] = _hash_text(text)
     data["text_chars"] = len(text)
     return data
 
 
-def _compact_citation_for_provider(item: CitationItem) -> JsonObject:
+def _compact_citation_for_provider(item: CitationItem, *, preview_chars: int = SYNTHESIS_CITATION_PREVIEW_CHARS) -> JsonObject:
     data = item.to_dict()
     quote = str(data.pop("quote", ""))
-    data["quote_preview"] = _preview(quote, SYNTHESIS_CITATION_PREVIEW_CHARS)
+    data["quote_preview"] = _preview(quote, preview_chars)
     data["quote_hash"] = _hash_text(quote)
     data["quote_chars"] = len(quote)
     return data
@@ -428,6 +436,14 @@ def _preview(text: str, limit: int) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 3)] + "..."
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _hash_text(text: str) -> str:
