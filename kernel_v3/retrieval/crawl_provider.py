@@ -13,6 +13,7 @@ from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.research import source_directory_for_profile
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 from kernel_v3.retrieval.http_provider import HttpTransport, HttpTransportResponse
+from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
 
 
 URL_PATTERN = re.compile(r"https?://[^\s<>'\")\]]+", re.IGNORECASE)
@@ -75,9 +76,10 @@ class SourceDirectorySearchProvider:
             }
             return []
         entries = source_directory_for_profile(profile_id)
-        ranked_entries = _rank_source_directory_entries(entries, query=query, metadata=goal.metadata)
+        ranked_entries = rank_source_directory_entries(entries, query=query, metadata=goal.metadata)
         sources: list[SearchSource] = []
-        for entry, score, matched in ranked_entries:
+        for ranked_entry in ranked_entries:
+            entry = ranked_entry.entry
             if not _safe_url(entry.base_url):
                 continue
             rank = len(sources) + 1
@@ -88,10 +90,10 @@ class SourceDirectorySearchProvider:
                 "source_family": entry.source_family,
                 "authority_level": entry.authority_level,
                 "allowed_hosts": list(entry.allowed_hosts),
-                "source_directory_relevance_score": round(score, 6),
+                "source_directory_relevance_score": round(ranked_entry.score, 6),
             }
-            if matched:
-                source_metadata["matched_query_terms"] = matched[:12]
+            if ranked_entry.matched_terms:
+                source_metadata["matched_query_terms"] = ranked_entry.matched_terms[:12]
             sources.append(
                 SearchSource(
                     source_id=f"{self.provider_id}-{_hash(entry.source_id)[:12]}-{rank}",
@@ -444,103 +446,6 @@ def _rank_crawl_candidates(sources: list[SearchSource], *, query_terms: list[str
     return [source for _score, _index, source in scored]
 
 
-def _rank_source_directory_entries(entries: list[object], *, query: str, metadata: JsonObject) -> list[tuple[object, float, list[str]]]:
-    query_terms = _query_terms(query, metadata)
-    task_terms = _source_directory_task_terms(metadata)
-    task_text = " ".join(task_terms)
-    preferred_families = set(_metadata_string_list(metadata, "preferred_source_families"))
-    source_family = _metadata_string(metadata, "source_family")
-    if source_family:
-        preferred_families.add(source_family)
-    scored: list[tuple[float, int, object, list[str]]] = []
-    for index, entry in enumerate(entries):
-        text = _source_directory_entry_text(entry).lower()
-        matched = [term for term in query_terms if term in text]
-        score = len(matched) / max(1, len(query_terms)) if query_terms else 0.0
-        score += 0.08 * sum(1 for term in task_terms if term and term in text)
-        family = str(getattr(entry, "source_family", "") or "")
-        authority = str(getattr(entry, "authority_level", "") or "")
-        if family in preferred_families:
-            score += 0.3
-        if _metadata_requests_authority(metadata, authority):
-            score += 0.2
-        score += _source_directory_task_boost(family=family.lower(), task_text=task_text, entry_text=text)
-        scored.append((score, index, entry, matched))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    return [(entry, score, matched) for score, _index, entry, matched in scored]
-
-
-def _source_directory_entry_text(entry: object) -> str:
-    pieces: list[str] = [
-        str(getattr(entry, "source_id", "") or ""),
-        str(getattr(entry, "title", "") or ""),
-        str(getattr(entry, "source_family", "") or ""),
-        str(getattr(entry, "authority_level", "") or ""),
-        str(getattr(entry, "base_url", "") or ""),
-    ]
-    for field_name in ("use_cases", "required_identifiers", "query_hints", "crawl_notes", "allowed_hosts"):
-        value = getattr(entry, field_name, [])
-        if isinstance(value, list):
-            pieces.extend(str(item) for item in value if isinstance(item, str))
-    metadata = getattr(entry, "metadata", {})
-    if isinstance(metadata, dict):
-        pieces.extend(_metadata_text_values(metadata))
-    return " ".join(pieces)
-
-
-def _source_directory_task_terms(metadata: JsonObject) -> list[str]:
-    values: list[str] = []
-    for key in ("research_task_kind", "task_kind", "intent_kind", "source_family", "source_authority_requirement"):
-        value = _metadata_string(metadata, key)
-        if value:
-            values.append(value)
-    return _query_terms(" ".join(values), {})
-
-
-def _source_directory_task_boost(*, family: str, task_text: str, entry_text: str) -> float:
-    if not task_text:
-        return 0.0
-    boost = 0.0
-    if "market_news" in task_text or "news" in task_text or "latest" in task_text:
-        if family == "reputable_news":
-            boost += 0.45
-        elif "news" in entry_text:
-            boost += 0.15
-    if "market_data" in task_text or "quote" in task_text or "price" in task_text:
-        if family == "market_data_provider":
-            boost += 0.45
-        elif "market data" in entry_text or "quote" in entry_text:
-            boost += 0.15
-    if "transcript" in task_text or "earnings_call" in task_text or "management" in task_text:
-        if family == "earnings_transcript":
-            boost += 0.45
-    if "rating" in task_text or "credit" in task_text or "debt" in task_text:
-        if family == "credit_rating_agency":
-            boost += 0.45
-    if "rate" in task_text or "macro" in task_text or "inflation" in task_text or "treasury" in task_text:
-        if family in {"government_statistic", "central_bank_statistic", "treasury_data"}:
-            boost += 0.35
-    if "fundamental" in task_text or "filing" in task_text or "revenue" in task_text or "margin" in task_text:
-        if family in {"regulatory_filing", "structured_regulatory_data", "company_ir", "exchange_filing"}:
-            boost += 0.25
-    return boost
-
-
-def _metadata_requests_authority(metadata: JsonObject, authority: str) -> bool:
-    requested = _metadata_string(metadata, "source_authority_requirement")
-    if not requested:
-        requested = _metadata_string(metadata, "authority_level")
-    requested = requested.lower()
-    authority = authority.lower()
-    if not requested or not authority:
-        return False
-    if requested == authority:
-        return True
-    if requested == "secondary_or_better" and authority in {"primary", "secondary"}:
-        return True
-    return requested == "primary_or_better" and authority == "primary"
-
-
 def _reindex_sources(sources: list[SearchSource], *, query_terms: list[str]) -> list[SearchSource]:
     result: list[SearchSource] = []
     for index, source in enumerate(sources, start=1):
@@ -599,28 +504,6 @@ def _metadata_text_values(value: object) -> list[str]:
         for item in value:
             result.extend(_metadata_text_values(item))
         return result
-    return []
-
-
-def _metadata_string(metadata: JsonObject, key: str) -> str:
-    value = metadata.get(key)
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    nested = metadata.get("metadata")
-    if isinstance(nested, dict):
-        return _metadata_string(nested, key)
-    return ""
-
-
-def _metadata_string_list(metadata: JsonObject, key: str) -> list[str]:
-    value = metadata.get(key)
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    if isinstance(value, list):
-        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-    nested = metadata.get("metadata")
-    if isinstance(nested, dict):
-        return _metadata_string_list(nested, key)
     return []
 
 

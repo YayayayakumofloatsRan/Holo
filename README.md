@@ -264,7 +264,11 @@ The live retrieval chain is now broader than a single search endpoint:
   no network request by itself;
 - `research_source_query_search` expands curated source-directory
   `query_url_templates` into official search URLs, such as Companies House
-  company search and FRED series search, after placeholder and host validation;
+  company search and FRED series search, after placeholder and host validation.
+  It ranks rendered template candidates with the same query/task-aware source
+  directory scoring before applying `max_sources`, so a tight-budget market
+  news or market-data run does not lose the right search URL to an earlier
+  generic template that merely echoed the query;
 - source-directory-driven crawl can be enabled explicitly with
   `HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1` plus
   `HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST=1`. In that mode the crawler can use

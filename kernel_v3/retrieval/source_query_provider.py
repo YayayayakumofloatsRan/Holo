@@ -8,6 +8,7 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.research import identity_template_values, resolve_issuer_identity, source_directory_for_profile
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
+from kernel_v3.retrieval.source_directory_rank import rank_source_directory_sources
 
 
 class ResearchSourceQuerySearchProvider:
@@ -36,26 +37,36 @@ class ResearchSourceQuerySearchProvider:
             return []
 
         values = _template_values(query, goal.metadata)
-        sources: list[SearchSource] = []
+        rendered_sources: list[SearchSource] = []
+        seen_uris: set[str] = set()
         skipped = 0
         for entry in source_directory_for_profile(profile_id):
             templates = _query_templates(entry.metadata)
             for template in templates:
-                if len(sources) >= max(0, int(goal.max_sources)):
-                    break
                 rendered = _render_source(entry=entry, template=template, values=values)
                 if rendered is None:
                     skipped += 1
                     continue
-                if rendered.uri in {item.uri for item in sources}:
+                if rendered.uri in seen_uris:
                     continue
-                sources.append(rendered)
+                seen_uris.add(rendered.uri)
+                rendered_sources.append(rendered)
+        ranked_sources = rank_source_directory_sources(rendered_sources, query=query, metadata=goal.metadata)
+        sources = ranked_sources[: max(0, int(goal.max_sources))]
 
         self._last_search_diagnostics = {
             "status": "ok" if sources else "empty",
             "research_profile": profile_id,
             "source_count": len(sources),
+            "candidate_source_count": len(rendered_sources),
+            "ranked_candidate_count": len(ranked_sources),
             "skipped_template_count": skipped,
+            "query_aware_ranking": True,
+            "top_source_directory_ids": [
+                str(source.metadata.get("source_directory_id"))
+                for source in sources[:5]
+                if isinstance(source.metadata.get("source_directory_id"), str)
+            ],
             "query_hash": _hash(query),
             "plan_id": plan.plan_id,
         }
@@ -83,6 +94,7 @@ def _render_source(*, entry: object, template: JsonObject, values: dict[str, str
     source_kind = str(template.get("source_kind") or "source_directory_query")
     template_id = str(template.get("template_id") or _hash(raw_template)[:12])
     source_id = f"{ResearchSourceQuerySearchProvider.provider_id}-{_hash(uri)[:12]}"
+    match_any = template.get("match_any")
     return SearchSource(
         source_id=source_id,
         uri=uri,
@@ -97,6 +109,12 @@ def _render_source(*, entry: object, template: JsonObject, values: dict[str, str
             "allowed_hosts": allowed_hosts,
             "source_kind": source_kind,
             "template_id": template_id,
+            "source_directory_rank_text": _rank_text(entry=entry, template=template),
+            **(
+                {"template_match_any": [str(item) for item in match_any if isinstance(item, str)]}
+                if isinstance(match_any, list)
+                else {}
+            ),
         },
     )
 
@@ -112,6 +130,26 @@ def _query_templates(metadata: JsonObject) -> list[JsonObject]:
         elif isinstance(item, dict):
             templates.append(dict(item))
     return templates
+
+
+def _rank_text(*, entry: object, template: JsonObject) -> str:
+    pieces = [
+        str(getattr(entry, "source_id", "") or ""),
+        str(getattr(entry, "title", "") or ""),
+        str(getattr(entry, "source_family", "") or ""),
+        str(getattr(entry, "authority_level", "") or ""),
+        str(template.get("template_id") or ""),
+        str(template.get("source_kind") or ""),
+    ]
+    for field_name in ("use_cases", "required_identifiers", "query_hints", "crawl_notes", "allowed_hosts"):
+        value = getattr(entry, field_name, [])
+        if isinstance(value, list):
+            pieces.extend(str(item) for item in value if isinstance(item, str))
+    for field_name in ("match_any", "required_values"):
+        value = template.get(field_name)
+        if isinstance(value, list):
+            pieces.extend(str(item) for item in value if isinstance(item, str))
+    return " ".join(pieces)
 
 
 def _template_matches(template: JsonObject, values: dict[str, str]) -> bool:

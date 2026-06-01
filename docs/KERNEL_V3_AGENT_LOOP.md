@@ -514,6 +514,13 @@ bank, or Treasury entries. The ranking only changes candidate order and
 diagnostics; it does not fetch pages, grant network permission, or make
 secondary sources satisfy primary-source requirements.
 
+`research_source_query_search` uses the same ranking substrate after rendering
+safe `query_url_templates`. This avoids a subtle failure mode where an earlier
+official-search template can echo the whole user query and consume
+`max_sources` before a more relevant Reuters, Yahoo Finance, central-bank,
+Treasury, transcript, or rating-agency template is considered. The rendered URL
+still has to pass placeholder validation and the entry host allowlist first.
+
 Model feedback is never the only stop authority. It is combined with host
 progress signals, repetition detection, evidence checks, and loop guards.
 

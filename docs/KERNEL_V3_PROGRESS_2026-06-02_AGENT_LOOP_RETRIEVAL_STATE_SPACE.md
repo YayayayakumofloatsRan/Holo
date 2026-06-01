@@ -171,6 +171,11 @@
   `top_source_directory_ids`, matched terms, and relevance scores while still
   leaving network permission, fetch allowlists, evidence sufficiency, and
   source-authority gates to the host.
+- Source-query template expansion now uses the same ranking substrate after
+  safe template rendering. Candidate URLs are rendered, host-validated,
+  deduplicated, ranked by source/task relevance, and only then truncated by
+  `max_sources`, preventing a generic query-echo template from crowding out the
+  relevant Reuters/Yahoo/Treasury/transcript/rating search URL.
 - Retrieval replanning now has an explicit host-state packet:
   `context.state.agent_replan_hints`. It is compiled from journal records after
   each iteration and journaled in `agent_work_plan_update`. For insufficient

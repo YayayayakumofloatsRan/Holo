@@ -171,6 +171,34 @@ def test_phase99_source_query_provider_expands_reputable_market_news_sources():
     assert all(source.metadata["authority_level"] == "secondary" for source in news_sources)
 
 
+def test_phase99_source_query_provider_ranks_templates_before_source_budget():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "Apple SEC latest market news earnings",
+        goal=SearchGoal(
+            goal_id="goal-source-query-ranked-news",
+            query="Apple SEC latest market news earnings",
+            max_sources=1,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "company": "Apple",
+                "research_task_kind": "market_news",
+                "source_authority_requirement": "secondary_or_better",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    assert [source.uri for source in sources] == ["https://www.reuters.com/site-search/?query=Apple"]
+    assert sources[0].metadata["source_family"] == "reputable_news"
+    assert sources[0].metadata["source_directory_relevance_score"] > 0
+    diagnostics = provider.search_diagnostics()
+    assert diagnostics["query_aware_ranking"] is True
+    assert diagnostics["candidate_source_count"] > diagnostics["source_count"]
+    assert diagnostics["top_source_directory_ids"] == ["finance-reputable-market-news"]
+
+
 def test_phase99_source_query_provider_expands_rate_fund_transcript_and_credit_sources():
     provider = ResearchSourceQuerySearchProvider()
 
@@ -545,6 +573,75 @@ def test_phase99_agent_finance_market_news_and_data_use_source_directory_queries
     }
     assert {yahoo_url, reuters_url}.issubset(fetched)
     assert len(result.final_answer["citation_refs"]) == 2
+
+
+def test_phase99_agent_source_query_uses_ranked_template_under_tight_budget():
+    journal = JournalStore.in_memory()
+    query = "Apple SEC latest market news earnings"
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "market_news_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "market_news_research",
+                        "text": query,
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.market_news"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": query,
+                                    "max_sources": 1,
+                                    "max_fetches": 1,
+                                    "metadata": {"company": "Apple"},
+                                }
+                            }
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    reuters_url = "https://www.reuters.com/site-search/?query=Apple"
+    operator = RetrievalOperator(
+        search_provider=ResearchSourceQuerySearchProvider(),
+        fetch_provider=FakeFetchProvider(
+            {
+                reuters_url: (
+                    "Apple SEC latest market news earnings chronology from Reuters. "
+                    "This source gives current secondary market news context."
+                )
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run("Research Apple current market news", mode="auto", semantic_mode="model")
+
+    assert result.status == "completed"
+    search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
+    provider_diagnostics = search.data["diagnostics"]["provider_diagnostics"]
+    assert provider_diagnostics["top_source_directory_ids"] == ["finance-reputable-market-news"]
+    assert search.data["sources"][0]["uri"] == reuters_url
+    fetch = journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")[0]
+    assert fetch.data["uri"] == reuters_url
+    assert result.final_answer is not None
+    assert result.final_answer["citation_refs"]
 
 
 def _plan() -> QueryPlan:
