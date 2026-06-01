@@ -103,6 +103,19 @@ def test_phase5_roleplay_style_contract_avoids_parenthesized_stage_directions_by
     assert "unless the user explicitly" in combined
 
 
+def test_phase5_processor_system_prompt_guides_visible_text_style_without_overriding_host_control():
+    lowered = PROCESSOR_SYSTEM_PROMPT.lower()
+
+    assert "user-visible text" in lowered
+    assert "technical" in lowered
+    assert "rigorous" in lowered
+    assert "pragmatic" in lowered
+    assert "ordinary small talk" in lowered
+    assert "natural" in lowered
+    assert "never overrides policy" in lowered
+    assert "evidence" in lowered
+
+
 def test_phase5_malformed_planner_json_is_rejected_and_journaled_without_crashing_loop():
     journal = JournalStore.in_memory()
     fabric = ProcessorFabric(

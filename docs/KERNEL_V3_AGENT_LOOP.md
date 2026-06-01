@@ -281,6 +281,13 @@ DeepSeek live runs read `DEEPSEEK_API_KEY` from the environment. In WSL, the
 recommended local setup is a private `~/.holo_env` file sourced by `~/.bashrc`;
 the file must remain outside the repository and mode `600`.
 
+The processor system prompt controls only user-visible text fields inside the
+structured JSON result. It keeps technical, legal, financial, and safety
+answers rigorous and pragmatic, while allowing ordinary small talk, harmless
+roleplay, and light humor to sound more natural and less tool-like. This style
+guidance cannot override PolicyGate, evidence/citation requirements, memory
+review rules, or host-owned termination.
+
 Memory traces are structured audit views, not memory exports. `memory-trace`
 renders candidate/proposal/approval/commit/delete/migration events with ids,
 policy/status, privacy class, bounded previews, and hashes. Secret-like memory
