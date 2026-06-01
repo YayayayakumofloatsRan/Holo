@@ -95,6 +95,10 @@ Kernel v3 currently contains the infrastructure for:
 - retrieval workloop feedback that carries missing query facets and missing
   source-authority signals into the next planner packet, allowing bounded
   replan attempts without weakening host termination guards;
+- adaptive search strategy selection for retrieval: when configured, a model
+  planner can propose `metadata.search_strategy` values such as `corpus_only`,
+  `fresh_live`, `aggregate`, `structured`, or `crawl`, and the host selects only
+  among configured providers under existing policy and fetch allowlists;
 - live retrieval/corpus bridging: when corpus and artifact logs are configured,
   Holo searches the local research corpus before live providers, fetches corpus
   hits from artifact blobs, and indexes newly fetched live pages back into the
@@ -228,6 +232,11 @@ The live retrieval chain is now broader than a single search endpoint:
   and only then apply the source budget. This is useful for longer research
   loops where a generic first provider should not prevent later primary or
   corpus sources from being considered.
+- `adaptive_search` can be enabled with
+  `HOLO_V3_LIVE_SEARCH_STRATEGY=adaptive`. In that mode the planner may propose
+  a per-action `metadata.search_strategy` such as `corpus_only`, `fresh_live`,
+  `aggregate`, `structured`, or `crawl`. This is a provider selector, not a
+  permission grant.
 - if `--corpus-log`/`--corpus-index` and an artifact log are configured, the
   same live operator becomes cache-first: `research_corpus` is searched before
   live providers, corpus hits are fetched from artifact blobs, and new live

@@ -15,7 +15,7 @@ from kernel_v3.retrieval.contracts import (
     SearchGoal,
     SearchSource,
 )
-from kernel_v3.retrieval.composite import AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
+from kernel_v3.retrieval.composite import AdaptiveSearchProvider, AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
 from kernel_v3.retrieval.corpus_provider import CorpusFetchProvider, CorpusSearchProvider
 from kernel_v3.retrieval.crawl_provider import BoundedCrawlSearchProvider, DirectUrlSearchProvider, SourceDirectorySearchProvider
 from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportResponse, JsonHttpSearchProvider
@@ -30,6 +30,7 @@ __all__ = [
     "CitationItem",
     "CorpusFetchProvider",
     "CorpusSearchProvider",
+    "AdaptiveSearchProvider",
     "AggregateSearchProvider",
     "BoundedCrawlSearchProvider",
     "DirectUrlSearchProvider",

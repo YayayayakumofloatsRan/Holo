@@ -1634,6 +1634,18 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                 "side_effect_class": "read",
                 "payload_requirements": ["query or goal"],
             },
+            "search_strategy_hint": {
+                "payload_path": "metadata.search_strategy",
+                "allowed_values": ["fallback", "aggregate", "corpus_only", "fresh_live", "structured", "crawl"],
+                "meaning": "Optional host-validated selector among configured search providers; does not grant network permission.",
+                "use_when": {
+                    "corpus_only": "try existing indexed corpus evidence first",
+                    "fresh_live": "skip corpus after cached evidence was insufficient or stale",
+                    "aggregate": "merge multiple configured source providers when one provider may hide stronger evidence",
+                    "structured": "prefer official/source-directory structured candidates",
+                    "crawl": "use configured crawl discovery seeds when page discovery is needed",
+                },
+            },
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["web_search", "page_open", "network.fetch"],
             "interaction_preferences": preferences,

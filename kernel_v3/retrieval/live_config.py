@@ -12,7 +12,7 @@ from kernel_v3.retrieval.http_provider import (
     HttpTransport,
     JsonHttpSearchProvider,
 )
-from kernel_v3.retrieval.composite import AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
+from kernel_v3.retrieval.composite import AdaptiveSearchProvider, AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
 from kernel_v3.retrieval.corpus_provider import CorpusFetchProvider, CorpusSearchProvider
 from kernel_v3.retrieval.crawl_provider import (
     BoundedCrawlSearchProvider,
@@ -269,14 +269,19 @@ class LiveRetrievalConfig:
         if self.crawl.configured:
             search_providers.append(self.crawl.build_provider(transport=crawl_transport))
         search_providers.append(SourceDirectorySearchProvider())
-        search_provider = (
-            AggregateSearchProvider(
+        if self.search_strategy == "aggregate":
+            search_provider = AggregateSearchProvider(
                 search_providers,
                 max_sources_per_provider=self.max_sources_per_provider,
             )
-            if self.search_strategy == "aggregate"
-            else FallbackSearchProvider(search_providers)
-        )
+        elif self.search_strategy == "adaptive":
+            search_provider = AdaptiveSearchProvider(
+                search_providers,
+                default_strategy="fallback",
+                max_sources_per_provider=self.max_sources_per_provider,
+            )
+        else:
+            search_provider = FallbackSearchProvider(search_providers)
         live_fetch_provider = self.fetch.build_provider(transport=fetch_transport)
         fetch_provider = (
             RoutingFetchProvider(
@@ -351,7 +356,11 @@ def _optional_positive_int(value: object) -> int | None:
 
 def _search_strategy(value: object) -> str:
     normalized = str(value or "fallback").strip().lower()
-    return "aggregate" if normalized in {"aggregate", "merged", "blend", "blended"} else "fallback"
+    if normalized in {"aggregate", "merged", "blend", "blended"}:
+        return "aggregate"
+    if normalized in {"adaptive", "dynamic", "planner", "model"}:
+        return "adaptive"
+    return "fallback"
 
 
 def _safe_url_diagnostics(uri: str) -> JsonObject:

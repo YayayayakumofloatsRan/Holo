@@ -224,6 +224,17 @@ as the fallback. Newly fetched live pages are still written to artifact blobs
 and indexed into the corpus by `RetrievalOperator`, so a later agent loop can
 reuse previously fetched evidence without another network call.
 
+When the live search strategy is configured as `adaptive`, the model planner
+may propose `retrieval.run.payload.metadata.search_strategy` for the next
+bounded retrieval action. Supported values are `fallback`, `aggregate`,
+`corpus_only`, `fresh_live`, `structured`, and `crawl`. These values only select
+among host-configured search providers. They do not create new tools, grant
+network permission, bypass fetch allowlists, or weaken evidence/termination
+gates. This is the search-side counterpart to dynamic work plans: after
+feedback such as `primary_source` or `query_facet:*`, the next planner packet
+can choose a materially different search path while the host still executes one
+bounded action at a time.
+
 Finance research capabilities share one source-directory substrate but do not
 share one sufficiency rule. `finance.fundamentals_research` keeps the strict
 primary-source requirement for filings, issuer materials, exchange disclosures,

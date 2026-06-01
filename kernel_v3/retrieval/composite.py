@@ -196,6 +196,81 @@ class AggregateSearchProvider:
         return dict(getattr(self, "_last_search_diagnostics", {}))
 
 
+class AdaptiveSearchProvider:
+    provider_id = "adaptive_search"
+    live_network = False
+    default_enabled = True
+    profile_aware = False
+
+    def __init__(
+        self,
+        providers: list[SearchProvider],
+        *,
+        default_strategy: str = "fallback",
+        max_sources_per_provider: int | None = None,
+    ) -> None:
+        self.providers = list(providers)
+        self.default_strategy = _normalize_strategy(default_strategy)
+        self.max_sources_per_provider = max_sources_per_provider
+        self.live_network = any(bool(getattr(provider, "live_network", False)) for provider in self.providers)
+        self.default_enabled = any(bool(getattr(provider, "default_enabled", True)) for provider in self.providers)
+        self.profile_aware = any(bool(getattr(provider, "profile_aware", False)) for provider in self.providers)
+        self.supported_research_profiles = _unique(
+            [
+                profile
+                for provider in self.providers
+                for profile in getattr(provider, "supported_research_profiles", [])
+                if isinstance(profile, str)
+            ]
+        )
+        self.capability_diagnostics = {
+            "provider_count": len(self.providers),
+            "enabled_provider_count": sum(1 for provider in self.providers if _provider_enabled(provider)),
+            "default_strategy": self.default_strategy,
+            "supported_strategies": [
+                "fallback",
+                "aggregate",
+                "corpus_only",
+                "fresh_live",
+                "structured",
+                "crawl",
+            ],
+            "max_sources_per_provider": self.max_sources_per_provider,
+            "providers": [
+                provider_capability(provider, provider_kind="search").to_dict()
+                for provider in self.providers
+            ],
+        }
+
+    def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
+        request = _strategy_request(goal.metadata, default_strategy=self.default_strategy)
+        providers = _strategy_providers(self.providers, request=request)
+        if request["mode"] == "aggregate":
+            provider: SearchProvider = AggregateSearchProvider(
+                providers,
+                max_sources_per_provider=request.get("max_sources_per_provider") or self.max_sources_per_provider,
+            )
+        else:
+            provider = FallbackSearchProvider(providers)
+        sources = provider.search(query, goal=goal, plan=plan)
+        child_diagnostics = _provider_diagnostics(provider)
+        self._last_search_diagnostics = {
+            "provider_id": self.provider_id,
+            "status": "ok" if sources else str(child_diagnostics.get("status") or "empty"),
+            "requested_strategy": request["requested_strategy"],
+            "selected_strategy": request["mode"],
+            "selected_provider_ids": _provider_ids(providers),
+            "provider_count": len(providers),
+            "child_provider_id": getattr(provider, "provider_id", provider.__class__.__name__),
+            "child_diagnostics": child_diagnostics,
+            "query_hash": _hash_text(query),
+        }
+        return sources
+
+    def search_diagnostics(self):
+        return dict(getattr(self, "_last_search_diagnostics", {}))
+
+
 class RoutingFetchProvider:
     provider_id = "routing_fetch"
     live_network = False
@@ -260,6 +335,108 @@ def _provider_diagnostics(provider) -> dict:
 
 def _provider_enabled(provider) -> bool:
     return bool(getattr(provider, "default_enabled", True))
+
+
+def _strategy_request(metadata: object, *, default_strategy: str) -> dict[str, object]:
+    raw: object = {}
+    if isinstance(metadata, dict):
+        raw = metadata.get("search_strategy", metadata.get("retrieval_search_strategy", {}))
+    requested = raw
+    if isinstance(raw, str):
+        mode = raw
+        include = []
+        exclude = []
+        max_sources_per_provider = None
+    elif isinstance(raw, dict):
+        mode = str(raw.get("mode") or raw.get("strategy") or default_strategy)
+        include = _string_list(raw.get("include_provider_ids") or raw.get("provider_ids"))
+        exclude = _string_list(raw.get("exclude_provider_ids"))
+        max_sources_per_provider = _positive_int_or_none(raw.get("max_sources_per_provider"))
+    else:
+        mode = default_strategy
+        include = []
+        exclude = []
+        max_sources_per_provider = None
+    mode = _normalize_strategy(mode)
+    return {
+        "requested_strategy": requested if isinstance(requested, (str, dict)) else None,
+        "mode": mode,
+        "include_provider_ids": include,
+        "exclude_provider_ids": exclude,
+        "max_sources_per_provider": max_sources_per_provider,
+    }
+
+
+def _strategy_providers(providers: list[SearchProvider], *, request: dict[str, object]) -> list[SearchProvider]:
+    selected = list(providers)
+    include = set(_string_list(request.get("include_provider_ids")))
+    exclude = set(_string_list(request.get("exclude_provider_ids")))
+    if include:
+        selected = [provider for provider in selected if _provider_id(provider) in include]
+    if exclude:
+        selected = [provider for provider in selected if _provider_id(provider) not in exclude]
+    mode = str(request.get("mode") or "fallback")
+    if mode == "corpus_only":
+        selected = [provider for provider in selected if _provider_id(provider) == "research_corpus"]
+    elif mode == "fresh_live":
+        selected = [provider for provider in selected if _provider_id(provider) != "research_corpus"]
+    elif mode == "structured":
+        selected = [
+            provider
+            for provider in selected
+            if _provider_id(provider)
+            in {
+                "direct_url_search",
+                "sec_edgar_structured_search",
+                "research_source_query_search",
+                "research_source_directory_search",
+            }
+        ]
+    elif mode == "crawl":
+        selected = [
+            provider
+            for provider in selected
+            if _provider_id(provider) in {"direct_url_search", "bounded_crawl_search"}
+        ]
+    return selected
+
+
+def _normalize_strategy(value: object) -> str:
+    normalized = str(value or "fallback").strip().lower().replace("-", "_")
+    if normalized in {"aggregate", "merged", "blend", "blended"}:
+        return "aggregate"
+    if normalized in {"corpus", "corpus_only", "cache", "cache_only"}:
+        return "corpus_only"
+    if normalized in {"fresh", "fresh_live", "live", "live_only", "network"}:
+        return "fresh_live"
+    if normalized in {"structured", "official", "source_directory"}:
+        return "structured"
+    if normalized in {"crawl", "crawl_only"}:
+        return "crawl"
+    return "fallback"
+
+
+def _provider_ids(providers: list[SearchProvider]) -> list[str]:
+    return [_provider_id(provider) for provider in providers]
+
+
+def _provider_id(provider: object) -> str:
+    value = getattr(provider, "provider_id", "")
+    return value if isinstance(value, str) and value else provider.__class__.__name__
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def _positive_int_or_none(value: object) -> int | None:
+    try:
+        parsed = int(str(value or "").strip())
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _all_attempts_failed(attempts: list[dict]) -> bool:

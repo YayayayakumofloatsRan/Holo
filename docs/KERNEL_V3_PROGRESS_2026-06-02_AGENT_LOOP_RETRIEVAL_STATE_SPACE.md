@@ -128,6 +128,13 @@
   structured/source-query providers, JSON HTTP search, crawl discovery, and
   source directories. Corpus hits fetch from artifact blobs; new live fetches
   are indexed back into the corpus for later loops.
+- `adaptive_search` was added as a planner-visible but host-owned search
+  strategy provider. When configured with
+  `HOLO_V3_LIVE_SEARCH_STRATEGY=adaptive`, retrieval actions may propose
+  `metadata.search_strategy` values such as `corpus_only`, `fresh_live`,
+  `aggregate`, `structured`, or `crawl`. The provider only selects among
+  configured providers; PolicyGate, fetch allowlists, artifact storage,
+  sufficiency checks, and termination remain host-owned.
 
 ## Validation
 
@@ -140,7 +147,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-484 passed
+487 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -197,6 +204,9 @@ Additional deterministic coverage now includes:
   before live HTTP, and that an agent's first live SEC fetch is indexed into
   corpus so a second run can answer from artifact-backed corpus evidence without
   another network transport call.
+- adaptive search strategy tests show that planner metadata can switch from
+  `corpus_only` to `aggregate` after source-authority feedback, producing a
+  second retrieval loop that finds a primary SEC source and finalizes.
 
 Live model scenarios:
 
