@@ -72,6 +72,10 @@ Kernel v3 currently contains the infrastructure for:
   tracks the latest retrieval report for each host-planned `goal-plan-*`
   subgoal and refuses to finalize if any subgoal remains missing or
   insufficient;
+- explicit multi-query retrieval payloads: when a model/host payload supplies
+  `queries` or `query_templates`, Holo derives a safe default `max_queries` from
+  that list so one retrieval subgoal can run multiple bounded search attempts
+  without the model needing to guess budget fields;
 - model-planner dynamic loops that recompile context, re-call
   `planner.propose`, journal plan revisions, and continue for 10+ bounded
   iterations when evaluator feedback says more work remains;

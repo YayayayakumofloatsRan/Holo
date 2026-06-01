@@ -178,6 +178,11 @@
   synthesis. A later successful retrieval no longer hides an earlier failed
   subtopic; incomplete subgoals produce `retrieval_subgoal:<goal_id>` missing
   evidence and a `FailureReport`.
+- Explicit retrieval `queries` and `query_templates` now drive their own safe
+  default query budget. If a model packet provides several query strings but
+  omits `max_queries`, the host derives the default from the explicit list
+  length before global retrieval caps. Research-depth defaults no longer
+  accidentally truncate a structured multi-query search plan.
 
 ## Validation
 
@@ -190,7 +195,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-496 passed
+497 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -258,6 +263,10 @@ Additional deterministic coverage now includes:
   final synthesis despite a later successful subgoal, and returns a
   `planned_retrieval_subgoals_incomplete` failure report with the failed
   subgoal id.
+- a single-payload multi-query test verifies that a finance retrieval payload
+  with three explicit queries and no model-specified `max_queries` still
+  performs three bounded search attempts, even under light research-depth
+  defaults, and finalizes from the primary SEC result.
 - live retrieval/corpus bridge tests show that a configured corpus is searched
   before live HTTP, and that an agent's first live SEC fetch is indexed into
   corpus so a second run can answer from artifact-backed corpus evidence without

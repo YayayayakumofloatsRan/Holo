@@ -192,6 +192,15 @@ is exhausted, `AgentRuntime` returns a `FailureReport` with
 unsupported complete answer. Dynamic retry/replan paths remain safe because a
 new report for the same planned `goal_id` replaces the older status.
 
+Inside a single retrieval payload, the model may also provide explicit
+`queries` or `query_templates`. These are search attempts for one subgoal, not
+separate agent actions. If `max_queries` is omitted, the host derives the
+default query budget from the explicit list length, then still applies global
+retrieval caps. This prevents a good model packet such as
+`{"queries":["generic query","official filing query","issuer IR query"]}` from
+being accidentally truncated by a light research-depth default, while still
+letting an explicit `max_queries` field intentionally tighten the budget.
+
 Model planner mode can also run as a dynamic workloop instead of a pre-expanded
 static plan. In that path, every loop iteration recompiles context, sends the
 latest feedback and journal-derived state to `planner.propose`, receives one

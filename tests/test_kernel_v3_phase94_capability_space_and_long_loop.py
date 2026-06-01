@@ -1126,6 +1126,112 @@ def test_phase94_single_semantic_research_intent_expands_multiple_retrieval_payl
     assert len(result.final_answer["citation_refs"]) == 3
 
 
+def test_phase94_single_retrieval_payload_runs_all_explicit_queries_without_max_query_hint():
+    journal = JournalStore.in_memory()
+    query = "AAPL 2024 revenue primary source"
+    explicit_queries = [
+        "AAPL 2024 revenue generic summary",
+        "AAPL 2024 revenue annual report 10-K 10-Q filing",
+        "AAPL 2024 revenue SEC EDGAR companyfacts",
+    ]
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "finance_fundamentals_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals_research",
+                        "text": query,
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "domain": "finance",
+                            "activity": "research",
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": query,
+                                    "queries": explicit_queries,
+                                    "metadata": {
+                                        "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                                        "research_depth": "light",
+                                        "source_authority_requirement": "primary",
+                                    },
+                                }
+                            },
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    sec_url = "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm"
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                explicit_queries[0]: [
+                    _source(
+                        "src-generic",
+                        "https://example.com/aapl-revenue-summary",
+                        "Apple revenue summary",
+                        "A generic summary that is not a primary source.",
+                    )
+                ],
+                explicit_queries[1]: [
+                    _source(
+                        "src-sec-filing",
+                        sec_url,
+                        "Apple 2024 Form 10-K",
+                        "Official SEC filing revenue evidence.",
+                    )
+                ],
+                explicit_queries[2]: [],
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://example.com/aapl-revenue-summary": "A third-party Apple revenue summary.",
+                sec_url: "Apple 2024 Form 10-K official SEC filing revenue evidence.",
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        "调研 Apple 2024 收入，优先官方来源",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert len(actions) == 1
+    assert actions[0].data["payload"]["max_queries"] == 3
+    assert actions[0].data["payload"]["metadata"]["research_depth"] == "light"
+    plan = journal.records(task_id=result.task_id, kind="retrieval_query_plan")[0].data
+    assert plan["queries"] == explicit_queries
+    assert plan["diagnostics"]["query_count"] == 3
+    attempts = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")
+    assert [record.data["query"] for record in attempts] == explicit_queries
+    report = journal.records(task_id=result.task_id, kind="retrieval_report")[-1].data
+    assert report["status"] == "sufficient"
+    assert report["diagnostics"]["source_authority"]["primary_source_count"] == 1
+    assert result.final_answer["citation_refs"]
+
+
 def test_phase94_multi_payload_retrieval_requires_every_planned_subgoal_to_succeed():
     journal = JournalStore.in_memory()
     payloads = [

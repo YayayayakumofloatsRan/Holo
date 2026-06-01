@@ -563,7 +563,7 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
     return SearchGoal(
         goal_id=goal_id,
         query=query,
-        max_queries=_positive_int(data.get("max_queries"), default=1),
+        max_queries=_positive_int(data.get("max_queries"), default=_default_query_count(metadata)),
         max_sources=_positive_int(data.get("max_sources"), default=5),
         max_fetches=_positive_int(data.get("max_fetches"), default=3),
         max_spans_per_document=_positive_int(data.get("max_spans_per_document"), default=2),
@@ -602,6 +602,16 @@ def _goal_budget(goal: SearchGoal) -> JsonObject:
         "max_fetches": goal.max_fetches,
         "max_spans_per_document": goal.max_spans_per_document,
     }
+
+
+def _default_query_count(metadata: JsonObject) -> int:
+    for key in ("queries", "query_templates"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            count = sum(1 for item in value if isinstance(item, str) and item.strip())
+            if count > 0:
+                return count
+    return 1
 
 
 def _bounded_goal(goal: SearchGoal) -> SearchGoal:

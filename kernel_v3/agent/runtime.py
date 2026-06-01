@@ -2316,10 +2316,26 @@ def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
     merged = dict(payload)
     for key in ("max_queries", "max_sources", "max_fetches", "max_spans_per_document"):
         if key not in merged and key in defaults:
-            merged[key] = defaults[key]
+            if key == "max_queries":
+                merged[key] = max(int(defaults[key]), _explicit_retrieval_query_count(merged))
+            else:
+                merged[key] = defaults[key]
     if "research_depth" not in merged and isinstance(depth, str) and depth:
         merged["research_depth"] = depth
     return merged
+
+
+def _explicit_retrieval_query_count(payload: JsonObject) -> int:
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    for container in (payload, metadata):
+        for key in ("queries", "query_templates"):
+            value = container.get(key)
+            if isinstance(value, list):
+                count = sum(1 for item in value if isinstance(item, str) and item.strip())
+                if count > 0:
+                    return count
+    return 0
 
 
 def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) -> JsonObject:
