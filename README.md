@@ -24,7 +24,8 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/processors/`: schema-first processor fabric, fake providers,
   optional live model providers, JSON repair, routing, usage, and adapters.
 - `kernel_v3/retrieval/`: bounded retrieval FSM, evidence, citations, corpus
-  providers, optional live HTTP provider surfaces, and source inspection.
+  providers, direct URL/source-directory/crawl search providers, optional live
+  HTTP provider surfaces, and source inspection.
 - `kernel_v3/memory/`: durable memory contracts, store, privacy checks,
   proposal pipeline, projection, migration, and inspection.
 - `kernel_v3/resident/`: local resident queue, scheduler, runtime, projection,
@@ -68,8 +69,9 @@ Kernel v3 currently contains the infrastructure for:
   context injection;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
 - finance-fundamentals research profile and local corpus-backed retrieval.
-- finance fundamentals source directory entries for SEC/EDGAR, company IR,
-  official statistics, exchange disclosures, and secondary market sources.
+- finance fundamentals source directory entries for SEC/EDGAR, SEC structured
+  data, company IR, official statistics, exchange disclosures, and secondary
+  market sources.
 
 Live model and live retrieval surfaces are opt-in. They are not default unit-test
 dependencies.
@@ -151,6 +153,52 @@ HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "inspect a large workspace file" \
 Live retrieval is also explicit and host-allowlisted. Do not make network
 retrieval a default path.
 
+The live retrieval chain is now broader than a single search endpoint:
+
+- `direct_url_search` extracts safe user/host supplied URLs without network
+  access;
+- `bounded_crawl_search` can discover links from explicit seed URLs only when
+  `HOLO_V3_LIVE_RETRIEVAL=1`, crawl seeds, and host allowlists are configured;
+- `research_source_directory_search` exposes domain source directories such as
+  finance fundamentals without fetching anything by itself;
+- configured JSON HTTP search providers can sit in the same fallback chain.
+
+For crawl-only live inspection:
+
+```bash
+HOLO_V3_LIVE_RETRIEVAL=1 \
+HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
+HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+python3 holo-v3 retrieval-providers --mode live-http
+```
+
+For a model-backed live retrieval run, the model still only proposes
+`retrieval.run`. The host binds execution metadata such as `max_fetches`,
+`max_network_fetches`, research profile, and allowlisted network permission
+before `PolicyGate` and loop guards see the action:
+
+```bash
+HOLO_V3_LIVE_MODEL=1 \
+HOLO_V3_LIVE_RETRIEVAL=1 \
+HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
+HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+python3 holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方式" \
+  --mode retrieval \
+  --online \
+  --planner model \
+  --evaluator model \
+  --synthesizer model \
+  --live-retrieval \
+  --live-max-network-fetches 2
+```
+
+Current live crawl is intentionally basic: it can prove the loop, permissions,
+artifact storage, evidence, citations, and synthesis path, but richer web
+search, page readability extraction, and finance-specific source adapters are
+still the next capability layer.
+
 ## Validation
 
 Default validation should stay offline:
@@ -172,6 +220,7 @@ Targeted smoke commands:
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase92_agent_live_retrieval_permission.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase93_workspace_write_agent.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase94_capability_space_and_long_loop.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase95_retrieval_crawl_provider.py
 ```
 
 Optional live checks must be explicitly gated by environment variables and must

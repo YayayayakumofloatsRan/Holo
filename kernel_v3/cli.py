@@ -979,7 +979,7 @@ def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | 
             "reason": "live_retrieval_not_enabled",
             "live_config": config.safe_diagnostics(),
         }
-    if not config.search.configured:
+    if not config.search.configured and not config.crawl.configured:
         return {
             "status": "blocked",
             "reason": "live_search_endpoint_not_configured",
@@ -1010,7 +1010,7 @@ def _live_retrieval_doctor_config(args) -> JsonObject:
                 "code": "live_retrieval_not_enabled",
             }
         )
-    if not config.search.configured:
+    if not config.search.configured and not config.crawl.configured:
         issues.append(
             {
                 "component": "retrieval",
@@ -1042,13 +1042,23 @@ def _live_retrieval_doctor_status(issues: list[JsonObject]) -> str:
 
 def _live_retrieval_allowed_host_issues(config: LiveRetrievalConfig) -> list[JsonObject]:
     issues: list[JsonObject] = []
-    if not config.search.allow_all_hosts and not config.search.allowed_hosts:
+    if config.search.configured and not config.search.allow_all_hosts and not config.search.allowed_hosts:
         issues.append(
             {
                 "component": "retrieval",
                 "severity": "error",
                 "code": "live_provider_without_allowed_hosts",
                 "provider_id": "live_json_http_search",
+                "provider_kind": "search",
+            }
+        )
+    if config.crawl.configured and not config.crawl.allow_all_hosts and not config.crawl.allowed_hosts:
+        issues.append(
+            {
+                "component": "retrieval",
+                "severity": "error",
+                "code": "live_provider_without_allowed_hosts",
+                "provider_id": "bounded_crawl_search",
                 "provider_kind": "search",
             }
         )
@@ -1770,7 +1780,7 @@ def _packet_prompt(task_type: str, goal: str) -> str:
 def _retrieval_provider_command(args) -> dict[str, object]:
     if args.mode == "live-http":
         config = LiveRetrievalConfig.from_env()
-        if not config.search.configured:
+        if not config.search.configured and not config.crawl.configured:
             return {
                 "status": "blocked",
                 "mode": "live-http",

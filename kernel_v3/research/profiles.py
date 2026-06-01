@@ -43,6 +43,7 @@ def finance_fundamentals_profile() -> ResearchProfile:
         description="Financial fundamental research with primary-source preference and citation gating.",
         primary_source_families=[
             "regulatory_filing",
+            "structured_regulatory_data",
             "exchange_filing",
             "company_ir",
             "earnings_release",
@@ -72,6 +73,7 @@ def finance_fundamentals_profile() -> ResearchProfile:
                 "templates": list(_FINANCE_QUERY_TEMPLATES),
                 "preferred_source_families": [
                     "regulatory_filing",
+                    "structured_regulatory_data",
                     "exchange_filing",
                     "company_ir",
                     "earnings_release",

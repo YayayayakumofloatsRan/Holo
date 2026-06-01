@@ -533,7 +533,21 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
     query = str(data.get("query", ""))
     goal_id = str(data.get("goal_id", f"goal-{action.action_id}"))
     metadata = _dict_or_empty(data.get("metadata"))
-    for key in ("research_profile", "research_profile_id", "research_depth", "queries", "query_templates"):
+    for key in (
+        "research_profile",
+        "research_profile_id",
+        "research_depth",
+        "queries",
+        "query_templates",
+        "url",
+        "urls",
+        "source_url",
+        "source_urls",
+        "seed_url",
+        "seed_urls",
+        "crawl_seed_url",
+        "crawl_seed_urls",
+    ):
         if key in data and key not in metadata:
             metadata[key] = data[key]
     return SearchGoal(

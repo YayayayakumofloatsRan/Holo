@@ -12,6 +12,12 @@ from kernel_v3.retrieval.http_provider import (
     HttpTransport,
     JsonHttpSearchProvider,
 )
+from kernel_v3.retrieval.composite import FallbackSearchProvider
+from kernel_v3.retrieval.crawl_provider import (
+    BoundedCrawlSearchProvider,
+    DirectUrlSearchProvider,
+    SourceDirectorySearchProvider,
+)
 from kernel_v3.retrieval.operator import RetrievalOperator
 
 
@@ -26,6 +32,9 @@ LIVE_SEARCH_RESULTS_PATH_ENV = "HOLO_V3_LIVE_SEARCH_RESULTS_PATH"
 LIVE_SEARCH_API_KEY_ENV_ENV = "HOLO_V3_LIVE_SEARCH_API_KEY_ENV"
 LIVE_SEARCH_API_KEY_HEADER_ENV = "HOLO_V3_LIVE_SEARCH_API_KEY_HEADER"
 LIVE_SEARCH_API_KEY_PREFIX_ENV = "HOLO_V3_LIVE_SEARCH_API_KEY_PREFIX"
+LIVE_CRAWL_SEED_URLS_ENV = "HOLO_V3_LIVE_CRAWL_SEED_URLS"
+LIVE_CRAWL_MAX_PAGES_ENV = "HOLO_V3_LIVE_CRAWL_MAX_PAGES"
+LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV = "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE"
 LIVE_TIMEOUT_SECONDS_ENV = "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS"
 LIVE_MAX_BYTES_ENV = "HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES"
 
@@ -122,9 +131,57 @@ class LiveHttpFetchConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
+class LiveCrawlSearchConfig:
+    enabled: bool = False
+    seed_urls: list[str] = field(default_factory=list)
+    allowed_hosts: list[str] = field(default_factory=list)
+    allow_all_hosts: bool = False
+    allowed_schemes: list[str] = field(default_factory=lambda: ["https"])
+    timeout_seconds: int = 20
+    max_bytes: int = 1_000_000
+    max_pages: int = 3
+    max_links_per_page: int = 20
+    user_agent: str = "holo-kernel-v3/1.0"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.seed_urls)
+
+    def build_provider(self, *, transport: HttpTransport | None = None) -> BoundedCrawlSearchProvider:
+        return BoundedCrawlSearchProvider(
+            enabled=self.enabled,
+            seed_urls=self.seed_urls,
+            allowed_hosts=self.allowed_hosts,
+            allow_all_hosts=self.allow_all_hosts,
+            allowed_schemes=self.allowed_schemes,
+            timeout_seconds=self.timeout_seconds,
+            max_bytes=self.max_bytes,
+            max_pages=self.max_pages,
+            max_links_per_page=self.max_links_per_page,
+            user_agent=self.user_agent,
+            transport=transport,
+        )
+
+    def safe_diagnostics(self) -> JsonObject:
+        return {
+            "configured": self.configured,
+            "enabled": self.enabled,
+            "seed_count": len(self.seed_urls),
+            "allowed_host_count": len(self.allowed_hosts),
+            "allow_all_hosts": self.allow_all_hosts,
+            "allowed_schemes": list(self.allowed_schemes),
+            "timeout_seconds": self.timeout_seconds,
+            "max_bytes": self.max_bytes,
+            "max_pages": self.max_pages,
+            "max_links_per_page": self.max_links_per_page,
+        }
+
+
+@dataclass(frozen=True, kw_only=True)
 class LiveRetrievalConfig:
     enabled: bool = False
     search: LiveJsonHttpSearchConfig = field(default_factory=LiveJsonHttpSearchConfig)
+    crawl: LiveCrawlSearchConfig = field(default_factory=LiveCrawlSearchConfig)
     fetch: LiveHttpFetchConfig = field(default_factory=LiveHttpFetchConfig)
 
     @classmethod
@@ -151,6 +208,17 @@ class LiveRetrievalConfig:
                 timeout_seconds=timeout_seconds,
                 max_bytes=max_bytes,
             ),
+            crawl=LiveCrawlSearchConfig(
+                enabled=enabled,
+                seed_urls=_csv(values.get(LIVE_CRAWL_SEED_URLS_ENV)),
+                allowed_hosts=_csv(values.get(LIVE_SEARCH_ALLOWED_HOSTS_ENV)),
+                allow_all_hosts=allow_all_hosts,
+                allowed_schemes=allowed_schemes,
+                timeout_seconds=timeout_seconds,
+                max_bytes=max_bytes,
+                max_pages=_positive_int(values.get(LIVE_CRAWL_MAX_PAGES_ENV), default=3),
+                max_links_per_page=_positive_int(values.get(LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV), default=20),
+            ),
             fetch=LiveHttpFetchConfig(
                 enabled=enabled,
                 allowed_hosts=_csv(values.get(LIVE_FETCH_ALLOWED_HOSTS_ENV)),
@@ -165,10 +233,17 @@ class LiveRetrievalConfig:
         self,
         *,
         search_transport: HttpTransport | None = None,
+        crawl_transport: HttpTransport | None = None,
         fetch_transport: HttpTransport | None = None,
     ) -> RetrievalOperator:
+        search_providers = [DirectUrlSearchProvider()]
+        if self.search.configured:
+            search_providers.append(self.search.build_provider(transport=search_transport))
+        if self.crawl.configured:
+            search_providers.append(self.crawl.build_provider(transport=crawl_transport))
+        search_providers.append(SourceDirectorySearchProvider())
         return RetrievalOperator(
-            search_provider=self.search.build_provider(transport=search_transport),
+            search_provider=FallbackSearchProvider(search_providers),
             fetch_provider=self.fetch.build_provider(transport=fetch_transport),
         )
 
@@ -177,6 +252,7 @@ class LiveRetrievalConfig:
             "enabled": self.enabled,
             "env_gate": LIVE_RETRIEVAL_ENV,
             "search": self.search.safe_diagnostics(),
+            "crawl": self.crawl.safe_diagnostics(),
             "fetch": self.fetch.safe_diagnostics(),
         }
 

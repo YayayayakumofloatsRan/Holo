@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 _FAMILY_SCORES = {
     "regulatory_filing": 0.98,
+    "structured_regulatory_data": 0.97,
     "exchange_filing": 0.94,
     "company_ir": 0.9,
     "earnings_release": 0.88,

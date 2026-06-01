@@ -69,8 +69,9 @@ def test_phase91_live_retrieval_config_builds_inspectable_operator() -> None:
     assert operator.network_access is True
     assert inspection.generated_at_ms == 9191
     assert inspection.network_access is True
-    assert inspection.provider_capabilities[0]["provider_id"] == "live_json_http_search"
-    assert inspection.provider_capabilities[0]["default_enabled"] is True
+    assert inspection.provider_capabilities[0]["provider_id"] == "fallback_search"
+    provider_ids = {item["provider_id"] for item in inspection.diagnostics["provider_chain"]}
+    assert {"direct_url_search", "live_json_http_search", "research_source_directory_search"}.issubset(provider_ids)
     assert inspection.provider_capabilities[1]["provider_id"] == "live_http_fetch"
     assert inspection.provider_capabilities[1]["default_enabled"] is True
     assert inspection.issues[0]["code"] == "live_retrieval_provider_present"
@@ -170,11 +171,52 @@ def test_phase91_cli_live_http_provider_inspection_is_read_only_and_redacted(
     assert payload["status"] == "attention"
     assert payload["mode"] == "live-http"
     assert payload["network_access"] is True
-    assert payload["provider_capabilities"][0]["default_enabled"] is False
+    chain = payload["inspection"]["diagnostics"]["provider_chain"]
+    live_json = next(item for item in chain if item["provider_id"] == "live_json_http_search")
+    assert live_json["default_enabled"] is False
     dumped = json.dumps(payload, ensure_ascii=False)
     assert "api.example.com" not in dumped
     assert "docs.example.com" not in dumped
     assert "DEEPSEEK_API_KEY" not in dumped
+    assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
+def test_phase91_cli_live_http_provider_inspection_accepts_crawl_only_config(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_CRAWL_SEED_URLS", "https://docs.example.com/index.html")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS", "docs.example.com")
+    monkeypatch.setenv("HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS", "docs.example.com")
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "retrieval-providers",
+                "--mode",
+                "live-http",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    provider_ids = {
+        item["provider_id"]
+        for item in payload["inspection"]["diagnostics"]["provider_chain"]
+    }
+    assert payload["status"] == "attention"
+    assert "bounded_crawl_search" in provider_ids
+    assert "live_json_http_search" not in provider_ids
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
@@ -201,5 +243,8 @@ def _clear_live_env(monkeypatch) -> None:
         "HOLO_V3_LIVE_SEARCH_API_KEY_PREFIX",
         "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS",
         "HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES",
+        "HOLO_V3_LIVE_CRAWL_SEED_URLS",
+        "HOLO_V3_LIVE_CRAWL_MAX_PAGES",
+        "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE",
     ]:
         monkeypatch.delenv(name, raising=False)

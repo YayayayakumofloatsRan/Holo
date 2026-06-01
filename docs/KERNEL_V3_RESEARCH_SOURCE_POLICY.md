@@ -205,6 +205,9 @@ HOLO_V3_LIVE_SEARCH_API_KEY_ENV=DEEPSEEK_API_KEY
 HOLO_V3_LIVE_SEARCH_API_KEY_HEADER=Authorization
 HOLO_V3_LIVE_SEARCH_API_KEY_PREFIX="Bearer "
 HOLO_V3_LIVE_SEARCH_RESULTS_PATH=results
+HOLO_V3_LIVE_CRAWL_SEED_URLS=https://docs.example.com/
+HOLO_V3_LIVE_CRAWL_MAX_PAGES=3
+HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE=20
 HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS=20
 HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES=1000000
 ```
@@ -213,6 +216,21 @@ HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES=1000000
 provider can still be inspected but reports `default_enabled=false`. API key
 values are read only by the provider at call time, and provider inspection
 reports only booleans, host hashes, counts, and bounds.
+
+The live search side is a fallback chain, not a single hard-coded provider:
+
+- `direct_url_search` converts safe user/host supplied URLs into sources
+  without network access;
+- configured `live_json_http_search` calls an operator-provided JSON search
+  endpoint;
+- `bounded_crawl_search` fetches explicit seed pages, extracts bounded links,
+  and never stores raw seed bodies in journal diagnostics;
+- `research_source_directory_search` exposes profile source directories such
+  as finance fundamentals without fetching by itself.
+
+At least one of `HOLO_V3_LIVE_SEARCH_ENDPOINT` or
+`HOLO_V3_LIVE_CRAWL_SEED_URLS` must be configured for `--mode live-http`.
+This allows crawl-only smoke tests while preserving explicit network gating.
 
 Agent execution has a second, separate gate. Even if a host injects a live
 `RetrievalOperator`, `retrieval.run` is registered as a network tool and
@@ -231,6 +249,10 @@ Agent execution has a second, separate gate. Even if a host injects a live
 
 Model planner payloads can request retrieval arguments, but they cannot grant
 `network:fetch`. That permission is derived only from host execution metadata.
+If a model-planned `retrieval.run` omits host budget fields, `AgentRuntime`
+rebounds the action to the task recipe before execution so loop guards see the
+operator-requested `max_fetches` and `max_network_fetches` instead of a generic
+manifest default. The journaled action records the merged payload for audit.
 The CLI exposes this as an explicit live agent flag:
 
 ```bash

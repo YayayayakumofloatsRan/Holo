@@ -177,6 +177,14 @@ memory, resident, transport, and system families with statuses such as
 `host_only`. The model can reason over that state space, but only enabled or
 permissioned host tools become executable actions.
 
+Model planner actions are also rebound to recipe constraints before execution.
+For example, a live model may propose only `{"name":"retrieval.run",
+"payload":{"query":"..."}}`; the host then merges the recipe's execution
+metadata such as `max_fetches`, `max_network_fetches`, research profile, and
+interaction preferences before the action reaches `PolicyGate` and loop guards.
+This keeps model packets broad and semantic while keeping budgets and
+permissions host-owned.
+
 ## Durable Memory Boundary
 
 Durable memory uses a split audit model. `MemoryStore` is the memory subsystem's

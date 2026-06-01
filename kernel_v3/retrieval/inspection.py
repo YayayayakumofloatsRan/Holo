@@ -112,6 +112,8 @@ def _composite_provider_issues(capabilities: list[JsonObject]) -> list[JsonObjec
 def _live_provider_configuration_issues(capabilities: list[JsonObject]) -> list[JsonObject]:
     issues: list[JsonObject] = []
     for capability in _walk_capabilities(capabilities):
+        if _is_composite_capability(capability):
+            continue
         if not bool(capability.get("live_network", False)):
             continue
         if not bool(capability.get("default_enabled", True)):
@@ -132,6 +134,13 @@ def _live_provider_configuration_issues(capabilities: list[JsonObject]) -> list[
             }
         )
     return issues
+
+
+def _is_composite_capability(capability: JsonObject) -> bool:
+    diagnostics = capability.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    return any(key in diagnostics for key in ("providers", "fallback", "route_providers"))
 
 
 def _providers_by_kind(capabilities: list[JsonObject], provider_kind: str) -> list[JsonObject]:

@@ -298,9 +298,14 @@ class AgentRuntime:
         if planner_mode == "model":
             if self.processor_fabric is None:
                 raise ValueError("model planner requires processor_fabric")
-            return ModelPlanner(
+            planner = ModelPlanner(
                 fabric=self.processor_fabric,
                 allowed_tool_names=set(recipe.allowed_tools) or {"__no_tools_allowed__"},
+            )
+            return _RecipeBoundPlanner(
+                inner=planner,
+                goal=goal,
+                recipe=recipe,
             )
         return _RecipePlanner(goal=goal, recipe=recipe, journal=self.journal)
 
@@ -823,6 +828,17 @@ class _AgentContextCompiler:
         )
 
 
+class _RecipeBoundPlanner:
+    def __init__(self, *, inner: Planner, goal: str, recipe: TaskRecipe) -> None:
+        self.inner = inner
+        self.goal = goal
+        self.recipe = recipe
+
+    def propose(self, context: ContextBundle, feedback: Feedback | None = None) -> CandidateAction:
+        action = self.inner.propose(context, feedback)
+        return _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
+
+
 class _RecipePlanner:
     def __init__(self, *, goal: str, recipe: TaskRecipe, journal: JournalStore | None = None) -> None:
         self.goal = goal
@@ -948,6 +964,27 @@ def _bind_recipe_action_to_run(action: CandidateAction, context: ContextBundle) 
     if action.action_id.endswith(suffix):
         return action
     return replace(action, action_id=f"{action.action_id}{suffix}")
+
+
+def _bind_model_action_to_recipe(
+    action: CandidateAction,
+    *,
+    goal: str,
+    recipe: TaskRecipe,
+    context: ContextBundle,
+) -> CandidateAction:
+    action = _bind_recipe_action_to_run(action, context)
+    if action.kind != "tool":
+        return action
+    if action.name == "retrieval.run":
+        payload = dict(action.payload)
+        payload.setdefault("goal_id", "goal-agent-retrieval")
+        payload.setdefault("query", goal)
+        payload.setdefault("max_spans_per_document", 2)
+        payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
+        payload = _apply_research_depth_defaults(payload)
+        return replace(action, payload=payload)
+    return action
 
 
 def task_recipe(
@@ -2006,6 +2043,14 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
             "research_depth",
             "queries",
             "query_templates",
+            "url",
+            "urls",
+            "source_url",
+            "source_urls",
+            "seed_url",
+            "seed_urls",
+            "crawl_seed_url",
+            "crawl_seed_urls",
         }
         if any(key in capability_args for key in retrieval_keys):
             result = dict(capability_args)

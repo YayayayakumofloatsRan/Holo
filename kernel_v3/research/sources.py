@@ -33,7 +33,7 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             source_id="finance-sec-companyfacts",
             profile_id=profile,
             title="SEC companyfacts and submissions JSON",
-            source_family="regulatory_filing",
+            source_family="structured_regulatory_data",
             authority_level="primary",
             base_url="https://data.sec.gov/",
             allowed_hosts=["data.sec.gov"],
