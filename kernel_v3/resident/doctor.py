@@ -156,7 +156,11 @@ class ResidentDoctor:
         if self.corpus_store is None:
             return None
         try:
-            return self.corpus_store.inspect(sample_limit=sample_limit, artifact_store=self.artifact_store)
+            return self.corpus_store.inspect(
+                sample_limit=sample_limit,
+                artifact_store=self.artifact_store,
+                profile_id=self.research_profile_id,
+            )
         except Exception as exc:
             return CorpusInspection(
                 status="error",

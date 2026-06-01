@@ -5,6 +5,11 @@ from kernel_v3 import cli
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryProposal, MemoryStore, stable_memory_id, stable_proposal_id
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, ResearchCorpusStore, finance_fundamentals_profile
+from kernel_v3.research.corpus import corpus_document_from_retrieval
+from kernel_v3.research.source_policy import assess_search_source
+from kernel_v3.retrieval import SearchGoal, SearchSource
+from kernel_v3.retrieval.contracts import FetchedDocument
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentScheduler
 
 
@@ -71,6 +76,55 @@ def test_phase77_resident_doctor_reports_memory_reference_integrity(tmp_path: Pa
     issue_codes = {issue["code"] for issue in report.issues}
     assert {"missing_memory_provenance", "missing_memory_artifacts"}.issubset(issue_codes)
     assert "repair artifact store or delete affected memory" in report.recommended_actions
+
+
+def test_phase77_resident_doctor_uses_research_profile_for_corpus_health(tmp_path: Path) -> None:
+    queue = ResidentQueue(tmp_path / "resident-profile-corpus.sqlite", clock_ms=_clock())
+    scheduler = ResidentScheduler(queue=queue, clock_ms=_clock())
+    corpus = ResearchCorpusStore.in_memory(clock_ms=_clock())
+    source = _source(
+        "src-sec-global",
+        "https://www.sec.gov/Archives/edgar/data/320193/global-filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    corpus.record_document(
+        corpus_document_from_retrieval(
+            document=_document(
+                source=source,
+                artifact_id="artifact-global-sec",
+                payload_hash="hash-global-sec",
+                preview=source.snippet,
+            ),
+            source=source,
+            goal=SearchGoal(goal_id="goal-global", query="AAPL revenue"),
+            task_id="task-global",
+            run_id="run-global",
+            fetched_at_ms=1_001,
+            source_assessment=assess_search_source(source, profile=finance_fundamentals_profile()),
+        )
+    )
+
+    report = ResidentDoctor(
+        queue=queue,
+        scheduler=scheduler,
+        corpus_store=corpus,
+        research_profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID,
+    ).inspect(sample_limit=1)
+
+    assert report.status == "attention"
+    assert report.configured["corpus_store"] is True
+    assert report.corpus_inspection is not None
+    scope = report.corpus_inspection["corpus_status"]["inspection_scope"]
+    assert scope["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert scope["document_count"] == 0
+    assert scope["global_document_count"] == 1
+    codes = {(issue["component"], issue["code"]) for issue in report.issues}
+    assert ("corpus", "empty_profile_corpus") in codes
+    assert (
+        f"retrieve <query> --profile {FINANCE_FUNDAMENTALS_PROFILE_ID} --index-corpus"
+        in report.recommended_actions
+    )
 
 
 def test_phase77_resident_doctor_contains_component_inspection_failures(tmp_path: Path) -> None:
@@ -252,9 +306,40 @@ class _FailingMemoryStore:
 
 
 class _FailingCorpusStore:
-    def inspect(self, *, sample_limit: int = 5, artifact_store=None):
+    def inspect(self, *, sample_limit: int = 5, artifact_store=None, profile_id=None):
         raise RuntimeError("corpus raw failure must not leak")
 
 
 class _FailingRetrievalOperator:
     pass
+
+
+def _source(
+    source_id: str,
+    uri: str,
+    title: str,
+    snippet: str,
+) -> SearchSource:
+    return SearchSource(
+        source_id=source_id,
+        uri=uri,
+        title=title,
+        snippet=snippet,
+        provider="fake",
+        metadata={},
+    )
+
+
+def _document(*, source: SearchSource, artifact_id: str, payload_hash: str, preview: str) -> FetchedDocument:
+    return FetchedDocument(
+        document_id=f"doc-{source.source_id}",
+        goal_id="goal-doctor",
+        source_id=source.source_id,
+        uri=source.uri,
+        title=source.title,
+        artifact_id=artifact_id,
+        payload_hash=payload_hash,
+        preview=preview,
+        size_bytes=len(preview.encode("utf-8")),
+        metadata={"mime_type": "text/plain"},
+    )

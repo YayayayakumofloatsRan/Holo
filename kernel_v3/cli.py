@@ -268,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     corpus_inspect.add_argument("document_id")
     corpus_inspect_store = corpus_sub.add_parser("inspect-store")
     corpus_inspect_store.add_argument("--sample-limit", type=int, default=5)
+    corpus_inspect_store.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     corpus_sub.add_parser("status")
     corpus_audit = corpus_sub.add_parser("audit")
     corpus_audit.add_argument("--limit", type=int, default=20)
@@ -938,6 +939,7 @@ def _corpus_command(args) -> dict[str, object]:
         inspection = store.inspect(
             sample_limit=args.sample_limit,
             artifact_store=_artifact_store(args, create_default=False),
+            profile_id=args.profile,
         )
         return {"status": inspection.status, "inspection": inspection.to_dict()}
     if command == "index":

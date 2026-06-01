@@ -344,7 +344,10 @@ their CLI paths are configured, and it does not enqueue, approve memory,
 retrieve, fetch, or execute tools. When the journal and artifact store are
 configured, doctor also asks durable memory inspection to verify committed
 memory provenance refs and artifact refs, using metadata/blob presence checks
-only. Retrieval-provider inspection is capability-only: it reports fake/corpus/
+only. If a research profile is configured, doctor asks corpus inspection for
+that profile's scoped health instead of relying on global corpus health; a
+healthy unrelated corpus no longer hides an empty or stale finance corpus.
+Retrieval-provider inspection is capability-only: it reports fake/corpus/
 future-live provider metadata, network capability, and research-profile support
 without running retrieval or reading artifact bodies. Retrieval-provider errors,
 such as an empty fallback search chain, are promoted into the doctor status and

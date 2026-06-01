@@ -506,6 +506,50 @@ def test_phase83_empty_or_weak_corpus_inspection_is_actionable() -> None:
     assert "unprofiled_documents" in codes
 
 
+def test_phase83_profile_scoped_inspection_reports_empty_profile_even_when_global_corpus_has_sources() -> None:
+    source = _source(
+        "src-sec-global",
+        "https://www.sec.gov/Archives/edgar/data/320193/global-filing.htm",
+        "Apple Form 10-K",
+        "AAPL annual report revenue.",
+    )
+    store = ResearchCorpusStore.in_memory(clock_ms=lambda: 1110)
+    store.record_document(
+        corpus_document_from_retrieval(
+            document=_document(
+                source=source,
+                artifact_id="artifact-global-sec",
+                payload_hash="hash-global-sec",
+                preview=source.snippet,
+            ),
+            source=source,
+            goal=SearchGoal(goal_id="goal-global", query="AAPL revenue"),
+            task_id="task-global",
+            run_id="run-global",
+            fetched_at_ms=1110,
+            source_assessment=assess_search_source(source, profile=finance_fundamentals_profile()),
+        )
+    )
+
+    inspection = store.inspect(profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID)
+
+    assert inspection.status == "attention"
+    assert inspection.issues[0]["code"] == "empty_profile_corpus"
+    assert inspection.issues[0]["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert inspection.issues[0]["global_document_count"] == 1
+    assert inspection.corpus_status["document_count"] == 1
+    scope = inspection.corpus_status["inspection_scope"]
+    assert scope["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert scope["document_count"] == 0
+    assert scope["global_profile_counts"]["unprofiled"] == 1
+    assert inspection.samples["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert inspection.samples["documents"] == []
+    assert (
+        f"retrieve <query> --profile {FINANCE_FUNDAMENTALS_PROFILE_ID} --index-corpus"
+        in inspection.recommended_actions
+    )
+
+
 def test_phase83_corpus_inspection_detects_missing_artifact_without_reading_body() -> None:
     source = _source(
         "src-sec",

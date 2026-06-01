@@ -325,6 +325,7 @@ holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus list --profile finance
 holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus inspect <document_id>
 holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus status
 holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus inspect-store
+holo-v3 --corpus-log .state/kernel_v3/corpus.jsonl corpus inspect-store --profile finance_fundamentals
 ```
 
 `corpus status` and `corpus inspect-store` are store-level health surfaces for
@@ -333,7 +334,10 @@ coverage, source-family and authority-level distribution, primary-source
 coverage, audit-event counts, and small safe document samples. When an
 artifact log is configured, `inspect-store` also checks that corpus document
 artifact refs and blobs exist, without reading or printing raw fetched bodies;
-raw content remains in `ArtifactStore`.
+raw content remains in `ArtifactStore`. Passing `--profile` scopes the
+inspection to that research profile while still showing global corpus counts,
+so an operator can see that the finance corpus is empty or stale even when
+unrelated corpus documents exist.
 
 Profiles can also declare freshness budgets. `finance_fundamentals` currently
 marks corpus documents stale after 180 days. `corpus inspect-store` reports a

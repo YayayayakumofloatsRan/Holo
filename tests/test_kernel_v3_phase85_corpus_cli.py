@@ -112,6 +112,23 @@ def test_phase85_cli_indexes_searches_and_reuses_corpus_without_network(tmp_path
     assert inspection_payload["inspection"]["artifact_consistency"]["missing_artifact_blob_count"] == 0
     assert RAW_ONLY_SENTINEL not in store_inspection.stdout
 
+    scoped_inspection = _run_cli(
+        *base_args,
+        "corpus",
+        "inspect-store",
+        "--sample-limit",
+        "1",
+        "--profile",
+        FINANCE_FUNDAMENTALS_PROFILE_ID,
+    )
+    scoped_payload = json.loads(scoped_inspection.stdout)
+    scope = scoped_payload["inspection"]["corpus_status"]["inspection_scope"]
+    assert scoped_payload["status"] == "ok"
+    assert scope["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert scope["document_count"] == 1
+    assert scoped_payload["inspection"]["samples"]["profile_id"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert RAW_ONLY_SENTINEL not in scoped_inspection.stdout
+
     assert RAW_ONLY_SENTINEL not in corpus_path.read_text(encoding="utf-8")
     assert RAW_ONLY_SENTINEL not in journal_path.read_text(encoding="utf-8")
     assert RAW_ONLY_SENTINEL in artifact_path.read_text(encoding="utf-8")

@@ -262,12 +262,25 @@ class ResearchCorpusStore:
             latest_fetched_at_ms=max(fetched_times) if fetched_times else None,
         )
 
-    def inspect(self, *, sample_limit: int = 5, artifact_store: "ArtifactStore | None" = None) -> CorpusInspection:
+    def inspect(
+        self,
+        *,
+        sample_limit: int = 5,
+        artifact_store: "ArtifactStore | None" = None,
+        profile_id: str | None = None,
+    ) -> CorpusInspection:
         status = self.status()
-        documents = self.documents()
+        documents = self.documents(profile_id=profile_id)
         effective_sample_limit = _clamp_limit(sample_limit, cap=CORPUS_SAMPLE_LIMIT_CAP)
         issues: list[JsonObject] = []
         actions: list[str] = []
+        scoped_status = _inspection_scope(
+            documents,
+            profile_id=profile_id,
+            global_status=status,
+            now_ms=status.generated_at_ms,
+            sample_limit=effective_sample_limit,
+        )
         artifact_consistency = _artifact_consistency(
             documents,
             artifact_store=artifact_store,
@@ -278,26 +291,35 @@ class ResearchCorpusStore:
             now_ms=status.generated_at_ms,
             sample_limit=effective_sample_limit,
         )
-        if status.document_count == 0:
-            issues.append(
-                {
-                    "severity": "info",
-                    "code": "empty_corpus",
-                    "message": "No research corpus documents are indexed.",
-                }
+        if not documents:
+            code = "empty_corpus" if profile_id is None else "empty_profile_corpus"
+            message = (
+                "No research corpus documents are indexed."
+                if profile_id is None
+                else f"No research corpus documents are indexed for profile {profile_id}."
             )
-            actions.append("retrieve <query> --index-corpus")
-        elif status.primary_usable_count == 0:
-            issues.append(
-                {
-                    "severity": "warning",
-                    "code": "no_primary_usable_sources",
-                    "document_count": status.document_count,
-                }
-            )
-            actions.append("retrieve <query> --profile finance_fundamentals --index-corpus")
+            issue: JsonObject = {
+                "severity": "info",
+                "code": code,
+                "message": message,
+            }
+            if profile_id is not None:
+                issue["profile_id"] = profile_id
+                issue["global_document_count"] = status.document_count
+            issues.append(issue)
+            actions.append(_profile_retrieve_action(profile_id))
+        elif int(scoped_status["primary_usable_count"]) == 0:
+            issue = {
+                "severity": "warning",
+                "code": "no_primary_usable_sources",
+                "document_count": int(scoped_status["document_count"]),
+            }
+            if profile_id is not None:
+                issue["profile_id"] = profile_id
+            issues.append(issue)
+            actions.append(_profile_retrieve_action(profile_id or "finance_fundamentals"))
         unprofiled_count = int(status.profile_counts.get("unprofiled", 0))
-        if unprofiled_count:
+        if profile_id is None and unprofiled_count:
             issues.append(
                 {
                     "severity": "info",
@@ -337,12 +359,13 @@ class ResearchCorpusStore:
             generated_at_ms=status.generated_at_ms,
             issues=issues,
             recommended_actions=_ordered_unique(actions),
-            corpus_status=status.to_dict(),
+            corpus_status={**status.to_dict(), "inspection_scope": scoped_status},
             artifact_consistency=artifact_consistency,
             samples=_inspection_samples(
                 documents,
                 requested_sample_limit=sample_limit,
                 effective_sample_limit=effective_sample_limit,
+                profile_id=profile_id,
             ),
         )
 
@@ -634,16 +657,60 @@ def _inspection_samples(
     *,
     requested_sample_limit: int,
     effective_sample_limit: int,
+    profile_id: str | None = None,
 ) -> JsonObject:
     samples: JsonObject = {
         "documents": [_document_sample(document) for document in documents[:effective_sample_limit]],
     }
+    if profile_id is not None:
+        samples["profile_id"] = profile_id
     if effective_sample_limit != requested_sample_limit:
         samples["requested_sample_limit"] = requested_sample_limit
         samples["sample_limit"] = effective_sample_limit
         samples["sample_limit_cap"] = CORPUS_SAMPLE_LIMIT_CAP
         samples["sample_limit_clamped"] = True
     return samples
+
+
+def _inspection_scope(
+    documents: list[CorpusDocument],
+    *,
+    profile_id: str | None,
+    global_status: CorpusStatus,
+    now_ms: int,
+    sample_limit: int,
+) -> JsonObject:
+    stale = [document for document in documents if _document_is_stale(document, now_ms=now_ms)]
+    stale = sorted(stale, key=lambda document: (document.fetched_at_ms, document.document_id))
+    primary_usable_count = sum(1 for document in documents if bool(_assessment(document).get("usable_as_primary")))
+    total_size_bytes = sum(max(0, int(document.size_bytes)) for document in documents)
+    freshness = {
+        "checked": True,
+        "profile_id": profile_id,
+        "document_count": len(documents),
+        "stale_count": len(stale),
+        "max_age_ms_by_profile": _freshness_max_ages(documents),
+        "oldest_age_ms": max(0, now_ms - stale[0].fetched_at_ms) if stale else 0,
+        "document_ids": [document.document_id for document in stale[: max(0, sample_limit)]],
+    }
+    return {
+        "profile_id": profile_id,
+        "document_count": len(documents),
+        "primary_usable_count": primary_usable_count,
+        "total_size_bytes": total_size_bytes,
+        "provider_counts": _count_by(documents, lambda document: document.provider or "unknown"),
+        "source_family_counts": _count_by(
+            documents,
+            lambda document: str(_assessment(document).get("source_family") or "unknown"),
+        ),
+        "authority_level_counts": _count_by(
+            documents,
+            lambda document: str(_assessment(document).get("authority_level") or "unknown"),
+        ),
+        "freshness": freshness,
+        "global_document_count": global_status.document_count,
+        "global_profile_counts": dict(global_status.profile_counts),
+    }
 
 
 def _document_sample(document: CorpusDocument) -> JsonObject:
@@ -765,6 +832,12 @@ def _freshness_max_age_ms(metadata: JsonObject) -> int | None:
     if isinstance(value, float) and value > 0:
         return int(value)
     return None
+
+
+def _profile_retrieve_action(profile_id: str | None) -> str:
+    if profile_id:
+        return f"retrieve <query> --profile {profile_id} --index-corpus"
+    return "retrieve <query> --index-corpus"
 
 
 def _ordered_unique(values: list[str]) -> list[str]:
