@@ -76,6 +76,9 @@ Kernel v3 currently contains the infrastructure for:
   boundaries, credential/secret boundaries, browser/session boundaries, and
   device-control boundaries are represented explicitly even when they are only
   planned or host-only;
+- planner-visible semantic state axes beyond workspace, including autonomy,
+  world model, resource kind, action phase, temporal status, source authority,
+  identity boundary, communication channel, and risk;
 - multi-turn chat over journal-derived thread state;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
@@ -87,6 +90,11 @@ Kernel v3 currently contains the infrastructure for:
   context injection;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
 - finance-fundamentals research profile and local corpus-backed retrieval.
+- model-planner retrieval binding that applies host-validated research profile
+  defaults from semantic intake/task plans before tool execution;
+- retrieval workloop feedback that carries missing query facets and missing
+  source-authority signals into the next planner packet, allowing bounded
+  replan attempts without weakening host termination guards;
 - finance fundamentals source directory entries for SEC/EDGAR, SEC structured
   data, SEC CIK/ticker mapping, SEC archives, SEC financial statement datasets,
   company IR, US/global official statistics, China/HK/UK/Canada/Australia/Japan/

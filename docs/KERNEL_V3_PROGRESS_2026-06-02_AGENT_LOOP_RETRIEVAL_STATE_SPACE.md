@@ -107,6 +107,21 @@
   the retrieval operator applies its source/fetch budget. This avoids a generic
   first provider preventing later primary/corpus/source-directory candidates
   from being considered.
+- The semantic state space is now exposed to planner context as
+  `semantic_state_space`, not only to semantic intake. It includes autonomy,
+  world model, resource kind, action phase, authority, temporal, risk,
+  identity-boundary, and communication-channel axes so live model packets can
+  reason over more than `workspace:*` state without inventing executable tools.
+- Model-planner retrieval actions now inherit finance-profile defaults from
+  the host-validated semantic plan. If model intake classified a task as
+  `finance.fundamentals_research`, the host adds the finance fundamentals
+  research profile even when the model's `planner.propose` payload only
+  contains a query/source URL.
+- Retrieval insufficiency feedback now includes source-authority gaps, not just
+  generic `sufficient_retrieval_evidence`. A weak source under a primary-source
+  finance task produces `source_authority:primary` and `primary_source`, which
+  the next planner packet can use to replan toward official filings or issuer
+  materials.
 
 ## Validation
 
@@ -119,7 +134,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-480 passed
+482 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -167,6 +182,11 @@ Additional deterministic coverage now includes:
 - aggregate search provider tests show that a low-authority generic web result
   and a later SEC primary filing can be merged, ranked, and handed to the
   agent so only the SEC filing is fetched under a one-source/one-fetch budget.
+- model-planner retrieval tests show that finance profile defaults are applied
+  by the host even when the model payload omits them;
+- a two-iteration retrieval loop test shows that weak-source evidence creates
+  source-authority feedback, the second planner call sees that gap, and a retry
+  against an SEC source finalizes with citations.
 
 Live model scenarios:
 

@@ -84,6 +84,7 @@ def capability_catalog(
 
 def semantic_capability_catalog() -> JsonObject:
     return {
+        "version": 1,
         "modes": ["direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"],
         "core_rule": "The model proposes capabilities/actions; the host validates policy, executes tools, journals, and stops.",
         "catalog_rule": (
@@ -130,6 +131,93 @@ def semantic_capability_catalog() -> JsonObject:
             ],
             "output_contract": ["plain_answer", "cited_answer", "file_artifact", "structured_report", "failure_report", "ask_user"],
             "user_control": ["normal", "interrupted", "cancelled", "clarification_requested"],
+            "autonomy": [
+                "single_turn_response",
+                "bounded_task_loop",
+                "long_running_resident_worker",
+                "scheduled_monitor",
+                "operator_review",
+                "user_interrupted",
+            ],
+            "world_model": [
+                "current_conversation",
+                "thread_journal",
+                "workspace_project",
+                "web_corpus",
+                "market_state",
+                "durable_memory_snapshot",
+                "external_account_boundary",
+                "physical_world_unavailable",
+            ],
+            "resource_kind": [
+                "conversation_turn",
+                "web_page",
+                "official_filing",
+                "market_data",
+                "news_article",
+                "local_file",
+                "generated_artifact",
+                "memory_item",
+                "queue_message",
+                "calendar_event",
+                "credential_boundary",
+                "device_boundary",
+            ],
+            "action_phase": [
+                "intake",
+                "decompose",
+                "plan",
+                "tool_call",
+                "observe",
+                "evaluate_progress",
+                "replan",
+                "synthesize",
+                "commit_or_report",
+                "await_user",
+            ],
+            "risk": [
+                "normal",
+                "privacy_sensitive",
+                "financial_advice_boundary",
+                "legal_advice_boundary",
+                "medical_boundary",
+                "credential_boundary",
+                "write_side_effect",
+                "external_side_effect",
+                "device_control_blocked",
+            ],
+            "temporal": [
+                "timeless",
+                "current_time",
+                "recent_news",
+                "historical_period",
+                "scheduled_future",
+                "long_running",
+            ],
+            "authority": [
+                "not_needed",
+                "self_knowledge",
+                "user_provided",
+                "workspace_evidence",
+                "retrieval_citation",
+                "primary_source_required",
+                "secondary_source_allowed",
+                "conflicting_sources",
+            ],
+            "identity_boundary": [
+                "assistant_self_description",
+                "roleplay_persona",
+                "professional_domain_role",
+                "tool_capability_disclosure",
+                "private_reasoning_blocked",
+            ],
+            "communication_channel": [
+                "cli",
+                "chat_thread",
+                "resident_inbox",
+                "transport_gateway_planned",
+                "outbox_pending",
+            ],
         },
         "task_domains": [
             "conversation",
@@ -246,6 +334,19 @@ def semantic_capability_catalog() -> JsonObject:
             "secret.store",
             "device.input.control",
         ],
+    }
+
+
+def semantic_state_space_catalog() -> JsonObject:
+    catalog = semantic_capability_catalog()
+    return {
+        "version": catalog["version"],
+        "modes": list(catalog["modes"]),
+        "state_dimensions": dict(catalog["state_dimensions"]),
+        "task_domains": list(catalog["task_domains"]),
+        "families": dict(catalog["families"]),
+        "semantic_slots": dict(catalog["semantic_slots"]),
+        "not_default_or_requires_configuration": list(catalog["not_default_or_requires_configuration"]),
     }
 
 

@@ -195,11 +195,15 @@ project, resident, transport, calendar, browser/session boundaries, system,
 and security families with statuses such as `enabled`,
 `available_with_permission`, `not_configured`, `planned`, and `host_only`. It
 also exposes state axes such as intent scope, execution surface, evidence,
-permissions, output contract, resident state, and user control. This is not a
-phrase table: the model chooses broad semantic labels and capability ids; the
-host maps only known executable capability families to recipes and keeps
-planned, host-only, credential, transport, browser, and device boundaries out
-of `ToolRegistry`.
+permissions, output contract, resident state, user control, autonomy, world
+model, resource kind, action phase, temporal status, source authority, identity
+boundary, communication channel, and risk. The planner context now receives a
+compact `semantic_state_space` snapshot derived from that catalog, so live
+model packets can describe broad Hermes-style tasks without reducing every
+state to `workspace:*`. This is not a phrase table: the model chooses broad
+semantic labels and capability ids; the host maps only known executable
+capability families to recipes and keeps planned, host-only, credential,
+transport, browser, and device boundaries out of `ToolRegistry`.
 
 Non-workspace research capabilities can still become executable when there is
 a safe host route. For example, `web.research`, `finance.market_news`,
@@ -218,7 +222,16 @@ and official statistics. `finance.market_news`, `finance.market_data`, and
 `secondary_or_better`, so reputable news and market-data providers can satisfy
 current-news or quote-context tasks without being misrepresented as primary
 filing evidence. The retrieval report records the effective authority
-requirement in diagnostics.
+requirement and source-authority counts.
+
+When retrieval evidence is insufficient, the workloop converts host-derived
+retrieval diagnostics into planner feedback. Missing query facets appear as
+`query_facet:*`; missing authority now appears as `source_authority:primary`,
+`primary_source`, or `source_authority:secondary_or_better` as appropriate.
+Model planner mode receives those exact gaps on the next `planner.propose`
+packet. The model can then propose a materially different query/source, while
+the host still validates policy, source/fetch budgets, progress, repetition,
+and final termination.
 
 Model planner actions are also rebound to recipe constraints before execution.
 For example, a live model may propose only `{"name":"retrieval.run",

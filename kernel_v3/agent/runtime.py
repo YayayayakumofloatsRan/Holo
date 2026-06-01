@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import replace
 from pathlib import Path
 
-from kernel_v3.capabilities import capability_catalog
+from kernel_v3.capabilities import capability_catalog, semantic_state_space_catalog
 from kernel_v3.agent.contracts import (
     AgentRuntimeResult,
     FailureReport,
@@ -844,6 +844,7 @@ class _AgentContextCompiler:
                     allowed_permissions=_recipe_allowed_permissions(self.recipe),
                     mode=self.recipe.mode,
                 ),
+                "semantic_state_space": semantic_state_space_catalog(),
                 "research_source_directory": _research_source_directory_metadata(self.recipe),
                 "agent_runtime_directive": _planner_directive(self.recipe),
                 "context_pack_hash": pack.payload_hash,
@@ -1085,6 +1086,7 @@ def _bind_model_action_to_recipe(
         payload.setdefault("goal_id", "goal-agent-retrieval")
         payload.setdefault("query", goal)
         payload.setdefault("max_spans_per_document", 2)
+        payload = _apply_recipe_profile_defaults(payload, recipe)
         payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
         payload = _apply_research_depth_defaults(payload)
         return replace(action, payload=payload)
@@ -1943,7 +1945,14 @@ def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
 
 
 def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) -> JsonObject:
-    capabilities = set(_step_capabilities(step))
+    return _apply_finance_capability_defaults(payload, set(_step_capabilities(step)))
+
+
+def _apply_recipe_profile_defaults(payload: JsonObject, recipe: TaskRecipe) -> JsonObject:
+    return _apply_finance_capability_defaults(payload, _recipe_finance_capabilities(recipe))
+
+
+def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[str]) -> JsonObject:
     if not capabilities.intersection(_FINANCE_RESEARCH_PROFILE_CAPABILITIES):
         return payload
     updated = dict(payload)
@@ -1961,6 +1970,23 @@ def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) ->
             metadata.setdefault("research_task_kind", "competitive_landscape")
     updated["metadata"] = metadata
     return updated
+
+
+def _recipe_finance_capabilities(recipe: TaskRecipe) -> set[str]:
+    capabilities: set[str] = set()
+    semantic = _semantic_intake_metadata(recipe)
+    intents = semantic.get("intents")
+    if isinstance(intents, list):
+        for intent in intents:
+            if isinstance(intent, dict):
+                capabilities.update(_string_list(intent.get("required_capabilities")))
+    plan = _task_execution_plan_metadata(recipe)
+    steps = plan.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict):
+                capabilities.update(_step_capabilities(step))
+    return capabilities.intersection(_FINANCE_RESEARCH_PROFILE_CAPABILITIES)
 
 
 def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:

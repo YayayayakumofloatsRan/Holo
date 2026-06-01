@@ -333,6 +333,12 @@ def assess_evidence_sufficiency(
     report_diagnostics = _dict_or_empty(latest_retrieval_report.data.get("diagnostics")) if latest_retrieval_report else {}
     evaluation_diagnostics = _dict_or_empty(report_diagnostics.get("evaluation_diagnostics"))
     missing_query_facets = _string_list(evaluation_diagnostics.get("missing_query_facets"))
+    source_authority = _dict_or_empty(evaluation_diagnostics.get("source_authority"))
+    source_authority_requirement = _string_or_empty(evaluation_diagnostics.get("source_authority_requirement"))
+    missing_source_authority = _missing_source_authority(
+        requirement=source_authority_requirement,
+        authority_summary=source_authority,
+    )
     latest_report_status = str(latest_retrieval_report.data.get("status")) if latest_retrieval_report else None
     latest_report_reason = str(report_diagnostics.get("reason") or latest_report_status or "")
     latest_observation = _latest_record(journal, task_id=task_id, kind="observation")
@@ -392,6 +398,7 @@ def assess_evidence_sufficiency(
         sufficient = False
         missing.append("sufficient_retrieval_evidence")
         missing.extend(f"query_facet:{facet}" for facet in missing_query_facets)
+        missing.extend(missing_source_authority)
         reason = latest_report_reason or f"retrieval_{latest_report_status}"
     if recipe.mode == "workspace_answer" and not workspace_reads:
         sufficient = False
@@ -425,6 +432,9 @@ def assess_evidence_sufficiency(
             "latest_retrieval_report_status": latest_report_status,
             "latest_retrieval_report_reason": latest_report_reason,
             "missing_query_facets": missing_query_facets,
+            "source_authority_requirement": source_authority_requirement,
+            "source_authority": source_authority,
+            "missing_source_authority": missing_source_authority,
         },
     )
 
@@ -759,6 +769,26 @@ def _latest_missing_evidence(journal: JournalStore, *, task_id: str, run_id: str
 
 def _dict_or_empty(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _string_or_empty(value: object) -> str:
+    return str(value) if isinstance(value, str) else ""
+
+
+def _missing_source_authority(*, requirement: str, authority_summary: JsonObject) -> list[str]:
+    if not requirement:
+        return []
+    primary = _int_or_zero(authority_summary.get("primary_source_count"))
+    secondary = _int_or_zero(authority_summary.get("secondary_source_count"))
+    if requirement == "primary" and primary <= 0:
+        return ["source_authority:primary", "primary_source"]
+    if requirement == "secondary_or_better" and primary + secondary <= 0:
+        return ["source_authority:secondary_or_better", "secondary_or_better_source"]
+    return []
+
+
+def _int_or_zero(value: object) -> int:
+    return value if isinstance(value, int) else 0
 
 
 def _string_list(value: object) -> list[str]:

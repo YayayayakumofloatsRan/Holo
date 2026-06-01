@@ -53,6 +53,7 @@ def test_phase94_capability_catalog_exposes_broad_agent_state_space(tmp_path):
     assert result.status == "completed"
     context = journal.records(task_id=result.task_id, kind="context")[0].data["state"]
     catalog = context["capability_catalog"]
+    state_space = context["semantic_state_space"]
     families = set(catalog["families"])
     assert {
         "conversation",
@@ -94,6 +95,13 @@ def test_phase94_capability_catalog_exposes_broad_agent_state_space(tmp_path):
     }.issubset(capability_ids)
     assert "web.search" in catalog["not_configured"]
     assert "web.crawl" in catalog["planned"]
+    assert "autonomy" in state_space["state_dimensions"]
+    assert "world_model" in state_space["state_dimensions"]
+    assert "resource_kind" in state_space["state_dimensions"]
+    assert "authority" in state_space["state_dimensions"]
+    assert "identity_boundary" in state_space["state_dimensions"]
+    assert "transport" in state_space["families"]
+    assert "security" in state_space["families"]
 
 
 def test_phase94_semantic_capability_catalog_is_not_workspace_only():
@@ -129,6 +137,12 @@ def test_phase94_semantic_capability_catalog_is_not_workspace_only():
     assert "execution_surface" in catalog["state_dimensions"]
     assert "intent_scope" in catalog["state_dimensions"]
     assert "output_contract" in catalog["state_dimensions"]
+    assert "autonomy" in catalog["state_dimensions"]
+    assert "world_model" in catalog["state_dimensions"]
+    assert "resource_kind" in catalog["state_dimensions"]
+    assert "authority" in catalog["state_dimensions"]
+    assert "identity_boundary" in catalog["state_dimensions"]
+    assert "communication_channel" in catalog["state_dimensions"]
     assert "semantic_slots" in catalog
     assert "document" in families
     assert "roleplay.perform" in families["conversation"]
