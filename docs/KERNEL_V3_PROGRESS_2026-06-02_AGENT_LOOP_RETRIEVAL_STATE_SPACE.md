@@ -188,6 +188,11 @@
   plan as well as executed actions, so the model can declare several research
   subgoals up front, execute them one at a time, and retry only the incomplete
   subgoal when host coverage remains insufficient.
+- Planner context now includes `agent_retrieval_plan_state`, a low-noise
+  retrieval work-plan packet with planned subgoals, pending/complete/incomplete
+  goal ids, latest status by goal id, and `next_recommended_goal_id`. This gives
+  live models an explicit way to choose the next bounded retrieval action from
+  the host-validated plan instead of inferring it from raw journal history.
 
 ## Validation
 
@@ -277,6 +282,9 @@ Additional deterministic coverage now includes:
   successful services source, then a host-packet-driven retry of only
   `goal-plan-1-2`. The run finalizes only after planned coverage becomes
   sufficient for every subgoal.
+- the same dynamic replanning test now asserts that the first planner context
+  exposes `agent_retrieval_plan_state` with all planned subgoals and that the
+  retry planner update carries `next_recommended_goal_id=goal-plan-1-2`.
 - live retrieval/corpus bridge tests show that a configured corpus is searched
   before live HTTP, and that an agent's first live SEC fetch is indexed into
   corpus so a second run can answer from artifact-backed corpus evidence without

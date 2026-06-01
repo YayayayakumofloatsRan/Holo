@@ -864,6 +864,12 @@ class _AgentContextCompiler:
                 "semantic_state_space": semantic_state_space_catalog(),
                 "research_source_directory": _research_source_directory_metadata(self.recipe),
                 "agent_runtime_directive": _planner_directive(self.recipe),
+                "agent_retrieval_plan_state": _agent_retrieval_plan_state(
+                    journal,
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    recipe=self.recipe,
+                ),
                 "agent_replan_hints": _agent_replan_hints(
                     journal,
                     task_id=task.task_id,
@@ -958,6 +964,7 @@ class _RecipeBoundPlanner:
                     "feedback_status": feedback.status if feedback is not None else None,
                     "feedback_stop_reason": feedback.stop_reason if feedback is not None else None,
                     "feedback_missing_evidence": list(feedback.missing_evidence) if feedback is not None else [],
+                    "retrieval_plan_state": context.state.get("agent_retrieval_plan_state", {}),
                     "replan_hints": context.state.get("agent_replan_hints", {}),
                     "selected_action": _action_plan_preview(action),
                     "status": status,
@@ -1775,6 +1782,50 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         "interaction_preferences": preferences,
         "semantic_intake": semantic,
         "semantic_state_profile_summary": state_profile_summary,
+    }
+
+
+def _agent_retrieval_plan_state(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+) -> JsonObject:
+    if recipe.mode != "retrieval_answer":
+        return {"status": "not_applicable", "planned_subgoals": []}
+    subgoals = _planned_retrieval_subgoals_from_recipe(recipe)
+    coverage = _planned_retrieval_coverage(journal, task_id, run_id, recipe)
+    status_by_goal = _json_object(coverage.get("latest_status_by_goal_id"))
+    incomplete = _string_list(coverage.get("incomplete_goal_ids"))
+    complete = _string_list(coverage.get("complete_goal_ids"))
+    pending = [goal_id for goal_id in incomplete if status_by_goal.get(goal_id) == "missing_report"]
+    subgoal_records = []
+    for subgoal in subgoals:
+        goal_id = str(subgoal.get("goal_id") or "")
+        status = str(status_by_goal.get(goal_id) or ("missing_report" if goal_id else "unknown"))
+        state = "complete" if status == "sufficient" else "pending" if status == "missing_report" else "incomplete"
+        subgoal_records.append({**subgoal, "latest_status": status, "state": state})
+    if not subgoal_records:
+        status = "unplanned"
+    elif incomplete:
+        status = "needs_retrieval" if len(incomplete) == len(subgoal_records) and len(complete) == 0 else "needs_replan"
+    else:
+        status = "complete"
+    return {
+        "status": status,
+        "planned_subgoals": subgoal_records,
+        "planned_goal_ids": _string_list(coverage.get("planned_goal_ids")),
+        "complete_goal_ids": complete,
+        "pending_goal_ids": pending,
+        "incomplete_goal_ids": incomplete,
+        "latest_status_by_goal_id": status_by_goal,
+        "next_recommended_goal_id": incomplete[0] if incomplete else None,
+        "planner_instructions": [
+            "Use goal_id from planned_subgoals when proposing retrieval.run for this plan.",
+            "Prefer next_recommended_goal_id unless feedback identifies a different urgent subgoal.",
+            "Do not finalize until incomplete_goal_ids is empty.",
+        ],
     }
 
 
@@ -2819,11 +2870,21 @@ def _planned_retrieval_coverage(journal: JournalStore, task_id: str, run_id: str
 
 
 def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe) -> list[str]:
+    return _ordered_unique(
+        [
+            str(subgoal["goal_id"])
+            for subgoal in _planned_retrieval_subgoals_from_recipe(recipe)
+            if isinstance(subgoal.get("goal_id"), str)
+        ]
+    )
+
+
+def _planned_retrieval_subgoals_from_recipe(recipe: TaskRecipe) -> list[JsonObject]:
     plan = _task_execution_plan_metadata(recipe)
     steps = plan.get("steps")
     if not isinstance(steps, list):
         return []
-    goal_ids: list[str] = []
+    subgoals: list[JsonObject] = []
     for raw_step in steps:
         if not isinstance(raw_step, dict):
             continue
@@ -2832,6 +2893,7 @@ def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe) -> list[str]:
         if str(raw_step.get("tool_name") or "") != "retrieval.run":
             continue
         sequence = _plan_step_index(raw_step)
+        step_goal = _string_value(raw_step.get("goal")) or ""
         metadata = raw_step.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
         capability_args = metadata.get("capability_args")
@@ -2842,11 +2904,35 @@ def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe) -> list[str]:
         total = len(payloads)
         for index, payload in enumerate(payloads, start=1):
             goal_id = payload.get("goal_id")
-            if isinstance(goal_id, str) and goal_id:
-                goal_ids.append(goal_id)
-            else:
-                goal_ids.append(f"goal-plan-{sequence}" if total == 1 else f"goal-plan-{sequence}-{index}")
-    return _ordered_unique(goal_ids)
+            normalized_goal_id = goal_id if isinstance(goal_id, str) and goal_id else f"goal-plan-{sequence}" if total == 1 else f"goal-plan-{sequence}-{index}"
+            payload_metadata = _json_object(payload.get("metadata"))
+            subgoals.append(
+                {
+                    "goal_id": normalized_goal_id,
+                    "sequence_index": sequence,
+                    "payload_index": index,
+                    "query": _preview_text(_string_value(payload.get("query")) or step_goal, 180),
+                    "research_profile": _string_value(
+                        payload_metadata.get("research_profile")
+                        or payload_metadata.get("research_profile_id")
+                        or payload.get("research_profile")
+                        or payload.get("research_profile_id")
+                    ),
+                    "research_task_kind": _string_value(payload_metadata.get("research_task_kind")),
+                    "source_authority_requirement": _string_value(payload_metadata.get("source_authority_requirement")),
+                    "search_strategy": _string_value(payload_metadata.get("search_strategy")),
+                    "query_count": _explicit_retrieval_query_count(payload),
+                }
+            )
+    seen: set[str] = set()
+    unique: list[JsonObject] = []
+    for subgoal in subgoals:
+        goal_id = str(subgoal["goal_id"])
+        if goal_id in seen:
+            continue
+        seen.add(goal_id)
+        unique.append(subgoal)
+    return unique
 
 
 def _retrieval_payloads_from_capability_args(value: object) -> list[JsonObject]:

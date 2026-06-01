@@ -202,6 +202,15 @@ the next planner packet still has `status=needs_replan`,
 subgoal. A model can then retry only that `goal_id`, and host finalization will
 allow synthesis once the latest report for every planned goal is sufficient.
 
+The first planner packet also receives `state.agent_retrieval_plan_state`. This
+is the low-noise work-plan view for retrieval: it lists `planned_subgoals`
+with their `goal_id`, query preview, research profile, authority requirement,
+and strategy; it also lists pending, complete, and incomplete goal ids plus a
+`next_recommended_goal_id`. Model planner mode should propose one bounded
+`retrieval.run` action using that `goal_id`. This lets the LLM choose and update
+work over broad research state without relying on a hidden phrase table or
+parsing raw journal history.
+
 Inside a single retrieval payload, the model may also provide explicit
 `queries` or `query_templates`. These are search attempts for one subgoal, not
 separate agent actions. If `max_queries` is omitted, the host derives the

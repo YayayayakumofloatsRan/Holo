@@ -125,6 +125,10 @@ Kernel v3 currently contains the infrastructure for:
   `agent_replan_hints` reports incomplete subgoal ids even when the latest
   retrieval report itself was sufficient, allowing the model planner to retry
   only the failed subgoal before finalization;
+- planner-visible `agent_retrieval_plan_state`, which exposes planned
+  retrieval subgoals, pending/complete/incomplete goal ids, latest report
+  status by goal id, and the next recommended `goal_id` for model planner
+  packets;
 - adaptive search strategy selection for retrieval: when configured, a model
   planner can propose `metadata.search_strategy` values such as `corpus_only`,
   `fresh_live`, `aggregate`, `structured`, or `crawl`, and the host selects only

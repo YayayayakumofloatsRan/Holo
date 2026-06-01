@@ -247,6 +247,17 @@ def test_phase103_planned_subgoal_coverage_feedback_drives_model_retry() -> None
     )
 
     assert result.status == "completed"
+    contexts = journal.records(task_id=result.task_id, kind="context")
+    initial_plan_state = contexts[0].data["state"]["agent_retrieval_plan_state"]
+    assert initial_plan_state["status"] == "needs_retrieval"
+    assert initial_plan_state["planned_goal_ids"] == ["goal-plan-1-1", "goal-plan-1-2", "goal-plan-1-3"]
+    assert initial_plan_state["pending_goal_ids"] == ["goal-plan-1-1", "goal-plan-1-2", "goal-plan-1-3"]
+    assert initial_plan_state["next_recommended_goal_id"] == "goal-plan-1-1"
+    assert [subgoal["goal_id"] for subgoal in initial_plan_state["planned_subgoals"]] == [
+        "goal-plan-1-1",
+        "goal-plan-1-2",
+        "goal-plan-1-3",
+    ]
     actions = journal.records(task_id=result.task_id, kind="action")
     assert [record.data["payload"]["goal_id"] for record in actions] == [
         "goal-plan-1-1",
@@ -263,12 +274,18 @@ def test_phase103_planned_subgoal_coverage_feedback_drives_model_retry() -> None
     ]
     updates = journal.records(task_id=result.task_id, kind="agent_work_plan_update")
     retry_hints = updates[3].data["replan_hints"]
+    retry_plan_state = updates[3].data["retrieval_plan_state"]
+    assert retry_plan_state["status"] == "needs_replan"
+    assert retry_plan_state["next_recommended_goal_id"] == "goal-plan-1-2"
+    assert retry_plan_state["incomplete_goal_ids"] == ["goal-plan-1-2"]
     assert retry_hints["status"] == "needs_replan"
     assert retry_hints["suggested_next_action"] == "retry_incomplete_planned_retrieval_subgoals"
     assert retry_hints["retrieval"]["latest_report_status"] == "sufficient"
     assert retry_hints["retrieval"]["incomplete_planned_goal_ids"] == ["goal-plan-1-2"]
     assert "retrieval_subgoal:goal-plan-1-2 sufficient" in retry_hints["retrieval"]["do_not_finalize_until"]
-    contexts = journal.records(task_id=result.task_id, kind="context")
+    retry_context_plan_state = contexts[3].data["state"]["agent_retrieval_plan_state"]
+    assert retry_context_plan_state["status"] == "needs_replan"
+    assert retry_context_plan_state["next_recommended_goal_id"] == "goal-plan-1-2"
     assert contexts[3].data["state"]["agent_replan_hints"]["retrieval"]["planned_retrieval_coverage"][
         "incomplete_goal_ids"
     ] == ["goal-plan-1-2"]
