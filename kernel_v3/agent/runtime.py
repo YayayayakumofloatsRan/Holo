@@ -29,7 +29,12 @@ from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
-from kernel_v3.research import ResearchCorpusStore, research_depth_defaults, source_directory_for_profile
+from kernel_v3.research import (
+    FINANCE_FUNDAMENTALS_PROFILE_ID,
+    ResearchCorpusStore,
+    research_depth_defaults,
+    source_directory_for_profile,
+)
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
@@ -233,6 +238,26 @@ class AgentRuntime:
         )
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
         if result.status == "needs_user_input":
+            if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
+                failure = self._failure(
+                    result.task_id,
+                    result.run_id,
+                    _latest_termination_failure_reason(self.journal, result.task_id, result.run_id)
+                    or result.stop_reason
+                    or "no_executable_action",
+                    missing_evidence=_missing_evidence(self.journal, result.task_id, result.run_id),
+                    next_action="refine_plan_or_configure_more_tools",
+                )
+                return AgentRuntimeResult(
+                    status="failed",
+                    task_id=result.task_id,
+                    run_id=result.run_id,
+                    mode=recipe.mode,
+                    recipe_id=recipe.recipe_id,
+                    final_answer=None,
+                    failure_report=failure.to_dict(),
+                    trace_refs=_trace_refs(self.journal, result.task_id),
+                )
             return AgentRuntimeResult(
                 status="needs_user_input",
                 task_id=result.task_id,
@@ -1309,6 +1334,7 @@ def _actions_from_plan_step(goal: str, recipe: TaskRecipe, step: JsonObject) -> 
             "max_spans_per_document": 2,
         }
         payload = _merge_retrieval_payload(payload, _capability_args_from_step(step, "retrieval.run"))
+        payload = _apply_profile_capability_defaults(payload, step)
         payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
         payload = _apply_research_depth_defaults(payload)
         return [
@@ -1633,6 +1659,11 @@ def _research_profile_id(recipe: TaskRecipe) -> str | None:
         value = semantic.get(key)
         if isinstance(value, str) and value:
             return value
+    if _semantic_has_capability(semantic, "finance.fundamentals_research"):
+        return FINANCE_FUNDAMENTALS_PROFILE_ID
+    plan = _task_execution_plan_metadata(recipe)
+    if _plan_has_capability(plan, "finance.fundamentals_research"):
+        return FINANCE_FUNDAMENTALS_PROFILE_ID
     return None
 
 
@@ -1805,6 +1836,17 @@ def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
     return merged
 
 
+def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) -> JsonObject:
+    capabilities = set(_step_capabilities(step))
+    if "finance.fundamentals_research" not in capabilities:
+        return payload
+    updated = dict(payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    metadata.setdefault("research_profile", FINANCE_FUNDAMENTALS_PROFILE_ID)
+    updated["metadata"] = metadata
+    return updated
+
+
 def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
     step = _execution_step_metadata(recipe)
     if step is not None:
@@ -1814,7 +1856,7 @@ def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
     return _capability_args_from_plan(
         _task_execution_plan_metadata(recipe),
         "retrieval.run",
-        capability_markers={"retrieval.run"},
+        capability_markers={"retrieval.run", "finance.fundamentals_research"},
     )
 
 
@@ -1980,6 +2022,32 @@ def _capability_args_from_plan(
     return {}
 
 
+def _semantic_has_capability(semantic: JsonObject, capability: str) -> bool:
+    intents = semantic.get("intents")
+    if not isinstance(intents, list):
+        return False
+    return any(
+        capability in _string_list(item.get("required_capabilities"))
+        for item in intents
+        if isinstance(item, dict)
+    )
+
+
+def _plan_has_capability(plan: JsonObject, capability: str) -> bool:
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return False
+    return any(
+        capability in _step_capabilities(step)
+        for step in steps
+        if isinstance(step, dict)
+    )
+
+
+def _step_capabilities(raw_step: JsonObject) -> list[str]:
+    return _string_list(raw_step.get("required_capabilities"))
+
+
 def _capability_args_from_step(raw_step: JsonObject, tool_name: str | None) -> JsonObject:
     metadata = raw_step.get("metadata")
     if not isinstance(metadata, dict):
@@ -1997,6 +2065,12 @@ def _capability_args_from_step(raw_step: JsonObject, tool_name: str | None) -> J
         nested = _nested_json(node_metadata["capability_args"], tool_name)
         return nested or _direct_tool_payload(node_metadata["capability_args"], tool_name)
     return {}
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
 
 
 def _capability_payloads_from_step(raw_step: JsonObject, tool_name: str) -> list[JsonObject]:
@@ -2135,6 +2209,17 @@ def _latest_retrieval_report(journal: JournalStore, task_id: str, run_id: str) -
     if not records:
         return None
     return RetrievalReport.from_dict(records[-1].data)
+
+
+def _latest_action_is_no_planned_action(journal: JournalStore, task_id: str, run_id: str) -> bool:
+    records = [
+        record for record in journal.records(task_id=task_id, kind="action")
+        if record.run_id == run_id
+    ]
+    if not records:
+        return False
+    reasons = records[-1].data.get("reasons")
+    return isinstance(reasons, list) and "no_planned_action" in reasons
 
 
 def _retrieval_evidence(journal: JournalStore, task_id: str, run_id: str) -> list[EvidenceItem]:

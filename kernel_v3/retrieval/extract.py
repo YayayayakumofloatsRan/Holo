@@ -4,6 +4,7 @@ import html
 from html.parser import HTMLParser
 
 from kernel_v3.retrieval.contracts import ExtractedSpan, FetchedDocument, SearchGoal
+from kernel_v3.retrieval.evaluate import QUERY_FACET_ALIASES, query_facets
 
 READABLE_TEXT_LIMIT = 200_000
 SPAN_BEFORE_CHARS = 120
@@ -201,6 +202,12 @@ def _terms(text: str) -> list[str]:
             continue
         seen.add(term)
         terms.append(term)
+    for facet in query_facets(text):
+        for alias in QUERY_FACET_ALIASES.get(facet, ()):
+            normalized = alias.lower()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                terms.append(normalized)
     return terms
 
 

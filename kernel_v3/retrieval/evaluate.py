@@ -10,6 +10,93 @@ from kernel_v3.research.contracts import ResearchProfile
 from kernel_v3.research.source_policy import assess_evidence_source, source_authority_summary
 
 
+QUERY_FACET_ALIASES: dict[str, tuple[str, ...]] = {
+    "model": (
+        "model",
+        "models",
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-v3",
+        "deepseek-v4",
+        "模型",
+    ),
+    "authentication": (
+        "auth",
+        "authentication",
+        "authorization",
+        "bearer",
+        "api key",
+        "apikey",
+        "x-api-key",
+        "secret key",
+        "鉴权",
+        "认证",
+        "授权",
+        "api密钥",
+        "密钥",
+    ),
+    "pricing": (
+        "pricing",
+        "price",
+        "cost",
+        "billing",
+        "bill",
+        "定价",
+        "价格",
+        "费用",
+        "计费",
+    ),
+    "token": (
+        "token",
+        "tokens",
+        "tokenizer",
+        "context length",
+        "上下文",
+        "令牌",
+    ),
+    "rate_limit": (
+        "rate limit",
+        "rate-limit",
+        "quota",
+        "qps",
+        "rpm",
+        "limit",
+        "限流",
+        "额度",
+        "配额",
+    ),
+    "endpoint": (
+        "endpoint",
+        "base url",
+        "base_url",
+        "api base",
+        "host",
+        "接口地址",
+        "端点",
+        "基础地址",
+    ),
+}
+
+QUERY_FACET_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "model": ("model", "models", "模型"),
+    "authentication": (
+        "auth",
+        "authentication",
+        "authorization",
+        "api key",
+        "apikey",
+        "鉴权",
+        "认证",
+        "授权",
+        "密钥",
+    ),
+    "pricing": ("pricing", "price", "cost", "billing", "定价", "价格", "费用", "计费"),
+    "token": ("token", "tokens", "tokenizer", "context length", "上下文", "令牌"),
+    "rate_limit": ("rate limit", "rate-limit", "quota", "qps", "rpm", "限流", "额度", "配额"),
+    "endpoint": ("endpoint", "base url", "base_url", "接口地址", "端点", "基础地址"),
+}
+
+
 class EvidenceEvaluator:
     def evaluate(
         self,
@@ -26,6 +113,11 @@ class EvidenceEvaluator:
         }
         sufficient = bool(evidence and citations)
         reason = "evidence_with_citations" if sufficient else "insufficient_evidence"
+        facet_diagnostics = assess_query_facet_coverage(goal=goal, evidence=evidence)
+        diagnostics.update(facet_diagnostics)
+        if sufficient and facet_diagnostics["missing_query_facets"]:
+            sufficient = False
+            reason = "query_facets_missing"
         if research_profile is not None:
             assessments = [assess_evidence_source(item, profile=research_profile) for item in evidence]
             authority_summary = source_authority_summary(assessments)
@@ -50,3 +142,47 @@ class EvidenceEvaluator:
             citation_count=len(citations),
             diagnostics=diagnostics,
         )
+
+
+def assess_query_facet_coverage(*, goal: SearchGoal, evidence: list[EvidenceItem]) -> dict[str, object]:
+    required = query_facets(goal.query)
+    corpus = "\n".join(item.text for item in evidence).lower()
+    covered: list[str] = []
+    missing: list[str] = []
+    matched_aliases: dict[str, list[str]] = {}
+    for facet in required:
+        aliases = QUERY_FACET_ALIASES.get(facet, ())
+        matches = [alias for alias in aliases if alias.lower() in corpus]
+        if matches:
+            covered.append(facet)
+            matched_aliases[facet] = matches[:5]
+        else:
+            missing.append(facet)
+    return {
+        "query_facets": required,
+        "covered_query_facets": covered,
+        "missing_query_facets": missing,
+        "query_facet_coverage": 1.0 if not required else round(len(covered) / len(required), 4),
+        "query_facet_matches": matched_aliases,
+    }
+
+
+def query_facets(query: str) -> list[str]:
+    normalized = query.lower()
+    facets = [
+        facet
+        for facet, triggers in QUERY_FACET_TRIGGERS.items()
+        if any(trigger.lower() in normalized for trigger in triggers)
+    ]
+    return _ordered_unique(facets)
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

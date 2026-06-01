@@ -1,0 +1,92 @@
+# Kernel v3 Progress 2026-06-02: Agent Loop, Retrieval Sufficiency, State Space
+
+## What Changed
+
+- Retrieval sufficiency now checks requested query facets, not only whether any
+  evidence/citation exists. Facets currently cover model, authentication,
+  pricing, token, endpoint, and rate-limit style requests.
+- `RetrievalReport.diagnostics` now carries evaluator diagnostics so workloop
+  decisions and planner feedback can see missing facets.
+- Workloop evidence sufficiency now respects insufficient retrieval reports.
+  A model evaluator cannot finalize when the host retrieval report says the
+  evidence is incomplete.
+- Planner feedback now merges model-reported missing evidence with host-derived
+  evidence gaps, so a model planner can replan from concrete missing facets.
+- Finance is now a first-class profile capability: a model may propose
+  `finance.fundamentals_research`, and the host compiles it to `retrieval.run`
+  with the finance fundamentals research profile.
+- The semantic capability catalog now exposes broader state dimensions:
+  task lifecycle, evidence, tooling, memory, resident runtime, and user control.
+
+## Validation
+
+Offline kernel v3 regression:
+
+```bash
+.venv/bin/pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+446 passed
+```
+
+Live model scenarios:
+
+```bash
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli model-scenarios \
+  --provider deepseek \
+  --profile balanced \
+  --thinking enabled \
+  --reasoning-effort high \
+  --temperature 0.2
+```
+
+Result:
+
+```text
+5 scenarios passed
+```
+
+Live agent retrieval smoke:
+
+```bash
+HOLO_V3_LIVE_MODEL=1 \
+HOLO_V3_LIVE_RETRIEVAL=1 \
+HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
+HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+.venv/bin/python -m kernel_v3.cli agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
+  --mode retrieval \
+  --online \
+  --planner model \
+  --evaluator model \
+  --synthesizer model \
+  --semantic-intake model \
+  --live-retrieval \
+  --live-max-network-fetches 4 \
+  --thinking enabled \
+  --reasoning-effort high \
+  --temperature 0.2 \
+  --max-output-tokens provider
+```
+
+Result:
+
+```text
+completed
+```
+
+The live trace showed semantic intake, planner, evaluator, and synthesizer
+processor calls against DeepSeek; bounded crawl/fetch against
+`api-docs.deepseek.com`; artifact-backed evidence/citations; and a host-owned
+termination decision. The DeepSeek API key was not present in the journal.
+
+## Remaining Boundary
+
+This iteration improves the core loop and state/capability surface. It does not
+make arbitrary web search a default path, does not add live transports, and does
+not let models execute tools or commit memory directly. Search quality still
+needs a dedicated source/search layer before finance-grade research can be
+considered reliable.

@@ -324,6 +324,17 @@ def assess_evidence_sufficiency(
         and record.data.get("source") == "tool:system.time"
         and record.data.get("status") == "ok"
     ]
+    latest_retrieval_report = _latest_run_record(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        kind="retrieval_report",
+    )
+    report_diagnostics = _dict_or_empty(latest_retrieval_report.data.get("diagnostics")) if latest_retrieval_report else {}
+    evaluation_diagnostics = _dict_or_empty(report_diagnostics.get("evaluation_diagnostics"))
+    missing_query_facets = _string_list(evaluation_diagnostics.get("missing_query_facets"))
+    latest_report_status = str(latest_retrieval_report.data.get("status")) if latest_retrieval_report else None
+    latest_report_reason = str(report_diagnostics.get("reason") or latest_report_status or "")
     latest_observation = _latest_record(journal, task_id=task_id, kind="observation")
     if (
         latest_observation is not None
@@ -377,6 +388,11 @@ def assess_evidence_sufficiency(
         sufficient = False
         missing.append("retrieval_evidence")
         reason = "missing_retrieval_evidence"
+    if recipe.mode == "retrieval_answer" and latest_report_status and latest_report_status != "sufficient":
+        sufficient = False
+        missing.append("sufficient_retrieval_evidence")
+        missing.extend(f"query_facet:{facet}" for facet in missing_query_facets)
+        reason = latest_report_reason or f"retrieval_{latest_report_status}"
     if recipe.mode == "workspace_answer" and not workspace_reads:
         sufficient = False
         missing.append("file_read_observation")
@@ -406,6 +422,9 @@ def assess_evidence_sufficiency(
             "workspace_write_count": len(workspace_writes),
             "system_observation_count": len(system_observations),
             "retrieval_evidence_count": len(retrieval_evidence),
+            "latest_retrieval_report_status": latest_report_status,
+            "latest_retrieval_report_reason": latest_report_reason,
+            "missing_query_facets": missing_query_facets,
         },
     )
 
@@ -485,12 +504,14 @@ def decide_termination(
             "progress_score": progress.progress_score,
             "progress_type": progress.progress_type,
             "evidence_reason": evidence.reason,
+            "evidence_missing": evidence.missing,
             "no_progress_count": no_progress_count,
         },
     )
 
 
 def _feedback_from_decision(base: Feedback, decision: TerminationDecision, *, run_id: str, index: int) -> Feedback:
+    missing_evidence = _ordered_unique([*base.missing_evidence, *_decision_missing_evidence(decision)])
     if decision.decision == "continue":
         return Feedback(
             feedback_id=f"fb-{run_id}-workloop-{index}",
@@ -498,7 +519,7 @@ def _feedback_from_decision(base: Feedback, decision: TerminationDecision, *, ru
             status="continue",
             stop_reason=None,
             answer=None,
-            missing_evidence=list(base.missing_evidence),
+            missing_evidence=missing_evidence,
         )
     if decision.decision == "final_answer":
         return Feedback(
@@ -516,7 +537,7 @@ def _feedback_from_decision(base: Feedback, decision: TerminationDecision, *, ru
             status="needs_user_input",
             stop_reason="needs_user_input",
             answer=base.answer,
-            missing_evidence=list(base.missing_evidence),
+            missing_evidence=missing_evidence,
         )
     if decision.decision == "blocked":
         return Feedback(
@@ -525,7 +546,7 @@ def _feedback_from_decision(base: Feedback, decision: TerminationDecision, *, ru
             status="blocked",
             stop_reason=decision.reason,
             answer=None,
-            missing_evidence=list(base.missing_evidence),
+            missing_evidence=missing_evidence,
         )
     return Feedback(
         feedback_id=f"fb-{run_id}-workloop-{index}",
@@ -533,7 +554,7 @@ def _feedback_from_decision(base: Feedback, decision: TerminationDecision, *, ru
         status="failed",
         stop_reason=decision.reason,
         answer=None,
-        missing_evidence=list(base.missing_evidence) or [decision.reason],
+        missing_evidence=missing_evidence or [decision.reason],
     )
 
 
@@ -564,6 +585,19 @@ def _observation_step(journal: JournalStore, *, task_id: str, observation_id: st
 def _latest_record(journal: JournalStore, *, task_id: str, kind: str):
     records = journal.records(task_id=task_id, kind=kind)
     return records[-1] if records else None
+
+
+def _latest_run_record(journal: JournalStore, *, task_id: str, run_id: str, kind: str):
+    records = [
+        record for record in journal.records(task_id=task_id, kind=kind)
+        if record.run_id == run_id
+    ]
+    return records[-1] if records else None
+
+
+def _decision_missing_evidence(decision: TerminationDecision) -> list[str]:
+    missing = _string_list(decision.diagnostics.get("evidence_missing"))
+    return missing or ([decision.reason] if decision.reason else [])
 
 
 def _seen_artifact_before(journal: JournalStore, *, task_id: str, record_id: str, artifact_id: str) -> bool:
@@ -721,6 +755,16 @@ def _latest_missing_evidence(journal: JournalStore, *, task_id: str, run_id: str
         if isinstance(missing, list):
             return [str(item) for item in missing]
     return []
+
+
+def _dict_or_empty(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
 
 
 def _hash(value: object) -> str:

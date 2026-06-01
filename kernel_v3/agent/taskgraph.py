@@ -12,6 +12,8 @@ from kernel_v3.contracts import JsonObject
 
 
 _SAFE_CAPABILITIES = {
+    "finance.fundamentals_research",
+    "finance.source_directory",
     "retrieval.run",
     "workspace.search",
     "file.read",
@@ -273,6 +275,8 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         return requested
     if "system.time" in capabilities:
         return "system_answer"
+    if "finance.fundamentals_research" in capabilities:
+        return "retrieval_answer"
     if "retrieval.run" in capabilities:
         return "retrieval_answer"
     if any(capability in capabilities for capability in {"workspace.write", "workspace:write"}):
@@ -298,6 +302,8 @@ def _action_kind_for_node(node: TaskGraphNode) -> str:
 
 def _tool_for_node(node: TaskGraphNode) -> str | None:
     capabilities = set(node.required_capabilities)
+    if "finance.fundamentals_research" in capabilities:
+        return "retrieval.run"
     if "retrieval.run" in capabilities:
         return "retrieval.run"
     if "workspace.write" in capabilities or "workspace:write" in capabilities:
@@ -325,6 +331,8 @@ def _capability_plan(capabilities: list[str]) -> JsonObject:
         for capability in capabilities
         if capability in {"retrieval.run", "workspace.search", "file.read", "workspace.write", "system.time"}
     ]
+    if "finance.fundamentals_research" in capabilities and "retrieval.run" not in tools:
+        tools.append("retrieval.run")
     if "workspace:write" in capabilities and "workspace.write" not in tools:
         tools.append("workspace.write")
     return {
@@ -332,7 +340,13 @@ def _capability_plan(capabilities: list[str]) -> JsonObject:
         "tools": tools,
         "requires_evidence": any(
             capability in capabilities
-            for capability in {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
+            for capability in {
+                "finance.fundamentals_research",
+                "retrieval.run",
+                "workspace.search",
+                "file.read",
+                "workspace:read",
+            }
         ),
     }
 
@@ -343,7 +357,13 @@ def _evidence_required(kind: str, capabilities: list[str], *, metadata: JsonObje
         return value
     if any(
         capability in capabilities
-        for capability in {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
+        for capability in {
+            "finance.fundamentals_research",
+            "retrieval.run",
+            "workspace.search",
+            "file.read",
+            "workspace:read",
+        }
     ):
         return True
     return kind in {"retrieval_research", "workspace_read"}
@@ -353,7 +373,7 @@ def _citations_required(kind: str, capabilities: list[str], *, metadata: JsonObj
     value = metadata.get("citations_required")
     if isinstance(value, bool):
         return value
-    if "retrieval.run" in capabilities:
+    if "retrieval.run" in capabilities or "finance.fundamentals_research" in capabilities:
         return True
     return kind == "retrieval_research"
 

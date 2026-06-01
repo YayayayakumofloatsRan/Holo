@@ -61,6 +61,9 @@ Kernel v3 currently contains the infrastructure for:
   proposes a host capability and the host reads the current time;
 - semantic work plans that can expand one model-proposed capability into many
   ordered tool actions, including 10+ iteration workspace loops;
+- non-workspace profile capabilities such as `finance.fundamentals_research`,
+  which compile to host-validated retrieval with the finance fundamentals
+  source policy instead of collapsing into workspace mode;
 - multi-turn chat over journal-derived thread state;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
@@ -201,6 +204,41 @@ script/style/head/nav/header/footer markup before evidence extraction, so
 journaled spans prefer readable page body while raw fetched HTML remains in
 `ArtifactStore`. Richer web search APIs, deeper readability heuristics, and
 finance-specific source adapters are still the next capability layer.
+
+Retrieval sufficiency is stricter than "any citation exists". The retrieval
+evaluator derives explicit query facets such as model, authentication, pricing,
+token, endpoint, and rate limits, then requires extracted evidence to cover the
+requested facets before the workloop may finalize. Missing facets are journaled
+in `retrieval_evaluation_decision`, `retrieval_report`, `evidence_sufficiency`,
+and the next planner feedback.
+
+Recent live smoke, using real DeepSeek model calls and real
+`api-docs.deepseek.com` crawling, completed this path:
+
+```bash
+HOLO_V3_LIVE_MODEL=1 \
+HOLO_V3_LIVE_RETRIEVAL=1 \
+HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
+HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
+python3 holo-v3 agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
+  --mode retrieval \
+  --online \
+  --planner model \
+  --evaluator model \
+  --synthesizer model \
+  --semantic-intake model \
+  --live-retrieval \
+  --live-max-network-fetches 4 \
+  --thinking enabled \
+  --reasoning-effort high \
+  --temperature 0.2 \
+  --max-output-tokens provider
+```
+
+The journal for that run showed `processor_request`/`processor_result` with
+usage, bounded crawl/fetch artifacts, evidence/citations, evidence sufficiency,
+termination decision, and final answer. API keys were not written to journal.
 
 ## Validation
 

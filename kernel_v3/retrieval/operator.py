@@ -404,6 +404,7 @@ class RetrievalOperator:
             diagnostics={
                 "sufficient": decision.sufficient,
                 "reason": decision.reason,
+                "evaluation_diagnostics": decision.diagnostics,
                 "goal_query": goal.query,
                 "interaction_preferences": goal.metadata.get("interaction_preferences", {}),
                 "response_language": goal.metadata.get("response_language"),

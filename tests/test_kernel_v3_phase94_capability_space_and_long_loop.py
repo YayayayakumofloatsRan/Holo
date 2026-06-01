@@ -79,6 +79,9 @@ def test_phase94_semantic_capability_catalog_is_not_workspace_only():
     assert "resident" in families
     assert "transport" in families
     assert "system" in families
+    assert "finance_fundamentals" in catalog["task_domains"]
+    assert "resident" in catalog["state_dimensions"]
+    assert "tooling" in catalog["state_dimensions"]
     assert "workspace_write" in catalog["modes"]
     assert "system_answer" in catalog["modes"]
     assert catalog["executable_tools_by_recipe"]["system_answer"] == ["system.time"]
@@ -320,3 +323,51 @@ def test_phase94_finance_source_directory_is_structured_and_context_injected(tmp
     assert injected
     assert {entry["source_family"] for entry in injected} >= {"regulatory_filing", "company_ir", "exchange_filing"}
     assert any("SEC" in entry["title"] for entry in injected)
+
+
+def test_phase94_finance_profile_capability_routes_to_retrieval_without_workspace_collapse():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "finance_fundamentals",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals",
+                        "text": "Research AAPL revenue fundamentals",
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "Research AAPL revenue fundamentals",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.mode == "retrieval_answer"
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    assert graph["validation"]["status"] == "ready"
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert plan["selected_mode"] == "retrieval_answer"
+    assert plan["steps"][0]["tool_name"] == "retrieval.run"
+    context = journal.records(task_id=result.task_id, kind="context")[0].data["state"]
+    assert context["research_source_directory"]
+    action = journal.records(task_id=result.task_id, kind="action")[0].data
+    assert action["name"] == "retrieval.run"
+    assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID

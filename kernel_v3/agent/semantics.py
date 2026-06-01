@@ -59,6 +59,8 @@ _HOST_BOUNDARY_RULES = (
 )
 
 _SAFE_CAPABILITIES = {
+    "finance.fundamentals_research",
+    "finance.source_directory",
     "retrieval.run",
     "workspace.search",
     "file.read",
