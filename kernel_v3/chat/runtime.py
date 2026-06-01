@@ -1714,6 +1714,7 @@ def _string_or_none(value: object) -> str | None:
 def _pending_for_task(journal: JournalStore, *, thread_id: str, task_id: str, run_id: str) -> PendingUserInput:
     question = "请补充完成这个任务所需的信息。"
     source_ref = None
+    metadata: JsonObject = {"pending_type": "clarification"}
     for record in reversed(journal.records(task_id=task_id, kind="observation")):
         if record.data.get("status") != "needs_user_input":
             continue
@@ -1722,6 +1723,26 @@ def _pending_for_task(journal: JournalStore, *, thread_id: str, task_id: str, ru
             question = str(content["question"])
             source_ref = record.record_id
             break
+    pending_memory = _pending_memory_proposals(journal, task_id=task_id)
+    if pending_memory:
+        proposal_ids = [str(record.data.get("proposal_id")) for record in pending_memory if record.data.get("proposal_id")]
+        source_ref = pending_memory[-1].record_id
+        metadata = {
+            "pending_type": "memory_review",
+            "memory_proposal_ids": proposal_ids,
+            "blocked_capabilities": ["durable_memory:write"],
+            "review_commands": [
+                "/memory proposals",
+                "/memory approve <proposal_id>",
+                "/memory reject <proposal_id> [reason]",
+            ],
+        }
+        question = (
+            "已创建待审核长期记忆提案："
+            + ", ".join(proposal_ids)
+            + "。长期记忆不会自动提交；请使用 /memory proposals 查看，"
+            + "用 /memory approve <proposal_id> 批准，或用 /memory reject <proposal_id> [reason] 拒绝。"
+        )
     return PendingUserInput(
         pending_id=f"pending-{task_id}-{run_id}",
         thread_id=thread_id,
@@ -1730,7 +1751,16 @@ def _pending_for_task(journal: JournalStore, *, thread_id: str, task_id: str, ru
         question=question,
         source_ref=source_ref,
         created_at_ms=len(journal.records()) + 1,
+        metadata=metadata,
     )
+
+
+def _pending_memory_proposals(journal: JournalStore, *, task_id: str) -> list[LedgerRecord]:
+    proposals: list[LedgerRecord] = []
+    for record in journal.records(task_id=task_id, kind="memory_proposal"):
+        if record.data.get("approval_status") == "pending":
+            proposals.append(record)
+    return proposals
 
 
 def _mode_for_task(journal: JournalStore, task_id: str) -> str:

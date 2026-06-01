@@ -146,6 +146,12 @@ candidate, proposal, approval, commit, delete, migration, and secret-rejection
 events include ids, status, policy, privacy class, short previews, and hashes.
 It remains a trace view only; rejected secret-like candidates are shown by
 reason/risk/hash and not by raw candidate text.
+When an agent or resident turn detects a durable-memory write intent, the host
+creates only a pending proposal. The pending-user-input question includes the
+proposal id and the `/memory proposals`, `/memory approve <proposal_id>`, and
+`/memory reject <proposal_id>` review commands, so a resident outbox can be
+handled without searching raw traces. No committed memory item is created until
+that explicit approval path runs.
 
 For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured

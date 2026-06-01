@@ -218,6 +218,11 @@ def test_phase72_chat_memory_admin_approves_and_lists_pending_proposal():
     deleted = chat.receive(f"/memory delete {memory_id} test-delete", thread_id="thread-memory")
 
     assert first.status == "needs_user_input"
+    assert first.pending_question is not None
+    assert proposal_id in first.pending_question["question"]
+    assert "/memory approve <proposal_id>" in first.pending_question["question"]
+    assert first.pending_question["metadata"]["pending_type"] == "memory_review"
+    assert first.pending_question["metadata"]["memory_proposal_ids"] == [proposal_id]
     assert listed.status == "completed"
     assert proposal_id in listed.answer
     assert approved.status == "completed"

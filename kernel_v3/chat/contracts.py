@@ -36,6 +36,7 @@ class PendingUserInput(Contract):
     question: str
     source_ref: str | None
     created_at_ms: int
+    metadata: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)

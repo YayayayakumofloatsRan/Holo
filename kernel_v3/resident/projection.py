@@ -203,14 +203,18 @@ def _failure_report_manifest(failure_report: JsonObject) -> JsonObject:
 
 def _pending_question_manifest(pending_question: JsonObject) -> JsonObject:
     question = pending_question.get("question")
+    metadata = _dict_value(pending_question.get("metadata"))
     return {
         "pending_id": pending_question.get("pending_id"),
         "task_id": pending_question.get("task_id"),
         "run_id": pending_question.get("run_id"),
         "source_ref": pending_question.get("source_ref"),
+        "pending_type": metadata.get("pending_type"),
+        "memory_proposal_ids": _string_list(metadata.get("memory_proposal_ids")),
         "question_preview": _preview(str(question or "")),
         "question_hash": _text_hash(str(question or "")),
-        "redaction": {"question": "preview_hash_only"},
+        "metadata": _metadata_manifest(metadata),
+        "redaction": {"question": "preview_hash_only", "metadata": "manifest_only"},
     }
 
 

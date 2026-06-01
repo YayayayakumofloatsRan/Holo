@@ -268,6 +268,10 @@ Memory traces are structured audit views, not memory exports. `memory-trace`
 renders candidate/proposal/approval/commit/delete/migration events with ids,
 policy/status, privacy class, bounded previews, and hashes. Secret-like memory
 candidates that were rejected are shown only by reason, risk flags, and hash.
+Memory-write turns remain review-first. When semantic intake asks for
+`durable_memory:write`, the host can create a pending memory proposal, then the
+pending question and resident outbox name the proposal id and the memory review
+commands. The resident worker still does not commit durable memory by itself.
 
 Resident outbox payloads keep a compact `ChatRuntimeResult` manifest. Resident
 run results also surface `chat_route`, compact `command_result`,

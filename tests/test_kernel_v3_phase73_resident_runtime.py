@@ -351,6 +351,37 @@ def test_phase73_invalid_memory_admin_command_does_not_retry_inbox(tmp_path: Pat
     assert journal.records(kind="chat_command")[-1].data["status"] == "failed"
 
 
+def test_phase73_memory_write_surfaces_reviewable_proposal_in_resident_outbox(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    memory = MemoryStore.in_memory(clock_ms=_clock())
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(
+            journal=journal,
+            memory_store=memory,
+            processor_fabric=fake_fabric({"semantic.intake": _memory_write_intake("resident prefers concise Chinese")}, journal=journal),
+        ),
+        memory_store=memory,
+        semantic_mode="model",
+    )
+    queue.enqueue(thread_id="resident-memory", text="remember resident prefers concise Chinese", message_id="in-memory-review")
+
+    result = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-memory", journal=journal).run_once()
+
+    proposal_id = memory.proposals()[0].proposal_id
+    outbox = queue.outbox_messages()[0]
+    pending = outbox.payload["pending_question"]
+    assert result.status == "processed"
+    assert outbox.status == "pending_user_input"
+    assert proposal_id in outbox.text
+    assert "/memory approve <proposal_id>" in outbox.text
+    assert pending["pending_type"] == "memory_review"
+    assert pending["memory_proposal_ids"] == [proposal_id]
+    assert result.payload["pending_question"]["metadata"]["memory_proposal_ids"] == [proposal_id]
+    assert memory.recall(query="resident", scope={"thread_id": "resident-memory"}).total == 0
+
+
 def test_phase73_answering_pending_question_marks_old_outbox_answered(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
@@ -1700,6 +1731,30 @@ def _multi_safe_read_after_research_intake() -> dict:
         "warnings": ["model_detected_compound_task"],
         "response_hint": None,
         "clarification_question": "Confirm the resident read-only task plan.",
+    }
+
+
+def _memory_write_intake(text: str) -> dict:
+    return {
+        "primary_intent": "memory_write",
+        "suggested_mode": "clarify_first",
+        "compound": False,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "memory_write",
+                "text": text,
+                "sequence_index": 1,
+                "required_capabilities": ["durable_memory:write"],
+                "risk": "write",
+                "status": "needs_review",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": ["durable_memory:write"],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
     }
 
 
