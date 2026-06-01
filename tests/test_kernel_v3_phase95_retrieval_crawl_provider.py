@@ -8,6 +8,7 @@ from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import (
     BoundedCrawlSearchProvider,
     DirectUrlSearchProvider,
+    FakeFetchProvider,
     HttpFetchProvider,
     HttpTransportResponse,
     LiveRetrievalConfig,
@@ -62,6 +63,137 @@ def test_phase95_source_directory_search_provider_exposes_finance_sources() -> N
     assert {source.metadata["source_family"] for source in sources} >= {"regulatory_filing", "structured_regulatory_data"}
     assert all(source.provider == "research_source_directory_search" for source in sources)
     assert provider.search_diagnostics()["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+
+
+def test_phase95_source_directory_ranks_finance_sources_by_query_and_task_metadata() -> None:
+    provider = SourceDirectorySearchProvider()
+
+    news_sources = provider.search(
+        "Apple latest Reuters CNBC market news earnings",
+        goal=SearchGoal(
+            goal_id="goal-news-directory",
+            query="Apple latest Reuters CNBC market news earnings",
+            max_sources=3,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_task_kind": "market_news",
+                "source_authority_requirement": "secondary_or_better",
+            },
+        ),
+        plan=_plan(),
+    )
+    data_sources = provider.search(
+        "AAPL quote price market cap Nasdaq Yahoo",
+        goal=SearchGoal(
+            goal_id="goal-data-directory",
+            query="AAPL quote price market cap Nasdaq Yahoo",
+            max_sources=3,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_task_kind": "market_data",
+                "source_authority_requirement": "secondary_or_better",
+            },
+        ),
+        plan=_plan(),
+    )
+    macro_sources = provider.search(
+        "Federal Reserve policy rate Treasury yield curve",
+        goal=SearchGoal(
+            goal_id="goal-macro-directory",
+            query="Federal Reserve policy rate Treasury yield curve",
+            max_sources=3,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_task_kind": "macro_rates",
+                "source_authority_requirement": "primary",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    assert news_sources[0].metadata["source_family"] == "reputable_news"
+    assert data_sources[0].metadata["source_family"] == "market_data_provider"
+    assert macro_sources[0].metadata["source_family"] in {
+        "central_bank_statistic",
+        "treasury_data",
+        "government_statistic",
+    }
+    assert float(news_sources[0].metadata["source_directory_relevance_score"]) > 0
+    assert provider.search_diagnostics()["query_aware_ranking"] is True
+
+
+def test_phase95_agent_uses_relevant_source_directory_entry_under_tight_source_budget() -> None:
+    journal = JournalStore.in_memory()
+    query = "Apple latest Reuters CNBC market news earnings"
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "semantic.intake": {
+                        "primary_intent": "market_news_research",
+                        "suggested_mode": "retrieval_answer",
+                        "compound": False,
+                        "requires_clarification": False,
+                        "intents": [
+                            {
+                                "kind": "market_news_research",
+                                "text": query,
+                                "sequence_index": 1,
+                                "required_capabilities": ["finance.market_news"],
+                                "risk": "read",
+                                "status": "ready",
+                                "metadata": {
+                                    "capability_args": {
+                                        "retrieval.run": {
+                                            "query": query,
+                                            "max_sources": 1,
+                                            "max_fetches": 1,
+                                        }
+                                    }
+                                },
+                            }
+                        ],
+                        "blocked_capabilities": [],
+                        "warnings": [],
+                        "response_hint": None,
+                        "clarification_question": None,
+                    }
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=SourceDirectorySearchProvider(),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.reuters.com/": (
+                    "Apple latest Reuters CNBC market news earnings chronology. "
+                    "This secondary market news source provides citable event context."
+                )
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run("Research Apple market news", mode="auto", semantic_mode="model")
+
+    assert result.status == "completed"
+    search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
+    assert search.data["sources"][0]["metadata"]["source_directory_id"] == "finance-reputable-market-news"
+    assert search.data["sources"][0]["metadata"]["source_family"] == "reputable_news"
+    assert search.data["diagnostics"]["provider_diagnostics"]["top_source_directory_ids"] == [
+        "finance-reputable-market-news"
+    ]
+    fetch = journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")[0]
+    assert fetch.data["uri"] == "https://www.reuters.com/"
+    assert result.final_answer is not None
+    assert result.final_answer["citation_refs"]
 
 
 def test_phase95_bounded_crawl_search_provider_discovers_links_with_host_allowlist() -> None:

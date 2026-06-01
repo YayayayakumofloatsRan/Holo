@@ -164,6 +164,13 @@
   searches. They remain source pointers rather than cached market content;
   source policy marks central-bank, Treasury, and fund disclosures as primary
   families and transcript/rating sources as secondary context.
+- Source-directory search now ranks curated entries by query and task metadata
+  before applying the source budget. This prevents tight-budget market-news,
+  market-data, macro/rate, transcript, or rating tasks from always spending the
+  first fetch on the static SEC directory entries. The provider journals
+  `top_source_directory_ids`, matched terms, and relevance scores while still
+  leaving network permission, fetch allowlists, evidence sufficiency, and
+  source-authority gates to the host.
 - Retrieval replanning now has an explicit host-state packet:
   `context.state.agent_replan_hints`. It is compiled from journal records after
   each iteration and journaled in `agent_work_plan_update`. For insufficient

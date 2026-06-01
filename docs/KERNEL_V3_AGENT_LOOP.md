@@ -502,6 +502,18 @@ finance profile is active, the directory is injected into context as source
 metadata so the model can choose better query targets while live search/fetch
 still remains opt-in and host-allowlisted.
 
+`research_source_directory_search` is query-aware rather than a static dump of
+that directory. It scores source entries against the query, safe task metadata,
+source family preferences, source-authority requirements, use cases, query
+hints, crawl notes, and entry-declared template match terms before applying the
+source budget. This matters when the budget is tight: `finance.market_news`
+should surface Reuters/Bloomberg/FT/CNBC-style entries before SEC filings,
+`finance.market_data` should surface quote/data portals before generic
+filings, and macro/rate research should surface official statistics, central
+bank, or Treasury entries. The ranking only changes candidate order and
+diagnostics; it does not fetch pages, grant network permission, or make
+secondary sources satisfy primary-source requirements.
+
 Model feedback is never the only stop authority. It is combined with host
 progress signals, repetition detection, evidence checks, and loop guards.
 

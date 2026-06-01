@@ -252,7 +252,12 @@ The live retrieval chain is now broader than a single search endpoint:
   `HOLO_V3_LIVE_RETRIEVAL=1`, crawl seeds, and host allowlists are configured;
   it can also inspect same-host `sitemap.xml` within bounded limits;
 - `research_source_directory_search` exposes domain source directories such as
-  finance fundamentals without fetching anything by itself;
+  finance fundamentals without fetching anything by itself. It ranks directory
+  entries against the query plus task metadata such as `research_task_kind`,
+  preferred source families, and source-authority requirements before applying
+  the source budget, so market-news tasks prefer reputable-news entry points,
+  market-data tasks prefer quote/data portals, and macro/rate tasks prefer
+  official statistics, central-bank, or Treasury entries;
 - `sec_edgar_structured_search` generates official SEC EDGAR, submissions,
   companyfacts, and ticker-directory candidates for finance fundamentals from
   host-supplied ticker/CIK metadata or an injected ticker-to-CIK map; it performs
