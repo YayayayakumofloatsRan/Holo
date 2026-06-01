@@ -128,8 +128,9 @@ Kernel v3 currently contains the infrastructure for:
 - planner-visible `agent_replan_hints` compiled from journal records after
   insufficient retrieval. The packet carries missing facets/source authority,
   attempted query/strategy/provider summaries, payload hashes to avoid
-  repeating, suggested next search strategies/query hints, and
-  `do_not_finalize_until` rules for the next model planner call;
+  repeating, suggested next search strategies/query hints, ranked
+  source-directory targets for profiled research, and `do_not_finalize_until`
+  rules for the next model planner call;
 - dynamic planner retries for planned retrieval subgoals: semantic task plans
   can declare multiple `goal-plan-*` retrieval subgoals, and
   `agent_replan_hints` reports incomplete subgoal ids even when the latest

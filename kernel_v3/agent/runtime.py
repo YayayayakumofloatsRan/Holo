@@ -48,6 +48,7 @@ from kernel_v3.retrieval import (
     register_retrieval_tool,
 )
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
+from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
 from kernel_v3.session import TaskState
 from kernel_v3.tools import ToolManifest, ToolRegistry
 
@@ -1889,6 +1890,7 @@ def _agent_replan_hints(
         journal,
         task_id=task_id,
         run_id=run_id,
+        recipe=recipe,
         report_record=report,
         evidence_record=evidence,
     )
@@ -1913,6 +1915,7 @@ def _retrieval_replan_hints(
     *,
     task_id: str,
     run_id: str,
+    recipe: TaskRecipe,
     report_record,
     evidence_record,
 ) -> JsonObject:
@@ -1949,6 +1952,13 @@ def _retrieval_replan_hints(
         missing=missing,
         requirement=requirement,
     )
+    source_targets = _suggested_source_targets(
+        recipe=recipe,
+        query=_string_value(report_data.get("preview") or diagnostics.get("goal_query") or diagnostics.get("query")),
+        missing=missing,
+        requirement=requirement,
+        strategy_hints=strategy_hints,
+    )
     needs_replan = bool(report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
     return {
         "needs_replan": needs_replan,
@@ -1963,6 +1973,7 @@ def _retrieval_replan_hints(
         "source_authority": source_authority,
         "suggested_search_strategies": strategy_hints,
         "suggested_query_hints": query_hints,
+        "suggested_source_targets": source_targets,
         "attempted_queries": _ordered_unique([item["query"] for item in attempts if isinstance(item.get("query"), str)]),
         "attempted_search_strategies": _ordered_unique(
             [item["search_strategy"] for item in attempts if isinstance(item.get("search_strategy"), str)]
@@ -2120,6 +2131,80 @@ def _suggested_query_hints(*, base_query: str, missing: list[str], requirement: 
     if not base:
         return _ordered_unique(additions)[:6]
     return _ordered_unique([f"{base} {addition}" for addition in additions])[:6]
+
+
+def _suggested_source_targets(
+    *,
+    recipe: TaskRecipe,
+    query: str,
+    missing: list[str],
+    requirement: str,
+    strategy_hints: list[str],
+) -> list[JsonObject]:
+    profile_id = _research_profile_id(recipe)
+    if not profile_id:
+        return []
+    entries = source_directory_for_profile(profile_id)
+    if not entries:
+        return []
+    ranking_metadata: JsonObject = {
+        "research_profile": profile_id,
+        "source_authority_requirement": requirement,
+        "missing": missing,
+        "suggested_search_strategies": strategy_hints,
+    }
+    if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
+        ranking_metadata["preferred_source_families"] = [
+            "regulatory_filing",
+            "structured_regulatory_data",
+            "company_ir",
+            "exchange_filing",
+        ]
+    ranked = rank_source_directory_entries(entries, query=query, metadata=ranking_metadata)
+    targets: list[JsonObject] = []
+    for ranked_entry in ranked[:6]:
+        entry = ranked_entry.entry
+        metadata = getattr(entry, "metadata", {})
+        templates = _source_target_query_templates(metadata)
+        source_family = _string_value(getattr(entry, "source_family", "")) or ""
+        authority_level = _string_value(getattr(entry, "authority_level", "")) or ""
+        payload_metadata: JsonObject = {
+            "research_profile": profile_id,
+            "source_family": source_family,
+            "source_authority_requirement": requirement or authority_level,
+        }
+        if strategy_hints:
+            payload_metadata["search_strategy"] = strategy_hints[0]
+        targets.append(
+            {
+                "source_id": _string_value(getattr(entry, "source_id", "")) or "",
+                "title": _preview_text(_string_value(getattr(entry, "title", "")) or "", limit=140),
+                "source_family": source_family,
+                "authority_level": authority_level,
+                "base_url": _string_value(getattr(entry, "base_url", "")) or "",
+                "allowed_hosts": _string_list(getattr(entry, "allowed_hosts", []))[:8],
+                "matched_query_terms": ranked_entry.matched_terms[:12],
+                "relevance_score": round(ranked_entry.score, 6),
+                "query_hints": _string_list(getattr(entry, "query_hints", []))[:4],
+                "crawl_notes": _string_list(getattr(entry, "crawl_notes", []))[:3],
+                "query_template_ids": [
+                    _string_value(template.get("template_id"))
+                    for template in templates[:4]
+                    if isinstance(template, dict) and _string_value(template.get("template_id"))
+                ],
+                "suggested_payload_metadata": payload_metadata,
+            }
+        )
+    return targets
+
+
+def _source_target_query_templates(metadata: object) -> list[JsonObject]:
+    if not isinstance(metadata, dict):
+        return []
+    value = metadata.get("query_url_templates")
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _do_not_finalize_until(*, missing: list[str], requirement: str) -> list[str]:

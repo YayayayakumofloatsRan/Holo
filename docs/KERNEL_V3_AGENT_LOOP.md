@@ -243,11 +243,20 @@ After an insufficient retrieval iteration, the next planner context includes
 memory and not a tool. It records the latest feedback, evidence sufficiency,
 retrieval report status, missing query facets, source-authority gaps, attempted
 queries/provider ids/search strategies, recent action payload hashes,
-suggested query/search-strategy changes, and `do_not_finalize_until` rules.
+suggested query/search-strategy changes, ranked `suggested_source_targets` for
+profiled research, and `do_not_finalize_until` rules.
 The planner contract tells live models to use this packet to propose one
 materially different safe action and avoid final answers while host evidence
 rules are unmet. The host still enforces PolicyGate, repetition detection,
 evidence sufficiency, and final termination.
+
+For finance-profile retrieval, `suggested_source_targets` comes from the
+curated source directory ranked against the current query, missing evidence,
+and source-authority requirement. It gives the next planner packet source ids,
+source families, authority levels, base URLs, query/crawl hints, template ids,
+and host-owned payload metadata such as `search_strategy`; it does not include
+raw fetched bodies or make those sources executable without a normal
+`retrieval.run` action.
 
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, roleplay, document/report work,

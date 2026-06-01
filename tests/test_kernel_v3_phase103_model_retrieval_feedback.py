@@ -130,11 +130,24 @@ def test_phase103_source_authority_gap_feedback_drives_model_retrieval_replan() 
     assert "source_authority:primary" in retrieval_replan["missing"]
     assert "structured" in retrieval_replan["suggested_search_strategies"]
     assert "official filing" in " ".join(retrieval_replan["suggested_query_hints"])
+    assert retrieval_replan["suggested_source_targets"]
+    top_target = retrieval_replan["suggested_source_targets"][0]
+    assert top_target["authority_level"] == "primary"
+    assert top_target["source_family"] in {
+        "regulatory_filing",
+        "structured_regulatory_data",
+        "company_ir",
+        "exchange_filing",
+    }
+    assert top_target["base_url"].startswith("https://")
+    assert top_target["suggested_payload_metadata"]["search_strategy"] == "structured"
+    assert top_target["suggested_payload_metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert "primary source authority requirement is satisfied" in retrieval_replan["do_not_finalize_until"]
     contexts = journal.records(task_id=result.task_id, kind="context")
     second_context_replan = contexts[1].data["state"]["agent_replan_hints"]
     assert second_context_replan["status"] == "needs_replan"
     assert second_context_replan["retrieval"]["source_authority_requirement"] == "primary"
+    assert second_context_replan["retrieval"]["suggested_source_targets"][0]["source_id"] == top_target["source_id"]
     reports = journal.records(task_id=result.task_id, kind="retrieval_report")
     assert reports[0].data["status"] == "insufficient_evidence"
     assert reports[-1].data["status"] == "sufficient"

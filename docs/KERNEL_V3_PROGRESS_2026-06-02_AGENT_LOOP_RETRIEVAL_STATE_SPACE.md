@@ -183,9 +183,16 @@
   each iteration and journaled in `agent_work_plan_update`. For insufficient
   retrieval it includes missing facets/source authority, attempted
   query/strategy/provider summaries, recent payload hashes, suggested query
-  and search-strategy changes, and `do_not_finalize_until` rules. This gives a
-  live model a structured next-action interface instead of forcing it to infer
-  loop state from raw record history or fixed phrase behavior.
+  and search-strategy changes, ranked finance source-directory targets, and
+  `do_not_finalize_until` rules. This gives a live model a structured
+  next-action interface instead of forcing it to infer loop state from raw
+  record history or fixed phrase behavior.
+- Finance retrieval replan hints now include `suggested_source_targets`
+  selected from the curated source directory by query, missing evidence, and
+  source-authority requirement. The targets expose source ids, authority,
+  source family, base URL, query/crawl hints, query-template ids, and
+  suggested payload metadata while still requiring a normal host-validated
+  `retrieval.run` action.
 - `retrieval.run` now supports the same plural capability payload contract as
   workspace actions. A single model semantic intent can place a list under
   `metadata.capability_args["retrieval.run"]`; the host expands it into
