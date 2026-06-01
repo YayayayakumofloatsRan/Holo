@@ -171,6 +171,17 @@ expanded action count. This is how the current loop can run 10+ useful
 iterations from one broad instruction while still knowing when the plan is
 complete.
 
+The same plural payload contract now applies to retrieval. A model semantic
+packet may place an array under `metadata.capability_args["retrieval.run"]`,
+for example one payload for official revenue filings, one for issuer margin
+materials, and one for competitive landscape context. `AgentRuntime` expands
+those payloads into separate ordered `retrieval.run` actions, preserves the
+payload metadata such as research profile and source-authority requirements,
+and lets the existing workloop decide `continue` or `final_answer` after each
+observation. This gives LLM-driven planning a broad research interface without
+letting the model bypass PolicyGate, source budgets, evidence sufficiency, or
+termination guards.
+
 Model planner mode can also run as a dynamic workloop instead of a pre-expanded
 static plan. In that path, every loop iteration recompiles context, sends the
 latest feedback and journal-derived state to `planner.propose`, receives one

@@ -1439,27 +1439,37 @@ def _actions_from_plan_step(goal: str, recipe: TaskRecipe, step: JsonObject) -> 
     tool_name = str(step.get("tool_name") or "")
     sequence = _plan_step_index(step)
     if tool_name == "retrieval.run":
-        payload = {
-            "goal_id": f"goal-plan-{sequence}",
-            "query": str(step.get("goal") or goal),
-            "max_spans_per_document": 2,
-        }
-        payload = _merge_retrieval_payload(payload, _capability_args_from_step(step, "retrieval.run"))
-        payload = _apply_profile_capability_defaults(payload, step)
-        payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
-        payload = _apply_research_depth_defaults(payload)
-        return [
-            CandidateAction(
-                action_id=f"act-plan-{sequence}-retrieval",
-                kind="tool",
-                name="retrieval.run",
-                description=str(step.get("goal") or "run retrieval"),
-                score=1.0,
-                payload=payload,
-                reasons=["semantic_task_plan"],
-                side_effect_class="read",
+        retrieval_payloads = _capability_payloads_from_step(step, "retrieval.run")
+        if not retrieval_payloads:
+            retrieval_payloads = [_capability_args_from_step(step, "retrieval.run") or {}]
+        actions: list[CandidateAction] = []
+        total_payloads = len(retrieval_payloads)
+        for item_index, args in enumerate(retrieval_payloads, start=1):
+            payload = {
+                "goal_id": f"goal-plan-{sequence}" if total_payloads == 1 else f"goal-plan-{sequence}-{item_index}",
+                "query": str(step.get("goal") or goal),
+                "max_spans_per_document": 2,
+            }
+            payload = _merge_retrieval_payload(payload, args)
+            payload = _apply_profile_capability_defaults(payload, step)
+            payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
+            payload = _apply_research_depth_defaults(payload)
+            payload.setdefault("query", str(step.get("goal") or goal))
+            actions.append(
+                CandidateAction(
+                    action_id=f"act-plan-{sequence}-retrieval"
+                    if total_payloads == 1
+                    else f"act-plan-{sequence}-{item_index}-retrieval",
+                    kind="tool",
+                    name="retrieval.run",
+                    description=str(payload.get("query") or step.get("goal") or "run retrieval"),
+                    score=1.0,
+                    payload=payload,
+                    reasons=["semantic_task_plan"],
+                    side_effect_class="read",
+                )
             )
-        ]
+        return actions
     if tool_name == "workspace.search,file.read":
         target = _workspace_target(goal, {"steps": [step]})
         if target is None:

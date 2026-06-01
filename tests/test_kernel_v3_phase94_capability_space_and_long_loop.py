@@ -1014,6 +1014,118 @@ def test_phase94_finance_profile_can_drive_multiple_retrieval_loop_actions():
     assert len(result.final_answer["citation_refs"]) == 2
 
 
+def test_phase94_single_semantic_research_intent_expands_multiple_retrieval_payloads():
+    journal = JournalStore.in_memory()
+    payloads = [
+        {
+            "query": "AAPL 2024 official filing revenue",
+            "metadata": {
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "primary",
+                "research_task_kind": "fundamentals",
+            },
+        },
+        {
+            "query": "AAPL 2024 investor relations margin",
+            "metadata": {
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "primary",
+                "research_task_kind": "fundamentals",
+            },
+        },
+        {
+            "query": "AAPL 2024 competitive landscape services",
+            "metadata": {
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "secondary_or_better",
+                "research_task_kind": "competitive_landscape",
+            },
+        },
+    ]
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "finance_fundamentals_research_plan",
+                "suggested_mode": "retrieval_answer",
+                "compound": True,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals_research_plan",
+                        "text": "research Apple revenue, margin, and competitive services context",
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.fundamentals_research", "finance.competitive_landscape"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "domain": "finance",
+                            "activity": "research",
+                            "capability_args": {"retrieval.run": payloads},
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    urls = {
+        payloads[0]["query"]: "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm",
+        payloads[1]["query"]: "https://www.apple.com/investor-relations/earnings-releases/",
+        payloads[2]["query"]: "https://www.reuters.com/technology/apple-services-market-context/",
+    }
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                query: [
+                    _source(
+                        f"src-{index}",
+                        url,
+                        f"Apple research source {index}",
+                        f"Evidence for {query}.",
+                    )
+                ]
+                for index, (query, url) in enumerate(urls.items(), start=1)
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                urls[payloads[0]["query"]]: "Apple 2024 Form 10-K official SEC filing revenue evidence.",
+                urls[payloads[1]["query"]]: "Apple investor relations official margin and earnings release evidence.",
+                urls[payloads[2]["query"]]: "Reuters reported Apple services competitive landscape context.",
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        "调研 Apple 的收入、利润率和服务业务竞争格局",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert len(plan["steps"][0]["metadata"]["capability_args"]["retrieval.run"]) == 3
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["name"] for record in actions] == ["retrieval.run", "retrieval.run", "retrieval.run"]
+    assert [record.data["payload"]["query"] for record in actions] == [payload["query"] for payload in payloads]
+    assert actions[0].data["payload"]["metadata"]["source_authority_requirement"] == "primary"
+    assert actions[2].data["payload"]["metadata"]["source_authority_requirement"] == "secondary_or_better"
+    updates = journal.records(task_id=result.task_id, kind="agent_work_plan_update")
+    assert [update.data["remaining_actions"] for update in updates] == [2, 1, 0]
+    decisions = journal.records(task_id=result.task_id, kind="termination_decision")
+    assert [record.data["decision"] for record in decisions] == ["continue", "continue", "final_answer"]
+    assert len(result.final_answer["citation_refs"]) == 3
+
+
 def _source(source_id: str, uri: str, title: str, snippet: str) -> SearchSource:
     return SearchSource(
         source_id=source_id,

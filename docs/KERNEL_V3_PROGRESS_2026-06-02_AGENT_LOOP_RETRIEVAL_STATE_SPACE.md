@@ -165,6 +165,13 @@
   and search-strategy changes, and `do_not_finalize_until` rules. This gives a
   live model a structured next-action interface instead of forcing it to infer
   loop state from raw record history or fixed phrase behavior.
+- `retrieval.run` now supports the same plural capability payload contract as
+  workspace actions. A single model semantic intent can place a list under
+  `metadata.capability_args["retrieval.run"]`; the host expands it into
+  multiple ordered retrieval actions, preserving query metadata such as finance
+  research profile, research task kind, and source-authority requirement.
+  This lets one LLM planning packet drive multi-subtopic research loops without
+  giving the model direct tool execution authority.
 
 ## Validation
 
@@ -177,7 +184,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-494 passed
+495 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -235,6 +242,11 @@ Additional deterministic coverage now includes:
   source-authority state, suggested official-source query terms, search
   strategy changes, recent payload hashes, and host-owned
   `do_not_finalize_until` rules.
+- a single-intent finance research test now feeds three `retrieval.run`
+  payloads through semantic intake. The host expands them into three loop
+  actions for revenue, margin, and competitive landscape research, journals
+  decreasing work-plan remaining counts, continues twice, and finalizes after
+  three citations.
 - live retrieval/corpus bridge tests show that a configured corpus is searched
   before live HTTP, and that an agent's first live SEC fetch is indexed into
   corpus so a second run can answer from artifact-backed corpus evidence without

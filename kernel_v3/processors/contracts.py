@@ -155,6 +155,10 @@ represent that boundary in required_capabilities/status/warnings instead of
 pretending it is executable.
 When a capability needs structured arguments, put them under metadata.capability_args,
 keyed by capability name, for example {"file.read":{"path":"README.md"}}.
+For multi-part research, metadata.capability_args may contain a list of payloads
+for one capability, for example {"retrieval.run":[{"query":"official filing revenue"},{"query":"issuer investor relations margin"}]}.
+The host will expand each payload into one bounded tool proposal and still
+validate policy, budgets, evidence, and termination.
 When useful, include metadata.domain, metadata.activity, metadata.resource, and
 metadata.execution_surface to preserve broad agent state such as finance,
 database, cloud, workflow, knowledge_base, multimodal, resident, transport,

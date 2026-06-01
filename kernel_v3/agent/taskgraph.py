@@ -283,9 +283,12 @@ def _capability_args(metadata: JsonObject) -> JsonObject:
         return {}
     result: JsonObject = {}
     for key, payload in value.items():
-        if not isinstance(key, str) or not isinstance(payload, dict):
+        if not isinstance(key, str):
             continue
-        result[key] = dict(payload)
+        if isinstance(payload, dict):
+            result[key] = dict(payload)
+        elif isinstance(payload, list):
+            result[key] = [dict(item) for item in payload if isinstance(item, dict)]
     return result
 
 

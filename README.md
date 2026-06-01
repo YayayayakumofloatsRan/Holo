@@ -64,6 +64,10 @@ Kernel v3 currently contains the infrastructure for:
   proposes a host capability and the host reads the current time;
 - semantic work plans that can expand one model-proposed capability into many
   ordered tool actions, including 10+ iteration workspace loops;
+- semantic research plans that can expand one model-proposed `retrieval.run`
+  capability into multiple ordered retrieval actions from
+  `metadata.capability_args["retrieval.run"]` payload arrays, so one LLM packet
+  can drive multi-subtopic research while each retrieval remains host-validated;
 - model-planner dynamic loops that recompile context, re-call
   `planner.propose`, journal plan revisions, and continue for 10+ bounded
   iterations when evaluator feedback says more work remains;
