@@ -10,8 +10,14 @@ RESEARCH_DEPTHS = ("light", "balanced", "deep")
 _FINANCE_QUERY_TEMPLATES = [
     "{query}",
     "{query} annual report 10-K 10-Q filing",
+    "{query} SEC EDGAR 10-K 10-Q companyfacts",
+    "{query} site:sec.gov/Archives/edgar/data annual report",
     "{query} investor relations earnings release",
+    "{query} investor relations earnings presentation annual report",
     "{query} exchange filing annual report",
+    "{query} HKEX annual report announcement",
+    "{query} cninfo 年报 季报 公告",
+    "{query} official financial statements annual report",
 ]
 
 _FINANCE_DEPTH_DEFAULTS: dict[str, JsonObject] = {

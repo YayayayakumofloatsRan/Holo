@@ -73,8 +73,9 @@ Kernel v3 currently contains the infrastructure for:
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
 - finance-fundamentals research profile and local corpus-backed retrieval.
 - finance fundamentals source directory entries for SEC/EDGAR, SEC structured
-  data, company IR, official statistics, exchange disclosures, and secondary
-  market sources.
+  data, SEC CIK/ticker mapping, SEC archives, SEC financial statement datasets,
+  company IR, US/global official statistics, China/HK/UK/Canada/Australia/Japan/
+  Singapore disclosure portals, and secondary market sources.
 
 Live model and live retrieval surfaces are opt-in. They are not default unit-test
 dependencies.
@@ -239,6 +240,13 @@ python3 holo-v3 agent "上网检索DeepSeek API文档，说明模型和鉴权方
 The journal for that run showed `processor_request`/`processor_result` with
 usage, bounded crawl/fetch artifacts, evidence/citations, evidence sufficiency,
 termination decision, and final answer. API keys were not written to journal.
+
+Financial fundamental research is represented as a profile capability rather
+than a hard-coded domain branch. A model can propose
+`finance.fundamentals_research`; the host compiles that into `retrieval.run`
+with the `finance_fundamentals` research profile, source directory context, and
+primary-source policy. Multi-intent finance plans can therefore execute multiple
+retrieval loop actions before finalization.
 
 ## Validation
 

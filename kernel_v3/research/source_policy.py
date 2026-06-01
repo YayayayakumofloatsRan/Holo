@@ -30,11 +30,17 @@ _FAMILY_SCORES = {
 }
 
 _REGULATORY_DOMAINS = {
+    "api.company-information.service.gov.uk",
+    "disclosure2.edinet-fsa.go.jp",
+    "find-and-update.company-information.service.gov.uk",
     "sec.gov",
+    "sedarplus.ca",
     "www.sec.gov",
+    "www.sedarplus.ca",
     "edgar.sec.gov",
 }
 _EXCHANGE_DOMAINS = {
+    "asx.com.au",
     "cninfo.com.cn",
     "www.cninfo.com.cn",
     "static.cninfo.com.cn",
@@ -52,13 +58,25 @@ _EXCHANGE_DOMAINS = {
     "www.hkexnews.hk",
     "londonstockexchange.com",
     "www.londonstockexchange.com",
+    "sgx.com",
+    "www.asx.com.au",
+    "www.sgx.com",
 }
 _GOVERNMENT_STAT_DOMAINS = {
     "bea.gov",
+    "bis.org",
+    "data.worldbank.org",
     "www.bea.gov",
     "bls.gov",
+    "imf.org",
+    "oecd.org",
     "www.bls.gov",
+    "www.bis.org",
+    "www.imf.org",
+    "www.oecd.org",
+    "www.worldbank.org",
     "fred.stlouisfed.org",
+    "worldbank.org",
 }
 _MARKET_DATA_DOMAINS = {
     "finance.yahoo.com",

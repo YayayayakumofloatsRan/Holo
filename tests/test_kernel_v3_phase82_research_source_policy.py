@@ -46,11 +46,9 @@ def test_phase82_finance_profile_expands_queries_toward_primary_sources() -> Non
         research_profile=finance_fundamentals_profile(),
     )
 
-    assert queries == [
-        "AAPL revenue margin",
-        "AAPL revenue margin annual report 10-K 10-Q filing",
-        "AAPL revenue margin investor relations earnings release",
-    ]
+    assert queries[0] == "AAPL revenue margin"
+    assert any("10-K" in query or "10-Q" in query for query in queries[1:])
+    assert any("SEC EDGAR" in query or "investor relations" in query for query in queries[1:])
 
 
 def test_phase82_finance_profile_multi_query_can_recover_primary_source() -> None:
@@ -277,6 +275,51 @@ def test_phase82_source_policy_matches_known_finance_subdomains() -> None:
     assert news.authority_level == "secondary"
     assert market_data.source_family == "market_data_provider"
     assert market_data.authority_level == "secondary"
+
+
+def test_phase82_source_policy_matches_global_primary_finance_sources() -> None:
+    profile = finance_fundamentals_profile()
+    samples = [
+        (
+            "https://find-and-update.company-information.service.gov.uk/company/00000006/filing-history",
+            "UK Companies House accounts",
+            "regulatory_filing",
+        ),
+        (
+            "https://www.sedarplus.ca/landingpage/",
+            "SEDAR+ issuer filings",
+            "regulatory_filing",
+        ),
+        (
+            "https://www.asx.com.au/markets/trade-our-cash-market/announcements",
+            "ASX company announcements",
+            "exchange_filing",
+        ),
+        (
+            "https://disclosure2.edinet-fsa.go.jp/",
+            "EDINET securities report",
+            "regulatory_filing",
+        ),
+        (
+            "https://www.sgx.com/securities/company-announcements",
+            "SGX company announcements",
+            "exchange_filing",
+        ),
+        (
+            "https://data.worldbank.org/indicator/NY.GDP.MKTP.CD",
+            "World Bank GDP indicator",
+            "government_statistic",
+        ),
+    ]
+
+    for uri, title, expected_family in samples:
+        assessment = assess_search_source(
+            _source("src-global", uri, title, "official finance source"),
+            profile=profile,
+        )
+        assert assessment.source_family == expected_family
+        assert assessment.authority_level == "primary"
+        assert assessment.usable_as_primary is True
 
 
 def test_phase82_model_taskgraph_capability_args_reach_retrieval_without_agent_domain_logic() -> None:

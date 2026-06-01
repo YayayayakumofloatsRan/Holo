@@ -17,6 +17,13 @@
   with the finance fundamentals research profile.
 - The semantic capability catalog now exposes broader state dimensions:
   task lifecycle, evidence, tooling, memory, resident runtime, and user control.
+- The finance source directory was expanded as a search-resource library, not a
+  financial content cache. It now includes SEC CIK/ticker mapping, SEC archives,
+  SEC financial statement datasets, Companies House, SEDAR+, ASX, EDINET, SGX,
+  and global official-statistics families in addition to the existing SEC,
+  company IR, China/HK exchange, US statistics, and secondary market sources.
+- Finance source policy now recognizes those official/global domains as primary
+  regulatory, exchange, or government-statistic sources.
 
 ## Validation
 
@@ -29,8 +36,15 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-446 passed
+448 passed
 ```
+
+Additional deterministic coverage now includes:
+
+- global primary finance-source classification;
+- a multi-intent `finance.fundamentals_research` task that compiles into two
+  `retrieval.run` loop actions and finalizes only after both reports are
+  sufficient.
 
 Live model scenarios:
 

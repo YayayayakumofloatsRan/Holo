@@ -2,9 +2,11 @@ from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.capabilities import semantic_capability_catalog
+from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, finance_fundamentals_source_directory
+from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchSource
 
 
 def test_phase94_capability_catalog_exposes_broad_agent_state_space(tmp_path):
@@ -260,14 +262,25 @@ def test_phase94_finance_source_directory_is_structured_and_context_injected(tmp
     assert {
         "finance-sec-edgar-filings",
         "finance-sec-companyfacts",
+        "finance-sec-company-tickers",
+        "finance-sec-edgar-archives",
+        "finance-sec-financial-statement-data-sets",
         "finance-company-investor-relations",
         "finance-us-official-statistics",
         "finance-china-exchange-disclosures",
         "finance-hkex-disclosures",
+        "finance-uk-companies-house-filings",
+        "finance-canada-sedar-plus-filings",
+        "finance-asx-announcements",
+        "finance-japan-edinet-filings",
+        "finance-sgx-announcements",
+        "finance-global-official-statistics",
         "finance-market-data-secondary",
     }.issubset(source_ids)
     assert all(entry.allowed_hosts for entry in directory)
     assert all(entry.query_hints for entry in directory)
+    assert all(entry.required_identifiers for entry in directory)
+    assert len(directory) >= 14
 
     journal = JournalStore.in_memory()
     fabric = fake_fabric(
@@ -371,3 +384,112 @@ def test_phase94_finance_profile_capability_routes_to_retrieval_without_workspac
     action = journal.records(task_id=result.task_id, kind="action")[0].data
     assert action["name"] == "retrieval.run"
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+
+
+def test_phase94_finance_profile_can_drive_multiple_retrieval_loop_actions():
+    journal = JournalStore.in_memory()
+    queries = [
+        "AAPL 2024 10-K revenue",
+        "AAPL 2024 investor relations margin",
+    ]
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "finance_fundamentals",
+                "suggested_mode": "retrieval_answer",
+                "compound": True,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals",
+                        "text": queries[0],
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    },
+                    {
+                        "kind": "finance_fundamentals",
+                        "text": queries[1],
+                        "sequence_index": 2,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {},
+                    },
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                queries[0]: [
+                    _source(
+                        "sec-aapl-10k",
+                        "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm",
+                        "Apple 2024 Form 10-K",
+                        "Official SEC filing revenue evidence.",
+                    )
+                ],
+                queries[1]: [
+                    _source(
+                        "apple-ir",
+                        "https://www.apple.com/investor-relations/earnings-releases/",
+                        "Apple investor relations earnings release",
+                        "Issuer-hosted margin and earnings release evidence.",
+                    )
+                ],
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm": (
+                    "Apple 2024 Form 10-K revenue was reported in the official SEC filing."
+                ),
+                "https://www.apple.com/investor-relations/earnings-releases/": (
+                    "Apple investor relations earnings release discussed gross margin and results."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        "Research AAPL revenue and margin from primary sources",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["name"] for record in actions] == ["retrieval.run", "retrieval.run"]
+    assert all(
+        record.data["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+        for record in actions
+    )
+    decisions = journal.records(task_id=result.task_id, kind="termination_decision")
+    assert [record.data["decision"] for record in decisions] == ["continue", "final_answer"]
+    reports = journal.records(task_id=result.task_id, kind="retrieval_report")
+    assert [record.data["status"] for record in reports] == ["sufficient", "sufficient"]
+    assert len(result.final_answer["citation_refs"]) == 2
+
+
+def _source(source_id: str, uri: str, title: str, snippet: str) -> SearchSource:
+    return SearchSource(
+        source_id=source_id,
+        uri=uri,
+        title=title,
+        snippet=snippet,
+        provider="fake",
+    )
