@@ -112,6 +112,14 @@
   world model, resource kind, action phase, authority, temporal, risk,
   identity-boundary, and communication-channel axes so live model packets can
   reason over more than `workspace:*` state without inventing executable tools.
+- The state space now separates executable recipes from broader Hermes-style
+  operating state. `SemanticStateProfile.state_axes` includes
+  `goal_structure`, `dependency_state`, `commitment_state`, `preference_state`,
+  `memory_scope`, `planning_depth`, `operation_runtime`, `quality_bar`, and
+  `interruption_policy`. These axes let model packets represent roleplay,
+  professional-domain boundaries, personal-assistant coordination, long-running
+  resident work, user preferences, and external/human-world limits without
+  granting any new tool capability.
 - Model-planner retrieval actions now inherit finance-profile defaults from
   the host-validated semantic plan. If model intake classified a task as
   `finance.fundamentals_research`, the host adds the finance fundamentals

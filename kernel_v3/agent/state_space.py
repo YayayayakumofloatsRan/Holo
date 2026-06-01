@@ -22,7 +22,19 @@ _CAPABILITY_ALIASES = {
 
 
 _FAMILY_BY_MARKER = {
-    "conversation": ("conversation", "roleplay", "knowledge", "analysis", "direct_answer", "noop"),
+    "conversation": (
+        "conversation",
+        "roleplay",
+        "knowledge",
+        "analysis",
+        "direct_answer",
+        "noop",
+        "task.decompose",
+        "decision",
+        "strategy",
+        "assistant",
+        "preference",
+    ),
     "retrieval": ("retrieval", "web", "browser.page", "news", "research"),
     "finance": ("finance", "market", "filing", "fundamental", "competitive"),
     "legal": ("legal", "contract", "regulation", "compliance"),
@@ -314,6 +326,68 @@ def _state_axes(
             _identity_boundary(intent_kind=intent_kind, domain=domain, capabilities=capabilities),
         ),
         "communication_channel": _axis(metadata, "communication_channel", "chat_thread"),
+        "goal_structure": _axis(
+            metadata,
+            "goal_structure",
+            _goal_structure(intent_kind=intent_kind, activity=activity, autonomy=autonomy, route_class=route_class),
+        ),
+        "dependency_state": _axis(
+            metadata,
+            "dependency_state",
+            _dependency_state(
+                metadata=metadata,
+                evidence_posture=evidence_posture,
+                execution_surface=execution_surface,
+                permission_state=permission_state,
+                status=status,
+            ),
+        ),
+        "commitment_state": _axis(
+            metadata,
+            "commitment_state",
+            _commitment_state(activity=activity, permission_state=permission_state, status=status),
+        ),
+        "preference_state": _axis(
+            metadata,
+            "preference_state",
+            _preference_state(domain=domain, capabilities=capabilities),
+        ),
+        "memory_scope": _axis(
+            metadata,
+            "memory_scope",
+            _memory_scope(domain=domain, capabilities=capabilities, memory_state=_memory_state(domain=domain, capabilities=capabilities)),
+        ),
+        "planning_depth": _axis(
+            metadata,
+            "planning_depth",
+            _planning_depth(intent_kind=intent_kind, activity=activity, autonomy=autonomy, route_class=route_class),
+        ),
+        "operation_runtime": _axis(
+            metadata,
+            "operation_runtime",
+            _operation_runtime(intent_kind=intent_kind, activity=activity, autonomy=autonomy, domain=domain),
+        ),
+        "quality_bar": _axis(
+            metadata,
+            "quality_bar",
+            _quality_bar(
+                domain=domain,
+                activity=activity,
+                evidence_posture=evidence_posture,
+                authority=_authority_state(
+                    domain=domain,
+                    families=families,
+                    evidence_posture=evidence_posture,
+                    execution_surface=execution_surface,
+                    capabilities=capabilities,
+                ),
+            ),
+        ),
+        "interruption_policy": _axis(
+            metadata,
+            "interruption_policy",
+            _interruption_policy(permission_state=permission_state, route_class=route_class),
+        ),
     }
 
 
@@ -730,6 +804,135 @@ def _identity_boundary(*, intent_kind: str, domain: str, capabilities: list[str]
     if "self" in text or "identity" in text or "capability" in text:
         return "tool_capability_disclosure"
     return "assistant_self_description"
+
+
+def _goal_structure(*, intent_kind: str, activity: str, autonomy: str, route_class: str) -> str:
+    text = f"{intent_kind} {activity} {autonomy} {route_class}".lower()
+    if any(marker in text for marker in ("physical", "device", "human_world")):
+        return "human_world_request"
+    if any(marker in text for marker in ("resident", "monitor", "background")):
+        return "background_monitor"
+    if any(marker in text for marker in ("schedule", "recurring", "reminder")):
+        return "recurring"
+    if any(marker in text for marker in ("open", "research", "investigate", "explore")):
+        return "open_ended"
+    if any(marker in text for marker in ("compound", "workflow", "multi_step", "automation")):
+        return "compound_ordered"
+    return "atomic"
+
+
+def _dependency_state(
+    *,
+    metadata: JsonObject,
+    evidence_posture: str,
+    execution_surface: str,
+    permission_state: str,
+    status: str,
+) -> str:
+    depends_on = metadata.get("depends_on")
+    if isinstance(depends_on, list) and depends_on:
+        return "depends_on_prior_step"
+    if status in {"needs_user_input", "needs_clarification"}:
+        return "depends_on_user_input"
+    if permission_state in {"dangerous_blocked", "host_only"}:
+        return "depends_on_permission"
+    if permission_state in {"planned", "not_configured"}:
+        return "depends_on_unconfigured_connector"
+    if evidence_posture in {"evidence_required", "citations_required", "partial", "insufficient"} or execution_surface == "retrieval":
+        return "depends_on_external_data"
+    if permission_state in {"network_permission_required", "write_permission_required", "dangerous_blocked", "host_only"}:
+        return "depends_on_permission"
+    return "none"
+
+
+def _commitment_state(*, activity: str, permission_state: str, status: str) -> str:
+    if status == "cancelled":
+        return "cancelled_commitment"
+    if status in {"completed", "final_answer"}:
+        return "completed_commitment"
+    if permission_state in {"write_permission_required", "network_permission_required", "dangerous_blocked", "host_only", "planned", "not_configured"}:
+        return "pending_user_approval"
+    if activity in {"write", "monitor", "plan"}:
+        return "drafting_commitment"
+    return "none"
+
+
+def _preference_state(*, domain: str, capabilities: list[str]) -> str:
+    text = " ".join([domain, *capabilities]).lower()
+    if "preference.apply" in capabilities:
+        return "thread_preference"
+    if "durable_memory.commit" in capabilities:
+        return "durable_preference_candidate"
+    if "durable_memory" in text and any(marker in text for marker in ("read", "search", "recall")):
+        return "durable_preference_applied"
+    if "conflict" in text and "preference" in text:
+        return "preference_conflict"
+    return "not_relevant"
+
+
+def _memory_scope(*, domain: str, capabilities: list[str], memory_state: str) -> str:
+    text = " ".join([domain, *capabilities]).lower()
+    if memory_state == "committed_snapshot":
+        return "durable_snapshot"
+    if memory_state == "proposal_pending":
+        return "proposal_shadow"
+    if "durable_memory.delete" in capabilities or "durable_memory.export" in capabilities:
+        return "admin_review"
+    if "thread" in text or "summary" in text:
+        return "thread_summary"
+    return "current_turn"
+
+
+def _planning_depth(*, intent_kind: str, activity: str, autonomy: str, route_class: str) -> str:
+    text = f"{intent_kind} {activity} {autonomy} {route_class}".lower()
+    if route_class in {"host_boundary", "planned_or_not_configured_boundary", "host_only_boundary"}:
+        return "operator_review_plan"
+    if "resident" in text or "monitor" in text:
+        return "resident_plan"
+    if "research" in text:
+        return "research_plan"
+    if any(marker in text for marker in ("compound", "workflow", "automation", "plan")):
+        return "multi_step_plan"
+    if activity in {"respond", "read", "write", "analyze", "teach"}:
+        return "single_action"
+    return "none"
+
+
+def _operation_runtime(*, intent_kind: str, activity: str, autonomy: str, domain: str) -> str:
+    text = f"{intent_kind} {activity} {autonomy} {domain}".lower()
+    if "scheduled" in text or "calendar" in text or "reminder" in text:
+        return "scheduled"
+    if "resident" in text:
+        return "resident"
+    if "long_running" in text or "monitor" in text:
+        return "long_running"
+    if any(marker in text for marker in ("workflow", "operator", "handoff")):
+        return "external_handoff"
+    if autonomy == "bounded_task_loop" or activity in {"research", "write", "analyze", "plan"}:
+        return "bounded_loop"
+    return "instant"
+
+
+def _quality_bar(*, domain: str, activity: str, evidence_posture: str, authority: str) -> str:
+    if domain in {"legal", "medical", "finance", "risk", "cybersecurity"}:
+        return "regulated_domain"
+    if authority in {"primary_source_required", "conflicting_sources"} or evidence_posture == "citations_required":
+        return "audit_ready"
+    if activity in {"research", "analyze", "review", "plan"} or evidence_posture == "evidence_required":
+        return "rigorous"
+    if domain in {"creative", "communication"}:
+        return "casual"
+    return "standard"
+
+
+def _interruption_policy(*, permission_state: str, route_class: str) -> str:
+    if route_class in {"host_boundary", "host_only_boundary", "planned_or_not_configured_boundary"}:
+        return "operator_approval_required"
+    if permission_state == "write_permission_required":
+        return "ask_before_side_effect"
+    if permission_state in {"network_permission_required", "read_allowed", "none_required"}:
+        return "ask_only_if_blocked"
+    return "user_can_interrupt"
 
 
 def _family_for(value: str) -> str:

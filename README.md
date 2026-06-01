@@ -94,6 +94,11 @@ Kernel v3 currently contains the infrastructure for:
 - planner-visible semantic state axes beyond workspace, including autonomy,
   world model, resource kind, action phase, temporal status, source authority,
   identity boundary, communication channel, and risk;
+- Hermes-style operating-state axes are now first-class planner/context
+  vocabulary, not executable tools: goal structure, dependency state,
+  commitment state, preference state, memory scope, planning depth, operation
+  runtime, quality bar, and interruption policy let model packets describe
+  broad agent work without collapsing everything into `workspace:*`;
 - per-intent semantic state profiles in the task graph. Each node now carries
   host-visible `domain`, `activity`, `resource`, `execution_surface`,
   `permission_state`, `route_class`, capability families/statuses, evidence

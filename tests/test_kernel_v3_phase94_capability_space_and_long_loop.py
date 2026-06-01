@@ -445,6 +445,111 @@ def test_phase94_state_profiles_cover_hermes_level_non_workspace_domains():
             assert value in dimensions[axis]
 
 
+def test_phase94_state_profiles_include_operating_state_beyond_resource_mode():
+    catalog = semantic_capability_catalog()
+    dimensions = catalog["state_dimensions"]
+    for axis in {
+        "goal_structure",
+        "dependency_state",
+        "commitment_state",
+        "preference_state",
+        "memory_scope",
+        "planning_depth",
+        "operation_runtime",
+        "quality_bar",
+        "interruption_policy",
+    }:
+        assert axis in dimensions
+
+    intake = SemanticIntake(
+        intake_id="semantic-intake-1",
+        goal="roleplay, plan finance research, keep a resident monitor, and apply my style preference",
+        primary_intent="broad_operating_state",
+        suggested_mode="direct_answer",
+        compound=True,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "roleplay",
+                "text": "speak as Jarvis in this thread",
+                "sequence_index": 1,
+                "required_capabilities": ["roleplay.perform"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "finance_fundamentals_research",
+                "text": "research fundamentals using primary sources",
+                "sequence_index": 2,
+                "required_capabilities": ["finance.fundamentals_research", "web.research"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "resident_monitor",
+                "text": "monitor a future queue for updates",
+                "sequence_index": 3,
+                "required_capabilities": ["resident.scheduler"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "preference_application",
+                "text": "apply the user's concise Chinese preference",
+                "sequence_index": 4,
+                "required_capabilities": ["preference.apply"],
+                "risk": "none",
+                "status": "ready",
+                "metadata": {},
+            },
+            {
+                "kind": "device_control_boundary",
+                "text": "move the user's mouse",
+                "sequence_index": 5,
+                "required_capabilities": ["device.input.control"],
+                "risk": "destructive",
+                "status": "ready",
+                "metadata": {},
+            },
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+
+    graph = task_graph_from_semantic(intake)
+    profiles = [node["metadata"]["state_profile"] for node in graph.nodes]
+    by_kind = {profile["intent_kind"]: profile["state_axes"] for profile in profiles}
+
+    assert by_kind["roleplay"]["identity_boundary"] == "roleplay_persona"
+    assert by_kind["finance_fundamentals_research"]["goal_structure"] == "open_ended"
+    assert by_kind["finance_fundamentals_research"]["quality_bar"] == "regulated_domain"
+    assert by_kind["finance_fundamentals_research"]["dependency_state"] == "depends_on_external_data"
+    assert by_kind["resident_monitor"]["goal_structure"] == "background_monitor"
+    assert by_kind["resident_monitor"]["operation_runtime"] == "resident"
+    assert by_kind["preference_application"]["preference_state"] == "thread_preference"
+    assert by_kind["device_control_boundary"]["dependency_state"] == "depends_on_permission"
+    assert by_kind["device_control_boundary"]["interruption_policy"] == "operator_approval_required"
+    summary_axes = graph.metadata["state_profile_summary"]["state_axes"]
+    assert {
+        "open_ended",
+        "background_monitor",
+    }.issubset(set(summary_axes["goal_structure"]))
+    assert {
+        "regulated_domain",
+        "standard",
+    }.issubset(set(summary_axes["quality_bar"]))
+
+    for profile in profiles:
+        for axis, value in profile["state_axes"].items():
+            assert axis in dimensions
+            assert value in dimensions[axis]
+
+
 def test_phase94_agent_context_exposes_state_profile_summary_to_planner():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(

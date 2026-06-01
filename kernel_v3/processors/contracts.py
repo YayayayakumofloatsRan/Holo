@@ -165,6 +165,12 @@ database, cloud, workflow, knowledge_base, multimodal, resident, transport,
 calendar, security, or physical-world boundaries. These metadata fields do not
 grant permission; they help the host preserve state instead of collapsing all
 work into workspace.
+When useful, include metadata.state_axes with broad operating-state coordinates
+from the host catalog, such as goal_structure, dependency_state,
+commitment_state, preference_state, memory_scope, planning_depth,
+operation_runtime, quality_bar, interruption_policy, authority, temporal, and
+identity_boundary. These coordinates describe the task for host audit and
+planning; they do not authorize tools.
 For host-state questions such as current time, environment facts, or runtime status, use
 suggested_mode=system_answer and required_capabilities such as ["system.time"]; put
 optional arguments under metadata.capability_args, for example {"system.time":{"timezone":"Asia/Shanghai"}}.

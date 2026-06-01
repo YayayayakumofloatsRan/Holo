@@ -155,6 +155,16 @@ non-executable and require user confirmation or scope reduction. This keeps
 open-ended semantics in the processor layer and keeps permissions, tools,
 evidence, and termination in the host layer.
 
+The execution `mode` is only a recipe selector, not the full agent state
+space. Each semantic node also receives a broader operating-state profile with
+axes such as `goal_structure`, `dependency_state`, `commitment_state`,
+`preference_state`, `memory_scope`, `planning_depth`, `operation_runtime`,
+`quality_bar`, and `interruption_policy`. These axes let live model packets
+describe roleplay, professional advice boundaries, finance research,
+resident/background work, preference application, human-world requests, and
+unconfigured connectors without inventing tools. The host still decides which
+parts can execute, which require approval, and when the loop should stop.
+
 When a semantic node needs concrete tool arguments, model mode can place them in
 `metadata.capability_args` keyed by capability name. For example,
 `{"workspace.search":{"query":"overview"},"file.read":{"path":"README.md"}}`
