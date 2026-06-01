@@ -370,6 +370,222 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             },
         ),
         ResearchSourceEntry(
+            source_id="finance-central-bank-policy-data",
+            profile_id=profile,
+            title="Central bank policy rates, releases, and datasets",
+            source_family="central_bank_statistic",
+            authority_level="primary",
+            base_url="https://www.federalreserve.gov/data.htm",
+            allowed_hosts=[
+                "federalreserve.gov",
+                "www.federalreserve.gov",
+                "data.ecb.europa.eu",
+                "ecb.europa.eu",
+                "www.ecb.europa.eu",
+                "bankofengland.co.uk",
+                "www.bankofengland.co.uk",
+                "boj.or.jp",
+                "www.boj.or.jp",
+                "pbc.gov.cn",
+                "www.pbc.gov.cn",
+            ],
+            use_cases=["policy rates", "central bank balance sheets", "money/credit aggregates", "official release chronology"],
+            required_identifiers=["central bank or region", "series or policy concept", "date range"],
+            query_hints=["Federal Reserve {metric}", "ECB data portal {metric}", "Bank of England database {metric}"],
+            crawl_notes=[
+                "Prefer official series pages and release tables over media summaries.",
+                "Record release date, series code, units, and revision policy.",
+            ],
+            metadata={
+                "crawl_seed_urls": [
+                    "https://www.federalreserve.gov/data.htm",
+                    "https://data.ecb.europa.eu/",
+                    "https://www.bankofengland.co.uk/boeapps/database/",
+                ],
+                "query_url_templates": [
+                    {
+                        "template_id": "federal-reserve-search",
+                        "template": "https://www.federalreserve.gov/searchresults.htm?searchtext={metric_or_query_url}",
+                        "title": "Federal Reserve search for {metric_or_query}",
+                        "snippet": "Official Federal Reserve search entry point for policy, rate, balance-sheet, and data releases.",
+                        "source_kind": "central_bank_search",
+                        "required_values": ["metric_or_query"],
+                        "match_any": ["fed", "federal reserve", "rate", "rates", "policy", "balance sheet"],
+                    },
+                    {
+                        "template_id": "ecb-data-portal-search",
+                        "template": "https://data.ecb.europa.eu/search-results?searchTerm={metric_or_query_url}",
+                        "title": "ECB Data Portal search for {metric_or_query}",
+                        "snippet": "Official ECB Data Portal search entry point for euro-area monetary and financial statistics.",
+                        "source_kind": "central_bank_search",
+                        "required_values": ["metric_or_query"],
+                        "match_any": ["ecb", "euro", "rate", "rates", "monetary", "central bank"],
+                    },
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="finance-us-treasury-rates-and-fiscal-data",
+            profile_id=profile,
+            title="US Treasury rates, auctions, debt, and fiscal data",
+            source_family="treasury_data",
+            authority_level="primary",
+            base_url="https://home.treasury.gov/policy-issues/financing-the-government/interest-rate-statistics",
+            allowed_hosts=[
+                "home.treasury.gov",
+                "treasury.gov",
+                "www.treasury.gov",
+                "fiscaldata.treasury.gov",
+            ],
+            use_cases=["Treasury yield curve", "auction data", "public debt", "fiscal receipts/outlays"],
+            required_identifiers=["series or table", "date range", "maturity when rates are requested"],
+            query_hints=["Treasury yield curve {date}", "FiscalData public debt {metric}", "Treasury auction results {security}"],
+            crawl_notes=[
+                "Record table name, maturity, observation date, and publication timestamp.",
+                "Use official Treasury or FiscalData pages before market-data mirrors.",
+            ],
+            metadata={
+                "crawl_seed_urls": [
+                    "https://home.treasury.gov/policy-issues/financing-the-government/interest-rate-statistics",
+                    "https://fiscaldata.treasury.gov/",
+                ],
+                "query_url_templates": [
+                    {
+                        "template_id": "treasury-site-search",
+                        "template": "https://home.treasury.gov/search?keys={metric_or_query_url}",
+                        "title": "US Treasury search for {metric_or_query}",
+                        "snippet": "Official US Treasury search entry point for yield, auction, and financing data.",
+                        "source_kind": "treasury_search",
+                        "required_values": ["metric_or_query"],
+                        "match_any": ["treasury", "yield", "auction", "debt", "rate", "rates"],
+                    },
+                    {
+                        "template_id": "fiscaldata-search",
+                        "template": "https://fiscaldata.treasury.gov/datasets/?search={metric_or_query_url}",
+                        "title": "FiscalData dataset search for {metric_or_query}",
+                        "snippet": "Official FiscalData search entry point for US debt and fiscal datasets.",
+                        "source_kind": "treasury_dataset_search",
+                        "required_values": ["metric_or_query"],
+                        "match_any": ["fiscal", "debt", "treasury", "auction", "deficit"],
+                    },
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="finance-fund-etf-disclosures",
+            profile_id=profile,
+            title="Fund and ETF disclosure entry points",
+            source_family="fund_disclosure",
+            authority_level="primary",
+            base_url="https://www.sec.gov/edgar/search/",
+            allowed_hosts=[
+                "sec.gov",
+                "www.sec.gov",
+                "edgar.sec.gov",
+                "blackrock.com",
+                "www.blackrock.com",
+                "ishares.com",
+                "www.ishares.com",
+                "vanguard.com",
+                "investor.vanguard.com",
+                "ssga.com",
+                "www.ssga.com",
+            ],
+            use_cases=["ETF prospectuses", "fund holdings", "N-PORT/N-CSR filings", "issuer fund pages"],
+            required_identifiers=["fund name or ticker", "issuer", "filing type or holdings date"],
+            query_hints=["{ticker} ETF prospectus SEC", "{fund} N-PORT holdings", "{issuer} ETF holdings"],
+            crawl_notes=[
+                "Prefer SEC filings and issuer-hosted holdings/prospectus pages.",
+                "Record holdings date, share class, benchmark, and issuer caveats.",
+            ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "sec-edgar-fund-search",
+                        "template": "https://www.sec.gov/edgar/search/#/q={ticker_or_query_url}",
+                        "title": "SEC EDGAR fund/ETF search for {ticker_or_query}",
+                        "snippet": "Official SEC EDGAR search entry point for fund and ETF prospectus, holdings, and periodic filings.",
+                        "source_kind": "fund_disclosure_search",
+                        "required_values": ["ticker_or_query"],
+                        "match_any": ["etf", "fund", "prospectus", "n-port", "n-csr", "holdings"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="finance-earnings-transcripts-secondary",
+            profile_id=profile,
+            title="Earnings call transcript and presentation aggregators",
+            source_family="earnings_transcript",
+            authority_level="secondary",
+            base_url="https://seekingalpha.com/earnings/earnings-call-transcripts",
+            allowed_hosts=[
+                "seekingalpha.com",
+                "www.seekingalpha.com",
+                "finance.yahoo.com",
+                "fool.com",
+                "www.fool.com",
+                "marketscreener.com",
+                "www.marketscreener.com",
+            ],
+            use_cases=["management commentary", "Q&A context", "transcript chronology", "secondary transcript checks"],
+            required_identifiers=["ticker or company", "quarter", "fiscal year"],
+            query_hints=["{ticker} earnings call transcript", "{company} Q4 transcript", "{ticker} investor presentation transcript"],
+            crawl_notes=[
+                "Use transcripts as secondary context unless issuer-hosted.",
+                "Cross-check key claims against filings, releases, or investor relations materials.",
+            ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "seeking-alpha-transcript-search",
+                        "template": "https://seekingalpha.com/search?q={company_or_query_url}%20transcript",
+                        "title": "Seeking Alpha transcript search for {company_or_query}",
+                        "snippet": "Secondary transcript search entry point for earnings-call context.",
+                        "source_kind": "earnings_transcript_search",
+                        "required_values": ["company_or_query"],
+                        "match_any": ["transcript", "earnings call", "q&a", "management commentary"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="finance-credit-ratings-secondary",
+            profile_id=profile,
+            title="Credit rating agency issuer pages and research entry points",
+            source_family="credit_rating_agency",
+            authority_level="secondary",
+            base_url="https://www.fitchratings.com/search",
+            allowed_hosts=[
+                "fitchratings.com",
+                "www.fitchratings.com",
+                "moodys.com",
+                "www.moodys.com",
+                "spglobal.com",
+                "www.spglobal.com",
+            ],
+            use_cases=["issuer credit ratings", "outlook changes", "sector credit context", "debt-risk chronology"],
+            required_identifiers=["issuer name", "instrument or entity", "rating action date"],
+            query_hints=["{company} Fitch rating", "{issuer} Moody's rating", "{company} S&P rating outlook"],
+            crawl_notes=[
+                "Treat ratings as secondary/expert context; do not substitute them for primary financial statement evidence.",
+                "Record rating agency, action date, rating type, and whether the content is paywalled.",
+            ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "fitch-search",
+                        "template": "https://www.fitchratings.com/search?query={company_or_query_url}",
+                        "title": "Fitch Ratings search for {company_or_query}",
+                        "snippet": "Credit-rating agency search entry point for issuer and sector credit context.",
+                        "source_kind": "credit_rating_search",
+                        "required_values": ["company_or_query"],
+                        "match_any": ["rating", "credit", "debt", "outlook", "issuer"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
             source_id="finance-market-data-secondary",
             profile_id=profile,
             title="Common market data portals",

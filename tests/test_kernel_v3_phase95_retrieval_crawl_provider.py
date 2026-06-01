@@ -208,6 +208,51 @@ def test_phase95_bounded_crawl_search_provider_discovers_sitemap_urls_and_rank_p
     }
 
 
+def test_phase95_bounded_crawl_can_seed_from_finance_source_directory() -> None:
+    transport = _Transport(
+        {
+            "https://www.sec.gov/edgar/search/": HttpTransportResponse(
+                status_code=200,
+                mime_type="text/html",
+                body=(
+                    b"<html><body>"
+                    b'<a href="/Archives/edgar/data/320193/aapl-10k-revenue.htm">AAPL 10-K revenue filing</a>'
+                    b'<a href="https://untrusted.example.net/skip">Skip untrusted host</a>'
+                    b"</body></html>"
+                ),
+            )
+        }
+    )
+    provider = BoundedCrawlSearchProvider(
+        enabled=True,
+        allowed_hosts=["sec.gov", "www.sec.gov"],
+        include_source_directory_seeds=True,
+        include_sitemaps=False,
+        max_source_directory_seeds=1,
+        max_links_per_page=5,
+        transport=transport,
+    )
+    goal = SearchGoal(
+        goal_id="goal-source-dir-crawl",
+        query="AAPL 10-K revenue filing",
+        max_sources=3,
+        max_fetches=1,
+        metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+
+    assert [source.uri for source in sources] == [
+        "https://www.sec.gov/edgar/search/",
+        "https://www.sec.gov/Archives/edgar/data/320193/aapl-10k-revenue.htm",
+    ]
+    diagnostics = provider.search_diagnostics()
+    assert diagnostics["configured_seed_count"] == 0
+    assert diagnostics["source_directory_seed_count"] == 1
+    assert diagnostics["fetched_seed_count"] == 1
+    assert [call["url"] for call in transport.calls] == ["https://www.sec.gov/edgar/search/"]
+
+
 def test_phase95_agent_live_crawl_uses_sitemap_discovery_for_relevant_fetches() -> None:
     journal = JournalStore.in_memory()
     crawl_transport = _Transport(
@@ -277,6 +322,115 @@ def test_phase95_agent_live_crawl_uses_sitemap_discovery_for_relevant_fetches() 
     }
     search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
     assert search.data["diagnostics"]["provider_diagnostics"]["selected_provider_id"] == "bounded_crawl_search"
+
+
+def test_phase95_agent_can_crawl_from_finance_source_directory_seed() -> None:
+    journal = JournalStore.in_memory()
+    crawl_transport = _Transport(
+        {
+            "https://www.sec.gov/edgar/search/": HttpTransportResponse(
+                status_code=200,
+                mime_type="text/html",
+                body=(
+                    b"<html><body>"
+                    b'<a href="/Archives/edgar/data/320193/aapl-10k-revenue.htm">AAPL 10-K revenue filing</a>'
+                    b"</body></html>"
+                ),
+            )
+        }
+    )
+    fetch_transport = _Transport(
+        {
+            "https://www.sec.gov/Archives/edgar/data/320193/aapl-10k-revenue.htm": HttpTransportResponse(
+                status_code=200,
+                body=b"Apple AAPL 10-K revenue filing evidence from SEC archive.",
+                mime_type="text/plain",
+            )
+        }
+    )
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "semantic.intake": {
+                        "primary_intent": "finance_fundamentals",
+                        "suggested_mode": "retrieval_answer",
+                        "compound": False,
+                        "requires_clarification": False,
+                        "intents": [
+                            {
+                                "kind": "finance_fundamentals",
+                                "text": "AAPL 10-K revenue filing",
+                                "sequence_index": 1,
+                                "required_capabilities": ["finance.fundamentals_research"],
+                                "risk": "read",
+                                "status": "ready",
+                                "metadata": {
+                                    "capability_args": {
+                                        "retrieval.run": {
+                                            "query": "AAPL 10-K revenue filing",
+                                            "max_queries": 1,
+                                            "max_sources": 3,
+                                            "max_fetches": 1,
+                                            "metadata": {
+                                                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                                                "search_strategy": "crawl",
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        ],
+                        "blocked_capabilities": [],
+                        "warnings": [],
+                        "response_hint": None,
+                        "clarification_question": None,
+                    }
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    operator = LiveRetrievalConfig.from_env(
+        {
+            "HOLO_V3_LIVE_RETRIEVAL": "1",
+            "HOLO_V3_LIVE_SEARCH_STRATEGY": "adaptive",
+            "HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY": "1",
+            "HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST": "1",
+            "HOLO_V3_LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS": "1",
+            "HOLO_V3_LIVE_CRAWL_MAX_PAGES": "1",
+            "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS": "0",
+        }
+    ).build_operator(crawl_transport=crawl_transport, fetch_transport=fetch_transport)
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        "Research AAPL 10-K revenue filing from official sources",
+        mode="auto",
+        semantic_mode="model",
+        execution_metadata={
+            "retrieval": {
+                "allow_network": True,
+                "max_network_fetches": 1,
+            }
+        },
+    )
+
+    assert result.status == "completed"
+    assert [call["url"] for call in crawl_transport.calls] == ["https://www.sec.gov/edgar/search/"]
+    assert [call["url"] for call in fetch_transport.calls] == [
+        "https://www.sec.gov/Archives/edgar/data/320193/aapl-10k-revenue.htm"
+    ]
+    search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
+    provider_diagnostics = search.data["diagnostics"]["provider_diagnostics"]
+    assert provider_diagnostics["selected_strategy"] == "crawl"
+    assert "bounded_crawl_search" in provider_diagnostics["selected_provider_ids"]
+    assert result.final_answer["citation_refs"]
 
 
 def test_phase95_agent_live_retrieval_can_use_direct_url_search_provider() -> None:

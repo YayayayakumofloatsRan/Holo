@@ -171,6 +171,46 @@ def test_phase99_source_query_provider_expands_reputable_market_news_sources():
     assert all(source.metadata["authority_level"] == "secondary" for source in news_sources)
 
 
+def test_phase99_source_query_provider_expands_rate_fund_transcript_and_credit_sources():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "SPY ETF fund prospectus N-PORT holdings Federal Reserve rate Treasury yield Apple transcript Fitch credit rating",
+        goal=SearchGoal(
+            goal_id="goal-source-query-expanded-finance-databases",
+            query=(
+                "SPY ETF fund prospectus N-PORT holdings Federal Reserve rate "
+                "Treasury yield Apple transcript Fitch credit rating"
+            ),
+            max_sources=40,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "ticker": "SPY",
+                "company": "Apple",
+                "metric": "policy rate",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    urls = {source.uri for source in sources}
+    assert "https://www.federalreserve.gov/searchresults.htm?searchtext=policy%20rate" in urls
+    assert "https://data.ecb.europa.eu/search-results?searchTerm=policy%20rate" in urls
+    assert "https://home.treasury.gov/search?keys=policy%20rate" in urls
+    assert "https://fiscaldata.treasury.gov/datasets/?search=policy%20rate" in urls
+    assert "https://www.sec.gov/edgar/search/#/q=SPY" in urls
+    assert "https://seekingalpha.com/search?q=Apple%20transcript" in urls
+    assert "https://www.fitchratings.com/search?query=Apple" in urls
+    by_family = {}
+    for source in sources:
+        by_family.setdefault(source.metadata["source_family"], []).append(source)
+    assert by_family["central_bank_statistic"][0].metadata["authority_level"] == "primary"
+    assert by_family["treasury_data"][0].metadata["authority_level"] == "primary"
+    assert by_family["fund_disclosure"][0].metadata["authority_level"] == "primary"
+    assert by_family["earnings_transcript"][0].metadata["authority_level"] == "secondary"
+    assert by_family["credit_rating_agency"][0].metadata["authority_level"] == "secondary"
+
+
 def test_phase99_source_query_provider_expands_exchange_official_query_urls():
     provider = ResearchSourceQuerySearchProvider()
 

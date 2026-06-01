@@ -19,7 +19,13 @@ _FAMILY_SCORES = {
     "company_ir": 0.9,
     "earnings_release": 0.88,
     "government_statistic": 0.86,
+    "central_bank_statistic": 0.86,
+    "treasury_data": 0.86,
+    "fund_disclosure": 0.84,
     "market_data_provider": 0.72,
+    "portfolio_risk_data_provider": 0.7,
+    "credit_rating_agency": 0.66,
+    "earnings_transcript": 0.62,
     "reputable_news": 0.58,
     "analyst_report": 0.5,
     "blog": 0.24,
@@ -81,6 +87,35 @@ _GOVERNMENT_STAT_DOMAINS = {
     "fred.stlouisfed.org",
     "worldbank.org",
 }
+_CENTRAL_BANK_DOMAINS = {
+    "bankofengland.co.uk",
+    "boj.or.jp",
+    "data.ecb.europa.eu",
+    "ecb.europa.eu",
+    "federalreserve.gov",
+    "pbc.gov.cn",
+    "www.bankofengland.co.uk",
+    "www.boj.or.jp",
+    "www.ecb.europa.eu",
+    "www.federalreserve.gov",
+    "www.pbc.gov.cn",
+}
+_TREASURY_DOMAINS = {
+    "fiscaldata.treasury.gov",
+    "home.treasury.gov",
+    "treasury.gov",
+    "www.treasury.gov",
+}
+_FUND_DISCLOSURE_DOMAINS = {
+    "blackrock.com",
+    "ishares.com",
+    "investor.vanguard.com",
+    "ssga.com",
+    "vanguard.com",
+    "www.blackrock.com",
+    "www.ishares.com",
+    "www.ssga.com",
+}
 _MARKET_DATA_DOMAINS = {
     "finance.yahoo.com",
     "eastmoney.com",
@@ -97,6 +132,22 @@ _MARKET_DATA_DOMAINS = {
     "www.macrotrends.net",
     "tradingview.com",
     "www.tradingview.com",
+}
+_CREDIT_RATING_DOMAINS = {
+    "fitchratings.com",
+    "moodys.com",
+    "spglobal.com",
+    "www.fitchratings.com",
+    "www.moodys.com",
+    "www.spglobal.com",
+}
+_EARNINGS_TRANSCRIPT_DOMAINS = {
+    "fool.com",
+    "marketscreener.com",
+    "seekingalpha.com",
+    "www.fool.com",
+    "www.marketscreener.com",
+    "www.seekingalpha.com",
 }
 _REPUTABLE_NEWS_DOMAINS = {
     "apnews.com",
@@ -202,10 +253,20 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
         return "regulatory_filing", "recognized_regulatory_domain"
     if _host_matches(host, _EXCHANGE_DOMAINS):
         return "exchange_filing", "recognized_exchange_domain"
+    if _host_matches(host, _CENTRAL_BANK_DOMAINS):
+        return "central_bank_statistic", "recognized_central_bank_domain"
+    if _host_matches(host, _TREASURY_DOMAINS):
+        return "treasury_data", "recognized_treasury_domain"
     if _host_matches(host, _GOVERNMENT_STAT_DOMAINS):
         return "government_statistic", "recognized_government_statistic_domain"
+    if _host_matches(host, _FUND_DISCLOSURE_DOMAINS):
+        return "fund_disclosure", "recognized_fund_disclosure_domain"
     if _host_matches(host, _MARKET_DATA_DOMAINS):
         return "market_data_provider", "recognized_market_data_domain"
+    if _host_matches(host, _CREDIT_RATING_DOMAINS):
+        return "credit_rating_agency", "recognized_credit_rating_domain"
+    if _host_matches(host, _EARNINGS_TRANSCRIPT_DOMAINS):
+        return "earnings_transcript", "recognized_earnings_transcript_domain"
     if _host_matches(host, _REPUTABLE_NEWS_DOMAINS):
         return "reputable_news", "recognized_reputable_news_domain"
     if _looks_like_company_ir(host, path):

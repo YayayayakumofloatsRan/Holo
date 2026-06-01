@@ -239,6 +239,39 @@ def test_phase91_cli_live_http_provider_inspection_accepts_crawl_only_config(
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
+def test_phase91_live_retrieval_can_enable_source_directory_crawl_and_allowlist() -> None:
+    config = LiveRetrievalConfig.from_env(
+        {
+            "HOLO_V3_LIVE_RETRIEVAL": "1",
+            "HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY": "1",
+            "HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST": "1",
+            "HOLO_V3_LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS": "4",
+            "HOLO_V3_LIVE_SEARCH_STRATEGY": "adaptive",
+        }
+    )
+
+    assert config.crawl.configured is True
+    assert config.crawl.include_source_directory_seeds is True
+    assert config.crawl.max_source_directory_seeds == 4
+    assert "www.sec.gov" in config.crawl.allowed_hosts
+    assert "www.sec.gov" in config.fetch.allowed_hosts
+    diagnostics = config.safe_diagnostics()
+    dumped = json.dumps(diagnostics, ensure_ascii=False)
+    assert diagnostics["search_strategy"] == "adaptive"
+    assert diagnostics["crawl"]["include_source_directory_seeds"] is True
+    assert diagnostics["crawl"]["allowed_host_count"] > 0
+    assert "www.sec.gov" not in dumped
+
+    operator = config.build_operator()
+    inspection = inspect_retrieval_providers(operator, clock_ms=lambda: 9105)
+    provider_ids = {
+        item["provider_id"]
+        for item in inspection.diagnostics["provider_chain"]
+    }
+    assert "adaptive_search" in [item["provider_id"] for item in inspection.provider_capabilities]
+    assert "bounded_crawl_search" in provider_ids
+
+
 class _Transport:
     def __init__(self, *, response: HttpTransportResponse) -> None:
         self.response = response
@@ -267,5 +300,10 @@ def _clear_live_env(monkeypatch) -> None:
         "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE",
         "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS",
         "HOLO_V3_LIVE_CRAWL_MAX_SITEMAP_URLS",
+        "HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY",
+        "HOLO_V3_LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS",
+        "HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST",
+        "HOLO_V3_LIVE_SEARCH_STRATEGY",
+        "HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER",
     ]:
         monkeypatch.delenv(name, raising=False)

@@ -228,12 +228,22 @@ The live retrieval chain is now broader than a single search endpoint:
 - `research_source_query_search` expands curated source-directory
   `query_url_templates` into official search URLs, such as Companies House
   company search and FRED series search, after placeholder and host validation;
+- source-directory-driven crawl can be enabled explicitly with
+  `HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1` plus
+  `HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST=1`. In that mode the crawler can use
+  curated finance source-directory base URLs and `crawl_seed_urls` as bounded
+  discovery seeds, while fetches still go through the host HTTP provider,
+  allowlists, artifact storage, evidence checks, and loop guards;
 - the finance source directory also exposes common secondary market-data and
   reputable-news entry points such as Yahoo Finance quote/lookup, Nasdaq market
   activity, MarketWatch stock pages, Reuters search, Bloomberg search, Financial
-  Times search, and CNBC search. These are source pointers, not cached financial
-  content, and they remain secondary evidence unless paired with primary
-  filings, issuer materials, or official statistics;
+  Times search, and CNBC search. It now also includes central-bank data portals,
+  US Treasury/FiscalData, fund/ETF disclosure entry points, earnings-call
+  transcript aggregators, and credit-rating agency search entry points. These
+  are source pointers, not cached financial content. Transcript, rating, news,
+  and market-data sources remain secondary evidence unless paired with primary
+  filings, issuer materials, official statistics, central-bank data, Treasury
+  data, or fund disclosures;
 - configured JSON HTTP search providers can sit in the same fallback chain.
 - `aggregate_search` can be enabled for live retrieval to collect candidates
   from multiple providers, rank them by query relevance and source authority,
@@ -258,6 +268,16 @@ HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
 HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 python3 holo-v3 retrieval-providers --mode live-http
+```
+
+For finance-profile crawl seeded by the curated source directory:
+
+```bash
+HOLO_V3_LIVE_RETRIEVAL=1
+HOLO_V3_LIVE_SEARCH_STRATEGY=adaptive
+HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1
+HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST=1
+HOLO_V3_LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS=4
 ```
 
 For multi-provider research, set:

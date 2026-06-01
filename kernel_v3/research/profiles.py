@@ -54,10 +54,16 @@ def finance_fundamentals_profile() -> ResearchProfile:
             "company_ir",
             "earnings_release",
             "government_statistic",
+            "central_bank_statistic",
+            "treasury_data",
+            "fund_disclosure",
         ],
         secondary_source_families=[
             "reputable_news",
             "market_data_provider",
+            "credit_rating_agency",
+            "earnings_transcript",
+            "portfolio_risk_data_provider",
             "analyst_report",
         ],
         weak_source_families=[
@@ -84,6 +90,9 @@ def finance_fundamentals_profile() -> ResearchProfile:
                     "company_ir",
                     "earnings_release",
                     "government_statistic",
+                    "central_bank_statistic",
+                    "treasury_data",
+                    "fund_disclosure",
                 ],
             },
             "research_depths": {

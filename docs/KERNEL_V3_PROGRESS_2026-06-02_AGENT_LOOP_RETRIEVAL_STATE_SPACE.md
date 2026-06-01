@@ -144,6 +144,19 @@
   database, cloud, workflow, knowledge-base, multimodal, resident, transport,
   calendar, system, security, and physical-world boundary state while the host
   still decides what can execute.
+- Source-directory-driven crawl was added behind explicit live retrieval env
+  gates. `HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1` lets the bounded crawler draw
+  seeds from curated profile source entries; `HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST=1`
+  merges concrete source-directory hosts into crawl/fetch allowlists. This
+  enables a finance-profile planner action with `metadata.search_strategy=crawl`
+  to go from source library to crawler discovery to fetched evidence without
+  embedding specific URLs in the model packet.
+- The finance source library now includes additional common research entry
+  points: central bank data portals, US Treasury/FiscalData, fund/ETF
+  disclosures, earnings-call transcript aggregators, and credit-rating agency
+  searches. They remain source pointers rather than cached market content;
+  source policy marks central-bank, Treasury, and fund disclosures as primary
+  families and transcript/rating sources as secondary context.
 
 ## Validation
 
@@ -156,7 +169,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-489 passed
+494 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -220,6 +233,16 @@ Additional deterministic coverage now includes:
   database, workflow, and knowledge-base are preserved in task graph node
   metadata and planner context instead of being collapsed into workspace mode;
   planned or not-configured capabilities remain host boundaries.
+- source-directory crawl tests show that the crawler can use finance profile
+  source entries as bounded seeds, while live config tests verify the feature is
+  opt-in and redacted;
+- source-query and source-policy tests cover central-bank, Treasury, fund/ETF,
+  transcript, and credit-rating entry points with primary/secondary authority
+  classification;
+- an agent crawl test shows a model semantic packet can request
+  `finance.fundamentals_research` with `search_strategy=crawl`, after which the
+  host seeds SEC discovery from the source directory, fetches the discovered
+  filing URL, and finalizes from citations.
 
 Live model scenarios:
 

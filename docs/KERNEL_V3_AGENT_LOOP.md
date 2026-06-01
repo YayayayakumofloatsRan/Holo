@@ -281,6 +281,16 @@ path. Crawled HTML is stored raw as artifacts but evidence spans are extracted
 from readable body text, so downstream evaluator/synthesizer packets see
 citations instead of raw page chrome.
 
+Bounded crawl can now be seeded from the curated finance source directory when
+the host explicitly sets `HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1`. With
+`HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST=1`, live retrieval merges concrete
+source-directory hosts into crawl/fetch allowlists. This lets a planner choose
+`metadata.search_strategy="crawl"` for a finance-profile retrieval action and
+have the host discover pages from SEC, Treasury, central-bank, fund-disclosure,
+or other curated entry points without hard-coding those URLs in planner output.
+The setting is still opt-in, redacted in diagnostics, and bounded by the same
+network, source, fetch, artifact, sufficiency, and termination guards.
+
 Bounded crawl discovery now ranks discovered page and sitemap candidates
 against query/metadata terms before applying the source budget. Seed URLs stay
 visible as provenance, but if a page exposes many links the crawler prefers

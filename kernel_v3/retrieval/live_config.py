@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from kernel_v3.contracts import JsonObject
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, source_directory_for_profile
 from kernel_v3.retrieval.http_provider import (
     HttpFetchProvider,
     HttpTransport,
@@ -40,6 +41,9 @@ LIVE_CRAWL_MAX_PAGES_ENV = "HOLO_V3_LIVE_CRAWL_MAX_PAGES"
 LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV = "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE"
 LIVE_CRAWL_INCLUDE_SITEMAPS_ENV = "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS"
 LIVE_CRAWL_MAX_SITEMAP_URLS_ENV = "HOLO_V3_LIVE_CRAWL_MAX_SITEMAP_URLS"
+LIVE_CRAWL_SOURCE_DIRECTORY_ENV = "HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY"
+LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS_ENV = "HOLO_V3_LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS"
+LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV = "HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST"
 LIVE_SEARCH_STRATEGY_ENV = "HOLO_V3_LIVE_SEARCH_STRATEGY"
 LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV = "HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER"
 LIVE_TIMEOUT_SECONDS_ENV = "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS"
@@ -150,11 +154,13 @@ class LiveCrawlSearchConfig:
     max_links_per_page: int = 20
     include_sitemaps: bool = True
     max_sitemap_urls: int = 50
+    include_source_directory_seeds: bool = False
+    max_source_directory_seeds: int = 12
     user_agent: str = "holo-kernel-v3/1.0"
 
     @property
     def configured(self) -> bool:
-        return bool(self.seed_urls)
+        return bool(self.seed_urls or self.include_source_directory_seeds)
 
     def build_provider(self, *, transport: HttpTransport | None = None) -> BoundedCrawlSearchProvider:
         return BoundedCrawlSearchProvider(
@@ -169,6 +175,8 @@ class LiveCrawlSearchConfig:
             max_links_per_page=self.max_links_per_page,
             include_sitemaps=self.include_sitemaps,
             max_sitemap_urls=self.max_sitemap_urls,
+            include_source_directory_seeds=self.include_source_directory_seeds,
+            max_source_directory_seeds=self.max_source_directory_seeds,
             user_agent=self.user_agent,
             transport=transport,
         )
@@ -187,6 +195,8 @@ class LiveCrawlSearchConfig:
             "max_links_per_page": self.max_links_per_page,
             "include_sitemaps": self.include_sitemaps,
             "max_sitemap_urls": self.max_sitemap_urls,
+            "include_source_directory_seeds": self.include_source_directory_seeds,
+            "max_source_directory_seeds": self.max_source_directory_seeds,
         }
 
 
@@ -207,12 +217,16 @@ class LiveRetrievalConfig:
         allowed_schemes = _csv(values.get(LIVE_ALLOWED_SCHEMES_ENV)) or ["https"]
         timeout_seconds = _positive_int(values.get(LIVE_TIMEOUT_SECONDS_ENV), default=20)
         max_bytes = _positive_int(values.get(LIVE_MAX_BYTES_ENV), default=1_000_000)
+        source_directory_allowlist = _truthy(values.get(LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV))
+        source_directory_hosts = _source_directory_allowed_hosts() if source_directory_allowlist else []
+        search_allowed_hosts = _ordered_unique([*_csv(values.get(LIVE_SEARCH_ALLOWED_HOSTS_ENV)), *source_directory_hosts])
+        fetch_allowed_hosts = _ordered_unique([*_csv(values.get(LIVE_FETCH_ALLOWED_HOSTS_ENV)), *source_directory_hosts])
         return cls(
             enabled=enabled,
             search=LiveJsonHttpSearchConfig(
                 enabled=enabled,
                 endpoint_url=_optional(values.get(LIVE_SEARCH_ENDPOINT_ENV)),
-                allowed_hosts=_csv(values.get(LIVE_SEARCH_ALLOWED_HOSTS_ENV)),
+                allowed_hosts=search_allowed_hosts,
                 allow_all_hosts=allow_all_hosts,
                 allowed_schemes=allowed_schemes,
                 query_param=_optional(values.get(LIVE_SEARCH_QUERY_PARAM_ENV)) or "q",
@@ -226,7 +240,7 @@ class LiveRetrievalConfig:
             crawl=LiveCrawlSearchConfig(
                 enabled=enabled,
                 seed_urls=_csv(values.get(LIVE_CRAWL_SEED_URLS_ENV)),
-                allowed_hosts=_csv(values.get(LIVE_SEARCH_ALLOWED_HOSTS_ENV)),
+                allowed_hosts=search_allowed_hosts,
                 allow_all_hosts=allow_all_hosts,
                 allowed_schemes=allowed_schemes,
                 timeout_seconds=timeout_seconds,
@@ -235,10 +249,12 @@ class LiveRetrievalConfig:
                 max_links_per_page=_positive_int(values.get(LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV), default=20),
                 include_sitemaps=not _falsey(values.get(LIVE_CRAWL_INCLUDE_SITEMAPS_ENV)),
                 max_sitemap_urls=_positive_int(values.get(LIVE_CRAWL_MAX_SITEMAP_URLS_ENV), default=50),
+                include_source_directory_seeds=_truthy(values.get(LIVE_CRAWL_SOURCE_DIRECTORY_ENV)),
+                max_source_directory_seeds=_positive_int(values.get(LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS_ENV), default=12),
             ),
             fetch=LiveHttpFetchConfig(
                 enabled=enabled,
-                allowed_hosts=_csv(values.get(LIVE_FETCH_ALLOWED_HOSTS_ENV)),
+                allowed_hosts=fetch_allowed_hosts,
                 allow_all_hosts=allow_all_hosts,
                 allowed_schemes=allowed_schemes,
                 timeout_seconds=timeout_seconds,
@@ -354,6 +370,17 @@ def _optional_positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _source_directory_allowed_hosts() -> list[str]:
+    hosts: list[str] = []
+    for entry in source_directory_for_profile(FINANCE_FUNDAMENTALS_PROFILE_ID):
+        for host in entry.allowed_hosts:
+            text = str(host or "").strip().lower()
+            if not text or "*" in text or "example." in text:
+                continue
+            hosts.append(text)
+    return _ordered_unique(hosts)
+
+
 def _search_strategy(value: object) -> str:
     normalized = str(value or "fallback").strip().lower()
     if normalized in {"aggregate", "merged", "blend", "blended"}:
@@ -370,3 +397,14 @@ def _safe_url_diagnostics(uri: str) -> JsonObject:
         "url_scheme": parsed.scheme,
         "host_hash": hashlib.sha256(host.lower().encode("utf-8")).hexdigest() if host else "",
     }
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

@@ -339,6 +339,21 @@ def test_phase82_source_policy_matches_global_primary_finance_sources() -> None:
             "SEC companyfacts JSON",
             "structured_regulatory_data",
         ),
+        (
+            "https://data.ecb.europa.eu/data/datasets/EXR",
+            "ECB exchange-rate dataset",
+            "central_bank_statistic",
+        ),
+        (
+            "https://home.treasury.gov/policy-issues/financing-the-government/interest-rate-statistics",
+            "US Treasury yield curve",
+            "treasury_data",
+        ),
+        (
+            "https://www.ishares.com/us/products/239726/ishares-core-sp-500-etf",
+            "iShares ETF holdings and prospectus",
+            "fund_disclosure",
+        ),
     ]
 
     for uri, title, expected_family in samples:
@@ -349,6 +364,31 @@ def test_phase82_source_policy_matches_global_primary_finance_sources() -> None:
         assert assessment.source_family == expected_family
         assert assessment.authority_level == "primary"
         assert assessment.usable_as_primary is True
+
+
+def test_phase82_source_policy_classifies_secondary_finance_research_databases() -> None:
+    profile = finance_fundamentals_profile()
+    samples = [
+        (
+            "https://www.fitchratings.com/search?query=Apple",
+            "Fitch Apple rating outlook",
+            "credit_rating_agency",
+        ),
+        (
+            "https://seekingalpha.com/search?q=Apple%20transcript",
+            "Apple earnings call transcript",
+            "earnings_transcript",
+        ),
+    ]
+
+    for uri, title, expected_family in samples:
+        assessment = assess_search_source(
+            _source("src-secondary", uri, title, "secondary finance research database"),
+            profile=profile,
+        )
+        assert assessment.source_family == expected_family
+        assert assessment.authority_level == "secondary"
+        assert assessment.usable_as_primary is False
 
 
 def test_phase82_model_taskgraph_capability_args_reach_retrieval_without_agent_domain_logic() -> None:

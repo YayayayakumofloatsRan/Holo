@@ -132,6 +132,8 @@ class BoundedCrawlSearchProvider:
         max_links_per_page: int = 20,
         include_sitemaps: bool = True,
         max_sitemap_urls: int = 50,
+        include_source_directory_seeds: bool = False,
+        max_source_directory_seeds: int = 12,
         user_agent: str = "holo-kernel-v3/1.0",
         transport: HttpTransport | None = None,
     ) -> None:
@@ -146,6 +148,8 @@ class BoundedCrawlSearchProvider:
         self.max_links_per_page = max(0, int(max_links_per_page))
         self.include_sitemaps = bool(include_sitemaps)
         self.max_sitemap_urls = max(0, int(max_sitemap_urls))
+        self.include_source_directory_seeds = bool(include_source_directory_seeds)
+        self.max_source_directory_seeds = max(0, int(max_source_directory_seeds))
         self.user_agent = user_agent
         self.transport = transport or _urllib_transport
         self._last_search_diagnostics: JsonObject = {}
@@ -162,6 +166,8 @@ class BoundedCrawlSearchProvider:
             "max_links_per_page": self.max_links_per_page,
             "include_sitemaps": self.include_sitemaps,
             "max_sitemap_urls": self.max_sitemap_urls,
+            "include_source_directory_seeds": self.include_source_directory_seeds,
+            "max_source_directory_seeds": self.max_source_directory_seeds,
         }
 
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
@@ -182,7 +188,12 @@ class BoundedCrawlSearchProvider:
                 "plan_id": plan.plan_id,
             }
             return []
-        seeds = _safe_unique_urls([*self.seed_urls, *_candidate_seed_urls(query, goal.metadata)])
+        source_directory_seeds = _source_directory_seed_urls(
+            goal.metadata,
+            enabled=self.include_source_directory_seeds,
+            max_count=self.max_source_directory_seeds,
+        )
+        seeds = _safe_unique_urls([*self.seed_urls, *_candidate_seed_urls(query, goal.metadata), *source_directory_seeds])
         if not seeds:
             self._last_search_diagnostics = {
                 "status": "empty",
@@ -296,6 +307,8 @@ class BoundedCrawlSearchProvider:
         self._last_search_diagnostics = {
             "status": "ok" if sources else "failed" if failed or failed_sitemaps else "empty",
             "seed_count": len(seeds),
+            "configured_seed_count": len(self.seed_urls),
+            "source_directory_seed_count": len(source_directory_seeds),
             "fetched_seed_count": fetched,
             "failed_seed_count": failed,
             "fetched_sitemap_count": fetched_sitemaps,
@@ -505,6 +518,36 @@ def _candidate_seed_urls(query: str, metadata: JsonObject) -> list[str]:
     values = _candidate_urls(query, metadata)
     values.extend(_metadata_urls(metadata, keys=("seed_url", "seed_urls", "crawl_seed_url", "crawl_seed_urls")))
     return _safe_unique_urls(values)
+
+
+def _source_directory_seed_urls(metadata: JsonObject, *, enabled: bool, max_count: int) -> list[str]:
+    if not enabled or max_count <= 0:
+        return []
+    profile_id = _research_profile_id(metadata)
+    if profile_id is None:
+        return []
+    urls: list[str] = []
+    for entry in source_directory_for_profile(profile_id):
+        candidates = [entry.base_url]
+        extra = entry.metadata.get("crawl_seed_urls") if isinstance(entry.metadata, dict) else None
+        if isinstance(extra, list):
+            candidates.extend(str(item) for item in extra if isinstance(item, str))
+        for url in candidates:
+            if _source_directory_seed_is_usable(url):
+                urls.append(url)
+            if len(urls) >= max_count:
+                return _safe_unique_urls(urls)
+    return _safe_unique_urls(urls)
+
+
+def _source_directory_seed_is_usable(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not _safe_url(url):
+        return False
+    if not host or "example." in host or "*" in host:
+        return False
+    return True
 
 
 def _metadata_urls(metadata: JsonObject, *, keys: tuple[str, ...]) -> list[str]:
