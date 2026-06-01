@@ -66,6 +66,29 @@ the retrieval operator:
 This prepares the kernel for future live web/database providers without making
 live retrieval the default.
 
+## Issuer Identity Resolution
+
+`kernel_v3.research.identity` provides a small shared resolver for finance
+retrieval identifiers. It normalizes host metadata and query text into an
+`IssuerIdentity` with fields such as ticker, SEC CIK, company, issuer, ASX code,
+HKEX code, SGX code, market, confidence, and safe diagnostics.
+
+The resolver is deterministic and offline. It may use injected host metadata,
+query text, and host-provided ticker-to-CIK maps, but it does not fetch an
+external identity service and does not claim verification when identifiers are
+missing. This keeps identity extraction inside the host boundary while leaving
+future live identity lookups to explicit providers and PolicyGate.
+Non-US exchange-code markers such as `ASX:BHP`, `HKEX 700`, and `SGX D05` are
+normalized as exchange identifiers, not as SEC tickers, so SEC-specific
+providers do not generate EDGAR candidates for them unless an explicit SEC
+ticker/CIK is also supplied by the host.
+
+SEC EDGAR structured search and source-directory query expansion reuse this
+resolver so identifier parsing is not duplicated across providers. This matters
+for long finance loops: planner output can carry structured metadata once, the
+host normalizes it once, and each retrieval provider receives consistent ticker,
+CIK, company, and exchange-code values.
+
 ## Source Directory Query Expansion
 
 `research_source_query_search` turns curated source-directory metadata into

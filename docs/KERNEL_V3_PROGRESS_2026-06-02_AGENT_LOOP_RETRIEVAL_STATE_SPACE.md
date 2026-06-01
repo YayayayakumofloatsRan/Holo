@@ -40,6 +40,13 @@
 - Finance source entries now include curated official query templates for SEC
   EDGAR search, Companies House company search, FRED series search, and World
   Bank Data search.
+- `kernel_v3.research.identity` now provides a shared host-owned
+  `IssuerIdentity` resolver. It normalizes SEC tickers/CIKs, company and issuer
+  names, and ASX/HKEX/SGX-style exchange codes from query text and host
+  metadata, including injected ticker-to-CIK maps. SEC EDGAR and source-query
+  providers now reuse this resolver instead of duplicating identifier parsing.
+  Non-US exchange-code patterns such as `ASX:BHP` are not treated as SEC
+  tickers.
 
 ## Validation
 
@@ -52,7 +59,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-457 passed
+463 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -70,6 +77,11 @@ Additional deterministic coverage now includes:
   continues once, then finalizes with two citations.
 - source-directory query expansion from company and macro metadata;
 - source-directory query-template host allowlist rejection;
+- shared issuer identity resolution for metadata, query CIKs, injected SEC
+  ticker-to-CIK maps, and selected exchange-code patterns;
+- guard coverage that prevents non-US exchange codes from generating SEC EDGAR
+  candidates as if they were US tickers;
+- SEC EDGAR structured search using the shared identity resolver.
 - a second multi-step finance agent loop using official Companies House and
   FRED query URLs, showing planner-intent expansion into two retrieval loop
   actions and host-owned finalization with two citations.

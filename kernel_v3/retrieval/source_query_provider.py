@@ -6,7 +6,7 @@ import urllib.parse
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.privacy import contains_secret_like_content
-from kernel_v3.research import source_directory_for_profile
+from kernel_v3.research import identity_template_values, resolve_issuer_identity, source_directory_for_profile
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 
 
@@ -139,6 +139,7 @@ def _render(template: str, values: dict[str, str]) -> str | None:
 
 def _template_values(query: str, metadata: JsonObject) -> dict[str, str]:
     raw: dict[str, str] = {"query": _compact(query)}
+    raw.update(identity_template_values(resolve_issuer_identity(query, metadata)))
     for key, value in _flatten_metadata(metadata).items():
         if isinstance(value, str) and value.strip():
             raw[key] = _compact(value)

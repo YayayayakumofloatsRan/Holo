@@ -86,6 +86,10 @@ Kernel v3 currently contains the infrastructure for:
   them from host metadata such as company, ticker, metric, and query, validates
   the resulting host against the entry allowlist, and only then exposes them as
   retrieval candidates.
+- Host-owned issuer identity resolution for finance retrieval. Ticker, SEC CIK,
+  company/issuer names, and selected exchange codes are normalized once and
+  reused by SEC EDGAR and source-query providers instead of being guessed
+  independently inside each provider.
 
 Live model and live retrieval surfaces are opt-in. They are not default unit-test
 dependencies.
@@ -270,6 +274,9 @@ Companies House, FRED, and World Bank query URLs without hard-coding agent
 branches. Multi-intent finance plans can therefore execute multiple retrieval
 loop actions before finalization while preserving host-owned source ranking,
 artifact storage, evidence sufficiency, and termination gates.
+Issuer identity normalization is still offline and deterministic: it can use
+host metadata, query text, and injected ticker-to-CIK maps, but it does not call
+external services or claim that an unresolved company has been verified.
 
 ## Validation
 
@@ -295,6 +302,7 @@ Targeted smoke commands:
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase95_retrieval_crawl_provider.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase98_sec_edgar_provider.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase99_source_query_provider.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase100_issuer_identity.py
 ```
 
 Optional live checks must be explicitly gated by environment variables and must

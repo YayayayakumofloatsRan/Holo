@@ -12,6 +12,11 @@ from kernel_v3.research.corpus import (
     corpus_document_from_retrieval,
     stable_corpus_document_id,
 )
+from kernel_v3.research.identity import (
+    IssuerIdentity,
+    identity_template_values,
+    resolve_issuer_identity,
+)
 from kernel_v3.research.profiles import (
     FINANCE_FUNDAMENTALS_PROFILE_ID,
     RESEARCH_DEPTHS,
@@ -34,6 +39,7 @@ __all__ = [
     "CorpusInspection",
     "CorpusSearchResult",
     "CorpusStatus",
+    "IssuerIdentity",
     "ResearchProfile",
     "ResearchSourceEntry",
     "ResearchCorpusStore",
@@ -44,8 +50,10 @@ __all__ = [
     "corpus_document_from_retrieval",
     "finance_fundamentals_profile",
     "finance_fundamentals_source_directory",
+    "identity_template_values",
     "profile_by_id",
     "research_depth_defaults",
+    "resolve_issuer_identity",
     "source_directory_for_profile",
     "source_authority_summary",
     "stable_corpus_document_id",

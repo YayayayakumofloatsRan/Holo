@@ -1,31 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import re
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, resolve_issuer_identity
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
-
-
-_TICKER_PATTERN = re.compile(r"\b[A-Z][A-Z0-9.]{0,5}\b")
-_CIK_PATTERN = re.compile(r"\bCIK\s*0*([0-9]{1,10})\b", re.IGNORECASE)
-_IGNORED_TICKERS = {
-    "API",
-    "ASX",
-    "CIK",
-    "EDGAR",
-    "EPS",
-    "GAAP",
-    "HKEX",
-    "IFRS",
-    "IR",
-    "JSON",
-    "Q",
-    "SEC",
-    "SGX",
-    "US",
-}
 
 
 class SecEdgarSearchProvider:
@@ -52,7 +31,11 @@ class SecEdgarSearchProvider:
                 "plan_id": plan.plan_id,
             }
             return []
-        identifiers = _identifiers(query, goal.metadata)
+        identity = resolve_issuer_identity(query, goal.metadata)
+        identifiers = {
+            "ticker": identity.ticker,
+            "cik": identity.cik,
+        }
         sources = _sources_for_identifiers(identifiers, max_sources=goal.max_sources)
         resolved_cik = identifiers.get("cik") or _first_source_cik(sources)
         self._last_search_diagnostics = {
@@ -60,6 +43,8 @@ class SecEdgarSearchProvider:
             "reason": "ok" if sources else "missing_sec_identifier",
             "ticker": identifiers.get("ticker"),
             "cik_present": bool(resolved_cik),
+            "identity_confidence": identity.confidence,
+            "identity_sources": list(identity.sources),
             "source_count": len(sources),
             "query_hash": _hash(query),
             "plan_id": plan.plan_id,
@@ -74,8 +59,6 @@ def _sources_for_identifiers(identifiers: JsonObject, *, max_sources: int) -> li
     ticker = _string_or_none(identifiers.get("ticker"))
     cik = _normalize_cik(identifiers.get("cik"))
     sources: list[SearchSource] = []
-    if ticker and not cik:
-        cik = _normalize_cik(_ticker_cik_map(identifiers).get(ticker.upper()))
     if ticker:
         _append_source(
             sources,
@@ -163,60 +146,12 @@ def _append_source(
     )
 
 
-def _identifiers(query: str, metadata: JsonObject) -> JsonObject:
-    ticker = _string_or_none(metadata.get("ticker"))
-    if ticker is None:
-        ticker = _string_or_none(metadata.get("sec_ticker"))
-    if ticker is None:
-        ticker = _ticker_from_query(query)
-    cik = (
-        _normalize_cik(metadata.get("sec_cik"))
-        or _normalize_cik(metadata.get("cik"))
-        or _normalize_cik(metadata.get("company_cik"))
-        or _cik_from_query(query)
-    )
-    return {
-        "ticker": ticker.upper() if isinstance(ticker, str) else None,
-        "cik": cik,
-        "ticker_cik_map": metadata.get("ticker_cik_map") or metadata.get("sec_ticker_cik_map"),
-    }
-
-
 def _first_source_cik(sources: list[SearchSource]) -> str | None:
     for source in sources:
         cik = _string_or_none(source.metadata.get("sec_cik"))
         if cik is not None:
             return cik
     return None
-
-
-def _ticker_from_query(query: str) -> str | None:
-    for match in _TICKER_PATTERN.findall(query):
-        ticker = match.strip(".").upper()
-        if ticker and ticker not in _IGNORED_TICKERS:
-            return ticker
-    return None
-
-
-def _cik_from_query(query: str) -> str | None:
-    match = _CIK_PATTERN.search(query)
-    if not match:
-        return None
-    return _normalize_cik(match.group(1))
-
-
-def _ticker_cik_map(identifiers: JsonObject) -> dict[str, str]:
-    value = identifiers.get("ticker_cik_map")
-    if not isinstance(value, dict):
-        return {}
-    result: dict[str, str] = {}
-    for raw_ticker, raw_cik in value.items():
-        if not isinstance(raw_ticker, str):
-            continue
-        cik = _normalize_cik(raw_cik)
-        if cik is not None:
-            result[raw_ticker.upper()] = cik
-    return result
 
 
 def _research_profile_id(metadata: JsonObject) -> str | None:
