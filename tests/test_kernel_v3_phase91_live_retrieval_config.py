@@ -74,6 +74,7 @@ def test_phase91_live_retrieval_config_builds_inspectable_operator() -> None:
     assert {
         "direct_url_search",
         "sec_edgar_structured_search",
+        "research_source_query_search",
         "live_json_http_search",
         "research_source_directory_search",
     }.issubset(provider_ids)

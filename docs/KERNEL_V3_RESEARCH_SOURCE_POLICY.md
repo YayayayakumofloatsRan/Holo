@@ -66,6 +66,32 @@ the retrieval operator:
 This prepares the kernel for future live web/database providers without making
 live retrieval the default.
 
+## Source Directory Query Expansion
+
+`research_source_query_search` turns curated source-directory metadata into
+query-specific official source candidates without making network requests.
+Directory entries may declare `query_url_templates` in `metadata`; the provider
+renders those templates from host-supplied values such as `company`, `ticker`,
+`metric`, and the user query, then validates the rendered URL against the
+entry's `allowed_hosts` before returning a `SearchSource`.
+
+This is deliberately data-driven. The agent does not receive domain-specific
+branches for Companies House, FRED, World Bank, or SEC search. The model may
+propose the finance research capability and structured arguments; the host
+expands vetted templates, ranks sources, fetches through the configured
+provider, stores raw bodies in artifacts, and applies evidence sufficiency.
+
+Current finance templates include:
+
+- SEC EDGAR full-text search;
+- UK Companies House company search;
+- FRED series search;
+- World Bank Data search.
+
+Template rendering journals only normal retrieval search attempts and provider
+diagnostics; it does not journal API keys, raw environment values, or fetched
+bodies.
+
 ## Research Corpus
 
 `ResearchCorpusStore` is the local webpage/database foundation for later live
@@ -223,6 +249,12 @@ The live search side is a fallback chain, not a single hard-coded provider:
 
 - `direct_url_search` converts safe user/host supplied URLs into sources
   without network access;
+- `sec_edgar_structured_search` generates SEC submissions, companyfacts,
+  EDGAR search/browse, and ticker-directory candidates from ticker/CIK metadata
+  without network access;
+- `research_source_query_search` expands curated source-directory
+  `query_url_templates` into official query URLs after placeholder and host
+  validation;
 - configured `live_json_http_search` calls an operator-provided JSON search
   endpoint;
 - `bounded_crawl_search` fetches explicit seed pages, extracts bounded links,

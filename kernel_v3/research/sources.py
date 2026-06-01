@@ -28,6 +28,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
                 "Prefer filing documents and official company submissions over summaries.",
                 "Respect SEC fair-access guidance and bounded fetch budgets.",
             ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "sec-edgar-full-text-search",
+                        "template": "https://www.sec.gov/edgar/search/#/q={query_url}",
+                        "title": "SEC EDGAR search for {query}",
+                        "snippet": "Official SEC EDGAR full-text search entry point for the finance query.",
+                        "source_kind": "official_search",
+                        "required_values": ["query"],
+                        "match_any": ["sec", "edgar", "10-k", "10-q", "filing", "annual report", "companyfacts"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-sec-companyfacts",
@@ -121,6 +134,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             required_identifiers=["series name or economic concept", "date range"],
             query_hints=["FRED {metric}", "BEA {metric}", "BLS {metric}"],
             crawl_notes=["Record series identifiers, release dates, and revision caveats."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "fred-series-search",
+                        "template": "https://fred.stlouisfed.org/searchresults/?search_type=series&search={metric_or_query_url}",
+                        "title": "FRED series search for {metric_or_query}",
+                        "snippet": "Official FRED search results for macro or rate series relevant to the finance query.",
+                        "source_kind": "official_search",
+                        "required_values": ["metric_or_query"],
+                        "match_any": ["fred", "rate", "rates", "inflation", "cpi", "gdp", "employment", "macro"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-china-exchange-disclosures",
@@ -176,6 +202,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
                 "Prefer company filing history and original accounts documents.",
                 "Record company number and filing date.",
             ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "companies-house-company-search",
+                        "template": "https://find-and-update.company-information.service.gov.uk/search?q={company_or_query_url}",
+                        "title": "Companies House search for {company_or_query}",
+                        "snippet": "Official Companies House search entry point for UK company accounts and filing history.",
+                        "source_kind": "official_search",
+                        "required_values": ["company_or_query"],
+                        "match_any": ["companies house", "uk", "accounts", "filing history", "company number"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-canada-sedar-plus-filings",
@@ -251,6 +290,19 @@ def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:
             required_identifiers=["country or region", "indicator", "date range"],
             query_hints=["World Bank {indicator} {country}", "IMF {indicator} {country}", "BIS {metric}"],
             crawl_notes=["Record series identifier, source agency, vintage, and revision caveats."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "world-bank-indicator-search",
+                        "template": "https://data.worldbank.org/search?q={metric_or_query_url}",
+                        "title": "World Bank Data search for {metric_or_query}",
+                        "snippet": "Official World Bank Data search entry point for country, sector, and macro indicators.",
+                        "source_kind": "official_search",
+                        "required_values": ["metric_or_query"],
+                        "match_any": ["world bank", "country", "gdp", "indicator", "macro", "population", "trade"],
+                    }
+                ]
+            },
         ),
         ResearchSourceEntry(
             source_id="finance-market-data-secondary",

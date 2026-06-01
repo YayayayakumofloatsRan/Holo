@@ -32,6 +32,14 @@
 - Live retrieval fallback construction now includes the SEC structured provider
   before generic configured search providers, so finance fundamentals tasks can
   use primary SEC URLs without relying on a broad web search API.
+- `research_source_query_search` was added as a generic, template-driven
+  source-directory query provider. It renders entry-declared
+  `query_url_templates` from host metadata such as company, ticker, metric, and
+  query; validates placeholders and allowed hosts; and returns official search
+  URLs without network access or agent-side domain branching.
+- Finance source entries now include curated official query templates for SEC
+  EDGAR search, Companies House company search, FRED series search, and World
+  Bank Data search.
 
 ## Validation
 
@@ -44,7 +52,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-452 passed
+457 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -60,6 +68,11 @@ Additional deterministic coverage now includes:
 - a multi-step finance agent loop that uses SEC structured candidates, fetches
   fake SEC submissions/companyfacts bodies, journals provider-backed retrieval,
   continues once, then finalizes with two citations.
+- source-directory query expansion from company and macro metadata;
+- source-directory query-template host allowlist rejection;
+- a second multi-step finance agent loop using official Companies House and
+  FRED query URLs, showing planner-intent expansion into two retrieval loop
+  actions and host-owned finalization with two citations.
 
 Live model scenarios:
 
@@ -119,6 +132,6 @@ make arbitrary web search a default path, does not add live transports, and does
 not let models execute tools or commit memory directly. Search quality still
 needs broader dedicated source/search adapters before finance-grade research can
 be considered reliable. The SEC provider is a useful primary-source brick, not a
-complete financial research stack: issuer identity resolution, exchange-specific
-filing adapters, current-market/news search, and deeper crawler/readability
-quality remain open capability layers.
+complete financial research stack: richer issuer identity resolution,
+exchange-specific filing adapters, current-market/news search, and deeper
+crawler/readability quality remain open capability layers.

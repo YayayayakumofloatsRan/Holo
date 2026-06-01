@@ -24,6 +24,7 @@ from kernel_v3.retrieval.live_config import LiveCrawlSearchConfig, LiveHttpFetch
 from kernel_v3.retrieval.operator import RetrievalOperator, register_retrieval_tool
 from kernel_v3.retrieval.providers import FakeFetchProvider, FakeSearchProvider, FetchResponse, provider_capability
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
+from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
 
 __all__ = [
     "CitationItem",
@@ -50,6 +51,7 @@ __all__ = [
     "QueryPlan",
     "RankedSource",
     "RankSources",
+    "ResearchSourceQuerySearchProvider",
     "RetrievalOperator",
     "RetrievalProviderCapability",
     "RetrievalProviderInspection",

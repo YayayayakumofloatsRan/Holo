@@ -24,8 +24,9 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/processors/`: schema-first processor fabric, fake providers,
   optional live model providers, JSON repair, routing, usage, and adapters.
 - `kernel_v3/retrieval/`: bounded retrieval FSM, evidence, citations, corpus
-  providers, direct URL/source-directory/crawl/SEC EDGAR structured search
-  providers, optional live HTTP provider surfaces, and source inspection.
+  providers, direct URL/source-directory/query-template/crawl/SEC EDGAR
+  structured search providers, optional live HTTP provider surfaces, and source
+  inspection.
 - `kernel_v3/memory/`: durable memory contracts, store, privacy checks,
   proposal pipeline, projection, migration, and inspection.
 - `kernel_v3/resident/`: local resident queue, scheduler, runtime, projection,
@@ -80,6 +81,11 @@ Kernel v3 currently contains the infrastructure for:
   ticker, CIK, or injected ticker-to-CIK map, Holo can generate official SEC
   submissions, companyfacts, EDGAR search, browse, and ticker-directory
   candidates without doing network search itself.
+- Template-driven official source-query expansion for finance fundamentals.
+  Source directory entries can declare safe `query_url_templates`; Holo renders
+  them from host metadata such as company, ticker, metric, and query, validates
+  the resulting host against the entry allowlist, and only then exposes them as
+  retrieval candidates.
 
 Live model and live retrieval surfaces are opt-in. They are not default unit-test
 dependencies.
@@ -174,6 +180,9 @@ The live retrieval chain is now broader than a single search endpoint:
   companyfacts, and ticker-directory candidates for finance fundamentals from
   host-supplied ticker/CIK metadata or an injected ticker-to-CIK map; it performs
   no network request by itself;
+- `research_source_query_search` expands curated source-directory
+  `query_url_templates` into official search URLs, such as Companies House
+  company search and FRED series search, after placeholder and host validation;
 - configured JSON HTTP search providers can sit in the same fallback chain.
 
 For crawl-only live inspection:
@@ -255,10 +264,12 @@ than a hard-coded domain branch. A model can propose
 with the `finance_fundamentals` research profile, source directory context, and
 primary-source policy. When the intent carries SEC identifiers, the live
 retrieval fallback chain also contributes structured EDGAR candidates before any
-generic search endpoint is needed. Multi-intent finance plans can therefore
-execute multiple retrieval loop actions before finalization while preserving
-host-owned source ranking, artifact storage, evidence sufficiency, and
-termination gates.
+generic search endpoint is needed. When the intent carries company or macro
+metadata, template-backed source-directory entries can generate official
+Companies House, FRED, and World Bank query URLs without hard-coding agent
+branches. Multi-intent finance plans can therefore execute multiple retrieval
+loop actions before finalization while preserving host-owned source ranking,
+artifact storage, evidence sufficiency, and termination gates.
 
 ## Validation
 
@@ -283,6 +294,7 @@ Targeted smoke commands:
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase94_capability_space_and_long_loop.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase95_retrieval_crawl_provider.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase98_sec_edgar_provider.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase99_source_query_provider.py
 ```
 
 Optional live checks must be explicitly gated by environment variables and must

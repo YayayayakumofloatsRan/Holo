@@ -19,6 +19,7 @@ from kernel_v3.retrieval.crawl_provider import (
     SourceDirectorySearchProvider,
 )
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
+from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
 from kernel_v3.retrieval.operator import RetrievalOperator
 
 
@@ -249,6 +250,7 @@ class LiveRetrievalConfig:
     ) -> RetrievalOperator:
         search_providers = [DirectUrlSearchProvider()]
         search_providers.append(SecEdgarSearchProvider())
+        search_providers.append(ResearchSourceQuerySearchProvider())
         if self.search.configured:
             search_providers.append(self.search.build_provider(transport=search_transport))
         if self.crawl.configured:
