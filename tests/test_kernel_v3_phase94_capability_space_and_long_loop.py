@@ -1126,6 +1126,111 @@ def test_phase94_single_semantic_research_intent_expands_multiple_retrieval_payl
     assert len(result.final_answer["citation_refs"]) == 3
 
 
+def test_phase94_multi_payload_retrieval_requires_every_planned_subgoal_to_succeed():
+    journal = JournalStore.in_memory()
+    payloads = [
+        {
+            "query": "AAPL 2024 official filing revenue",
+            "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        },
+        {
+            "query": "AAPL 2024 official filing margin missing",
+            "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        },
+        {
+            "query": "AAPL 2024 investor relations services",
+            "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        },
+    ]
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "finance_fundamentals_research_plan",
+                "suggested_mode": "retrieval_answer",
+                "compound": True,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals_research_plan",
+                        "text": "research Apple revenue, margin, and services",
+                        "sequence_index": 1,
+                        "required_capabilities": ["finance.fundamentals_research"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "domain": "finance",
+                            "activity": "research",
+                            "capability_args": {"retrieval.run": payloads},
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                payloads[0]["query"]: [
+                    _source(
+                        "src-revenue",
+                        "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm",
+                        "Apple 2024 Form 10-K",
+                        "Official revenue filing evidence.",
+                    )
+                ],
+                payloads[1]["query"]: [],
+                payloads[2]["query"]: [
+                    _source(
+                        "src-services",
+                        "https://www.apple.com/investor-relations/earnings-releases/",
+                        "Apple investor relations services context",
+                        "Issuer-hosted services context.",
+                    )
+                ],
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm": (
+                    "Apple 2024 Form 10-K official SEC filing revenue evidence."
+                ),
+                "https://www.apple.com/investor-relations/earnings-releases/": (
+                    "Apple investor relations official services context evidence."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        "调研 Apple 的收入、利润率和服务业务",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "failed"
+    assert result.final_answer is None
+    assert result.failure_report["reason"] == "planned_retrieval_subgoals_incomplete"
+    assert "retrieval_subgoal:goal-plan-1-2" in result.failure_report["missing_evidence"]
+    reports = journal.records(task_id=result.task_id, kind="retrieval_report")
+    assert [record.data["status"] for record in reports] == ["sufficient", "insufficient_evidence", "sufficient"]
+    evidence_records = journal.records(task_id=result.task_id, kind="evidence_sufficiency")
+    assert evidence_records[-2].data["sufficient"] is False
+    coverage = evidence_records[-2].data["diagnostics"]["planned_retrieval_coverage"]
+    assert coverage["incomplete_goal_ids"] == ["goal-plan-1-2"]
+    assert coverage["latest_status_by_goal_id"]["goal-plan-1-2"] == "insufficient_evidence"
+    assert not journal.records(task_id=result.task_id, kind="agent_final_answer")
+
+
 def _source(source_id: str, uri: str, title: str, snippet: str) -> SearchSource:
     return SearchSource(
         source_id=source_id,

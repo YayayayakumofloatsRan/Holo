@@ -330,6 +330,11 @@ def assess_evidence_sufficiency(
         run_id=run_id,
         kind="retrieval_report",
     )
+    planned_retrieval_coverage = _planned_retrieval_coverage(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+    )
     report_diagnostics = _dict_or_empty(latest_retrieval_report.data.get("diagnostics")) if latest_retrieval_report else {}
     evaluation_diagnostics = _dict_or_empty(report_diagnostics.get("evaluation_diagnostics"))
     missing_query_facets = _string_list(evaluation_diagnostics.get("missing_query_facets"))
@@ -400,6 +405,13 @@ def assess_evidence_sufficiency(
         missing.extend(f"query_facet:{facet}" for facet in missing_query_facets)
         missing.extend(missing_source_authority)
         reason = latest_report_reason or f"retrieval_{latest_report_status}"
+    if recipe.mode == "retrieval_answer" and planned_retrieval_coverage.get("required") is True:
+        incomplete_goal_ids = _string_list(planned_retrieval_coverage.get("incomplete_goal_ids"))
+        if incomplete_goal_ids:
+            sufficient = False
+            missing.append("sufficient_retrieval_evidence")
+            missing.extend(f"retrieval_subgoal:{goal_id}" for goal_id in incomplete_goal_ids)
+            reason = "planned_retrieval_subgoals_incomplete"
     if recipe.mode == "workspace_answer" and not workspace_reads:
         sufficient = False
         missing.append("file_read_observation")
@@ -435,6 +447,7 @@ def assess_evidence_sufficiency(
             "source_authority_requirement": source_authority_requirement,
             "source_authority": source_authority,
             "missing_source_authority": missing_source_authority,
+            "planned_retrieval_coverage": planned_retrieval_coverage,
         },
     )
 
@@ -603,6 +616,54 @@ def _latest_run_record(journal: JournalStore, *, task_id: str, run_id: str, kind
         if record.run_id == run_id
     ]
     return records[-1] if records else None
+
+
+def _planned_retrieval_coverage(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    planned_goal_ids: list[str] = []
+    for record in journal.records(task_id=task_id, kind="action"):
+        if record.run_id != run_id:
+            continue
+        if record.data.get("name") != "retrieval.run":
+            continue
+        payload = record.data.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        goal_id = payload.get("goal_id")
+        if isinstance(goal_id, str) and goal_id.startswith("goal-plan-"):
+            planned_goal_ids.append(goal_id)
+    planned_goal_ids = _ordered_unique(planned_goal_ids)
+    if not planned_goal_ids:
+        return {
+            "required": False,
+            "sufficient": True,
+            "planned_goal_ids": [],
+            "complete_goal_ids": [],
+            "incomplete_goal_ids": [],
+            "latest_status_by_goal_id": {},
+        }
+    reports_by_goal: dict[str, JsonObject] = {}
+    for record in journal.records(task_id=task_id, kind="retrieval_report"):
+        if record.run_id != run_id:
+            continue
+        goal_id = record.data.get("goal_id")
+        if isinstance(goal_id, str):
+            reports_by_goal[goal_id] = dict(record.data)
+    incomplete: list[str] = []
+    statuses: JsonObject = {}
+    for goal_id in planned_goal_ids:
+        report = reports_by_goal.get(goal_id)
+        status = str(report.get("status")) if report is not None else "missing_report"
+        statuses[goal_id] = status
+        if status != "sufficient":
+            incomplete.append(goal_id)
+    return {
+        "required": True,
+        "sufficient": not incomplete,
+        "planned_goal_ids": planned_goal_ids,
+        "complete_goal_ids": [goal_id for goal_id in planned_goal_ids if goal_id not in set(incomplete)],
+        "incomplete_goal_ids": incomplete,
+        "latest_status_by_goal_id": statuses,
+    }
 
 
 def _decision_missing_evidence(decision: TerminationDecision) -> list[str]:

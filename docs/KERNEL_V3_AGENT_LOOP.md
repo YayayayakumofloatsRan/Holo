@@ -182,6 +182,16 @@ observation. This gives LLM-driven planning a broad research interface without
 letting the model bypass PolicyGate, source budgets, evidence sufficiency, or
 termination guards.
 
+For host-planned retrieval subgoals, sufficiency is aggregated by planned
+`goal_id`. A later successful retrieval cannot hide an earlier failed subtopic:
+the workloop records `planned_retrieval_coverage` in `evidence_sufficiency`,
+and finalization checks that every latest `goal-plan-*` retrieval report is
+`sufficient`. If any planned subgoal is missing or insufficient after the plan
+is exhausted, `AgentRuntime` returns a `FailureReport` with
+`retrieval_subgoal:<goal_id>` missing evidence instead of synthesizing an
+unsupported complete answer. Dynamic retry/replan paths remain safe because a
+new report for the same planned `goal_id` replaces the older status.
+
 Model planner mode can also run as a dynamic workloop instead of a pre-expanded
 static plan. In that path, every loop iteration recompiles context, sends the
 latest feedback and journal-derived state to `planner.propose`, receives one

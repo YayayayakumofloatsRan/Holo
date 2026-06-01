@@ -68,6 +68,10 @@ Kernel v3 currently contains the infrastructure for:
   capability into multiple ordered retrieval actions from
   `metadata.capability_args["retrieval.run"]` payload arrays, so one LLM packet
   can drive multi-subtopic research while each retrieval remains host-validated;
+- run-level planned retrieval coverage: for multi-subtopic research, Holo
+  tracks the latest retrieval report for each host-planned `goal-plan-*`
+  subgoal and refuses to finalize if any subgoal remains missing or
+  insufficient;
 - model-planner dynamic loops that recompile context, re-call
   `planner.propose`, journal plan revisions, and continue for 10+ bounded
   iterations when evaluator feedback says more work remains;

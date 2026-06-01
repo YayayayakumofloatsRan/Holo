@@ -249,13 +249,20 @@ class AgentRuntime:
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
         if result.status == "needs_user_input":
             if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
+                planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id)
                 failure = self._failure(
                     result.task_id,
                     result.run_id,
-                    _latest_termination_failure_reason(self.journal, result.task_id, result.run_id)
+                    ("planned_retrieval_subgoals_incomplete" if planned_missing else None)
+                    or _latest_termination_failure_reason(self.journal, result.task_id, result.run_id)
                     or result.stop_reason
                     or "no_executable_action",
-                    missing_evidence=_missing_evidence(self.journal, result.task_id, result.run_id),
+                    missing_evidence=_ordered_unique(
+                        [
+                            *_missing_evidence(self.journal, result.task_id, result.run_id),
+                            *planned_missing,
+                        ]
+                    ),
                     next_action="refine_plan_or_configure_more_tools",
                 )
                 return AgentRuntimeResult(
@@ -421,6 +428,15 @@ class AgentRuntime:
         citations = _retrieval_citations(self.journal, task_id, run_id)
         if report is None:
             return None, self._failure(task_id, run_id, "missing_retrieval_report", next_action="retry_retrieval")
+        planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id)
+        if planned_coverage.get("required") is True and not planned_coverage.get("sufficient"):
+            return None, self._failure(
+                task_id,
+                run_id,
+                "planned_retrieval_subgoals_incomplete",
+                missing_evidence=_planned_retrieval_missing_evidence(self.journal, task_id, run_id),
+                next_action="refine_failed_retrieval_subgoals",
+            )
         if report.status != "sufficient":
             reason = _latest_termination_failure_reason(self.journal, task_id, run_id) or loop_stop_reason or f"retrieval_{report.status}"
             return None, self._failure(
@@ -2725,6 +2741,63 @@ def _latest_retrieval_report(journal: JournalStore, task_id: str, run_id: str) -
     if not records:
         return None
     return RetrievalReport.from_dict(records[-1].data)
+
+
+def _planned_retrieval_coverage(journal: JournalStore, task_id: str, run_id: str) -> JsonObject:
+    planned_goal_ids: list[str] = []
+    for record in journal.records(task_id=task_id, kind="action"):
+        if record.run_id != run_id:
+            continue
+        if record.data.get("name") != "retrieval.run":
+            continue
+        payload = record.data.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        goal_id = payload.get("goal_id")
+        if isinstance(goal_id, str) and goal_id.startswith("goal-plan-"):
+            planned_goal_ids.append(goal_id)
+    planned_goal_ids = _ordered_unique(planned_goal_ids)
+    if not planned_goal_ids:
+        return {
+            "required": False,
+            "sufficient": True,
+            "planned_goal_ids": [],
+            "complete_goal_ids": [],
+            "incomplete_goal_ids": [],
+            "latest_status_by_goal_id": {},
+        }
+    reports_by_goal: dict[str, JsonObject] = {}
+    for record in journal.records(task_id=task_id, kind="retrieval_report"):
+        if record.run_id != run_id:
+            continue
+        goal_id = record.data.get("goal_id")
+        if isinstance(goal_id, str):
+            reports_by_goal[goal_id] = dict(record.data)
+    incomplete: list[str] = []
+    statuses: JsonObject = {}
+    for goal_id in planned_goal_ids:
+        report = reports_by_goal.get(goal_id)
+        status = str(report.get("status")) if report is not None else "missing_report"
+        statuses[goal_id] = status
+        if status != "sufficient":
+            incomplete.append(goal_id)
+    incomplete_set = set(incomplete)
+    return {
+        "required": True,
+        "sufficient": not incomplete,
+        "planned_goal_ids": planned_goal_ids,
+        "complete_goal_ids": [goal_id for goal_id in planned_goal_ids if goal_id not in incomplete_set],
+        "incomplete_goal_ids": incomplete,
+        "latest_status_by_goal_id": statuses,
+    }
+
+
+def _planned_retrieval_missing_evidence(journal: JournalStore, task_id: str, run_id: str) -> list[str]:
+    coverage = _planned_retrieval_coverage(journal, task_id, run_id)
+    incomplete = _string_list(coverage.get("incomplete_goal_ids"))
+    if not incomplete:
+        return []
+    return _ordered_unique(["sufficient_retrieval_evidence", *[f"retrieval_subgoal:{goal_id}" for goal_id in incomplete]])
 
 
 def _latest_action_is_no_planned_action(journal: JournalStore, task_id: str, run_id: str) -> bool:

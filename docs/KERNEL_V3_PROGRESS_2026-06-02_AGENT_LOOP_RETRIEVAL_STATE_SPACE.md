@@ -172,6 +172,12 @@
   research profile, research task kind, and source-authority requirement.
   This lets one LLM planning packet drive multi-subtopic research loops without
   giving the model direct tool execution authority.
+- Multi-payload retrieval now has run-level planned subgoal coverage. The
+  workloop groups host-planned `goal-plan-*` retrieval reports by goal id and
+  requires each latest planned subgoal report to be sufficient before final
+  synthesis. A later successful retrieval no longer hides an earlier failed
+  subtopic; incomplete subgoals produce `retrieval_subgoal:<goal_id>` missing
+  evidence and a `FailureReport`.
 
 ## Validation
 
@@ -184,7 +190,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-495 passed
+496 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -247,6 +253,11 @@ Additional deterministic coverage now includes:
   actions for revenue, margin, and competitive landscape research, journals
   decreasing work-plan remaining counts, continues twice, and finalizes after
   three citations.
+- a companion failure test verifies that when one of three planned retrieval
+  subgoals is insufficient, Holo records planned retrieval coverage, refuses
+  final synthesis despite a later successful subgoal, and returns a
+  `planned_retrieval_subgoals_incomplete` failure report with the failed
+  subgoal id.
 - live retrieval/corpus bridge tests show that a configured corpus is searched
   before live HTTP, and that an agent's first live SEC fetch is indexed into
   corpus so a second run can answer from artifact-backed corpus evidence without
