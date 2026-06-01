@@ -39,6 +39,9 @@ _REGULATORY_DOMAINS = {
     "www.sedarplus.ca",
     "edgar.sec.gov",
 }
+_STRUCTURED_REGULATORY_DOMAINS = {
+    "data.sec.gov",
+}
 _EXCHANGE_DOMAINS = {
     "asx.com.au",
     "cninfo.com.cn",
@@ -179,6 +182,8 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
     path = parsed.path.lower()
     title_l = title.lower()
 
+    if _host_matches(host, _STRUCTURED_REGULATORY_DOMAINS):
+        return "structured_regulatory_data", "recognized_structured_regulatory_domain"
     if _host_matches(host, _REGULATORY_DOMAINS):
         return "regulatory_filing", "recognized_regulatory_domain"
     if _host_matches(host, _EXCHANGE_DOMAINS):

@@ -23,6 +23,7 @@ from kernel_v3.retrieval.inspection import inspect_retrieval_providers
 from kernel_v3.retrieval.live_config import LiveCrawlSearchConfig, LiveHttpFetchConfig, LiveJsonHttpSearchConfig, LiveRetrievalConfig
 from kernel_v3.retrieval.operator import RetrievalOperator, register_retrieval_tool
 from kernel_v3.retrieval.providers import FakeFetchProvider, FakeSearchProvider, FetchResponse, provider_capability
+from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
 
 __all__ = [
     "CitationItem",
@@ -57,6 +58,7 @@ __all__ = [
     "SearchAttempt",
     "SearchGoal",
     "SearchSource",
+    "SecEdgarSearchProvider",
     "SourceDirectorySearchProvider",
     "inspect_retrieval_providers",
     "provider_capability",

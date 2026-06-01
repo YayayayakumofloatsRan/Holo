@@ -71,7 +71,12 @@ def test_phase91_live_retrieval_config_builds_inspectable_operator() -> None:
     assert inspection.network_access is True
     assert inspection.provider_capabilities[0]["provider_id"] == "fallback_search"
     provider_ids = {item["provider_id"] for item in inspection.diagnostics["provider_chain"]}
-    assert {"direct_url_search", "live_json_http_search", "research_source_directory_search"}.issubset(provider_ids)
+    assert {
+        "direct_url_search",
+        "sec_edgar_structured_search",
+        "live_json_http_search",
+        "research_source_directory_search",
+    }.issubset(provider_ids)
     assert inspection.provider_capabilities[1]["provider_id"] == "live_http_fetch"
     assert inspection.provider_capabilities[1]["default_enabled"] is True
     assert inspection.issues[0]["code"] == "live_retrieval_provider_present"

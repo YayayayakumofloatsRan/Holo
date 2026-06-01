@@ -310,6 +310,11 @@ def test_phase82_source_policy_matches_global_primary_finance_sources() -> None:
             "World Bank GDP indicator",
             "government_statistic",
         ),
+        (
+            "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+            "SEC companyfacts JSON",
+            "structured_regulatory_data",
+        ),
     ]
 
     for uri, title, expected_family in samples:

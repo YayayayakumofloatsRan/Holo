@@ -24,6 +24,14 @@
   company IR, China/HK exchange, US statistics, and secondary market sources.
 - Finance source policy now recognizes those official/global domains as primary
   regulatory, exchange, or government-statistic sources.
+- `sec_edgar_structured_search` was added as a finance-profile-aware retrieval
+  provider. It produces official SEC ticker-directory, EDGAR search/browse,
+  submissions JSON, and companyfacts JSON candidates from ticker/CIK metadata or
+  an injected ticker-to-CIK map. It performs no network access itself; fetches
+  still go through the host-configured retrieval provider and allowlist.
+- Live retrieval fallback construction now includes the SEC structured provider
+  before generic configured search providers, so finance fundamentals tasks can
+  use primary SEC URLs without relying on a broad web search API.
 
 ## Validation
 
@@ -36,7 +44,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-448 passed
+452 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -45,6 +53,13 @@ Additional deterministic coverage now includes:
 - a multi-intent `finance.fundamentals_research` task that compiles into two
   `retrieval.run` loop actions and finalizes only after both reports are
   sufficient.
+- SEC EDGAR structured source generation from explicit CIK metadata and from an
+  injected ticker-to-CIK map;
+- live retrieval provider inspection showing `sec_edgar_structured_search` in
+  the fallback search chain;
+- a multi-step finance agent loop that uses SEC structured candidates, fetches
+  fake SEC submissions/companyfacts bodies, journals provider-backed retrieval,
+  continues once, then finalizes with two citations.
 
 Live model scenarios:
 
@@ -102,5 +117,8 @@ termination decision. The DeepSeek API key was not present in the journal.
 This iteration improves the core loop and state/capability surface. It does not
 make arbitrary web search a default path, does not add live transports, and does
 not let models execute tools or commit memory directly. Search quality still
-needs a dedicated source/search layer before finance-grade research can be
-considered reliable.
+needs broader dedicated source/search adapters before finance-grade research can
+be considered reliable. The SEC provider is a useful primary-source brick, not a
+complete financial research stack: issuer identity resolution, exchange-specific
+filing adapters, current-market/news search, and deeper crawler/readability
+quality remain open capability layers.
