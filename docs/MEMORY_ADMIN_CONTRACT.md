@@ -141,6 +141,11 @@ show memory ids, summaries, proposal status, counts, provenance refs, and
 redaction metadata, but they do not copy durable memory bodies, structured
 fields, or full export payloads into `chat_command` records. Use the explicit
 CLI/store export surface for a full item export.
+`memory-trace <task_id>` renders the same audit chain in operator form:
+candidate, proposal, approval, commit, delete, migration, and secret-rejection
+events include ids, status, policy, privacy class, short previews, and hashes.
+It remains a trace view only; rejected secret-like candidates are shown by
+reason/risk/hash and not by raw candidate text.
 
 For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured

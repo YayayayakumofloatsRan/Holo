@@ -264,6 +264,11 @@ semantic intake, turn routing, or planner/evaluator/synthesizer behavior
 without letting the worker execute tools directly, bypass PolicyGate, or become
 a transport-level decision maker.
 
+Memory traces are structured audit views, not memory exports. `memory-trace`
+renders candidate/proposal/approval/commit/delete/migration events with ids,
+policy/status, privacy class, bounded previews, and hashes. Secret-like memory
+candidates that were rejected are shown only by reason, risk flags, and hash.
+
 Resident outbox payloads keep a compact `ChatRuntimeResult` manifest. Resident
 run results also surface `chat_route`, compact `command_result`,
 `pending_question`, and `final_answer_ref` so a supervisor can see whether a

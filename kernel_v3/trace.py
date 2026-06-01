@@ -99,13 +99,7 @@ class TraceRenderer:
         lines = [f"Memory Trace {task_id}"]
         for record in records:
             if record.kind.startswith("memory_"):
-                data = record.data
-                lines.append(
-                    f"{record.run_id} {record.step_id or '-'} {record.kind} "
-                    f"proposal={data.get('proposal_id')} memory={data.get('memory_id')} "
-                    f"status={data.get('approval_status') or data.get('reason') or data.get('status')} "
-                    f"source={data.get('source_record_ref')}"
-                )
+                lines.extend(self._memory_lines(record))
         return "\n".join(lines)
 
     def render_resident_trace(self, *, limit: int = 200) -> str:
@@ -204,6 +198,67 @@ class TraceRenderer:
                 f"evidence={evidence_count} citations={citation_count} artifacts={record.artifact_refs}"
             ]
         return []
+
+    def _memory_lines(self, record) -> list[str]:
+        data = record.data
+        run = record.run_id
+        step = record.step_id or "-"
+        kind = record.kind
+        if kind == "memory_shadow_candidate":
+            return [
+                f"{run} {step} {kind} candidate={data.get('candidate_id')} "
+                f"status={data.get('status')} topic={_safe_trace_text(data.get('normalized_topic'))} "
+                f"required={_trace_list(data.get('required_capabilities'))} "
+                f"blocked={_trace_list(data.get('blocked_capabilities'))} "
+                f"text={_preview(_safe_trace_text(data.get('candidate_text_preview', '')), 96)} "
+                f"text_hash={_short_hash(data.get('candidate_text_hash'))}"
+            ]
+        if kind in {"memory_proposal", "memory_proposal_approved", "memory_proposal_rejected"}:
+            proposed = data.get("proposed_item") if isinstance(data.get("proposed_item"), dict) else {}
+            return [
+                f"{run} {step} {kind} proposal={data.get('proposal_id')} candidate={data.get('candidate_id')} "
+                f"status={data.get('approval_status')} policy={data.get('approval_policy')} "
+                f"operation={data.get('operation')} item={proposed.get('memory_id')} "
+                f"kind={proposed.get('kind')} privacy={proposed.get('privacy_class')} "
+                f"thread={data.get('source_thread_id')} "
+                f"summary={_preview(_safe_trace_text(proposed.get('summary_preview', '')), 96)} "
+                f"summary_hash={_short_hash(proposed.get('summary_hash'))}"
+            ]
+        if kind == "memory_item_committed":
+            return [
+                f"{run} {step} {kind} memory={data.get('memory_id')} kind={data.get('kind')} "
+                f"state={data.get('state')} privacy={data.get('privacy_class')} ttl={data.get('ttl_policy')} "
+                f"approved_by={data.get('approved_by')} "
+                f"summary={_preview(_safe_trace_text(data.get('summary_preview', '')), 96)} "
+                f"summary_hash={_short_hash(data.get('summary_hash'))}"
+            ]
+        if kind in {"memory_item_deleted", "memory_item_delete_observed"}:
+            return [
+                f"{run} {step} {kind} memory={data.get('memory_id')} tombstone={data.get('tombstone_id')} "
+                f"deleted_by={data.get('deleted_by')} "
+                f"reason={_preview(_safe_trace_text(data.get('reason_preview', '')), 96)} "
+                f"reason_hash={_short_hash(data.get('reason_hash'))}"
+            ]
+        if kind == "memory_migration":
+            proposals = data.get("proposal_ids", [])
+            rejected = data.get("rejected", [])
+            return [
+                f"{run} {step} {kind} source={data.get('source_record_ref')} "
+                f"proposals={len(proposals) if isinstance(proposals, list) else 0} "
+                f"rejected={len(rejected) if isinstance(rejected, list) else 0}"
+            ]
+        if kind == "memory_rejected_secret_like_content":
+            return [
+                f"{run} {step} {kind} reason={data.get('reason')} "
+                f"risk={_trace_list(data.get('risk_flags'))} "
+                f"candidate_hash={_short_hash(data.get('candidate_text_hash'))} "
+                f"source={data.get('source_record_ref')}"
+            ]
+        return [
+            f"{run} {step} {kind} proposal={data.get('proposal_id')} memory={data.get('memory_id')} "
+            f"status={data.get('approval_status') or data.get('reason') or data.get('status')} "
+            f"source={data.get('source_record_ref')}"
+        ]
 
     def _verbose_lines(self, record) -> list[str]:
         if record.kind == "policy_decision":
@@ -316,6 +371,13 @@ def _action_text(value) -> str:
         return "-"
     actions = [_safe_trace_text(item) for item in value[:3] if isinstance(item, str) and item]
     return "|".join(actions) if actions else "-"
+
+
+def _trace_list(value) -> str:
+    if not isinstance(value, list):
+        return "-"
+    items = [_safe_trace_text(item) for item in value[:6] if isinstance(item, str) and item]
+    return ",".join(items) if items else "-"
 
 
 def _short_hash(value) -> str:

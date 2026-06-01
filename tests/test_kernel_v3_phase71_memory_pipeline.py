@@ -6,6 +6,7 @@ from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryPipeline, MemoryStore, stable_memory_id
 from kernel_v3.processors.testing import fake_fabric
+from kernel_v3.trace import TraceRenderer
 
 
 def test_phase71_explicit_memory_intent_creates_pending_proposal_without_commit():
@@ -147,6 +148,19 @@ def test_phase71_memory_pipeline_journals_manifests_not_raw_memory_text():
     assert "body" not in committed
     assert deleted["reason_length"] == len(delete_reason)
     assert deleted["redaction"] == {"reason": "preview_hash_only", "metadata": "manifest_only"}
+    trace = TraceRenderer(journal).render_memory_trace("task-1")
+    assert "memory_shadow_candidate" in trace
+    assert "required=durable_memory:write" in trace
+    assert "memory_proposal" in trace
+    assert "status=pending policy=needs_review" in trace
+    assert "memory_proposal_approved" in trace
+    assert "memory_item_committed" in trace
+    assert "memory_item_deleted" in trace
+    assert "privacy=project_internal" in trace
+    assert "summary_hash=" in trace
+    assert "reason_hash=" in trace
+    assert marker not in trace
+    assert delete_reason not in trace
 
 
 def test_phase71_approving_proposal_twice_is_idempotent():
@@ -289,6 +303,12 @@ def test_phase71_secret_like_candidate_is_rejected_without_raw_payload_in_memory
     assert "sk_12345678901234567890" not in dumped
     assert "api_key" not in dumped
     assert "candidate_text_hash" in dumped
+    trace = TraceRenderer(journal).render_memory_trace("task-1")
+    assert "memory_rejected_secret_like_content" in trace
+    assert "risk=contains_secret_like_content" in trace
+    assert "candidate_hash=" in trace
+    assert secret not in trace
+    assert "sk_12345678901234567890" not in trace
 
 
 def test_phase71_default_agent_runtime_does_not_write_memory_without_store():
