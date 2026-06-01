@@ -3,7 +3,13 @@ from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
-from kernel_v3.retrieval import DirectUrlSearchProvider, FakeFetchProvider, RetrievalOperator
+from kernel_v3.retrieval import (
+    DirectUrlSearchProvider,
+    FakeFetchProvider,
+    FallbackSearchProvider,
+    RetrievalOperator,
+    SecEdgarSearchProvider,
+)
 
 
 def test_phase103_model_retrieval_action_inherits_finance_profile_defaults_from_task_plan() -> None:
@@ -305,6 +311,130 @@ def test_phase103_planned_subgoal_coverage_feedback_drives_model_retry() -> None
     final_evidence = journal.records(task_id=result.task_id, kind="evidence_sufficiency")[-1].data
     assert final_evidence["diagnostics"]["planned_retrieval_coverage"]["sufficient"] is True
     assert len(result.final_answer["citation_refs"]) == 4
+
+
+def test_phase103_model_planner_uses_sec_filing_continuation_hint_for_next_loop() -> None:
+    query = "AAPL 2024 Form 10-K filing document net sales"
+    submissions_query = "AAPL SEC submissions 2024 10-K accession primaryDocument"
+    filing_query = "SEC CIK 0000320193 10-K 2024-09-28 0000320193-24-000123 primary filing document"
+    primary_url = "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm"
+    journal = JournalStore.in_memory()
+    semantic = _finance_semantic_intake(query)
+    semantic["intents"][0]["metadata"] = {
+        "capability_args": {
+            "retrieval.run": [
+                {
+                    "goal_id": "goal-plan-1-1",
+                    "query": submissions_query,
+                    "metadata": {"sec_cik": "320193"},
+                },
+                {
+                    "goal_id": "goal-plan-1-2",
+                    "query": "AAPL 2024 10-K primary filing document",
+                    "metadata": {"sec_cik": "320193"},
+                },
+            ]
+        }
+    }
+    hinted_payload = {
+        "goal_id": "goal-plan-1-2",
+        "query": filing_query,
+        "max_fetches": 1,
+        "metadata": {
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "sec_cik": "0000320193",
+            "sec_accession_number": "0000320193-24-000123",
+            "sec_primary_document": "aapl-20240928.htm",
+            "sec_form": "10-K",
+            "report_date": "2024-09-28",
+            "source_authority_requirement": "primary",
+            "search_strategy": "structured",
+        },
+    }
+    fabric = fake_fabric(
+        {
+            "semantic.intake": semantic,
+            "planner.propose": [
+                {
+                    "action_id": "act-model-sec-submissions",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "retrieve SEC submissions metadata first",
+                    "payload": {
+                        "goal_id": "goal-plan-1-1",
+                        "query": submissions_query,
+                        "max_fetches": 1,
+                        "metadata": {
+                            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                            "sec_cik": "320193",
+                        },
+                    },
+                    "score": 0.9,
+                    "reasons": ["planned metadata subgoal"],
+                    "side_effect_class": "read",
+                },
+                {
+                    "action_id": "act-model-sec-primary-filing",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "use host SEC filing continuation hint",
+                    "payload": hinted_payload,
+                    "score": 0.94,
+                    "reasons": ["context exposed suggested_filing_documents"],
+                    "side_effect_class": "read",
+                },
+            ],
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([SecEdgarSearchProvider()]),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://data.sec.gov/submissions/CIK0000320193.json": (
+                    '{"filings":{"recent":{"form":["10-K"],"accessionNumber":["0000320193-24-000123"],'
+                    '"primaryDocument":["aapl-20240928.htm"],"reportDate":["2024-09-28"]}}}'
+                ),
+                primary_url: (
+                    "Apple 2024 Form 10-K primary filing document reports net sales in the SEC filing."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        query,
+        mode="auto",
+        semantic_mode="model",
+        planner_mode="model",
+    )
+
+    assert result.status == "completed"
+    planner_requests = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="processor_request")
+        if record.data["task_type"] == "planner.propose"
+    ]
+    assert len(planner_requests) == 2
+    contexts = journal.records(task_id=result.task_id, kind="context")
+    continuation_hints = contexts[1].data["state"]["agent_replan_hints"]["retrieval"]["suggested_filing_documents"]
+    assert continuation_hints
+    assert continuation_hints[0]["suggested_payload"]["metadata"]["sec_accession_number"] == "0000320193-24-000123"
+    assert continuation_hints[0]["suggested_payload"]["metadata"]["sec_primary_document"] == "aapl-20240928.htm"
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["payload"]["goal_id"] for record in actions] == ["goal-plan-1-1", "goal-plan-1-2"]
+    assert actions[1].data["payload"]["metadata"] == hinted_payload["metadata"]
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")
+    ]
+    assert primary_url in fetch_uris
+    assert result.final_answer["citation_refs"]
 
 
 def _finance_semantic_intake(query: str) -> dict:

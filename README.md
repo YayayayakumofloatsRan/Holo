@@ -435,7 +435,10 @@ the original 10-K/10-Q filing body without asking the model to invent SEC path
 rules. The agent also derives `agent_replan_hints.retrieval.suggested_filing_documents`
 from journaled SEC submissions extraction spans, so a live planner can see a
 host-built suggested payload for the next `retrieval.run` without reading raw
-artifact bodies or bypassing PolicyGate.
+artifact bodies or bypassing PolicyGate. The dynamic model-planner regression
+now covers this loop: first retrieve SEC submissions metadata, recompile
+context with the continuation hint, then have the next `planner.propose` use
+the hinted payload to fetch the original filing document.
 Market-news, market-data, and competitive-landscape finance intents use the
 same profile directory but set a different source authority requirement:
 secondary-or-better sources can satisfy those tasks, while fundamentals still

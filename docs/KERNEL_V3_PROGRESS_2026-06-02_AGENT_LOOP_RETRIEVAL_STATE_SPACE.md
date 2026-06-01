@@ -43,6 +43,10 @@
   source requirement, and structured search strategy. Raw JSON bodies remain in
   ArtifactStore, and the model still has to propose a normal host-validated
   action.
+- Dynamic model-planner regression now verifies that the second
+  `planner.propose` call sees those SEC continuation hints in compiled context
+  and uses the hinted payload to fetch the original Archives filing document.
+  This is a multi-loop planner path, not a prewritten two-action recipe.
 - Live retrieval fallback construction now includes the SEC structured provider
   before generic configured search providers, so finance fundamentals tasks can
   use primary SEC URLs without relying on a broad web search API.
