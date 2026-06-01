@@ -11,6 +11,7 @@ from kernel_v3.research.source_policy import assess_search_source
 from kernel_v3.retrieval import SearchGoal, SearchSource
 from kernel_v3.retrieval.contracts import FetchedDocument
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentScheduler
+from kernel_v3.trace import TraceRenderer
 
 
 def test_phase77_resident_doctor_aggregates_queue_schedule_and_memory(tmp_path: Path) -> None:
@@ -234,6 +235,18 @@ def test_phase77_cli_resident_doctor_includes_configured_memory_and_corpus(tmp_p
     assert '"samples"' not in encoded_event
     assert "doctor pending work" not in encoded_event
     assert "doctor scheduled work" not in encoded_event
+    trace = TraceRenderer(JournalStore(journal, index_path=index)).render_resident_trace()
+    assert "resident_doctor_report" in trace
+    assert "components=queue:attention" in trace
+    assert "schedule:attention" in trace
+    assert "memory:needs_review" in trace
+    assert "corpus:attention" in trace
+    assert "retrieval:" in trace
+    assert "memory:pending_memory_proposals" in trace
+    assert "corpus:empty_corpus" in trace
+    assert "report=" in trace
+    assert "doctor pending work" not in trace
+    assert "doctor scheduled work" not in trace
 
 
 def _memory_item(

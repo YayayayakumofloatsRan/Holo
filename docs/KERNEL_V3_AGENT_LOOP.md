@@ -362,6 +362,9 @@ The CLI `resident doctor` command also appends a compact
 `resident_doctor_report` journal record. That record keeps component statuses,
 issue codes, recommended actions, selected safe counters, and a hash of the
 full returned report; inspection samples and raw payloads are not embedded.
+`resident-trace` renders those doctor records with component health, issue
+codes, compact action hints, and the report hash, so operator snapshots remain
+visible in the same bounded resident trace stream as worker activity.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that

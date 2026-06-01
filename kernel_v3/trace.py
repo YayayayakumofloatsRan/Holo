@@ -119,15 +119,27 @@ class TraceRenderer:
                 f"(limit={effective_limit}, cap={RESIDENT_TRACE_LIMIT_CAP})"
             )
         for record in records:
-            data = record.data
-            lines.append(
-                f"{record.run_id} {record.kind} "
-                f"task={record.task_id or '-'} "
-                f"message={data.get('message_id') or data.get('in_reply_to') or '-'} "
-                f"outbox={data.get('outbox_id') or '-'} "
-                f"status={_safe_trace_text(data.get('status') or data.get('reason') or record.state_delta)}"
-            )
+            lines.append(self._resident_line(record))
         return "\n".join(lines)
+
+    def _resident_line(self, record) -> str:
+        data = record.data
+        if record.kind == "resident_doctor_report":
+            return (
+                f"{record.run_id} resident_doctor_report "
+                f"status={_safe_trace_text(data.get('status') or record.state_delta)} "
+                f"components={_component_status_text(data.get('component_statuses'))} "
+                f"issues={data.get('issue_count', 0)}[{_issue_code_text(data.get('issues'))}] "
+                f"actions={_action_text(data.get('recommended_actions'))} "
+                f"report={_short_hash(data.get('report_hash'))}"
+            )
+        return (
+            f"{record.run_id} {record.kind} "
+            f"task={record.task_id or '-'} "
+            f"message={data.get('message_id') or data.get('in_reply_to') or '-'} "
+            f"outbox={data.get('outbox_id') or '-'} "
+            f"status={_safe_trace_text(data.get('status') or data.get('reason') or record.state_delta)}"
+        )
 
     def _retrieval_lines(self, record) -> list[str]:
         data = record.data
@@ -268,6 +280,46 @@ def _safe_trace_value(value):
 
 def _safe_trace_text(value) -> str:
     return str(_safe_trace_value(value))
+
+
+def _component_status_text(value) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    parts = [
+        f"{key}:{value[key]}"
+        for key in ("queue", "schedule", "memory", "corpus", "retrieval")
+        if isinstance(value.get(key), str)
+    ]
+    return ",".join(parts) if parts else "-"
+
+
+def _issue_code_text(value) -> str:
+    if not isinstance(value, list):
+        return "-"
+    codes: list[str] = []
+    for issue in value[:8]:
+        if not isinstance(issue, dict):
+            continue
+        code = issue.get("code")
+        if not isinstance(code, str) or not code:
+            continue
+        component = issue.get("component")
+        if isinstance(component, str) and component:
+            codes.append(f"{component}:{code}")
+        else:
+            codes.append(code)
+    return ",".join(codes) if codes else "-"
+
+
+def _action_text(value) -> str:
+    if not isinstance(value, list):
+        return "-"
+    actions = [_safe_trace_text(item) for item in value[:3] if isinstance(item, str) and item]
+    return "|".join(actions) if actions else "-"
+
+
+def _short_hash(value) -> str:
+    return str(value)[:12] if value else "-"
 
 
 def _clamp_limit(value: int, *, cap: int) -> int:
