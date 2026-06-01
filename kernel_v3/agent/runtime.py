@@ -26,7 +26,7 @@ from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
-from kernel_v3.research import ResearchCorpusStore
+from kernel_v3.research import ResearchCorpusStore, research_depth_defaults
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
@@ -1104,7 +1104,28 @@ def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
     payload.setdefault("goal_id", "goal-agent-retrieval")
     payload.setdefault("query", goal)
     payload.setdefault("max_spans_per_document", 2)
+    payload = _apply_research_depth_defaults(payload)
     return payload
+
+
+def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return payload
+    profile_id = metadata.get("research_profile_id", metadata.get("research_profile"))
+    if not isinstance(profile_id, str) or not profile_id:
+        return payload
+    depth = payload.get("research_depth", metadata.get("research_depth"))
+    defaults = research_depth_defaults(profile_id, depth if isinstance(depth, str) else None)
+    if not defaults:
+        return payload
+    merged = dict(payload)
+    for key in ("max_queries", "max_sources", "max_fetches", "max_spans_per_document"):
+        if key not in merged and key in defaults:
+            merged[key] = defaults[key]
+    if "research_depth" not in merged and isinstance(depth, str) and depth:
+        merged["research_depth"] = depth
+    return merged
 
 
 def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
@@ -1275,6 +1296,9 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
             "metadata",
             "research_profile",
             "research_profile_id",
+            "research_depth",
+            "queries",
+            "query_templates",
         }
         if any(key in capability_args for key in retrieval_keys):
             result = dict(capability_args)

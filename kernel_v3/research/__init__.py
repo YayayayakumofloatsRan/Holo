@@ -11,7 +11,13 @@ from kernel_v3.research.corpus import (
     corpus_document_from_retrieval,
     stable_corpus_document_id,
 )
-from kernel_v3.research.profiles import FINANCE_FUNDAMENTALS_PROFILE_ID, finance_fundamentals_profile, profile_by_id
+from kernel_v3.research.profiles import (
+    FINANCE_FUNDAMENTALS_PROFILE_ID,
+    RESEARCH_DEPTHS,
+    finance_fundamentals_profile,
+    profile_by_id,
+    research_depth_defaults,
+)
 from kernel_v3.research.source_policy import (
     assess_evidence_source,
     assess_search_source,
@@ -21,6 +27,7 @@ from kernel_v3.research.source_policy import (
 
 __all__ = [
     "FINANCE_FUNDAMENTALS_PROFILE_ID",
+    "RESEARCH_DEPTHS",
     "CorpusDocument",
     "CorpusInspection",
     "CorpusSearchResult",
@@ -34,6 +41,7 @@ __all__ = [
     "corpus_document_from_retrieval",
     "finance_fundamentals_profile",
     "profile_by_id",
+    "research_depth_defaults",
     "source_authority_summary",
     "stable_corpus_document_id",
 ]

@@ -23,6 +23,9 @@ def test_phase87_agent_execution_metadata_applies_research_profile_to_retrieval(
     action = journal.records(task_id=result.task_id, kind="action")[0].data
     report = journal.records(task_id=result.task_id, kind="retrieval_report")[-1].data
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert action["payload"]["max_queries"] == 3
+    assert action["payload"]["max_sources"] == 10
+    assert action["payload"]["max_fetches"] == 4
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert report["diagnostics"]["reason"] == "no_primary_source_for_research_profile"
     assert journal.records(task_id=result.task_id, kind="retrieval_source_assessment")
@@ -80,6 +83,8 @@ def test_phase87_cli_agent_exposes_research_profile_flag(tmp_path: Path) -> None
             "AAPL 2024 revenue",
             "--research-profile",
             FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "--research-depth",
+            "deep",
         ).stdout
     )
     journal = JournalStore(journal_path, index_path=index_path)
@@ -87,6 +92,9 @@ def test_phase87_cli_agent_exposes_research_profile_flag(tmp_path: Path) -> None
     report = journal.records(task_id=payload["task_id"], kind="retrieval_report")[-1].data
 
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    assert action["payload"]["metadata"]["research_depth"] == "deep"
+    assert action["payload"]["max_queries"] == 4
+    assert action["payload"]["max_fetches"] == 8
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert report["diagnostics"]["reason"] == "no_primary_source_for_research_profile"
 

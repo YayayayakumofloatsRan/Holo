@@ -5,7 +5,7 @@ from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, finance_fundamentals_profile
 from kernel_v3.research.source_policy import assess_search_source
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
-from kernel_v3.retrieval.rank import rank_sources
+from kernel_v3.retrieval.rank import plan_queries, rank_sources
 
 
 def test_phase82_finance_profile_prefers_primary_filing_sources_over_generic_web() -> None:
@@ -33,6 +33,79 @@ def test_phase82_finance_profile_prefers_primary_filing_sources_over_generic_web
     assert ranked[0].metadata["source_assessment"]["source_family"] == "regulatory_filing"
     assert ranked[0].metadata["source_assessment"]["usable_as_primary"] is True
     assert "authority:primary" in ranked[0].reasons
+
+
+def test_phase82_finance_profile_expands_queries_toward_primary_sources() -> None:
+    queries = plan_queries(
+        SearchGoal(
+            goal_id="goal-finance-query-plan",
+            query="AAPL revenue margin",
+            max_queries=3,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        research_profile=finance_fundamentals_profile(),
+    )
+
+    assert queries == [
+        "AAPL revenue margin",
+        "AAPL revenue margin annual report 10-K 10-Q filing",
+        "AAPL revenue margin investor relations earnings release",
+    ]
+
+
+def test_phase82_finance_profile_multi_query_can_recover_primary_source() -> None:
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    targeted_query = "AAPL revenue annual report 10-K 10-Q filing"
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                "AAPL revenue": [
+                    _source(
+                        "src-generic",
+                        "https://example.com/aapl-revenue",
+                        "AAPL revenue summary",
+                        "A third-party summary repeats Apple revenue.",
+                    )
+                ],
+                targeted_query: [
+                    _source(
+                        "src-sec",
+                        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+                        "Apple Form 10-K",
+                        "AAPL revenue from annual report.",
+                    )
+                ],
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://example.com/aapl-revenue": "AAPL revenue third-party summary.",
+                "https://www.sec.gov/Archives/edgar/data/320193/filing.htm": "AAPL revenue from annual report.",
+            }
+        ),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-finance-multi-query",
+            query="AAPL revenue",
+            max_queries=3,
+            max_spans_per_document=1,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-finance-multi-query",
+        run_id="run-1",
+    )
+
+    plan = journal.records(task_id="task-finance-multi-query", kind="retrieval_query_plan")[0].data
+    assert report.status == "sufficient"
+    assert plan["queries"][1] == targeted_query
+    assert plan["diagnostics"]["query_strategy"]["strategy_id"] == "finance_primary_source_expansion"
+    assert len(journal.records(task_id="task-finance-multi-query", kind="retrieval_search_attempt")) == 3
+    assert report.diagnostics["source_authority"]["primary_source_count"] == 1
 
 
 def test_phase82_finance_retrieval_rejects_generic_web_as_final_primary_evidence() -> None:

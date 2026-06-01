@@ -91,7 +91,7 @@ class RetrievalOperator:
         requested_goal = goal
         goal = _bounded_goal(goal)
         research_profile = _research_profile_from_goal(goal)
-        queries = plan_queries(goal)
+        queries = plan_queries(goal, research_profile=research_profile)
         plan = QueryPlan(
             plan_id=f"plan-{goal.goal_id}",
             goal_id=goal.goal_id,
@@ -104,7 +104,7 @@ class RetrievalOperator:
                 "budget": _goal_budget(goal),
                 **_budget_clamp_diagnostics(requested_goal, goal),
                 "provider_capabilities": self.provider_capabilities(),
-                **({"research_profile": research_profile.profile_id} if research_profile is not None else {}),
+                **(_research_query_strategy_diagnostics(research_profile) if research_profile is not None else {}),
             },
         )
         _append(
@@ -529,6 +529,10 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
     data = goal_data if isinstance(goal_data, dict) else action.payload
     query = str(data.get("query", ""))
     goal_id = str(data.get("goal_id", f"goal-{action.action_id}"))
+    metadata = _dict_or_empty(data.get("metadata"))
+    for key in ("research_profile", "research_profile_id", "research_depth", "queries", "query_templates"):
+        if key in data and key not in metadata:
+            metadata[key] = data[key]
     return SearchGoal(
         goal_id=goal_id,
         query=query,
@@ -536,7 +540,7 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
         max_sources=_positive_int(data.get("max_sources"), default=5),
         max_fetches=_positive_int(data.get("max_fetches"), default=3),
         max_spans_per_document=_positive_int(data.get("max_spans_per_document"), default=2),
-        metadata=_dict_or_empty(data.get("metadata")),
+        metadata=metadata,
     )
 
 
@@ -545,6 +549,23 @@ def _research_profile_from_goal(goal: SearchGoal) -> ResearchProfile | None:
     if not isinstance(raw_profile, str):
         return None
     return profile_by_id(raw_profile)
+
+
+def _research_query_strategy_diagnostics(profile: ResearchProfile) -> JsonObject:
+    strategy = profile.metadata.get("query_strategy")
+    strategy = dict(strategy) if isinstance(strategy, dict) else {}
+    templates = strategy.get("templates")
+    return {
+        "research_profile": profile.profile_id,
+        "query_strategy": {
+            "strategy_id": str(strategy.get("strategy_id") or ""),
+            "template_count": len(templates) if isinstance(templates, list) else 0,
+            "preferred_source_families": [
+                item for item in strategy.get("preferred_source_families", [])
+                if isinstance(item, str)
+            ] if isinstance(strategy.get("preferred_source_families"), list) else [],
+        },
+    }
 
 
 def _goal_budget(goal: SearchGoal) -> JsonObject:

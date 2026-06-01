@@ -215,6 +215,17 @@ fields such as `max_fetches` / `network_fetch_count`, or from the manifest's
 this lets a future live retrieval/search operator declare bounded page-fetch
 cost without getting a special path in `LoopControllerV3`.
 
+Research profiles can shape retrieval without adding domain logic to the loop.
+For example, the finance fundamentals profile contributes primary-source query
+templates, source-family preferences, citation requirements, and depth presets
+(`light`, `balanced`, `deep`). `AgentRuntime` compiles the selected depth into
+ordinary `retrieval.run` payload fields such as `max_queries`, `max_sources`,
+`max_fetches`, and `max_spans_per_document`; live retrieval can also carry a
+`network_fetch_count` so search and fetch cost are budgeted before execution.
+The retrieval operator journals the selected query strategy in
+`retrieval_query_plan` and still evaluates sufficiency through evidence,
+citations, and source authority.
+
 Model feedback is never the only stop authority. It is combined with host
 progress signals, repetition detection, evidence checks, and loop guards.
 

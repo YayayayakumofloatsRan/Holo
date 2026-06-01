@@ -29,7 +29,12 @@ from kernel_v3.processors import (
     run_semantic_scenarios,
     scenario_report_payload,
 )
-from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, ResearchCorpusStore
+from kernel_v3.research import (
+    FINANCE_FUNDAMENTALS_PROFILE_ID,
+    RESEARCH_DEPTHS,
+    ResearchCorpusStore,
+    research_depth_defaults,
+)
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
@@ -85,12 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     agent_parser.add_argument("--citations-required", action="store_true")
     agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    agent_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(agent_parser)
 
     answer_parser = sub.add_parser("answer")
     answer_parser.add_argument("goal")
     answer_parser.add_argument("--citations-required", action="store_true")
     answer_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    answer_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
 
     chat_parser = sub.add_parser("chat")
     chat_parser.add_argument("--thread", default="default")
@@ -105,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     chat_parser.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    chat_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(chat_parser)
 
     chat_status_parser = sub.add_parser("chat-status")
@@ -158,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run_once.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    resident_run_once.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(resident_run_once)
     resident_run_once.add_argument("--tick-schedules", action="store_true")
     resident_run_once.add_argument("--schedule-tick-limit", type=int, default=20)
@@ -177,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["high", "max"], default="high")
     resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    resident_run.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(resident_run)
     resident_run.add_argument("--tick-schedules", action="store_true")
     resident_run.add_argument("--schedule-tick-limit", type=int, default=20)
@@ -782,12 +792,24 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
     metadata: JsonObject = {}
     research_profile = getattr(args, "research_profile", None)
     if isinstance(research_profile, str) and research_profile:
-        metadata.setdefault("retrieval", {})["metadata"] = {"research_profile": research_profile}
+        research_depth = str(getattr(args, "research_depth", "balanced") or "balanced")
+        retrieval = metadata.setdefault("retrieval", {})
+        current_metadata = retrieval.get("metadata")
+        current_metadata = dict(current_metadata) if isinstance(current_metadata, dict) else {}
+        retrieval["metadata"] = {
+            **current_metadata,
+            "research_profile": research_profile,
+            "research_depth": research_depth,
+        }
+        for key, value in research_depth_defaults(research_profile, research_depth).items():
+            retrieval.setdefault(key, value)
     if bool(getattr(args, "live_retrieval", False)):
         retrieval = metadata.setdefault("retrieval", {})
         retrieval["allow_network"] = True
         retrieval["max_network_fetches"] = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
         retrieval["max_fetches"] = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
+        if "max_queries" in retrieval and "max_fetches" in retrieval:
+            retrieval["network_fetch_count"] = int(retrieval["max_queries"]) + int(retrieval["max_fetches"])
     return metadata or None
 
 

@@ -6,6 +6,7 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.runtime import task_recipe
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import (
     HttpFetchProvider,
     HttpTransportResponse,
@@ -402,6 +403,59 @@ def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
     recipe = journal.records(task_id=payload["task_id"], kind="agent_recipe")[-1].data
     assert recipe["max_network_fetches"] == 1
     assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
+
+
+def test_phase92_cli_agent_live_research_depth_counts_query_and_fetch_budget(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    search_transport, fetch_transport = _live_success_transports()
+    monkeypatch.setattr(
+        cli.LiveRetrievalConfig,
+        "build_operator",
+        lambda _self: _live_operator(search_transport=search_transport, fetch_transport=fetch_transport),
+    )
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "agent",
+                "AAPL revenue",
+                "--mode",
+                "retrieval",
+                "--research-profile",
+                FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "--research-depth",
+                "balanced",
+                "--live-retrieval",
+                "--live-max-network-fetches",
+                "3",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    journal = JournalStore(journal_path, index_path=index_path)
+
+    assert payload["status"] == "failed"
+    assert search_transport.calls == []
+    assert fetch_transport.calls == []
+    action = journal.records(task_id=payload["task_id"], kind="action")[0].data
+    guard = journal.records(task_id=payload["task_id"], kind="guard")[-1].data
+    assert action["payload"]["network_fetch_count"] == 6
+    assert guard["stop_reason"] == "max_network_fetches"
+    assert guard["requested_network_fetches"] == 6
+    assert guard["max_network_fetches"] == 3
 
 
 def test_phase92_cli_chat_live_retrieval_forces_retrieval_recipe(
