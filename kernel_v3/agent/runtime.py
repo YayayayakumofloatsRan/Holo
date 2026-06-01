@@ -19,6 +19,7 @@ from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
+from kernel_v3.interaction import interaction_preferences, normalize_response_language
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.loop import LoopControllerV3
@@ -55,6 +56,7 @@ class AgentRuntime:
         workloop_config: WorkloopConfig | None = None,
         memory_store: MemoryStore | None = None,
         research_corpus_store: ResearchCorpusStore | None = None,
+        response_language: str | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.artifact_store = artifact_store or ArtifactStore.in_memory()
@@ -66,6 +68,7 @@ class AgentRuntime:
         self.memory_store = memory_store
         self.memory_pipeline = MemoryPipeline(store=memory_store, journal=self.journal) if memory_store is not None else None
         self.research_corpus_store = research_corpus_store
+        self.response_language = normalize_response_language(response_language)
 
     def run(
         self,
@@ -79,6 +82,7 @@ class AgentRuntime:
         semantic_mode: str = "fake",
         citations_required: bool | None = None,
         execution_metadata: JsonObject | None = None,
+        response_language: str | None = None,
     ) -> AgentRuntimeResult:
         return self._execute(
             goal,
@@ -90,6 +94,7 @@ class AgentRuntime:
             semantic_mode=semantic_mode,
             citations_required=citations_required,
             execution_metadata=execution_metadata,
+            response_language=response_language,
             task_id=None,
         )
 
@@ -106,6 +111,7 @@ class AgentRuntime:
         semantic_mode: str = "fake",
         citations_required: bool | None = None,
         execution_metadata: JsonObject | None = None,
+        response_language: str | None = None,
     ) -> AgentRuntimeResult:
         return self._execute(
             user_input,
@@ -117,6 +123,7 @@ class AgentRuntime:
             semantic_mode=semantic_mode,
             citations_required=citations_required,
             execution_metadata=execution_metadata,
+            response_language=response_language,
             task_id=task_id,
         )
 
@@ -132,9 +139,17 @@ class AgentRuntime:
         semantic_mode: str,
         citations_required: bool | None,
         execution_metadata: JsonObject | None,
+        response_language: str | None,
         task_id: str | None,
     ) -> AgentRuntimeResult:
-        intake = self._semantic_intake(goal, semantic_mode=semantic_mode, task_id=task_id)
+        effective_language = normalize_response_language(response_language or self.response_language)
+        execution_metadata = _with_interaction_preferences(execution_metadata, response_language=effective_language)
+        intake = self._semantic_intake(
+            goal,
+            semantic_mode=semantic_mode,
+            task_id=task_id,
+            response_language=effective_language,
+        )
         task_graph = task_graph_from_semantic(intake)
         task_graph_validation = validate_task_graph(task_graph)
         task_plan = build_task_execution_plan(task_graph, task_graph_validation)
@@ -367,6 +382,7 @@ class AgentRuntime:
                 missing_evidence=["citation_refs"],
                 next_action="retry_retrieval_with_citable_sources",
             )
+        report = _report_with_task_goal(report, recipe)
         synthesized = self._synthesize(
             task_id,
             run_id,
@@ -393,7 +409,7 @@ class AgentRuntime:
         recipe: TaskRecipe,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
-        evidence, citations, report = _workspace_grounding(self.journal, task_id, run_id)
+        evidence, citations, report = _workspace_grounding(self.journal, task_id, run_id, artifact_store=self.artifact_store)
         if not evidence:
             return None, self._failure(
                 task_id,
@@ -410,6 +426,7 @@ class AgentRuntime:
                 missing_evidence=["workspace citation refs"],
                 next_action="read_a_citable_file",
             )
+        report = _report_with_task_goal(report, recipe)
         synthesized = self._synthesize(
             task_id,
             run_id,
@@ -470,7 +487,14 @@ class AgentRuntime:
             citations=citations,
         )
 
-    def _semantic_intake(self, goal: str, *, semantic_mode: str, task_id: str | None) -> SemanticIntake:
+    def _semantic_intake(
+        self,
+        goal: str,
+        *,
+        semantic_mode: str,
+        task_id: str | None,
+        response_language: str,
+    ) -> SemanticIntake:
         if semantic_mode == "fake":
             return analyze_goal(goal)
         if semantic_mode != "model":
@@ -485,6 +509,7 @@ class AgentRuntime:
             task_id=semantic_task_id,
             run_id=semantic_run_id,
             context_id=f"ctx-semantic-{semantic_task_id}-{semantic_run_id}",
+            response_language=response_language,
         )
 
     def _append_recipe(self, recipe: TaskRecipe, *, task_id: str, run_id: str) -> None:
@@ -924,6 +949,7 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
 
 def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     semantic = _semantic_intake_metadata(recipe)
+    preferences = _interaction_preferences_metadata(recipe)
     if recipe.mode == "retrieval_answer":
         return {
             "mode": recipe.mode,
@@ -935,6 +961,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             },
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["web_search", "page_open", "network.fetch"],
+            "interaction_preferences": preferences,
             "semantic_intake": semantic,
         }
     if recipe.mode == "workspace_answer":
@@ -946,6 +973,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             ],
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "workspace.write"],
+            "interaction_preferences": preferences,
             "semantic_intake": semantic,
         }
     if recipe.mode == "clarify_first":
@@ -954,6 +982,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "required_first_action": {"kind": "ask_user", "name": None, "side_effect_class": "none"},
             "allowed_tools": [],
             "forbidden": ["all tool actions"],
+            "interaction_preferences": preferences,
             "semantic_intake": semantic,
         }
     return {
@@ -961,6 +990,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         "required_first_action": {"kind": "respond", "name": None, "side_effect_class": "none"},
         "allowed_tools": [],
         "forbidden": ["all tool actions"],
+        "interaction_preferences": preferences,
         "semantic_intake": semantic,
     }
 
@@ -1101,6 +1131,13 @@ def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
     }
     payload = _merge_retrieval_payload(payload, _retrieval_capability_args(recipe))
     payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
+    preferences = _interaction_preferences_metadata(recipe)
+    if preferences:
+        metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+        metadata.setdefault("interaction_preferences", preferences)
+        if isinstance(preferences.get("response_language"), str):
+            metadata.setdefault("response_language", preferences["response_language"])
+        payload["metadata"] = metadata
     payload.setdefault("goal_id", "goal-agent-retrieval")
     payload.setdefault("query", goal)
     payload.setdefault("max_spans_per_document", 2)
@@ -1378,7 +1415,17 @@ def _retrieval_citations(journal: JournalStore, task_id: str, run_id: str) -> li
     ]
 
 
-def _workspace_grounding(journal: JournalStore, task_id: str, run_id: str) -> tuple[list[EvidenceItem], list[CitationItem], RetrievalReport]:
+WORKSPACE_SYNTHESIS_EVIDENCE_CHARS = 12000
+WORKSPACE_SYNTHESIS_CITATION_CHARS = 2048
+
+
+def _workspace_grounding(
+    journal: JournalStore,
+    task_id: str,
+    run_id: str,
+    *,
+    artifact_store: ArtifactStore,
+) -> tuple[list[EvidenceItem], list[CitationItem], RetrievalReport]:
     evidence: list[EvidenceItem] = []
     citations: list[CitationItem] = []
     observations = [
@@ -1393,9 +1440,7 @@ def _workspace_grounding(journal: JournalStore, task_id: str, run_id: str) -> tu
         if not isinstance(content, dict):
             continue
         path = str(content.get("path", "workspace"))
-        text_value = content.get("text")
-        preview_value = content.get("text_preview")
-        text = str(text_value if isinstance(text_value, str) else preview_value if isinstance(preview_value, str) else "")
+        text = _workspace_observation_text(content, artifact_store=artifact_store)
         evidence_id = f"workspace-evidence-{index}"
         citation_id = f"workspace-cite-{index}"
         artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or evidence_id}"
@@ -1422,9 +1467,9 @@ def _workspace_grounding(journal: JournalStore, task_id: str, run_id: str) -> tu
                 artifact_id=artifact_id,
                 uri=f"workspace://{path}",
                 title=path,
-                quote=text[:256],
+                quote=text[:WORKSPACE_SYNTHESIS_CITATION_CHARS],
                 span_start=0,
-                span_end=min(len(text), 256),
+                span_end=min(len(text), WORKSPACE_SYNTHESIS_CITATION_CHARS),
                 metadata={"record_ref": record.record_id},
             )
         )
@@ -1440,9 +1485,25 @@ def _workspace_grounding(journal: JournalStore, task_id: str, run_id: str) -> tu
         evaluation_id="workspace-eval",
         artifact_refs=[item.artifact_id for item in evidence],
         preview="; ".join(item.text[:120] for item in evidence),
-        diagnostics={"evidence_count": len(evidence), "citation_count": len(citations)},
+        diagnostics={
+            "evidence_count": len(evidence),
+            "citation_count": len(citations),
+            "workspace_evidence_char_limit": WORKSPACE_SYNTHESIS_EVIDENCE_CHARS,
+        },
     )
     return evidence, citations, report
+
+
+def _workspace_observation_text(content: JsonObject, *, artifact_store: ArtifactStore) -> str:
+    artifact_id = content.get("artifact_id")
+    if isinstance(artifact_id, str) and artifact_store.has_blob(artifact_id):
+        payload = artifact_store.read_blob(artifact_id)
+        text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else payload
+        return str(text)[:WORKSPACE_SYNTHESIS_EVIDENCE_CHARS]
+    text_value = content.get("text")
+    preview_value = content.get("text_preview")
+    text = str(text_value if isinstance(text_value, str) else preview_value if isinstance(preview_value, str) else "")
+    return text[:WORKSPACE_SYNTHESIS_EVIDENCE_CHARS]
 
 
 def _grounded_answer(*, report: RetrievalReport, evidence: list[EvidenceItem], citations: list[CitationItem]) -> str:
@@ -1453,6 +1514,34 @@ def _grounded_answer(*, report: RetrievalReport, evidence: list[EvidenceItem], c
     if citations:
         return f"{preview} [{citations[0].citation_id}]"
     return preview or report.preview
+
+
+def _report_with_task_goal(report: RetrievalReport, recipe: TaskRecipe) -> RetrievalReport:
+    semantic = _semantic_intake_metadata(recipe)
+    task_goal = semantic.get("goal")
+    diagnostics = dict(report.diagnostics)
+    if isinstance(task_goal, str) and task_goal.strip():
+        diagnostics.setdefault("task_goal", task_goal.strip())
+    preferences = _interaction_preferences_metadata(recipe)
+    if preferences:
+        diagnostics.setdefault("interaction_preferences", preferences)
+        if isinstance(preferences.get("response_language"), str):
+            diagnostics.setdefault("response_language", preferences["response_language"])
+    return replace(report, diagnostics=diagnostics)
+
+
+def _with_interaction_preferences(metadata: JsonObject | None, *, response_language: str) -> JsonObject:
+    result = dict(metadata or {})
+    current = result.get("interaction_preferences")
+    preferences = dict(current) if isinstance(current, dict) else {}
+    preferences.update(interaction_preferences(response_language=response_language))
+    result["interaction_preferences"] = preferences
+    return result
+
+
+def _interaction_preferences_metadata(recipe: TaskRecipe) -> JsonObject:
+    metadata = _execution_metadata(recipe).get("interaction_preferences")
+    return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 def _agent_final_from_processor(processor_answer, *, task_id: str, run_id: str, trace_refs: list[str]) -> FinalAnswer:

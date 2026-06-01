@@ -270,6 +270,75 @@ def test_phase81_workspace_capability_args_replace_filename_phrase_parsing():
     assert "Workspace capability args" in result.final_answer["answer"]
 
 
+def test_phase81_safe_compound_workspace_plan_executes_without_confirmation():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "workspace_read",
+                "suggested_mode": "workspace_answer",
+                "compound": True,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "workspace_read",
+                        "text": "inspect README.md",
+                        "sequence_index": 1,
+                        "required_capabilities": ["workspace.search", "file.read"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "workspace.search": {"query": "kernel v3 mainline legacy stage"},
+                                "file.read": {"path": "README.md"},
+                            }
+                        },
+                    },
+                    {
+                        "kind": "answer_from_workspace",
+                        "text": "answer from the inspected README",
+                        "sequence_index": 2,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {},
+                    },
+                ],
+                "blocked_capabilities": [],
+                "warnings": ["model_detected_safe_compound_task"],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    runtime = AgentRuntime(
+        journal=journal,
+        processor_fabric=fabric,
+        workspace_files={"README.md": "Kernel v3 is the active mainline. Legacy stage docs are reference only."},
+    )
+
+    result = runtime.run(
+        "只读检查 README.md，告诉我 kernel v3 当前主线是什么，以及旧 stage 线是否还应该作为当前施工对象。",
+        mode="auto",
+        semantic_mode="model",
+    )
+    validation = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data["validation"]
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    actions = [record.data for record in journal.records(task_id=result.task_id, kind="action")]
+
+    assert result.status == "completed"
+    assert result.mode == "workspace_answer"
+    assert validation["status"] == "ready"
+    assert validation["selected_mode"] == "workspace_answer"
+    assert plan["approval_required"] is False
+    assert [action["name"] for action in actions] == ["workspace.search", "file.read"]
+    assert actions[1]["payload"] == {"path": "README.md"}
+    assert not any(action["kind"] == "ask_user" for action in actions)
+    assert result.final_answer is not None
+    assert "Kernel v3 is the active mainline" in result.final_answer["answer"]
+
+
 def test_phase81_blocked_capability_in_model_graph_cannot_select_tool_recipe():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(

@@ -8,6 +8,7 @@ from typing import Pattern
 from kernel_v3.agent.contracts import SemanticIntake, TaskIntent
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import JsonObject
+from kernel_v3.interaction import interaction_preferences
 from kernel_v3.processors.contracts import SEMANTIC_INTAKE_PROMPT_CONTRACT, SEMANTIC_INTAKE_SCHEMA
 from kernel_v3.processors.fabric import ProcessorFabric
 
@@ -106,29 +107,32 @@ def analyze_goal_with_processor(
     context_id: str,
     provider: str | None = None,
     model: str | None = None,
+    response_language: str | None = None,
 ) -> SemanticIntake:
-    fallback = analyze_goal(goal)
     outcome = fabric.run_json(
         task_type="semantic.intake",
         task_id=task_id,
         run_id=run_id,
         context_id=context_id,
-        prompt=_semantic_prompt(goal),
+        prompt=_semantic_prompt(goal, response_language=response_language),
         schema=SEMANTIC_INTAKE_SCHEMA,
         provider=provider,
         model=model,
         parameters={"adapter": "SemanticIntake", "contract_version": 1},
     )
     if outcome.parsed is None:
-        return _with_warning(fallback, "semantic_intake_processor_failed")
-    return _intake_from_model(goal, outcome.parsed, fallback=fallback)
+        return _processor_failed_intake(goal, response_language=response_language)
+    return _intake_from_model(goal, outcome.parsed, fallback=analyze_goal(goal))
 
 
-def _semantic_prompt(goal: str) -> str:
+def _semantic_prompt(goal: str, *, response_language: str | None = None) -> str:
+    preferences = interaction_preferences(response_language=response_language)
     payload = {
         "contract": SEMANTIC_INTAKE_PROMPT_CONTRACT,
         "contract_version": 1,
         "user_goal": goal,
+        "interaction_preferences": preferences,
+        "response_language": preferences["response_language"],
         "host_capability_catalog": {
             "modes": ["direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"],
             "executable_tools_by_recipe": {
@@ -147,6 +151,10 @@ def _semantic_prompt(goal: str) -> str:
         },
         "host_rules": [
             "Split compound requests into ordered intents.",
+            "Do not set requires_clarification merely because a task is compound.",
+            "For safe read-only compound tasks with clear tool arguments, set requires_clarification=false and keep the executable mode.",
+            "Ask the user only when critical scope/tool arguments are missing, a capability is blocked, or the user explicitly requests interruption/confirmation.",
+            "Use response_language as the default language for user-visible clarification text when the user's requested language is unclear or mixed.",
             "Use broad semantic judgment instead of sample-specific phrase matching.",
             (
                 "Use open semantic labels when useful; required_capabilities "
@@ -182,7 +190,9 @@ def _intake_from_model(goal: str, data: JsonObject, *, fallback: SemanticIntake)
     requires_clarification = _bool(data.get("requires_clarification"))
     if primary in {"transport_control", *_host_boundary_kinds()}:
         requires_clarification = False
-    elif compound or blocked:
+    elif blocked:
+        requires_clarification = True
+    elif _has_non_ready_intent(intents):
         requires_clarification = True
     suggested_mode = _normalize_mode(str(data.get("suggested_mode") or ""), primary=primary, requires_clarification=requires_clarification)
     model_warnings = [str(item) for item in data.get("warnings", [])] if isinstance(data.get("warnings"), list) else []
@@ -359,8 +369,6 @@ def _is_blocked_capability(capability: str) -> bool:
 
 def _warnings(intents: list[TaskIntent], *, compound: bool) -> list[str]:
     warnings: list[str] = []
-    if compound:
-        warnings.append("compound_task_requires_explicit_plan_confirmation")
     if any(intent.metadata.get("live_network_requested") is True for intent in intents):
         warnings.append("live_network_not_enabled_by_default")
     if any(intent.kind == "roleplay" for intent in intents):
@@ -406,9 +414,9 @@ def _requires_clarification(
         return True
     if any(intent.kind == "transport_control" or intent.kind in _host_boundary_kinds() for intent in intents):
         return False
-    if compound:
-        return True
     if any(intent.kind == "clarification" for intent in intents):
+        return True
+    if _has_non_ready_intent(intents):
         return True
     return bool(blocked_capabilities)
 
@@ -429,6 +437,39 @@ def _normalize_mode(value: str, *, primary: str, requires_clarification: bool) -
     if value in {"direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}:
         return value
     return _suggested_mode(primary, requires_clarification=requires_clarification)
+
+
+def _has_non_ready_intent(intents: list[TaskIntent]) -> bool:
+    return any(intent.status in {"needs_user_input", "needs_permission", "needs_review", "blocked", "invalid"} for intent in intents)
+
+
+def _processor_failed_intake(goal: str, *, response_language: str | None = None) -> SemanticIntake:
+    question = (
+        "The semantic processor did not return an executable structured plan. Please retry or narrow the task."
+        if str(response_language or "").lower().startswith("en")
+        else "语义处理器没有返回可执行的结构化计划。请重试，或缩小任务范围。"
+    )
+    return SemanticIntake(
+        intake_id="semantic-intake-1",
+        goal=goal,
+        primary_intent="processor_contract_failed",
+        suggested_mode="clarify_first",
+        compound=False,
+        requires_clarification=True,
+        intents=[
+            _intent(
+                1,
+                "processor_contract_failed",
+                goal,
+                risk="processor_contract",
+                status="needs_user_input",
+            ).to_dict()
+        ],
+        blocked_capabilities=[],
+        warnings=["semantic_intake_processor_failed"],
+        response_hint=None,
+        clarification_question=question,
+    )
 
 
 def _normalize_primary(value: str, intents: list[TaskIntent]) -> str:

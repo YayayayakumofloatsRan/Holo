@@ -347,9 +347,9 @@ class ChatRuntime:
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
             return _replace_command_result(result, command.result)
-        if name == "/cancel":
+        if name in {"/cancel", "/interrupt"}:
             command = self._append_command(turn, name=name, args=args, status="ok", result={"active_task_cleared": state.active_task_id})
-            return self._command_result(turn=turn, decision=decision, status="canceled", command=command, answer="Active task cleared.")
+            return self._command_result(turn=turn, decision=decision, status="canceled", command=command, answer="Active task interrupted.")
         if name == "/new":
             command = self._append_command(turn, name=name, args=args, status="ok", result={"active_task_cleared": state.active_task_id})
             return self._command_result(turn=turn, decision=decision, status="ready", command=command, answer="Started a new empty chat task boundary.")
@@ -373,7 +373,7 @@ class ChatRuntime:
         if name == "/memory":
             return self._execute_memory_command(args=args, state=state, turn=turn, decision=decision)
         if name == "/help":
-            result = {"commands": ["/status", "/trace", "/summary", "/tasks", "/plan", "/memory", "/cancel", "/new", "/help"]}
+            result = {"commands": ["/status", "/trace", "/summary", "/tasks", "/plan", "/memory", "/interrupt", "/cancel", "/new", "/help"]}
             command = self._append_command(turn, name=name, args=args, status="ok", result=result)
             return self._command_result(turn=turn, decision=decision, status="completed", command=command, answer=", ".join(result["commands"]))
         command = self._append_command(turn, name=name, args=args, status="unknown", result={"error": "unknown_command"})
@@ -1010,7 +1010,7 @@ class ChatRuntime:
         summary: ThreadSummary | None = None,
     ) -> ChatRuntimeResult:
         result_task_id = decision.task_id
-        if command.name in {"/cancel", "/new"} and not command.result.get("started_new_task"):
+        if command.name in {"/cancel", "/interrupt", "/new"} and not command.result.get("started_new_task"):
             result_task_id = None
         return ChatRuntimeResult(
             status=status,
@@ -1833,7 +1833,7 @@ def _latest_clear_at(journal: JournalStore, thread_id: str) -> int:
     for record in journal.records(kind="chat_command"):
         if record.data.get("thread_id") != thread_id:
             continue
-        if record.data.get("name") == "/cancel":
+        if record.data.get("name") in {"/cancel", "/interrupt"}:
             cleared = max(cleared, record.recorded_at_ms)
         if record.data.get("name") == "/new" and not record.data.get("result", {}).get("started_new_task"):
             cleared = max(cleared, record.recorded_at_ms)

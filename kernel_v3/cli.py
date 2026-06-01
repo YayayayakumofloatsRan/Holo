@@ -11,6 +11,7 @@ from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler
 from kernel_v3.contracts import JsonObject, ProcessorRequest
+from kernel_v3.interaction import DEFAULT_RESPONSE_LANGUAGE, normalize_response_language
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
@@ -75,6 +76,14 @@ def _add_online_model_arg(command_parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_response_language_arg(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--response-language",
+        default=None,
+        help=f"Default language for user-visible model text when the user does not specify one. Default: {DEFAULT_RESPONSE_LANGUAGE}.",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     parser = argparse.ArgumentParser(prog="holo-v3")
@@ -104,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     agent_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_response_language_arg(agent_parser)
     agent_parser.add_argument("--citations-required", action="store_true")
     agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     agent_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
@@ -111,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
 
     answer_parser = sub.add_parser("answer")
     answer_parser.add_argument("goal")
+    _add_response_language_arg(answer_parser)
     answer_parser.add_argument("--citations-required", action="store_true")
     answer_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     answer_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
@@ -128,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     chat_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_response_language_arg(chat_parser)
     chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     chat_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(chat_parser)
@@ -183,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run_once.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_response_language_arg(resident_run_once)
     resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_run_once.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(resident_run_once)
@@ -204,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_response_language_arg(resident_run)
     resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     resident_run.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
     _add_live_retrieval_args(resident_run)
@@ -388,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            response_language=_response_language_for_args(args),
             artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
             research_corpus_store=_runtime_corpus_store(args),
@@ -410,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime = _agent_runtime(
             journal,
             live_model=False,
+            response_language=_response_language_for_args(args),
             artifact_store=_runtime_artifact_store(args),
             memory_store=_memory_store(args, create_default=False),
             research_corpus_store=_runtime_corpus_store(args),
@@ -442,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             thinking=_thinking_override(args.thinking),
             reasoning_effort=args.reasoning_effort,
+            response_language=_response_language_for_args(args),
             planner_mode=_processor_mode(args, "planner"),
             evaluator_mode=_processor_mode(args, "evaluator"),
             synthesizer_mode=_processor_mode(args, "synthesizer"),
@@ -735,6 +752,7 @@ def _agent_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    response_language: str | None = None,
     artifact_store: ArtifactStore | None = None,
     memory_store: MemoryStore | None = None,
     research_corpus_store: ResearchCorpusStore | None = None,
@@ -760,6 +778,7 @@ def _agent_runtime(
         workspace_root=Path.cwd(),
         memory_store=memory_store,
         research_corpus_store=research_corpus_store,
+        response_language=normalize_response_language(response_language),
     )
 
 
@@ -775,6 +794,7 @@ def _chat_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
+    response_language: str | None = None,
     planner_mode: str = "fake",
     evaluator_mode: str = "fake",
     synthesizer_mode: str = "fake",
@@ -792,6 +812,7 @@ def _chat_runtime(
             profile=profile,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
+            response_language=response_language,
             artifact_store=artifact_store,
             memory_store=memory_store,
             research_corpus_store=research_corpus_store,
@@ -831,6 +852,10 @@ def _runtime_corpus_store(args) -> ResearchCorpusStore | None:
 
 def _runtime_execution_metadata(args) -> JsonObject | None:
     metadata: JsonObject = {}
+    response_language = _response_language_for_args(args)
+    metadata["interaction_preferences"] = {
+        "response_language": response_language,
+    }
     research_profile = getattr(args, "research_profile", None)
     if isinstance(research_profile, str) and research_profile:
         research_depth = str(getattr(args, "research_depth", "balanced") or "balanced")
@@ -852,6 +877,10 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
         if "max_queries" in retrieval and "max_fetches" in retrieval:
             retrieval["network_fetch_count"] = int(retrieval["max_queries"]) + int(retrieval["max_fetches"])
     return metadata or None
+
+
+def _response_language_for_args(args) -> str:
+    return normalize_response_language(getattr(args, "response_language", None) or os.environ.get("HOLO_V3_RESPONSE_LANGUAGE"))
 
 
 def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | None:
@@ -1305,6 +1334,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 profile=getattr(args, "profile", "balanced"),
                 thinking=_thinking_override(getattr(args, "thinking", "auto")),
                 reasoning_effort=getattr(args, "reasoning_effort", "high"),
+                response_language=_response_language_for_args(args),
                 planner_mode=_processor_mode(args, "planner"),
                 evaluator_mode=_processor_mode(args, "evaluator"),
                 synthesizer_mode=_processor_mode(args, "synthesizer"),

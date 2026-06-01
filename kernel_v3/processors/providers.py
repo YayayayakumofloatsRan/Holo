@@ -26,7 +26,9 @@ PROCESSOR_SYSTEM_PROMPT = (
     "policy, evidence, citation, memory, or tool constraints. For roleplay or "
     "persona requests, do not use parenthesized stage directions or action "
     "narration in visible text unless the user explicitly asks for script, stage "
-    "directions, or action narration."
+    "directions, or action narration. Default user-visible text to Chinese unless "
+    "the request payload provides a different response_language preference or the "
+    "user explicitly requests another language."
 )
 
 

@@ -141,18 +141,25 @@ def test_phase61_missing_file_path_asks_user_as_journaled_workloop_outcome():
     assert result.status == "needs_user_input"
     assert journal.records(task_id=result.task_id, kind="termination_decision")[0].data["decision"] == "ask_user"
     assert journal.records(task_id=result.task_id, kind="observation")[0].data["status"] == "needs_user_input"
+    sufficiency = journal.records(task_id=result.task_id, kind="evidence_sufficiency")[0].data
+    assert sufficiency["sufficient"] is False
+    assert sufficiency["reason"] == "user_input_required"
+    assert sufficiency["missing"] == ["user_input"]
 
 
 def test_phase61_workspace_search_then_file_read_counts_as_progress():
     journal = JournalStore.in_memory()
+    content = ("Holo workspace evidence for progress. " * 8) + "Artifact body beyond preview is available."
     runtime = AgentRuntime(
         journal=journal,
-        workspace_files={"README.md": "Holo workspace evidence for progress."},
+        workspace_files={"README.md": content},
     )
 
     result = runtime.run("read README.md", mode="workspace")
 
     assert result.status == "completed"
+    assert result.final_answer is not None
+    assert "Artifact body beyond preview" in result.final_answer["answer"]
     progress_types = [
         record.data["progress_type"]
         for record in journal.records(task_id=result.task_id, kind="progress_assessment")

@@ -141,6 +141,24 @@ def test_phase62_cancel_clears_active_task():
     assert state.pending_question is None
 
 
+def test_phase62_interrupt_alias_clears_active_task():
+    journal = JournalStore.in_memory()
+    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+
+    chat.receive("task before interrupt", thread_id="thread-interrupt")
+    interrupted = chat.receive("/interrupt", thread_id="thread-interrupt")
+    state = chat.build_thread_state("thread-interrupt")
+
+    assert interrupted.status == "canceled"
+    assert interrupted.command_result is not None
+    assert interrupted.command_result["name"] == "/interrupt"
+    assert "active_task_cleared" in interrupted.command_result["result"]
+    assert interrupted.task_id is None
+    assert "interrupted" in (interrupted.answer or "")
+    assert state.active_task_id is None
+    assert state.pending_question is None
+
+
 def test_phase62_status_command_does_not_clear_pending_question():
     journal = JournalStore.in_memory()
     chat = _chat_with_semantic(journal, [_workspace_read_intake()])

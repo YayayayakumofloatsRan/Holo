@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from kernel_v3 import cli
+from kernel_v3.agent import analyze_goal_with_processor
 from kernel_v3.context import ContextCompiler
 from kernel_v3.contracts import CandidateAction, Observation, ProcessorRequest
 from kernel_v3.journal import JournalStore
@@ -114,6 +115,49 @@ def test_phase5_processor_system_prompt_guides_visible_text_style_without_overri
     assert "natural" in lowered
     assert "never overrides policy" in lowered
     assert "evidence" in lowered
+    assert "default user-visible text to chinese" in lowered
+
+
+def test_phase5_response_language_preference_is_sent_to_semantic_processor():
+    provider = CapturingFakeJsonProvider(
+        {
+            "semantic.intake": {
+                "primary_intent": "direct_answer",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "direct_answer",
+                        "text": "answer",
+                        "sequence_index": 1,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        }
+    )
+    analyze_goal_with_processor(
+        "who are you",
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        ),
+        task_id="task-lang",
+        run_id="run-lang",
+        context_id="ctx-lang",
+        response_language="en",
+    )
+
+    assert '"response_language": "en"' in provider.last_prompt
+    assert "interaction_preferences" in provider.last_prompt
 
 
 def test_phase5_malformed_planner_json_is_rejected_and_journaled_without_crashing_loop():
@@ -471,8 +515,17 @@ def test_phase5_model_planner_redacts_secret_like_context_before_provider_and_jo
 
 
 def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_bodies():
-    raw = "RAW_PROVIDER_EGRESS_EVIDENCE_" + ("y" * 900)
+    raw = "RAW_PROVIDER_EGRESS_EVIDENCE_" + ("y" * 6000)
+    tail = "SYNTHESIS_PREVIEW_TAIL_MARKER"
     report, evidence, citation = _retrieval_contracts()
+    report = replace(
+        report,
+        diagnostics={
+            **report.diagnostics,
+            "task_goal": "回答 README 中的两个明确问题：当前主线是什么，旧 stage 是否还是施工对象。",
+            "interaction_preferences": {"response_language": "zh"},
+        },
+    )
     provider = CapturingFakeJsonProvider(
         {
             "synthesizer.answer": {
@@ -501,8 +554,39 @@ def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_b
 
     assert answer.status == "ok"
     assert raw not in provider.last_prompt
+    assert "task_goal" in provider.last_prompt
+    assert '"response_language": "zh"' in provider.last_prompt
+    assert "旧 stage 是否还是施工对象" in provider.last_prompt
+    assert "Answer every explicit question" in provider.last_prompt
     assert "text_preview" in provider.last_prompt
     assert "quote_preview" in provider.last_prompt
+
+    provider = CapturingFakeJsonProvider(
+        {
+            "synthesizer.answer": {
+                "answer": "Kernel v3 cites evidence.",
+                "citation_refs": ["cite-1"],
+                "confidence": 0.82,
+                "limitations": [],
+                "used_evidence": ["ev-1"],
+            }
+        }
+    )
+    Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        )
+    ).synthesize(
+        task_id="task-1",
+        run_id="run-1",
+        context_id="ctx-1",
+        report=report,
+        evidence=[replace(evidence, text=("e" * 900) + tail)],
+        citations=[replace(citation, quote=("c" * 900) + tail)],
+    )
+
+    assert tail in provider.last_prompt
 
 
 def test_phase5_router_model_takes_precedence_over_provider_default():

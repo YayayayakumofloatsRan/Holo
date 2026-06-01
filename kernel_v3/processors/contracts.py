@@ -142,6 +142,7 @@ Each intent object should include: kind, text, sequence_index, required_capabili
 Example shape:
 {"primary_intent":"roleplay","suggested_mode":"direct_answer","compound":false,"requires_clarification":false,"intents":[{"kind":"roleplay","text":"Act as a cautious legal intern","sequence_index":1,"required_capabilities":[],"risk":"none","status":"ready","metadata":{"style":"legal intern"}}],"blocked_capabilities":[],"warnings":[],"response_hint":null,"clarification_question":null}
 Use broad semantic judgment instead of keyword matching. Split compound user requests into ordered intents.
+Do not require user clarification merely because there are multiple safe steps. For safe read-only compound tasks with clear arguments, set requires_clarification=false and keep the executable mode. Ask the user only when critical scope/tool arguments are missing, a capability is blocked, or the user explicitly requests interruption/confirmation.
 The intent kind may be an open semantic label; executable routing comes from
 required_capabilities and host validation, not from a fixed phrase table.
 When a capability needs structured arguments, put them under metadata.capability_args,
@@ -161,8 +162,9 @@ Example host tool proposal:
 Example clarification:
 {"action_id":"act-clarify-1","kind":"ask_user","name":null,"description":"ask for missing scope","payload":{"question":"Which market, region, and time range should I research?"},"score":0.82,"reasons":["research scope is underspecified"],"side_effect_class":"none"}
 For user-visible respond/ask_user payload text, match the user's language when it is clear.
+If a response_language preference is present in context, use it as the default for user-visible text when the user's requested language is unclear or mixed.
 For roleplay/persona requests, speak in the requested role without parenthesized stage directions or action narration unless the user explicitly asks for script/stage directions/action narration.
-Treat compound user requests as multiple subrequests.
+Treat compound user requests as multiple subrequests. If the context contains a ready host-validated plan with allowed tools and clear payloads, propose the next executable safe action instead of asking for confirmation.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.
 For infeasible physical actions, unavailable tools, or unclear requests, propose respond/ask_user with the limitation; never invent tools.
 The model only proposes. The host validates policy and executes."""
@@ -173,7 +175,8 @@ answer string or null, stop_reason string or null, missing_evidence string array
 Example:
 {"status":"continue","answer":null,"stop_reason":null,"missing_evidence":["official source citation"]}
 Evaluate whether the latest observation is enough and whether the host should continue.
-For any user-visible answer text, match the user's language when it is clear."""
+For any user-visible answer text, match the user's language when it is clear.
+If a response_language preference is present in context, use it as the default when the user's requested language is unclear or mixed."""
 
 SYNTHESIZER_PROMPT_CONTRACT = """Return one JSON object matching synthesizer.answer.
 Fields: answer string, citation_refs string array, confidence number 0..1,
@@ -181,5 +184,8 @@ limitations string array, used_evidence string array.
 Example:
 {"answer":"The available evidence supports the answer, with one limitation noted.","citation_refs":["cite-1"],"confidence":0.82,"limitations":["Only provided evidence was used."],"used_evidence":["ev-1"]}
 Only cite provided citation ids. Do not invent sources.
+Answer every explicit question or subtask in the provided task_goal when evidence supports it.
+If evidence does not support part of the task_goal, state that limit in limitations instead of omitting the part.
 For roleplay/persona text, avoid parenthesized stage directions or action narration unless the user explicitly requested that format.
-Match the user's language when it is clear from the context."""
+Match the user's language when it is clear from the context.
+If a response_language preference is present in the prompt payload, use it as the default when the user's requested language is unclear or mixed."""

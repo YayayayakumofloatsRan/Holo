@@ -306,6 +306,26 @@ def assess_evidence_sufficiency(
         and record.data.get("source") == "tool:file.read"
         and record.data.get("status") == "ok"
     ]
+    latest_observation = _latest_record(journal, task_id=task_id, kind="observation")
+    if (
+        latest_observation is not None
+        and latest_observation.run_id == run_id
+        and latest_observation.data.get("status") == "needs_user_input"
+    ):
+        return EvidenceSufficiency(
+            sufficiency_id=f"evidence-{run_id}-{step_id or 'final'}",
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            sufficient=False,
+            citations_required=recipe.citations_required,
+            evidence_count=0,
+            citation_count=0,
+            valid_citation_refs=[],
+            missing=["user_input"],
+            reason="user_input_required",
+            diagnostics={"workspace_read_count": len(workspace_reads), "retrieval_evidence_count": len(retrieval_evidence)},
+        )
     evidence_count = len(retrieval_evidence) + len(workspace_reads)
     citation_refs = [str(record.data.get("citation_id")) for record in retrieval_citations if record.data.get("citation_id")]
     citation_refs.extend(f"workspace-cite-{index}" for index, _ in enumerate(workspace_reads, start=1))

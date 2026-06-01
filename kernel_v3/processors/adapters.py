@@ -17,6 +17,9 @@ from kernel_v3.processors.contracts import (
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
 
+SYNTHESIS_EVIDENCE_PREVIEW_CHARS = 4096
+SYNTHESIS_CITATION_PREVIEW_CHARS = 2048
+
 
 class ModelPlanner:
     def __init__(
@@ -178,8 +181,18 @@ def _synthesizer_prompt(
     evidence: list[EvidenceItem],
     citations: list[CitationItem],
 ) -> str:
+    preferences = _interaction_preferences_from_report(report)
     payload = {
         "contract": SYNTHESIZER_PROMPT_CONTRACT,
+        "task_goal": _task_goal_from_report(report),
+        "interaction_preferences": preferences,
+        "response_language": preferences.get("response_language"),
+        "answer_requirements": [
+            "Answer every explicit question or subtask in task_goal when supported by provided evidence.",
+            "If any part is unsupported, include it in limitations.",
+            "Use only provided citation_refs and evidence ids.",
+            "Use the response_language preference as the default user-visible language unless the user explicitly requested another language.",
+        ],
         "retrieval_report": report.to_dict(),
         "evidence": [_compact_evidence_for_provider(item) for item in evidence],
         "citations": [_compact_citation_for_provider(item) for item in citations],
@@ -203,6 +216,26 @@ def _compact_context(context: ContextBundle) -> JsonObject:
     }
 
 
+def _task_goal_from_report(report: RetrievalReport) -> str:
+    diagnostics = report.diagnostics if isinstance(report.diagnostics, dict) else {}
+    for key in ("task_goal", "goal_query", "query"):
+        value = diagnostics.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return report.preview
+
+
+def _interaction_preferences_from_report(report: RetrievalReport) -> JsonObject:
+    diagnostics = report.diagnostics if isinstance(report.diagnostics, dict) else {}
+    preferences = diagnostics.get("interaction_preferences")
+    if isinstance(preferences, dict):
+        return dict(preferences)
+    response_language = diagnostics.get("response_language")
+    if isinstance(response_language, str) and response_language:
+        return {"response_language": response_language}
+    return {}
+
+
 def _compact_observation_for_provider(observation: Observation) -> JsonObject:
     data = observation.to_dict()
     data["content"] = _compact_prompt_value(observation.content)
@@ -212,7 +245,7 @@ def _compact_observation_for_provider(observation: Observation) -> JsonObject:
 def _compact_evidence_for_provider(item: EvidenceItem) -> JsonObject:
     data = item.to_dict()
     text = str(data.pop("text", ""))
-    data["text_preview"] = _preview(text, 512)
+    data["text_preview"] = _preview(text, SYNTHESIS_EVIDENCE_PREVIEW_CHARS)
     data["text_hash"] = _hash_text(text)
     data["text_chars"] = len(text)
     return data
@@ -221,7 +254,7 @@ def _compact_evidence_for_provider(item: EvidenceItem) -> JsonObject:
 def _compact_citation_for_provider(item: CitationItem) -> JsonObject:
     data = item.to_dict()
     quote = str(data.pop("quote", ""))
-    data["quote_preview"] = _preview(quote, 512)
+    data["quote_preview"] = _preview(quote, SYNTHESIS_CITATION_PREVIEW_CHARS)
     data["quote_hash"] = _hash_text(quote)
     data["quote_chars"] = len(quote)
     return data

@@ -1,6 +1,6 @@
 from kernel_v3.agent import AgentRuntime, analyze_goal
 from kernel_v3.journal import JournalStore
-from kernel_v3.processors.testing import fake_fabric
+from kernel_v3.processors.testing import fake_fabric, malformed_fabric
 
 
 def test_phase63_roleplay_request_is_scoped_direct_response_not_echo():
@@ -321,6 +321,24 @@ def test_phase63_model_semantic_intake_drives_open_ended_decomposition():
     processor_results = journal.records(task_id=result.task_id, kind="processor_result")
     assert [record.data["task_type"] for record in processor_results] == ["semantic.intake"]
     assert processor_results[0].run_id == result.run_id
+
+
+def test_phase63_malformed_model_semantic_intake_does_not_fallback_to_direct_answer():
+    journal = JournalStore.in_memory()
+    result = AgentRuntime(journal=journal, processor_fabric=malformed_fabric(journal=journal)).run(
+        "只读检查 README.md，然后告诉我当前主线是什么",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "needs_user_input"
+    assert result.mode == "clarify_first"
+    assert result.final_answer is None
+    intake = journal.records(task_id=result.task_id, kind="semantic_intake")[0].data
+    assert intake["primary_intent"] == "processor_contract_failed"
+    assert intake["warnings"] == ["semantic_intake_processor_failed"]
+    assert intake["requires_clarification"] is True
+    assert _action_names(journal, result.task_id) == ["ask_user"]
 
 
 def test_phase63_model_semantic_intake_response_hint_cannot_become_final_answer():

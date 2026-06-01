@@ -100,6 +100,14 @@ Live model calls are gated:
 HOLO_V3_LIVE_MODEL=1 python3 holo-v3 model-packet --provider deepseek --task-type semantic.intake --goal "search today's news" --show-prompt
 ```
 
+Interactive model-backed runs default user-visible text to Chinese when the user
+does not clearly request another language. Override this per run with
+`--response-language en` or set `HOLO_V3_RESPONSE_LANGUAGE=en`.
+
+```bash
+HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "read README.md and summarize it" --online --response-language zh
+```
+
 Live retrieval is also explicit and host-allowlisted. Do not make network
 retrieval a default path.
 

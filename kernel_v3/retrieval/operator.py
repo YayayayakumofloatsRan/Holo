@@ -395,6 +395,9 @@ class RetrievalOperator:
             diagnostics={
                 "sufficient": decision.sufficient,
                 "reason": decision.reason,
+                "goal_query": goal.query,
+                "interaction_preferences": goal.metadata.get("interaction_preferences", {}),
+                "response_language": goal.metadata.get("response_language"),
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
                 **_budget_clamp_diagnostics(requested_goal, goal),
