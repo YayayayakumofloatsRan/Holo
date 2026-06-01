@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import Callable
@@ -176,8 +177,8 @@ class LoopControllerV3:
                 state_delta={"context_id": context.context_id},
             )
             action = self.planner.propose(context, current_feedback)
-            self._record_action(task, action, step_id=step_id)
             manifest = self.tool_registry.manifest_for_action(action)
+            self._record_action(task, action, step_id=step_id, manifest=manifest)
             decision = self.policy_gate.validate(run_id=task.run_id, action=action, manifest=manifest)
             self.journal.append(
                 task_id=task.task_id,
@@ -270,13 +271,20 @@ class LoopControllerV3:
                 self._append_guard(task, stop_reason, step_id=step_id, data=data)
                 return self._result(task, current_feedback, step_id=step_id)
 
-    def _record_action(self, task: TaskState, action: CandidateAction, *, step_id: str) -> None:
+    def _record_action(
+        self,
+        task: TaskState,
+        action: CandidateAction,
+        *,
+        step_id: str,
+        manifest=None,
+    ) -> None:
         self.journal.append(
             task_id=task.task_id,
             run_id=task.run_id,
             step_id=step_id,
             kind="action",
-            data=redact_journal_data(action.to_dict()),
+            data=redact_journal_data(_journal_action_data(action, manifest)),
             event_ref=self._last_ref(task.task_id, "event_ref"),
             action_ref=action.action_id,
             state_delta={"action_kind": action.kind},
@@ -484,6 +492,47 @@ def _network_cost_from_payload(payload: object) -> int | None:
     if isinstance(goal, dict):
         return _network_cost_from_payload(goal)
     return None
+
+
+def _journal_action_data(action: CandidateAction, manifest=None) -> dict[str, object]:
+    data = action.to_dict()
+    payload = data.get("payload")
+    if not isinstance(payload, dict) or manifest is None:
+        return data
+    schema = getattr(manifest, "input_schema", None)
+    if not isinstance(schema, dict):
+        return data
+    data["payload"] = _journal_payload_preview(payload, schema)
+    return data
+
+
+def _journal_payload_preview(payload: dict[str, object], schema: dict[str, object]) -> dict[str, object]:
+    compact: dict[str, object] = {}
+    for key, value in payload.items():
+        spec = schema.get(key)
+        if isinstance(spec, dict) and spec.get("journal") in {"preview", "preview_hash"} and isinstance(value, str):
+            preview_chars = _positive_preview_int(spec.get("preview_chars"), default=240)
+            compact[f"{key}_preview"] = _preview_text(value, preview_chars)
+            compact[f"{key}_hash"] = hashlib.sha256(value.encode("utf-8")).hexdigest()
+            compact[f"{key}_chars"] = len(value)
+            compact[f"{key}_redaction"] = "preview_hash_only"
+            continue
+        compact[key] = value
+    return compact
+
+
+def _preview_text(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
+
+
+def _positive_preview_int(value: object, *, default: int) -> int:
+    parsed = _positive_int(value)
+    if parsed is None or parsed == 0:
+        return default
+    return parsed
 
 
 def _positive_int(value: object) -> int | None:

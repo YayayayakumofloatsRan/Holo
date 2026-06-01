@@ -110,12 +110,14 @@ class OpenAICompatibleProvider:
         api_key_env: str = "OPENAI_COMPATIBLE_API_KEY",
         model: str = "local-model",
         timeout_seconds: int = 60,
+        max_retries: int = 1,
     ) -> None:
         self.enabled = enabled
         self.base_url = (base_url or os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "")).strip().rstrip("/")
         self.api_key_env = api_key_env
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.max_retries = max(0, int(max_retries))
 
     def availability(self) -> JsonObject:
         if not self.enabled:
@@ -131,7 +133,12 @@ class OpenAICompatibleProvider:
         if not available["available"]:
             return _failed_result(request, str(available["reason"]), provider=self.name, model=self.model)
         payload = self.build_payload(request)
-        decoded = self._post_json(self._completion_url(), self._api_key(), payload, _timeout(request, self.timeout_seconds))
+        decoded = self._post_json_with_retries(
+            self._completion_url(),
+            self._api_key(),
+            payload,
+            _timeout(request, self.timeout_seconds),
+        )
         text = _extract_chat_text(decoded)
         return ProcessorResult(
             result_id=f"result-{request.request_id}",
@@ -179,6 +186,7 @@ class OpenAICompatibleProvider:
                 "Accept": "application/json",
             },
             "timeout_seconds": _timeout(request, self.timeout_seconds),
+            "max_retries": self.max_retries,
             "body": _safe_payload(self.build_payload(request), include_prompt=include_prompt),
             "redaction": {
                 "api_key": "never_exposed",
@@ -193,6 +201,17 @@ class OpenAICompatibleProvider:
         if self.base_url.endswith("/chat/completions"):
             return self.base_url
         return f"{self.base_url}/chat/completions"
+
+    def _post_json_with_retries(self, url: str, api_key: str, payload: JsonObject, timeout_seconds: int) -> JsonObject:
+        last_error: RuntimeError | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self._post_json(url, api_key, payload, timeout_seconds)
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt >= self.max_retries or not _retryable_provider_error(str(exc)):
+                    raise
+        raise last_error or RuntimeError(f"{self.name} request failed")
 
     def _post_json(self, url: str, api_key: str, payload: JsonObject, timeout_seconds: int) -> JsonObject:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -234,6 +253,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         api_key_env: str = "DEEPSEEK_API_KEY",
         model: str | None = None,
         timeout_seconds: int = 60,
+        max_retries: int = 1,
     ) -> None:
         super().__init__(
             enabled=enabled,
@@ -241,6 +261,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             api_key_env=api_key_env,
             model=model or os.environ.get("DEEPSEEK_MODEL", "") or "deepseek-v4-flash",
             timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
         )
 
 
@@ -276,6 +297,23 @@ def _thinking_payload(value: object) -> JsonObject | None:
 
 def _thinking_enabled(value: JsonObject | None) -> bool:
     return isinstance(value, dict) and value.get("type") == "enabled"
+
+
+def _retryable_provider_error(message: str) -> bool:
+    lowered = message.lower()
+    if "http 429" in lowered or "http 500" in lowered or "http 502" in lowered or "http 503" in lowered or "http 504" in lowered:
+        return True
+    retryable_markers = [
+        "network error",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "unexpected_eof",
+        "eof occurred",
+        "connection reset",
+        "remote end closed",
+    ]
+    return any(marker in lowered for marker in retryable_markers)
 
 
 def _temperature(value: object, *, default: float) -> float:

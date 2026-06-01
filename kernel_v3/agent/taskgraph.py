@@ -11,8 +11,16 @@ from kernel_v3.agent.contracts import (
 from kernel_v3.contracts import JsonObject
 
 
-_SAFE_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
-_MAX_GRAPH_NODES = 8
+_SAFE_CAPABILITIES = {
+    "retrieval.run",
+    "workspace.search",
+    "file.read",
+    "workspace.write",
+    "workspace:read",
+    "workspace:write",
+    "system.time",
+}
+_MAX_GRAPH_NODES = 32
 
 
 def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
@@ -258,11 +266,17 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         "direct_answer",
         "retrieval_answer",
         "workspace_answer",
+        "workspace_write",
+        "system_answer",
         "clarify_first",
     }:
         return requested
+    if "system.time" in capabilities:
+        return "system_answer"
     if "retrieval.run" in capabilities:
         return "retrieval_answer"
+    if any(capability in capabilities for capability in {"workspace.write", "workspace:write"}):
+        return "workspace_write"
     if any(capability in capabilities for capability in {"workspace.search", "file.read", "workspace:read"}):
         return "workspace_answer"
     if kind == "retrieval_research":
@@ -286,12 +300,16 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
     capabilities = set(node.required_capabilities)
     if "retrieval.run" in capabilities:
         return "retrieval.run"
+    if "workspace.write" in capabilities or "workspace:write" in capabilities:
+        return "workspace.write"
     if {"workspace.search", "file.read"}.issubset(capabilities):
         return "workspace.search,file.read"
     if "workspace.search" in capabilities:
         return "workspace.search"
     if "file.read" in capabilities:
         return "file.read"
+    if "system.time" in capabilities:
+        return "system.time"
     if node.kind == "retrieval_research":
         return "retrieval.run"
     if node.kind == "workspace_read":
@@ -305,8 +323,10 @@ def _capability_plan(capabilities: list[str]) -> JsonObject:
     tools = [
         capability
         for capability in capabilities
-        if capability in {"retrieval.run", "workspace.search", "file.read"}
+        if capability in {"retrieval.run", "workspace.search", "file.read", "workspace.write", "system.time"}
     ]
+    if "workspace:write" in capabilities and "workspace.write" not in tools:
+        tools.append("workspace.write")
     return {
         "action_family": "tool" if tools else "host_capability",
         "tools": tools,

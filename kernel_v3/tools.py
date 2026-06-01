@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kernel_v3.context.artifacts import ArtifactStore
 from kernel_v3.contracts import ArtifactRef, CandidateAction, JsonObject, Observation, PolicyDecision, ToolManifest
@@ -53,6 +55,7 @@ class ToolRegistry:
         registry = cls()
         registry.register("__respond__", _execute_respond, manifest=_manifest("__respond__", "host", "respond", "none"))
         registry.register("__ask_user__", _execute_ask_user, manifest=_manifest("__ask_user__", "host", "ask_user", "none"))
+        registry.register("system.time", _execute_system_time, manifest=_system_time_manifest())
         return registry
 
     @classmethod
@@ -73,6 +76,11 @@ class ToolRegistry:
             "file.read",
             _fake_file_read(fake_files, artifact_store=artifact_store),
             manifest=_workspace_manifest("file.read", "read", "read"),
+        )
+        registry.register(
+            "workspace.write",
+            _fake_workspace_write(fake_files, artifact_store=artifact_store),
+            manifest=_workspace_manifest("workspace.write", "write", "write"),
         )
         registry.register(
             "blocked_external_write",
@@ -350,10 +358,39 @@ def _workspace_input_schema(name: str) -> JsonObject:
         }
     if name == "workspace.write":
         return {
-            "path": {"type": "str", "required": True, "min_length": 1},
-            "text": {"type": "str", "required": True},
+            "path": {
+                "type": "str",
+                "required": True,
+                "min_length": 1,
+                "description": "Workspace-relative file path. Absolute paths and parent-directory traversal are rejected.",
+            },
+            "text": {
+                "type": "str",
+                "required": True,
+                "preserve_whitespace": True,
+                "journal": "preview_hash",
+                "preview_chars": WORKSPACE_PREVIEW_CHARS,
+                "description": "Complete UTF-8 file body to write. Journal stores only preview/hash metadata.",
+            },
         }
     return {}
+
+
+def _system_time_manifest() -> ToolManifest:
+    return _manifest(
+        "system.time",
+        "system",
+        "time",
+        "read",
+        input_schema={
+            "timezone": {
+                "type": "str",
+                "required": False,
+                "min_length": 1,
+                "description": "IANA timezone name such as Asia/Shanghai or UTC. Defaults to the host local timezone.",
+            }
+        },
+    )
 
 
 def _execute_respond(action: CandidateAction) -> Observation:
@@ -382,6 +419,35 @@ def _execute_ask_user(action: CandidateAction) -> Observation:
         action_id=action.action_id,
         tool_call_id=None,
     )
+
+
+def _execute_system_time(action: CandidateAction) -> Observation:
+    requested_timezone = action.payload.get("timezone")
+    timezone_name = str(requested_timezone).strip() if isinstance(requested_timezone, str) else ""
+    tz = _timezone(timezone_name)
+    now = datetime.now(tz).replace(microsecond=0)
+    return _tool_observation(
+        action,
+        "ok",
+        {
+            "timezone": timezone_name or str(now.tzinfo or "local"),
+            "iso8601": now.isoformat(),
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M:%S"),
+            "utc_offset": now.strftime("%z"),
+            "unix_ms": int(now.timestamp() * 1000),
+        },
+        kind="system_time",
+    )
+
+
+def _timezone(timezone_name: str):
+    if not timezone_name:
+        return datetime.now().astimezone().tzinfo
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
 
 
 def _response_text(payload: JsonObject, *, fallback: str = "") -> str:
@@ -451,6 +517,7 @@ def _schema_spec(raw_spec: object) -> JsonObject:
             "min_length": raw_spec.get("min_length"),
             "min": raw_spec.get("min"),
             "max": raw_spec.get("max"),
+            "preserve_whitespace": bool(raw_spec.get("preserve_whitespace", False)),
             "aliases": [str(item) for item in aliases] if isinstance(aliases, list) else [],
         }
     text = str(raw_spec)
@@ -460,6 +527,7 @@ def _schema_spec(raw_spec: object) -> JsonObject:
         "min_length": None,
         "min": None,
         "max": None,
+        "preserve_whitespace": False,
         "aliases": [],
     }
 
@@ -469,9 +537,9 @@ def _coerce_schema_value(key: str, value: object, spec: JsonObject) -> tuple[obj
     if expected == "str":
         if not isinstance(value, str):
             return value, f"invalid_field_type:{key}:str"
-        parsed = value.strip()
+        parsed = value if bool(spec.get("preserve_whitespace")) else value.strip()
         min_length = _optional_int(spec.get("min_length"))
-        if min_length is not None and len(parsed) < min_length:
+        if min_length is not None and len(parsed.strip() if bool(spec.get("preserve_whitespace")) else parsed) < min_length:
             return value, f"invalid_field_value:{key}:min_length"
         return parsed, None
     if expected == "int":
@@ -551,6 +619,31 @@ def _fake_file_read(files: dict[str, str], *, artifact_store: ArtifactStore | No
     return execute
 
 
+def _fake_workspace_write(files: dict[str, str], *, artifact_store: ArtifactStore | None) -> ToolExecutor:
+    def execute(action: CandidateAction) -> ToolResult:
+        path = str(action.payload.get("path", "")).strip()
+        text = str(action.payload.get("text", ""))
+        if _unsafe_workspace_path_value(path):
+            return _tool_result(action, "blocked", {"path": path, "error": "path_outside_workspace"})
+        files[path] = text
+        artifact = _workspace_payload_artifact(
+            artifact_store=artifact_store,
+            kind="workspace_file_write",
+            path=path,
+            text=text,
+        )
+        return ToolResult(
+            observation=_tool_observation(
+                action,
+                "ok",
+                _workspace_write_payload(path=path, text=text, artifact=artifact),
+            ),
+            artifact_refs=[artifact],
+        )
+
+    return execute
+
+
 def _fake_blocked_external_write(action: CandidateAction) -> Observation:
     return _tool_observation(action, "blocked", {"reason": "external_write_blocked_in_fake_tool"})
 
@@ -612,7 +705,20 @@ class _Workspace:
             return _tool_result(action, "blocked", {"path": rel, "error": "path_outside_workspace"})
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        return _tool_result(action, "ok", {"path": rel, "bytes": len(text.encode("utf-8"))})
+        artifact = _workspace_payload_artifact(
+            artifact_store=self.artifact_store,
+            kind="workspace_file_write",
+            path=rel,
+            text=text,
+        )
+        return ToolResult(
+            observation=_tool_observation(
+                action,
+                "ok",
+                _workspace_write_payload(path=rel, text=text, artifact=artifact),
+            ),
+            artifact_refs=[artifact],
+        )
 
     def _resolve(self, rel: str) -> Path | None:
         candidate = (self.root / rel).resolve()
@@ -785,6 +891,16 @@ def _workspace_text_payload(*, path: str, text: str, artifact: ArtifactRef) -> J
     }
 
 
+def _workspace_write_payload(*, path: str, text: str, artifact: ArtifactRef) -> JsonObject:
+    return {
+        "path": path,
+        "bytes": len(text.encode("utf-8")),
+        "text_preview": _preview_text(text, WORKSPACE_PREVIEW_CHARS),
+        "artifact_id": artifact.artifact_id,
+        "payload_hash": artifact.payload_hash,
+    }
+
+
 def _preview_text(text: str, limit: int) -> str:
     normalized = " ".join(text.split())
     if len(normalized) <= limit:
@@ -801,3 +917,10 @@ def _search_limit(value: object) -> int:
 
 def _skip_workspace_path(path: Path) -> bool:
     return any(part in WORKSPACE_SEARCH_SKIP_DIRS for part in path.parts)
+
+
+def _unsafe_workspace_path_value(path: str) -> bool:
+    if not path.strip():
+        return True
+    parsed = Path(path)
+    return parsed.is_absolute() or any(part == ".." for part in parsed.parts)

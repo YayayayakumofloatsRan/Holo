@@ -16,6 +16,9 @@ reference only. New kernel work should start from `kernel_v3/`,
   tool-name-agnostic.
 - `kernel_v3/agent/`: single-agent runtime, task recipes, semantic task graph,
   workloop termination, and final answer/failure report assembly.
+- `kernel_v3/capabilities.py`: host-visible capability/state catalog spanning
+  conversation, workspace, retrieval, finance, memory, resident, transport,
+  and system capabilities.
 - `kernel_v3/chat/`: multi-turn thread runtime, routing, pending user input,
   journal-derived summaries, and memory admin surfaces.
 - `kernel_v3/processors/`: schema-first processor fabric, fake providers,
@@ -51,6 +54,12 @@ Kernel v3 currently contains the infrastructure for:
   decisions;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
+- workspace write flows with manifest validation and journal redaction of raw
+  file bodies;
+- non-workspace system-state flows such as `system.time`, where the model
+  proposes a host capability and the host reads the current time;
+- semantic work plans that can expand one model-proposed capability into many
+  ordered tool actions, including 10+ iteration workspace loops;
 - multi-turn chat over journal-derived thread state;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
@@ -59,6 +68,8 @@ Kernel v3 currently contains the infrastructure for:
   context injection;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
 - finance-fundamentals research profile and local corpus-backed retrieval.
+- finance fundamentals source directory entries for SEC/EDGAR, company IR,
+  official statistics, exchange disclosures, and secondary market sources.
 
 Live model and live retrieval surfaces are opt-in. They are not default unit-test
 dependencies.
@@ -86,6 +97,7 @@ Run from the repository root:
 ```bash
 python3 holo-v3 tools
 python3 holo-v3 agent "explain kernel v3" --mode direct
+python3 holo-v3 agent "what time is it in UTC?" --mode system
 python3 holo-v3 chat --thread demo --once "what can you do?"
 python3 holo-v3 providers
 python3 holo-v3 provider-smoke --fake
@@ -123,6 +135,9 @@ Tool calls remain host-validated after model planning: every tool payload is
 checked against the tool manifest schema before execution, and workspace search
 is bounded to preview matches so a bad query cannot exhaust the loop's artifact
 budget before a follow-up `file.read`.
+The current DeepSeek V4 router defaults to provider output-token limits for live
+interactive routes, so Holo does not clamp capable long-context models unless
+the operator explicitly passes an integer `--max-output-tokens`.
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "inspect a large workspace file" \
@@ -155,6 +170,8 @@ Targeted smoke commands:
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase73_resident_runtime.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase87_research_profile_runtime.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase92_agent_live_retrieval_permission.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase93_workspace_write_agent.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase94_capability_space_and_long_loop.py
 ```
 
 Optional live checks must be explicitly gated by environment variables and must

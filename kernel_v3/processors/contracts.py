@@ -135,7 +135,7 @@ unfinished plans, and execution. Never request tool execution or memory writes h
 
 
 SEMANTIC_INTAKE_PROMPT_CONTRACT = """Return one JSON object matching semantic.intake.
-Fields: primary_intent string, suggested_mode one of direct_answer/retrieval_answer/workspace_answer/clarify_first,
+Fields: primary_intent string, suggested_mode one of direct_answer/retrieval_answer/workspace_answer/workspace_write/system_answer/clarify_first,
 compound boolean, requires_clarification boolean, intents array, blocked_capabilities string array,
 warnings string array, response_hint string or null, clarification_question string or null.
 Each intent object should include: kind, text, sequence_index, required_capabilities, risk, status, metadata.
@@ -143,10 +143,14 @@ Example shape:
 {"primary_intent":"roleplay","suggested_mode":"direct_answer","compound":false,"requires_clarification":false,"intents":[{"kind":"roleplay","text":"Act as a cautious legal intern","sequence_index":1,"required_capabilities":[],"risk":"none","status":"ready","metadata":{"style":"legal intern"}}],"blocked_capabilities":[],"warnings":[],"response_hint":null,"clarification_question":null}
 Use broad semantic judgment instead of keyword matching. Split compound user requests into ordered intents.
 Do not require user clarification merely because there are multiple safe steps. For safe read-only compound tasks with clear arguments, set requires_clarification=false and keep the executable mode. Ask the user only when critical scope/tool arguments are missing, a capability is blocked, or the user explicitly requests interruption/confirmation.
+For local file/report generation, use suggested_mode=workspace_write and required_capabilities including workspace.write or workspace:write when the host can validate a concrete workspace-relative path and text payload. Put {"workspace.write":{"path":"...","text":"..."}} under metadata.capability_args when available.
 The intent kind may be an open semantic label; executable routing comes from
 required_capabilities and host validation, not from a fixed phrase table.
 When a capability needs structured arguments, put them under metadata.capability_args,
 keyed by capability name, for example {"file.read":{"path":"README.md"}}.
+For host-state questions such as current time, environment facts, or runtime status, use
+suggested_mode=system_answer and required_capabilities such as ["system.time"]; put
+optional arguments under metadata.capability_args, for example {"system.time":{"timezone":"Asia/Shanghai"}}.
 The model classifies and proposes structure only. The host validates capabilities, policy, execution, memory, and stop.
 Do not request live transports, direct tool execution, memory writes, or unavailable tools as executable actions."""
 
@@ -159,6 +163,8 @@ Example direct answer:
 {"action_id":"act-direct-1","kind":"respond","name":null,"description":"answer within provided context","payload":{"text":"I can answer from the current context, or ask the host to use an approved tool when needed."},"score":0.86,"reasons":["no external tool required"],"side_effect_class":"none"}
 Example host tool proposal:
 {"action_id":"act-retrieval-1","kind":"tool","name":"retrieval.run","description":"collect bounded external evidence","payload":{"goal":"Find official API documentation","query":"official API documentation"},"score":0.9,"reasons":["current external evidence is required"],"side_effect_class":"network"}
+Example workspace write proposal:
+{"action_id":"act-write-1","kind":"tool","name":"workspace.write","description":"write a host-validated workspace artifact","payload":{"path":"reports/summary.md","text":"# Summary\n..."},"score":0.86,"reasons":["user requested a local file artifact"],"side_effect_class":"write"}
 Example clarification:
 {"action_id":"act-clarify-1","kind":"ask_user","name":null,"description":"ask for missing scope","payload":{"question":"Which market, region, and time range should I research?"},"score":0.82,"reasons":["research scope is underspecified"],"side_effect_class":"none"}
 For user-visible respond/ask_user payload text, match the user's language when it is clear.

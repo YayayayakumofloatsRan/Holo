@@ -166,7 +166,7 @@ def test_phase81_open_semantic_label_routes_by_capability_not_intent_table():
     assert journal.records(task_id=result.task_id, kind="retrieval_report")
 
 
-def test_phase81_unknown_semantic_label_with_blocked_capability_is_not_executable():
+def test_phase81_workspace_write_without_payload_asks_user_without_blocking_capability():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(
         {
@@ -204,11 +204,12 @@ def test_phase81_unknown_semantic_label_with_blocked_capability_is_not_executabl
     plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
 
     assert result.status == "needs_user_input"
-    assert validation["blocked_capabilities"] == ["workspace:write"]
-    assert validation["selected_mode"] == "clarify_first"
+    assert validation["blocked_capabilities"] == []
+    assert validation["selected_mode"] == "workspace_write"
     assert plan["steps"][0]["kind"] == "任意本地产物生成"
-    assert plan["steps"][0]["status"] == "blocked"
-    assert not journal.records(task_id=result.task_id, kind="tool_call")
+    assert plan["steps"][0]["status"] == "ready"
+    assert plan["steps"][0]["tool_name"] == "workspace.write"
+    assert not any(record.data.get("name") == "workspace.write" for record in journal.records(task_id=result.task_id, kind="action"))
 
 
 def test_phase81_workspace_capability_args_replace_filename_phrase_parsing():

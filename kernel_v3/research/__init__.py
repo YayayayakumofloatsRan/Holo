@@ -4,6 +4,7 @@ from kernel_v3.research.contracts import (
     CorpusSearchResult,
     CorpusStatus,
     ResearchProfile,
+    ResearchSourceEntry,
     SourceAssessment,
 )
 from kernel_v3.research.corpus import (
@@ -24,6 +25,7 @@ from kernel_v3.research.source_policy import (
     classify_source_family,
     source_authority_summary,
 )
+from kernel_v3.research.sources import finance_fundamentals_source_directory, source_directory_for_profile
 
 __all__ = [
     "FINANCE_FUNDAMENTALS_PROFILE_ID",
@@ -33,6 +35,7 @@ __all__ = [
     "CorpusSearchResult",
     "CorpusStatus",
     "ResearchProfile",
+    "ResearchSourceEntry",
     "ResearchCorpusStore",
     "SourceAssessment",
     "assess_evidence_source",
@@ -40,8 +43,10 @@ __all__ = [
     "classify_source_family",
     "corpus_document_from_retrieval",
     "finance_fundamentals_profile",
+    "finance_fundamentals_source_directory",
     "profile_by_id",
     "research_depth_defaults",
+    "source_directory_for_profile",
     "source_authority_summary",
     "stable_corpus_document_id",
 ]

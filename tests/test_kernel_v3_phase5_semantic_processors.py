@@ -823,8 +823,95 @@ def test_phase5_deepseek_provider_payload_uses_component_route_tuning(monkeypatc
     assert provider.payload["model"] == DEEPSEEK_V4_PRO
     assert provider.payload["thinking"] == {"type": "enabled"}
     assert provider.payload["reasoning_effort"] == "high"
-    assert provider.payload["max_tokens"] == 768
+    assert "max_tokens" not in provider.payload
     assert "temperature" not in provider.payload
+
+
+def test_phase5_deepseek_provider_retries_transient_network_errors(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    class FlakyDeepSeekProvider(DeepSeekProvider):
+        def __init__(self):
+            super().__init__(enabled=True, max_retries=1)
+            self.calls = 0
+
+        def _post_json(self, url, api_key, payload, timeout_seconds):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("deepseek network error: [SSL: UNEXPECTED_EOF_WHILE_READING] eof occurred")
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action_id": "act-retry-ok",
+                                    "kind": "respond",
+                                    "name": None,
+                                    "description": "respond after retry",
+                                    "payload": {"text": "ok"},
+                                    "score": 0.9,
+                                    "reasons": ["transient network retry succeeded"],
+                                    "side_effect_class": "none",
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    provider = FlakyDeepSeekProvider()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=deepseek_v4_router(profile="balanced"),
+    )
+
+    outcome = fabric.run_json(
+        task_type="planner.propose",
+        run_id="run-retry",
+        context_id="ctx-retry",
+        prompt="retry transient provider error",
+        schema=PLANNER_SCHEMA,
+    )
+
+    assert outcome.result.status == "ok"
+    assert provider.calls == 2
+
+
+def test_phase5_deepseek_provider_does_not_retry_bad_request(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    class BadRequestDeepSeekProvider(DeepSeekProvider):
+        def __init__(self):
+            super().__init__(enabled=True, max_retries=2)
+            self.calls = 0
+
+        def _post_json(self, url, api_key, payload, timeout_seconds):
+            self.calls += 1
+            raise RuntimeError("deepseek HTTP 400: bad request")
+
+    journal = JournalStore.in_memory()
+    provider = BadRequestDeepSeekProvider()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=deepseek_v4_router(profile="balanced"),
+        journal=journal,
+    )
+
+    outcome = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-bad-request",
+        run_id="run-bad-request",
+        context_id="ctx-bad-request",
+        prompt="do not retry bad request",
+        schema=PLANNER_SCHEMA,
+    )
+
+    assert outcome.result.status == "failed"
+    assert provider.calls == 1
+    result = journal.records(task_id="task-bad-request", kind="processor_result")[0]
+    assert result.data["output"]["error_message_preview"].startswith("deepseek HTTP 400")
 
 
 def test_phase5_adaptive_generation_raises_reasoning_for_large_quality_planner(monkeypatch):

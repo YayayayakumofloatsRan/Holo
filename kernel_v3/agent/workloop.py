@@ -218,6 +218,12 @@ def assess_progress(
             content = record.data.get("content")
             path = content.get("path") if isinstance(content, dict) else None
             signals.append(ProgressSignal(signal_type="new_file_read", ref=str(path or record.record_id), weight=0.35))
+        elif record.kind == "observation" and record.data.get("source") == "tool:workspace.write" and record.data.get("status") == "ok":
+            content = record.data.get("content")
+            path = content.get("path") if isinstance(content, dict) else None
+            signals.append(ProgressSignal(signal_type="new_file_write", ref=str(path or record.record_id), weight=0.45))
+        elif record.kind == "observation" and record.data.get("source") == "tool:system.time" and record.data.get("status") == "ok":
+            signals.append(ProgressSignal(signal_type="new_system_observation", ref=record.record_id, weight=0.35))
         elif record.kind == "retrieval_search_attempt" and record.data.get("status") == "failed":
             signals.append(ProgressSignal(signal_type="new_failure_diagnostic", ref=record.record_id, weight=0.1))
     if observation.status not in {"blocked", "failed"} and current_action is not None and _action_narrows_scope(current_action.data):
@@ -306,6 +312,18 @@ def assess_evidence_sufficiency(
         and record.data.get("source") == "tool:file.read"
         and record.data.get("status") == "ok"
     ]
+    workspace_writes = [
+        record for record in journal.records(task_id=task_id, kind="observation")
+        if record.run_id == run_id
+        and record.data.get("source") == "tool:workspace.write"
+        and record.data.get("status") == "ok"
+    ]
+    system_observations = [
+        record for record in journal.records(task_id=task_id, kind="observation")
+        if record.run_id == run_id
+        and record.data.get("source") == "tool:system.time"
+        and record.data.get("status") == "ok"
+    ]
     latest_observation = _latest_record(journal, task_id=task_id, kind="observation")
     if (
         latest_observation is not None
@@ -324,9 +342,14 @@ def assess_evidence_sufficiency(
             valid_citation_refs=[],
             missing=["user_input"],
             reason="user_input_required",
-            diagnostics={"workspace_read_count": len(workspace_reads), "retrieval_evidence_count": len(retrieval_evidence)},
+            diagnostics={
+                "workspace_read_count": len(workspace_reads),
+                "workspace_write_count": len(workspace_writes),
+                "system_observation_count": len(system_observations),
+                "retrieval_evidence_count": len(retrieval_evidence),
+            },
         )
-    evidence_count = len(retrieval_evidence) + len(workspace_reads)
+    evidence_count = len(retrieval_evidence) + len(workspace_reads) + len(workspace_writes) + len(system_observations)
     citation_refs = [str(record.data.get("citation_id")) for record in retrieval_citations if record.data.get("citation_id")]
     citation_refs.extend(f"workspace-cite-{index}" for index, _ in enumerate(workspace_reads, start=1))
     missing: list[str] = []
@@ -358,6 +381,14 @@ def assess_evidence_sufficiency(
         sufficient = False
         missing.append("file_read_observation")
         reason = "missing_workspace_file_observation"
+    if recipe.mode == "workspace_write" and not workspace_writes:
+        sufficient = False
+        missing.append("workspace_write_observation")
+        reason = "missing_workspace_write_observation"
+    if recipe.mode == "system_answer" and not system_observations:
+        sufficient = False
+        missing.append("system_observation")
+        reason = "missing_system_observation"
     return EvidenceSufficiency(
         sufficiency_id=f"evidence-{run_id}-{step_id or 'final'}",
         task_id=task_id,
@@ -370,7 +401,12 @@ def assess_evidence_sufficiency(
         valid_citation_refs=_ordered_unique(citation_refs),
         missing=_ordered_unique(missing),
         reason=reason,
-        diagnostics={"workspace_read_count": len(workspace_reads), "retrieval_evidence_count": len(retrieval_evidence)},
+        diagnostics={
+            "workspace_read_count": len(workspace_reads),
+            "workspace_write_count": len(workspace_writes),
+            "system_observation_count": len(system_observations),
+            "retrieval_evidence_count": len(retrieval_evidence),
+        },
     )
 
 
@@ -400,7 +436,10 @@ def decide_termination(
             reason = "final_answer_blocked_by_evidence"
             override = True
     elif feedback.status == "continue":
-        if evidence.sufficient and recipe.mode in {"retrieval_answer", "workspace_answer"}:
+        if "remaining_plan_actions" in feedback.missing_evidence:
+            decision = "continue"
+            reason = "planned_actions_remaining"
+        elif evidence.sufficient and recipe.mode in {"retrieval_answer", "workspace_answer", "workspace_write", "system_answer"}:
             decision = "final_answer"
             reason = "evidence_sufficient_overrode_continue"
             override = True
@@ -421,7 +460,7 @@ def decide_termination(
         else:
             decision = "failure_report"
             reason = feedback.stop_reason or feedback.status
-    if repetition.repeated:
+    if repetition.repeated and not (repetition.repeat_type == "same_missing_evidence" and progress.made_progress):
         decision = "failure_report"
         reason = "repeated_no_progress"
         override = True

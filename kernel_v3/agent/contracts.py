@@ -6,7 +6,15 @@ from typing import Literal
 from kernel_v3.contracts import Contract, JsonObject
 
 
-AgentMode = Literal["direct_answer", "retrieval_answer", "workspace_answer", "clarify_first", "auto"]
+AgentMode = Literal[
+    "direct_answer",
+    "retrieval_answer",
+    "workspace_answer",
+    "workspace_write",
+    "system_answer",
+    "clarify_first",
+    "auto",
+]
 
 
 @dataclass(frozen=True, kw_only=True)

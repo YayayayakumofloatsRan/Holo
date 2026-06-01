@@ -66,6 +66,23 @@ workspace finalizer can turn the read observation into evidence and citations.
 This keeps the multi-step loop from exhausting artifact budgets before the
 agent can perform the follow-up read.
 
+Workspace writes are now first-class host tools, not side effects hidden in a
+planner response. `workspace.write` requires a workspace-relative `path` and a
+complete UTF-8 `text` payload. The manifest marks `text` as
+`journal=preview_hash`, so action records and plan previews keep only bounded
+preview/hash/length metadata while the raw body belongs to the artifact/write
+path. The write recipe may read/search first, then writes once and stops after
+the host observes the write.
+
+System-state tools are a separate capability family from workspace. For
+example, a live semantic processor may return a packet with
+`suggested_mode="system_answer"`, `required_capabilities=["system.time"]`, and
+`metadata.capability_args={"system.time":{"timezone":"UTC"}}`. The host turns
+that into a `system.time` tool call, journals a `system_time` observation,
+counts it as `new_system_observation`, and finalizes from that observation.
+This makes host state explicit without giving the model shell access or hidden
+environment reads.
+
 ## Context Redaction Boundary
 
 `ContextPackCompiler` is the last host-owned boundary before planner,
@@ -144,6 +161,21 @@ lets the host run a workspace read without guessing a filename from free text.
 These arguments are still only proposals: the plan records them for audit, the
 recipe turns them into bounded `CandidateAction` payloads, and `PolicyGate` plus
 `ToolRegistry` remain responsible for validation and execution.
+
+Capability arguments may be plural. If the model returns a list such as
+`{"file.read":[{"path":"docs/a.md"},{"path":"docs/b.md"}]}`, the host expands
+that one semantic node into multiple ordered `file.read` actions. The recipe
+budgets, work plan updates, repetition checks, and finalizer all see the real
+expanded action count. This is how the current loop can run 10+ useful
+iterations from one broad instruction while still knowing when the plan is
+complete.
+
+The capability catalog in context is intentionally broader than the currently
+enabled tool set. It exposes conversation, workspace, retrieval, finance,
+memory, resident, transport, and system families with statuses such as
+`enabled`, `available_with_permission`, `not_configured`, `planned`, and
+`host_only`. The model can reason over that state space, but only enabled or
+permissioned host tools become executable actions.
 
 ## Durable Memory Boundary
 
@@ -264,6 +296,14 @@ The retrieval operator journals the selected query strategy in
 `retrieval_query_plan` and still evaluates sufficiency through evidence,
 citations, and source authority.
 
+The finance source directory is not a content database. It is a structured map
+of where an agent should search for fundamentals evidence: SEC filings and
+companyfacts, company investor-relations pages, official statistics, China/HK
+exchange disclosure systems, and secondary market/news sources. When the
+finance profile is active, the directory is injected into context as source
+metadata so the model can choose better query targets while live search/fetch
+still remains opt-in and host-allowlisted.
+
 Model feedback is never the only stop authority. It is combined with host
 progress signals, repetition detection, evidence checks, and loop guards.
 
@@ -318,6 +358,12 @@ packet output.
 DeepSeek live runs read `DEEPSEEK_API_KEY` from the environment. In WSL, the
 recommended local setup is a private `~/.holo_env` file sourced by `~/.bashrc`;
 the file must remain outside the repository and mode `600`.
+
+The OpenAI-compatible/DeepSeek provider path performs bounded retries for
+transient network failures such as TLS EOF, timeout, HTTP 429, and HTTP 5xx.
+It does not retry bad request errors such as HTTP 400. This prevents a brief
+network fault from being misread as an agent loop failure while preserving hard
+provider/schema errors as normal failed processor results.
 
 The processor system prompt controls only user-visible text fields inside the
 structured JSON result. It keeps technical, legal, financial, and safety
@@ -505,4 +551,33 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_kernel_v3*.py -q
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m compileall -q kernel_v3
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_public_release_hygiene.py -q -p no:cacheprovider
 git diff --check
+```
+
+## Iteration 2026-06-01
+
+Hardening completed in this iteration:
+
+- added manifest-validated `workspace.write` as a real host tool with raw body
+  kept out of action journal records;
+- expanded the capability/state catalog beyond workspace into conversation,
+  retrieval, finance, memory, resident, transport, and system families;
+- added `system_answer` and `system.time` as an executable non-workspace state
+  path;
+- allowed semantic `capability_args` lists to expand into many ordered tool
+  actions, enabling 10+ iteration work plans from one model packet;
+- added `agent_work_plan` and incremental `agent_work_plan_update` audit records
+  for recipe-driven long loops;
+- added finance fundamentals source-directory metadata for domain-directed
+  search planning;
+- changed DeepSeek V4 live routes to omit provider `max_tokens` by default and
+  added bounded retry for transient provider network faults;
+- verified live DeepSeek packets for both a 12-file workspace loop and a
+  `system.time` task.
+
+Validation used:
+
+```bash
+.venv/bin/pytest -q tests/test_kernel_v3_*.py
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -c '<DeepSeek 12-file loop smoke>'
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -c '<DeepSeek system.time smoke>'
 ```

@@ -34,6 +34,22 @@ class SourceAssessment(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ResearchSourceEntry(Contract):
+    source_id: str
+    profile_id: str
+    title: str
+    source_family: str
+    authority_level: str
+    base_url: str
+    allowed_hosts: list[str]
+    use_cases: list[str]
+    required_identifiers: list[str]
+    query_hints: list[str]
+    crawl_notes: list[str]
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class CorpusDocument(Contract):
     document_id: str
     uri: str

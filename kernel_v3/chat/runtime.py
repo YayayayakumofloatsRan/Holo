@@ -32,8 +32,16 @@ from kernel_v3.processors.contracts import CHAT_ROUTE_PROMPT_CONTRACT, CHAT_ROUT
 from kernel_v3.trace import TraceRenderer
 
 
-_PLAN_SAFE_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
-_PLAN_ALLOWED_MODES = {"direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}
+_PLAN_SAFE_CAPABILITIES = {
+    "retrieval.run",
+    "workspace.search",
+    "file.read",
+    "workspace.write",
+    "workspace:read",
+    "workspace:write",
+    "system.time",
+}
+_PLAN_ALLOWED_MODES = {"direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"}
 
 
 class ChatRuntime:

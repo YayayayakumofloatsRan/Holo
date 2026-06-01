@@ -8,6 +8,7 @@ from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
+from kernel_v3.capabilities import semantic_capability_catalog
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler, merge_context_budget
 from kernel_v3.contracts import JsonObject, ProcessorRequest
@@ -138,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
 
     agent_parser = sub.add_parser("agent")
     agent_parser.add_argument("goal")
-    agent_parser.add_argument("--mode", choices=["direct", "retrieval", "workspace", "auto"], default="auto")
+    agent_parser.add_argument("--mode", choices=["direct", "retrieval", "workspace", "write", "system", "time", "auto"], default="auto")
     agent_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
@@ -814,7 +815,7 @@ def _agent_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
-    max_output_tokens: object = "auto",
+    max_output_tokens: object = "provider",
     temperature: float | None = None,
     generation_mode: str = "auto",
     latency_target: str = "balanced",
@@ -864,7 +865,7 @@ def _chat_runtime(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
-    max_output_tokens: object = "auto",
+    max_output_tokens: object = "provider",
     temperature: float | None = None,
     generation_mode: str = "auto",
     latency_target: str = "balanced",
@@ -1594,7 +1595,7 @@ def _live_processor_fabric(
     profile: str = "balanced",
     thinking: str | None = None,
     reasoning_effort: str = "high",
-    max_output_tokens: object = "auto",
+    max_output_tokens: object = "provider",
     temperature: float | None = None,
     generation_mode: str = "auto",
     latency_target: str = "balanced",
@@ -1630,7 +1631,7 @@ def _model_packet_payload(args) -> dict[str, object]:
             profile=getattr(args, "profile", "balanced"),
             thinking=thinking,
             reasoning_effort=getattr(args, "reasoning_effort", "high"),
-            max_output_tokens=getattr(args, "max_output_tokens", "auto"),
+            max_output_tokens=getattr(args, "max_output_tokens", "provider"),
             temperature=getattr(args, "temperature", None),
             generation_mode=getattr(args, "generation_mode", "auto"),
             latency_target=getattr(args, "latency_target", "balanced"),
@@ -1718,22 +1719,7 @@ def _packet_prompt(task_type: str, goal: str) -> str:
         payload = {
             "contract": SEMANTIC_INTAKE_PROMPT_CONTRACT,
             "user_goal": goal,
-            "host_capability_catalog": {
-                "modes": ["direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"],
-                "executable_tools_by_recipe": {
-                    "retrieval_answer": ["retrieval.run"],
-                    "workspace_answer": ["workspace.search", "file.read"],
-                    "direct_answer": [],
-                    "clarify_first": [],
-                },
-                "blocked_or_not_default": [
-                    "workspace:write",
-                    "shell:exec",
-                    "network.fetch",
-                    "live_transport:*",
-                    "durable_memory:write",
-                ],
-            },
+            "host_capability_catalog": semantic_capability_catalog(),
         }
     elif task_type == "evaluator.assess":
         payload = {
@@ -1772,6 +1758,7 @@ def _packet_prompt(task_type: str, goal: str) -> str:
                     {"name": "retrieval.run", "side_effect_class": "network"},
                     {"name": "workspace.search", "side_effect_class": "read"},
                     {"name": "file.read", "side_effect_class": "read"},
+                    {"name": "workspace.write", "side_effect_class": "write"},
                     {"name": "respond", "side_effect_class": "none"},
                     {"name": "ask_user", "side_effect_class": "none"},
                 ],

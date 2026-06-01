@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
+from kernel_v3.capabilities import capability_catalog
 from kernel_v3.agent.contracts import (
     AgentRuntimeResult,
     FailureReport,
@@ -27,7 +29,7 @@ from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
-from kernel_v3.research import ResearchCorpusStore, research_depth_defaults
+from kernel_v3.research import ResearchCorpusStore, research_depth_defaults, source_directory_for_profile
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
@@ -154,7 +156,13 @@ class AgentRuntime:
         task_graph_validation = validate_task_graph(task_graph)
         task_plan = build_task_execution_plan(task_graph, task_graph_validation)
         selected_mode = task_plan.selected_mode if mode == "auto" else _select_mode(goal, mode)
-        if selected_mode == "workspace_answer" and _workspace_target(goal, task_plan) is None:
+        if (
+            selected_mode == "workspace_answer"
+            and _workspace_target(goal, task_plan) is None
+            and not _task_plan_has_workspace_read_actions(task_plan)
+        ):
+            selected_mode = "clarify_first"
+        if selected_mode == "workspace_write" and planner_mode != "model" and _workspace_write_target(goal, task_plan) is None:
             selected_mode = "clarify_first"
         recipe = task_recipe(
             selected_mode,
@@ -167,6 +175,7 @@ class AgentRuntime:
                 "execution_metadata": dict(execution_metadata or {}),
             },
         )
+        recipe = _with_planned_action_count(goal, recipe)
         registry = self._registry(recipe, goal)
         planner = self._planner(goal, recipe, registry, planner_mode)
         evaluator = WorkloopEvaluator(
@@ -268,13 +277,15 @@ class AgentRuntime:
                 artifact_store=self.artifact_store,
             )
             return registry
-        if recipe.mode == "workspace_answer":
+        if recipe.mode in {"workspace_answer", "workspace_write"}:
             if self.workspace_root is not None:
                 return ToolRegistry.with_permissioned_workspace(root=self.workspace_root, artifact_store=self.artifact_store)
             return ToolRegistry.with_fake_workspace_tools(
                 files=self.workspace_files or {"README.md": "Holo Kernel v3 workspace evidence."},
                 artifact_store=self.artifact_store,
             )
+        if recipe.mode == "system_answer":
+            return ToolRegistry.with_builtin_respond()
         return ToolRegistry.with_builtin_respond()
 
     def _planner(
@@ -291,7 +302,7 @@ class AgentRuntime:
                 fabric=self.processor_fabric,
                 allowed_tool_names=set(recipe.allowed_tools) or {"__no_tools_allowed__"},
             )
-        return _RecipePlanner(goal=goal, recipe=recipe)
+        return _RecipePlanner(goal=goal, recipe=recipe, journal=self.journal)
 
     def _evaluator(self, recipe: TaskRecipe, evaluator_mode: str) -> Evaluator:
         if evaluator_mode == "model":
@@ -344,6 +355,10 @@ class AgentRuntime:
             )
         if recipe.mode == "workspace_answer":
             return self._finalize_workspace(task_id, run_id, recipe=recipe, synthesizer_mode=synthesizer_mode)
+        if recipe.mode == "workspace_write":
+            return self._finalize_workspace_write(task_id, run_id)
+        if recipe.mode == "system_answer":
+            return self._finalize_system(task_id, run_id)
         return None, self._failure(
             task_id,
             run_id,
@@ -448,6 +463,72 @@ class AgentRuntime:
         if synthesized.status != "ok" or synthesized.answer is None:
             return None, self._failure(task_id, run_id, synthesized.error or "synthesis_failed", next_action="read_more_files")
         return self._append_final(_agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))), None
+
+    def _finalize_workspace_write(
+        self,
+        task_id: str,
+        run_id: str,
+    ) -> tuple[FinalAnswer | None, FailureReport | None]:
+        write_records = _workspace_write_observations(self.journal, task_id, run_id)
+        if not write_records:
+            return None, self._failure(
+                task_id,
+                run_id,
+                "missing_workspace_write_observation",
+                missing_evidence=["workspace.write observation"],
+                next_action="propose_workspace_write",
+            )
+        latest = write_records[-1].data
+        content = latest.get("content") if isinstance(latest, dict) else {}
+        content = content if isinstance(content, dict) else {}
+        path = str(content.get("path") or "workspace file")
+        bytes_written = content.get("bytes")
+        detail = f"{bytes_written} bytes" if isinstance(bytes_written, int) else "written"
+        return self._append_final(
+            FinalAnswer(
+                answer=f"已写入 `{path}`（{detail}）。",
+                citation_refs=[],
+                used_evidence=[record.observation_ref or record.record_id for record in write_records],
+                limitations=[],
+                confidence=0.95,
+                task_id=task_id,
+                run_id=run_id,
+                trace_refs=_trace_refs(self.journal, task_id),
+            )
+        ), None
+
+    def _finalize_system(
+        self,
+        task_id: str,
+        run_id: str,
+    ) -> tuple[FinalAnswer | None, FailureReport | None]:
+        time_records = _system_time_observations(self.journal, task_id, run_id)
+        if not time_records:
+            return None, self._failure(
+                task_id,
+                run_id,
+                "missing_system_observation",
+                missing_evidence=["system.time observation"],
+                next_action="use_system_time",
+            )
+        latest = time_records[-1].data
+        content = latest.get("content") if isinstance(latest, dict) else {}
+        content = content if isinstance(content, dict) else {}
+        timezone = str(content.get("timezone") or "local")
+        iso8601 = str(content.get("iso8601") or "")
+        answer = f"当前时间是 {iso8601}（{timezone}）。" if iso8601 else f"已读取当前时间（{timezone}）。"
+        return self._append_final(
+            FinalAnswer(
+                answer=answer,
+                citation_refs=[],
+                used_evidence=[record.observation_ref or record.record_id for record in time_records],
+                limitations=[],
+                confidence=0.95,
+                task_id=task_id,
+                run_id=run_id,
+                trace_refs=_trace_refs(self.journal, task_id),
+            )
+        ), None
 
     def _synthesize(
         self,
@@ -717,6 +798,13 @@ class _AgentContextCompiler:
                 "thread_id": task.thread_id,
                 "input_text": task.input_text,
                 "agent_recipe": self.recipe.to_dict(),
+                "capability_catalog": capability_catalog(
+                    tool_manifests=self.tool_manifests,
+                    allowed_tools=self.recipe.allowed_tools,
+                    allowed_permissions=_recipe_allowed_permissions(self.recipe),
+                    mode=self.recipe.mode,
+                ),
+                "research_source_directory": _research_source_directory_metadata(self.recipe),
                 "agent_runtime_directive": _planner_directive(self.recipe),
                 "context_pack_hash": pack.payload_hash,
                 "sections": pack.sections,
@@ -736,12 +824,16 @@ class _AgentContextCompiler:
 
 
 class _RecipePlanner:
-    def __init__(self, *, goal: str, recipe: TaskRecipe) -> None:
+    def __init__(self, *, goal: str, recipe: TaskRecipe, journal: JournalStore | None = None) -> None:
         self.goal = goal
         self.recipe = recipe
+        self.journal = journal
         self._actions = _recipe_actions(goal, recipe)
+        self._total_actions = len(self._actions)
+        self._journaled_plan_refs: set[str] = set()
 
     def propose(self, context: ContextBundle, feedback: Feedback | None = None) -> CandidateAction:
+        self._journal_plan_if_needed(context)
         if not self._actions:
             return CandidateAction(
                 action_id=f"act-{context.state['run_id']}-agent-noop",
@@ -753,13 +845,70 @@ class _RecipePlanner:
                 reasons=["no_planned_action"],
                 side_effect_class="none",
             )
-        return _bind_recipe_action_to_run(self._actions.pop(0), context)
+        action = _bind_recipe_action_to_run(self._actions.pop(0), context)
+        self._journal_plan_update(context, action)
+        return action
+
+    def _journal_plan_if_needed(self, context: ContextBundle) -> None:
+        if self.journal is None:
+            return
+        task_id = str(context.state.get("task_id") or "")
+        run_id = str(context.state.get("run_id") or "")
+        plan_key = f"{task_id}:{run_id}"
+        if not task_id or plan_key in self._journaled_plan_refs:
+            return
+        self._journaled_plan_refs.add(plan_key)
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="agent_work_plan",
+            data=redact_journal_data(
+                {
+                    "plan_id": f"agent-work-plan-{run_id}",
+                    "goal": self.goal,
+                    "mode": self.recipe.mode,
+                    "revision": 1,
+                    "total_actions": self._total_actions,
+                    "pending_actions": [_action_plan_preview(action) for action in self._actions],
+                    "status": "running" if self._actions else "empty",
+                }
+            ),
+            state_delta={"agent_work_plan": "running" if self._actions else "empty"},
+        )
+
+    def _journal_plan_update(self, context: ContextBundle, action: CandidateAction) -> None:
+        if self.journal is None:
+            return
+        task_id = str(context.state.get("task_id") or "")
+        run_id = str(context.state.get("run_id") or "")
+        if not task_id:
+            return
+        completed = self._total_actions - len(self._actions)
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=str(context.state.get("step_id") or ""),
+            kind="agent_work_plan_update",
+            data=redact_journal_data(
+                {
+                    "plan_id": f"agent-work-plan-{run_id}",
+                    "selected_action": _action_plan_preview(action),
+                    "completed_actions": completed,
+                    "remaining_actions": len(self._actions),
+                    "status": "complete" if not self._actions else "running",
+                }
+            ),
+            action_ref=action.action_id,
+            state_delta={"agent_work_plan_remaining": len(self._actions)},
+        )
 
 
 class _RecipeEvaluator:
     def __init__(self, recipe: TaskRecipe) -> None:
         self.recipe = recipe
         self.calls = 0
+        self.expected_action_count = _expected_action_count(recipe)
 
     def evaluate(self, context: ContextBundle, observation: Observation) -> Feedback:
         self.calls += 1
@@ -770,8 +919,17 @@ class _RecipeEvaluator:
             return _feedback(run_id, self.calls, "blocked", "blocked", None, ["policy_block"])
         if self.recipe.mode == "workspace_answer" and observation.source == "tool:workspace.search":
             return _feedback(run_id, self.calls, "continue", None, None, ["file.read observation"])
+        if self.recipe.mode == "workspace_write" and observation.source in {"tool:workspace.search", "tool:file.read"}:
+            return _feedback(run_id, self.calls, "continue", None, None, ["workspace.write observation"])
+        if self.recipe.mode == "workspace_write" and observation.source == "tool:workspace.write" and observation.status == "ok":
+            content = observation.content if isinstance(observation.content, dict) else {}
+            path = content.get("path")
+            answer = f"已写入 `{path}`。" if isinstance(path, str) and path else None
+            return _feedback(run_id, self.calls, "final_answer_ready", "completed", answer, [])
         if observation.status in {"failed", "not_implemented"}:
             return _feedback(run_id, self.calls, "failed", "observation_failed", None, ["successful observation"])
+        if self.expected_action_count > self.calls:
+            return _feedback(run_id, self.calls, "continue", None, None, ["remaining_plan_actions"])
         if self.recipe.mode == "retrieval_answer":
             report = _nested(observation.content, "report")
             if isinstance(report, dict) and report.get("status") != "sufficient":
@@ -834,6 +992,37 @@ def task_recipe(
             mode=normalized,
             metadata=recipe_metadata,
         )
+    if normalized == "workspace_write":
+        recipe_metadata = _with_allowed_permission(recipe_metadata, "workspace:write")
+        return TaskRecipe(
+            recipe_id="recipe-workspace-write",
+            allowed_tools=["workspace.search", "file.read", "workspace.write"],
+            max_steps=8,
+            max_tool_calls=6,
+            max_network_fetches=0,
+            max_total_artifact_bytes=2_000_000,
+            permission_profile="read_write",
+            citations_required=bool(required),
+            finalizer="workspace_write_ack",
+            context_budget_mode="truncate",
+            mode=normalized,
+            metadata=recipe_metadata,
+        )
+    if normalized == "system_answer":
+        return TaskRecipe(
+            recipe_id="recipe-system-answer",
+            allowed_tools=["system.time"],
+            max_steps=2,
+            max_tool_calls=1,
+            max_network_fetches=0,
+            max_total_artifact_bytes=128_000,
+            permission_profile="read_only",
+            citations_required=bool(required),
+            finalizer="system_observation",
+            context_budget_mode="truncate",
+            mode=normalized,
+            metadata=recipe_metadata,
+        )
     if normalized == "clarify_first":
         return TaskRecipe(
             recipe_id="recipe-clarify-first",
@@ -865,16 +1054,43 @@ def task_recipe(
     )
 
 
+def _with_planned_action_count(goal: str, recipe: TaskRecipe) -> TaskRecipe:
+    actions = _actions_from_task_plan(goal, recipe)
+    if not actions:
+        return recipe
+    metadata = dict(recipe.metadata)
+    metadata["planned_action_count"] = len(actions)
+    tool_count = sum(1 for action in actions if action.kind == "tool")
+    return replace(
+        recipe,
+        max_steps=max(recipe.max_steps, len(actions) + 2),
+        max_tool_calls=max(recipe.max_tool_calls, tool_count + 1),
+        max_total_artifact_bytes=max(recipe.max_total_artifact_bytes, max(1_000_000, tool_count * 512_000)),
+        metadata=metadata,
+    )
+
+
+def _expected_action_count(recipe: TaskRecipe) -> int:
+    value = recipe.metadata.get("planned_action_count")
+    if isinstance(value, int) and value > 0:
+        return value
+    return 0
+
+
 def _select_mode(goal: str, mode: str) -> str:
     aliases = {
         "direct": "direct_answer",
         "retrieval": "retrieval_answer",
         "workspace": "workspace_answer",
+        "write": "workspace_write",
+        "workspace-write": "workspace_write",
+        "system": "system_answer",
+        "time": "system_answer",
         "clarify": "clarify_first",
     }
     normalized = aliases.get(mode, mode)
     if normalized != "auto":
-        if normalized not in {"direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}:
+        if normalized not in {"direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"}:
             raise ValueError(f"unsupported agent mode: {mode}")
         return normalized
     if not goal.strip() or goal.strip() in {"?", "？", ".", "。"}:
@@ -883,6 +1099,9 @@ def _select_mode(goal: str, mode: str) -> str:
 
 
 def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
+    plan_actions = _actions_from_task_plan(goal, recipe)
+    if plan_actions:
+        return plan_actions
     if recipe.mode == "retrieval_answer":
         first_payload = _retrieval_payload(goal, recipe)
         retry_payload = dict(first_payload)
@@ -935,6 +1154,70 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
                 side_effect_class="read",
             ),
         ]
+    if recipe.mode == "workspace_write":
+        target = _workspace_write_target(goal, _task_execution_plan_metadata(recipe))
+        if target is None:
+            return _recipe_actions(goal, task_recipe("clarify_first"))
+        path, text = target
+        actions: list[CandidateAction] = []
+        read_target = _workspace_target(goal, _task_execution_plan_metadata(recipe))
+        if read_target is not None:
+            query, read_path = read_target
+            actions.extend(
+                [
+                    CandidateAction(
+                        action_id="act-agent-write-workspace-search",
+                        kind="tool",
+                        name="workspace.search",
+                        description="search workspace before writing",
+                        score=0.8,
+                        payload={"query": query},
+                        reasons=["workspace_write recipe optional read preflight"],
+                        side_effect_class="read",
+                    ),
+                    CandidateAction(
+                        action_id="act-agent-write-file-read",
+                        kind="tool",
+                        name="file.read",
+                        description="read workspace input before writing",
+                        score=0.8,
+                        payload={"path": read_path},
+                        reasons=["workspace_write recipe optional read preflight"],
+                        side_effect_class="read",
+                    ),
+                ]
+            )
+        actions.append(
+            CandidateAction(
+                action_id="act-agent-workspace-write",
+                kind="tool",
+                name="workspace.write",
+                description="write host-validated workspace artifact",
+                score=1.0,
+                payload={"path": path, "text": text},
+                reasons=["workspace_write recipe"],
+                side_effect_class="write",
+            )
+        )
+        return actions
+    if recipe.mode == "system_answer":
+        payload = _capability_args_from_plan(
+            _task_execution_plan_metadata(recipe),
+            "system.time",
+            capability_markers={"system.time"},
+        )
+        return [
+            CandidateAction(
+                action_id="act-agent-system-time",
+                kind="tool",
+                name="system.time",
+                description="read current host time",
+                score=1.0,
+                payload=payload,
+                reasons=["system_answer recipe"],
+                side_effect_class="read",
+            )
+        ]
     if recipe.mode == "clarify_first":
         question = _semantic_clarification_question(recipe) or "请明确目标、文件名或需要检索的问题。"
         return [
@@ -962,6 +1245,215 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
             side_effect_class="none",
         )
     ]
+
+
+def _actions_from_task_plan(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
+    plan = _task_execution_plan_metadata(recipe)
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return []
+    actions: list[CandidateAction] = []
+    for step in sorted([dict(item) for item in steps if isinstance(item, dict)], key=_plan_step_index):
+        if str(step.get("status") or "") != "ready":
+            continue
+        if str(step.get("action_kind") or "") != "tool":
+            continue
+        actions.extend(_actions_from_plan_step(goal, recipe, step))
+    return actions
+
+
+def _actions_from_plan_step(goal: str, recipe: TaskRecipe, step: JsonObject) -> list[CandidateAction]:
+    tool_name = str(step.get("tool_name") or "")
+    sequence = _plan_step_index(step)
+    if tool_name == "retrieval.run":
+        payload = {
+            "goal_id": f"goal-plan-{sequence}",
+            "query": str(step.get("goal") or goal),
+            "max_spans_per_document": 2,
+        }
+        payload = _merge_retrieval_payload(payload, _capability_args_from_step(step, "retrieval.run"))
+        payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
+        payload = _apply_research_depth_defaults(payload)
+        return [
+            CandidateAction(
+                action_id=f"act-plan-{sequence}-retrieval",
+                kind="tool",
+                name="retrieval.run",
+                description=str(step.get("goal") or "run retrieval"),
+                score=1.0,
+                payload=payload,
+                reasons=["semantic_task_plan"],
+                side_effect_class="read",
+            )
+        ]
+    if tool_name == "workspace.search,file.read":
+        target = _workspace_target(goal, {"steps": [step]})
+        if target is None:
+            return []
+        query, path = target
+        return [
+            CandidateAction(
+                action_id=f"act-plan-{sequence}-workspace-search",
+                kind="tool",
+                name="workspace.search",
+                description=str(step.get("goal") or "search workspace"),
+                score=1.0,
+                payload={"query": query},
+                reasons=["semantic_task_plan"],
+                side_effect_class="read",
+            ),
+            CandidateAction(
+                action_id=f"act-plan-{sequence}-file-read",
+                kind="tool",
+                name="file.read",
+                description=str(step.get("goal") or "read workspace file"),
+                score=1.0,
+                payload={"path": path},
+                reasons=["semantic_task_plan"],
+                side_effect_class="read",
+            ),
+        ]
+    if tool_name == "workspace.search":
+        payloads = _capability_payloads_from_step(step, "workspace.search")
+        if not payloads:
+            payloads = [{"query": _string_value(step.get("goal")) or goal}]
+        actions = []
+        for item_index, args in enumerate(payloads, start=1):
+            query = _string_value(args.get("query")) or _string_value(step.get("goal")) or goal
+            actions.append(
+                CandidateAction(
+                    action_id=f"act-plan-{sequence}-{item_index}-workspace-search",
+                    kind="tool",
+                    name="workspace.search",
+                    description=str(step.get("goal") or "search workspace"),
+                    score=1.0,
+                    payload={"query": query},
+                    reasons=["semantic_task_plan"],
+                    side_effect_class="read",
+                )
+            )
+        return actions
+    if tool_name == "file.read":
+        payloads = _capability_payloads_from_step(step, "file.read")
+        if not payloads:
+            fallback = _file_target(str(step.get("goal") or goal))
+            payloads = [{"path": fallback}] if fallback is not None else []
+        actions = []
+        for item_index, args in enumerate(payloads, start=1):
+            path = _string_value(args.get("path"))
+            if path is None:
+                continue
+            actions.append(
+                CandidateAction(
+                    action_id=f"act-plan-{sequence}-{item_index}-file-read",
+                    kind="tool",
+                    name="file.read",
+                    description=str(step.get("goal") or "read workspace file"),
+                    score=1.0,
+                    payload={"path": path},
+                    reasons=["semantic_task_plan"],
+                    side_effect_class="read",
+                )
+            )
+        return actions
+    if tool_name == "workspace.write":
+        actions: list[CandidateAction] = []
+        read_target = _workspace_target(goal, {"steps": [step]})
+        if read_target is not None:
+            query, path = read_target
+            actions.extend(
+                [
+                    CandidateAction(
+                        action_id=f"act-plan-{sequence}-workspace-search",
+                        kind="tool",
+                        name="workspace.search",
+                        description=str(step.get("goal") or "search before writing"),
+                        score=0.8,
+                        payload={"query": query},
+                        reasons=["semantic_task_plan_write_preflight"],
+                        side_effect_class="read",
+                    ),
+                    CandidateAction(
+                        action_id=f"act-plan-{sequence}-file-read",
+                        kind="tool",
+                        name="file.read",
+                        description=str(step.get("goal") or "read before writing"),
+                        score=0.8,
+                        payload={"path": path},
+                        reasons=["semantic_task_plan_write_preflight"],
+                        side_effect_class="read",
+                    ),
+                ]
+            )
+        write_payloads = _capability_payloads_from_step(step, "workspace.write")
+        if not write_payloads:
+            target = _workspace_write_target(goal, {"steps": [step]})
+            write_payloads = [{"path": target[0], "text": target[1]}] if target is not None else []
+        if not write_payloads:
+            return actions
+        for item_index, args in enumerate(write_payloads, start=1):
+            path = _string_value(args.get("path"))
+            text = _write_text_value(args.get("text")) or _write_text_value(args.get("content")) or _write_text_value(args.get("body"))
+            if path is None or text is None:
+                continue
+            actions.append(
+                CandidateAction(
+                    action_id=f"act-plan-{sequence}-{item_index}-workspace-write",
+                    kind="tool",
+                    name="workspace.write",
+                    description=str(step.get("goal") or "write workspace file"),
+                    score=1.0,
+                    payload={"path": path, "text": text},
+                    reasons=["semantic_task_plan"],
+                    side_effect_class="write",
+                )
+            )
+        return actions
+    if tool_name == "system.time":
+        payloads = _capability_payloads_from_step(step, "system.time")
+        if not payloads:
+            payloads = [{}]
+        actions = []
+        for item_index, args in enumerate(payloads, start=1):
+            payload = {}
+            timezone = _string_value(args.get("timezone"))
+            if timezone is not None:
+                payload["timezone"] = timezone
+            actions.append(
+                CandidateAction(
+                    action_id=f"act-plan-{sequence}-{item_index}-system-time",
+                    kind="tool",
+                    name="system.time",
+                    description=str(step.get("goal") or "read current host time"),
+                    score=1.0,
+                    payload=payload,
+                    reasons=["semantic_task_plan"],
+                    side_effect_class="read",
+                )
+            )
+        return actions
+    return []
+
+
+def _plan_step_index(step: JsonObject) -> int:
+    value = step.get("sequence_index")
+    return value if isinstance(value, int) and value > 0 else 1_000_000
+
+
+def _action_plan_preview(action: CandidateAction) -> JsonObject:
+    payload = dict(action.payload)
+    text = payload.pop("text", None)
+    if isinstance(text, str):
+        payload["text_preview"] = _preview_text(text, 160)
+        payload["text_hash"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        payload["text_chars"] = len(text)
+    return {
+        "action_id": action.action_id,
+        "kind": action.kind,
+        "name": action.name,
+        "side_effect_class": action.side_effect_class,
+        "payload": payload,
+    }
 
 
 def _planner_directive(recipe: TaskRecipe) -> JsonObject:
@@ -1003,12 +1495,57 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
         }
+    if recipe.mode == "workspace_write":
+        return {
+            "mode": recipe.mode,
+            "required_outcome": "write a host-validated workspace artifact, then stop after the write observation succeeds",
+            "allowed_sequence": [
+                {
+                    "kind": "tool",
+                    "name": "workspace.search",
+                    "side_effect_class": "read",
+                    "payload_requirements": ["query: non-empty string"],
+                    "optional": True,
+                },
+                {
+                    "kind": "tool",
+                    "name": "file.read",
+                    "side_effect_class": "read",
+                    "payload_requirements": ["path: non-empty workspace-relative file path"],
+                    "optional": True,
+                },
+                {
+                    "kind": "tool",
+                    "name": "workspace.write",
+                    "side_effect_class": "write",
+                    "payload_requirements": ["path: non-empty workspace-relative file path", "text: complete UTF-8 file body"],
+                },
+            ],
+            "allowed_tools": list(recipe.allowed_tools),
+            "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "shell.exec"],
+            "interaction_preferences": preferences,
+            "semantic_intake": semantic,
+        }
     if recipe.mode == "clarify_first":
         return {
             "mode": recipe.mode,
             "required_first_action": {"kind": "ask_user", "name": None, "side_effect_class": "none"},
             "allowed_tools": [],
             "forbidden": ["all tool actions"],
+            "interaction_preferences": preferences,
+            "semantic_intake": semantic,
+        }
+    if recipe.mode == "system_answer":
+        return {
+            "mode": recipe.mode,
+            "required_first_action": {
+                "kind": "tool",
+                "name": "system.time",
+                "side_effect_class": "read",
+                "payload_requirements": ["timezone optional; prefer explicit IANA timezone when user asks"],
+            },
+            "allowed_tools": list(recipe.allowed_tools),
+            "forbidden": ["workspace.write", "network.fetch", "shell.exec", "live_transport:*"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
         }
@@ -1035,6 +1572,31 @@ def _task_execution_plan_metadata(recipe: TaskRecipe) -> JsonObject:
 def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
     value = recipe.metadata.get("execution_metadata")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _research_source_directory_metadata(recipe: TaskRecipe) -> list[JsonObject]:
+    profile_id = _research_profile_id(recipe)
+    if profile_id is None:
+        return []
+    return [entry.to_dict() for entry in source_directory_for_profile(profile_id)]
+
+
+def _research_profile_id(recipe: TaskRecipe) -> str | None:
+    metadata = _execution_metadata(recipe)
+    retrieval = metadata.get("retrieval")
+    if isinstance(retrieval, dict):
+        nested = retrieval.get("metadata")
+        if isinstance(nested, dict):
+            for key in ("research_profile_id", "research_profile"):
+                value = nested.get(key)
+                if isinstance(value, str) and value:
+                    return value
+    semantic = _semantic_intake_metadata(recipe)
+    for key in ("research_profile_id", "research_profile"):
+        value = semantic.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _context_budget_metadata(recipe: TaskRecipe) -> JsonObject:
@@ -1302,11 +1864,49 @@ def _workspace_target(goal: str, plan: TaskExecutionPlan | JsonObject | None) ->
     return query or path, path
 
 
+def _task_plan_has_workspace_read_actions(plan: TaskExecutionPlan | JsonObject | None) -> bool:
+    if plan is None:
+        return False
+    steps = plan.steps if isinstance(plan, TaskExecutionPlan) else plan.get("steps") if isinstance(plan, dict) else None
+    if not isinstance(steps, list):
+        return False
+    for raw_step in steps:
+        if not isinstance(raw_step, dict):
+            continue
+        if str(raw_step.get("status") or "") != "ready":
+            continue
+        if str(raw_step.get("tool_name") or "") in {"workspace.search", "file.read", "workspace.search,file.read"}:
+            return True
+    return False
+
+
+def _workspace_write_target(goal: str, plan: TaskExecutionPlan | JsonObject | None) -> tuple[str, str] | None:
+    capability_args = _workspace_write_capability_args(plan)
+    write_args = _nested_json(capability_args, "workspace.write")
+    path = _string_value(write_args.get("path")) or _file_target(goal)
+    text = (
+        _write_text_value(write_args.get("text"))
+        or _write_text_value(write_args.get("content"))
+        or _write_text_value(write_args.get("body"))
+    )
+    if path is None or text is None:
+        return None
+    return path, text
+
+
 def _workspace_capability_args(plan: TaskExecutionPlan | JsonObject | None) -> JsonObject:
     return _capability_args_from_plan(
         plan,
         None,
         capability_markers={"workspace.search", "file.read", "workspace:read"},
+    )
+
+
+def _workspace_write_capability_args(plan: TaskExecutionPlan | JsonObject | None) -> JsonObject:
+    return _capability_args_from_plan(
+        plan,
+        None,
+        capability_markers={"workspace.write", "workspace:write"},
     )
 
 
@@ -1362,6 +1962,35 @@ def _capability_args_from_step(raw_step: JsonObject, tool_name: str | None) -> J
     return {}
 
 
+def _capability_payloads_from_step(raw_step: JsonObject, tool_name: str) -> list[JsonObject]:
+    values: list[object] = []
+    metadata = raw_step.get("metadata")
+    if isinstance(metadata, dict):
+        capability_args = metadata.get("capability_args")
+        if isinstance(capability_args, dict):
+            values.append(capability_args.get(tool_name))
+        node_metadata = metadata.get("node_metadata")
+        if isinstance(node_metadata, dict):
+            node_args = node_metadata.get("capability_args")
+            if isinstance(node_args, dict):
+                values.append(node_args.get(tool_name))
+    payloads: list[JsonObject] = []
+    seen: set[str] = set()
+    for value in values:
+        candidates: list[JsonObject] = []
+        if isinstance(value, dict):
+            candidates.append(dict(value))
+        elif isinstance(value, list):
+            candidates.extend(dict(item) for item in value if isinstance(item, dict))
+        for candidate in candidates:
+            marker = repr(sorted(candidate.items()))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            payloads.append(candidate)
+    return payloads
+
+
 def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObject:
     if tool_name == "retrieval.run":
         retrieval_keys = {
@@ -1390,6 +2019,16 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
             if metadata:
                 result["metadata"] = metadata
             return result
+    if tool_name == "workspace.write":
+        if any(key in capability_args for key in {"path", "text", "content", "body"}):
+            result = dict(capability_args)
+            if "text" not in result:
+                for alias in ("content", "body"):
+                    value = result.get(alias)
+                    if isinstance(value, str):
+                        result["text"] = value
+                        break
+            return result
     return {}
 
 
@@ -1402,6 +2041,19 @@ def _string_value(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _write_text_value(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _preview_text(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
 
 
 def _positive_metadata_int(value: object, *, default: int) -> int:
@@ -1540,6 +2192,26 @@ def _workspace_grounding(
         },
     )
     return evidence, citations, report
+
+
+def _workspace_write_observations(journal: JournalStore, task_id: str, run_id: str):
+    return [
+        record
+        for record in journal.records(task_id=task_id, kind="observation")
+        if record.run_id == run_id
+        and record.data.get("source") == "tool:workspace.write"
+        and record.data.get("status") == "ok"
+    ]
+
+
+def _system_time_observations(journal: JournalStore, task_id: str, run_id: str):
+    return [
+        record
+        for record in journal.records(task_id=task_id, kind="observation")
+        if record.run_id == run_id
+        and record.data.get("source") == "tool:system.time"
+        and record.data.get("status") == "ok"
+    ]
 
 
 def _workspace_observation_text(content: JsonObject, *, artifact_store: ArtifactStore, evidence_char_limit: int) -> str:

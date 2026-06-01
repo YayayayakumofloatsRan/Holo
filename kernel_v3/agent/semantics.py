@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Pattern
 
+from kernel_v3.capabilities import semantic_capability_catalog
 from kernel_v3.agent.contracts import SemanticIntake, TaskIntent
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import JsonObject
@@ -57,7 +58,15 @@ _HOST_BOUNDARY_RULES = (
     ),
 )
 
-_SAFE_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace:read"}
+_SAFE_CAPABILITIES = {
+    "retrieval.run",
+    "workspace.search",
+    "file.read",
+    "workspace.write",
+    "workspace:read",
+    "workspace:write",
+    "system.time",
+}
 
 
 def analyze_goal(goal: str) -> SemanticIntake:
@@ -133,22 +142,7 @@ def _semantic_prompt(goal: str, *, response_language: str | None = None) -> str:
         "user_goal": goal,
         "interaction_preferences": preferences,
         "response_language": preferences["response_language"],
-        "host_capability_catalog": {
-            "modes": ["direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"],
-            "executable_tools_by_recipe": {
-                "retrieval_answer": ["retrieval.run"],
-                "workspace_answer": ["workspace.search", "file.read"],
-                "direct_answer": [],
-                "clarify_first": [],
-            },
-            "blocked_or_not_default": [
-                "workspace:write",
-                "shell:exec",
-                "network.fetch",
-                "live_transport:*",
-                "durable_memory:write",
-            ],
-        },
+        "host_capability_catalog": semantic_capability_catalog(),
         "host_rules": [
             "Split compound requests into ordered intents.",
             "Do not set requires_clarification merely because a task is compound.",
@@ -168,7 +162,7 @@ def _semantic_prompt(goal: str, *, response_language: str | None = None) -> str:
             "Classify transport/account/client control as transport_control and blocked.",
             "Classify unavailable tool, device, account, or execution requests as blocked capabilities instead of pretending they ran.",
             "Classify requests for hidden/private reasoning as private_reasoning and do not expose chain-of-thought.",
-            "Classify local writing/report generation as workspace_write and needs_permission unless an explicit writable recipe is available.",
+            "Classify local writing/report generation as workspace_write. Use status=ready when path and text can be proposed safely; use needs_user_input only when critical write target or content is missing.",
             "If a compound task includes blocked capabilities, ask for confirmation or scope reduction before execution.",
             "If unsure, preserve uncertainty in clarification_question instead of forcing a keyword-style class.",
         ],
@@ -390,6 +384,7 @@ def _primary_intent(intents: list[TaskIntent]) -> str:
         "memory_write",
         "retrieval_research",
         "workspace_write",
+        "system_time",
         "workspace_read",
         "synthesis",
         "roleplay",
@@ -428,13 +423,17 @@ def _suggested_mode(primary: str, *, requires_clarification: bool) -> str:
         return "retrieval_answer"
     if primary == "workspace_read":
         return "workspace_answer"
+    if primary == "workspace_write":
+        return "workspace_write"
+    if primary == "system_time":
+        return "system_answer"
     return "direct_answer"
 
 
 def _normalize_mode(value: str, *, primary: str, requires_clarification: bool) -> str:
     if requires_clarification:
         return "clarify_first"
-    if value in {"direct_answer", "retrieval_answer", "workspace_answer", "clarify_first"}:
+    if value in {"direct_answer", "retrieval_answer", "workspace_answer", "workspace_write", "system_answer", "clarify_first"}:
         return value
     return _suggested_mode(primary, requires_clarification=requires_clarification)
 
@@ -508,8 +507,6 @@ def _risk_for_kind(kind: str) -> str:
 def _status_for_kind(kind: str) -> str:
     if kind == "transport_control" or kind in _host_boundary_kinds():
         return "blocked"
-    if kind == "workspace_write":
-        return "needs_permission"
     if kind == "memory_write":
         return "needs_review"
     if kind == "clarification":
