@@ -168,6 +168,11 @@ Kernel v3 currently contains the infrastructure for:
   ticker, CIK, or injected ticker-to-CIK map, Holo can generate official SEC
   submissions, companyfacts, EDGAR search, browse, and ticker-directory
   candidates without doing network search itself.
+- SEC Archives filing-document candidate generation. When a host/model
+  retrieval payload carries CIK plus accession number and optional
+  `primaryDocument`, Holo derives the official primary filing document,
+  complete submission text, and filing directory URLs before generic SEC
+  browse/search candidates, while rejecting unsafe document names.
 - Template-driven official source-query expansion for finance fundamentals.
   Source directory entries can declare safe `query_url_templates`; Holo renders
   them from host metadata such as company, ticker, metric, and query, validates
@@ -422,6 +427,12 @@ Companies House, FRED, and World Bank query URLs without hard-coding agent
 branches. Multi-intent finance plans can therefore execute multiple retrieval
 loop actions before finalization while preserving host-owned source ranking,
 artifact storage, evidence sufficiency, and termination gates.
+When a prior SEC submissions/company metadata step exposes an accession number
+and `primaryDocument`, the next retrieval payload can carry those fields and
+the SEC provider will construct the direct `Archives/edgar/data/...` filing
+document URL. This lets a fundamentals loop move from metadata discovery to
+the original 10-K/10-Q filing body without asking the model to invent SEC path
+rules.
 Market-news, market-data, and competitive-landscape finance intents use the
 same profile directory but set a different source authority requirement:
 secondary-or-better sources can satisfy those tasks, while fundamentals still

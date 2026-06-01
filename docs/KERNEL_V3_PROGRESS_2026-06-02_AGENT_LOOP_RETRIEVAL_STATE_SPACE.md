@@ -29,6 +29,13 @@
   submissions JSON, and companyfacts JSON candidates from ticker/CIK metadata or
   an injected ticker-to-CIK map. It performs no network access itself; fetches
   still go through the host-configured retrieval provider and allowlist.
+- `sec_edgar_structured_search` now also derives official SEC Archives filing
+  document candidates when retrieval metadata includes CIK, accession number,
+  and optionally `primaryDocument`. It emits the primary filing document URL,
+  complete submission text URL, and filing directory URL before generic
+  browse/search candidates, and rejects unsafe document names. This closes the
+  common fundamentals loop from submissions metadata to the original 10-K/10-Q
+  document body without embedding SEC path rules in model text.
 - Live retrieval fallback construction now includes the SEC structured provider
   before generic configured search providers, so finance fundamentals tasks can
   use primary SEC URLs without relying on a broad web search API.

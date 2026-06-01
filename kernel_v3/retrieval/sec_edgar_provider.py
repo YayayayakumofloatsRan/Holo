@@ -36,13 +36,18 @@ class SecEdgarSearchProvider:
             "ticker": identity.ticker,
             "cik": identity.cik,
         }
-        sources = _sources_for_identifiers(identifiers, max_sources=goal.max_sources)
+        filing = _filing_metadata(goal.metadata)
+        if identifiers.get("cik") is None and filing.get("sec_accession_compact"):
+            identifiers["cik"] = _normalize_cik(str(filing["sec_accession_compact"])[:10])
+        sources = _sources_for_identifiers(identifiers, max_sources=goal.max_sources, filing=filing)
         resolved_cik = identifiers.get("cik") or _first_source_cik(sources)
         self._last_search_diagnostics = {
             "status": "ok" if sources else "empty",
             "reason": "ok" if sources else "missing_sec_identifier",
             "ticker": identifiers.get("ticker"),
             "cik_present": bool(resolved_cik),
+            "accession_present": bool(filing.get("sec_accession_number")),
+            "primary_document_present": bool(filing.get("sec_primary_document")),
             "identity_confidence": identity.confidence,
             "identity_sources": list(identity.sources),
             "source_count": len(sources),
@@ -55,10 +60,18 @@ class SecEdgarSearchProvider:
         return dict(self._last_search_diagnostics)
 
 
-def _sources_for_identifiers(identifiers: JsonObject, *, max_sources: int) -> list[SearchSource]:
+def _sources_for_identifiers(
+    identifiers: JsonObject,
+    *,
+    max_sources: int,
+    filing: JsonObject | None = None,
+) -> list[SearchSource]:
     ticker = _string_or_none(identifiers.get("ticker"))
     cik = _normalize_cik(identifiers.get("cik"))
+    filing = dict(filing or {})
     sources: list[SearchSource] = []
+    if cik:
+        _append_filing_document_sources(sources, ticker=ticker, cik=cik, filing=filing)
     if ticker:
         _append_source(
             sources,
@@ -115,6 +128,76 @@ def _sources_for_identifiers(identifiers: JsonObject, *, max_sources: int) -> li
     return sources[: max(0, int(max_sources))]
 
 
+def _append_filing_document_sources(
+    sources: list[SearchSource],
+    *,
+    ticker: str | None,
+    cik: str,
+    filing: JsonObject,
+) -> None:
+    accession_compact = _string_or_none(filing.get("sec_accession_compact"))
+    accession_number = _string_or_none(filing.get("sec_accession_number"))
+    if not accession_compact:
+        return
+    cik_path = str(int(cik))
+    primary_document = _safe_document_name(filing.get("sec_primary_document"))
+    base_uri = f"https://www.sec.gov/Archives/edgar/data/{cik_path}/{accession_compact}"
+    common = {
+        key: value
+        for key, value in {
+            "sec_accession_number": accession_number,
+            "sec_accession_compact": accession_compact,
+            "sec_primary_document": primary_document,
+            "sec_form": _string_or_none(filing.get("sec_form")),
+            "report_date": _string_or_none(filing.get("report_date")),
+        }.items()
+        if value
+    }
+    label = _filing_label(
+        form=common.get("sec_form"),
+        report_date=common.get("report_date"),
+        accession=accession_number,
+    )
+    if primary_document:
+        _append_source(
+            sources,
+            uri=f"{base_uri}/{primary_document}",
+            title=f"SEC primary filing document for {label}",
+            snippet=(
+                "Official SEC Archives primary filing document derived from CIK, "
+                "accession number, and primaryDocument metadata."
+            ),
+            source_family="regulatory_filing",
+            source_kind="sec_primary_filing_document",
+            ticker=ticker,
+            cik=cik,
+            extra_metadata=common,
+        )
+    if accession_number:
+        _append_source(
+            sources,
+            uri=f"{base_uri}/{accession_number}.txt",
+            title=f"SEC complete submission text for {label}",
+            snippet="Official SEC Archives complete submission text for the accession number.",
+            source_family="regulatory_filing",
+            source_kind="sec_complete_submission_text",
+            ticker=ticker,
+            cik=cik,
+            extra_metadata=common,
+        )
+    _append_source(
+        sources,
+        uri=f"{base_uri}/",
+        title=f"SEC filing directory for {label}",
+        snippet="Official SEC Archives filing directory for primary documents and exhibits.",
+        source_family="regulatory_filing",
+        source_kind="sec_filing_directory",
+        ticker=ticker,
+        cik=cik,
+        extra_metadata=common,
+    )
+
+
 def _append_source(
     sources: list[SearchSource],
     *,
@@ -125,7 +208,9 @@ def _append_source(
     source_kind: str,
     ticker: str | None,
     cik: str | None,
+    extra_metadata: JsonObject | None = None,
 ) -> None:
+    extra_metadata = dict(extra_metadata or {})
     sources.append(
         SearchSource(
             source_id=f"{SecEdgarSearchProvider.provider_id}-{_hash(uri)[:12]}-{len(sources) + 1}",
@@ -141,6 +226,7 @@ def _append_source(
                 "source_kind": source_kind,
                 **({"ticker": ticker} if ticker else {}),
                 **({"sec_cik": cik} if cik else {}),
+                **extra_metadata,
             },
         )
     )
@@ -157,6 +243,102 @@ def _first_source_cik(sources: list[SearchSource]) -> str | None:
 def _research_profile_id(metadata: JsonObject) -> str | None:
     value = metadata.get("research_profile_id", metadata.get("research_profile"))
     return value if isinstance(value, str) and value else None
+
+
+def _filing_metadata(metadata: JsonObject) -> JsonObject:
+    accession = _first_metadata_string(
+        metadata,
+        "sec_accession_number",
+        "accession_number",
+        "accession_no",
+        "accessionNumber",
+        "accession",
+    )
+    accession_data = _normalize_accession(accession)
+    primary_document = _safe_document_name(
+        _first_metadata_string(
+            metadata,
+            "sec_primary_document",
+            "primary_document",
+            "primaryDocument",
+            "filing_document",
+            "document_name",
+        )
+    )
+    result: JsonObject = {}
+    if accession_data:
+        result.update(accession_data)
+    if primary_document:
+        result["sec_primary_document"] = primary_document
+    form = _first_metadata_string(metadata, "sec_form", "form", "filing_form")
+    report_date = _first_metadata_string(metadata, "report_date", "period_of_report", "filing_date")
+    if form:
+        result["sec_form"] = form
+    if report_date:
+        result["report_date"] = report_date
+    return result
+
+
+def _first_metadata_string(metadata: JsonObject, *keys: str) -> str | None:
+    for key in keys:
+        value = _string_or_none(metadata.get(key))
+        if value is not None:
+            return value
+    for parent_key in ("sec_filing", "filing", "filing_metadata", "document"):
+        parent = metadata.get(parent_key)
+        if not isinstance(parent, dict):
+            continue
+        for key in keys:
+            value = _string_or_none(parent.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _normalize_accession(value: object) -> JsonObject | None:
+    text = _string_or_none(value)
+    if text is None:
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) < 18:
+        return None
+    compact = digits[-18:]
+    dashed = _accession_with_dashes(text, compact)
+    if dashed is None:
+        return None
+    return {
+        "sec_accession_number": dashed,
+        "sec_accession_compact": compact,
+    }
+
+
+def _accession_with_dashes(text: str, compact: str) -> str | None:
+    parts = [part for part in text.strip().split("-") if part]
+    if len(parts) == 3 and all(part.isdigit() for part in parts):
+        return f"{parts[0].zfill(10)}-{parts[1].zfill(2)}-{parts[2].zfill(6)}"
+    if len(compact) == 18:
+        return f"{compact[:10]}-{compact[10:12]}-{compact[12:]}"
+    return None
+
+
+def _safe_document_name(value: object) -> str | None:
+    text = _string_or_none(value)
+    if text is None:
+        return None
+    if any(marker in text for marker in ("/", "\\", "?", "#")):
+        return None
+    if text in {".", ".."}:
+        return None
+    return text
+
+
+def _filing_label(*, form: object, report_date: object, accession: object) -> str:
+    parts = [
+        _string_or_none(form),
+        _string_or_none(report_date),
+        _string_or_none(accession),
+    ]
+    return " ".join(part for part in parts if part) or "SEC filing"
 
 
 def _normalize_cik(value: object) -> str | None:
