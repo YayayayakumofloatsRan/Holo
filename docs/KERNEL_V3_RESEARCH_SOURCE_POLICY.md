@@ -236,6 +236,8 @@ The CLI exposes this as an explicit live agent flag:
 ```bash
 HOLO_V3_LIVE_RETRIEVAL=1 \
 HOLO_V3_LIVE_SEARCH_ENDPOINT=https://... \
+HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api.example.com \
+HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=www.sec.gov,docs.example.com \
 holo-v3 agent "AAPL 2024 revenue" \
   --mode retrieval \
   --live-retrieval \
@@ -257,8 +259,11 @@ holo-v3 resident run-once \
   --live-max-network-fetches 1
 ```
 
-If the env gate or endpoint is missing, the command returns a blocked payload
-before constructing a live retrieval operator or starting the agent loop.
+If the env gate, endpoint, or live provider host allowlists are missing, the
+command returns a blocked payload before constructing a live retrieval operator
+or starting the agent loop. `HOLO_V3_LIVE_RETRIEVAL_ALLOW_ALL_HOSTS=1` remains
+an explicit operator override; otherwise live search and fetch providers require
+bounded `allowed_hosts`.
 For chat and resident runs, `--live-retrieval` or `--research-profile` also
 sets the host-owned default new-task mode to retrieval. This avoids a resident
 research worker silently answering directly just because fake semantic intake

@@ -166,6 +166,42 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_endpoint(tmp_path: Path
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
+def test_phase92_cli_agent_live_retrieval_blocks_without_allowed_hosts(tmp_path: Path, capsys, monkeypatch) -> None:
+    _clear_live_env(monkeypatch)
+    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "agent",
+                "AAPL revenue",
+                "--mode",
+                "retrieval",
+                "--live-retrieval",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
+    issue_keys = {
+        (issue["code"], issue["provider_id"], issue["provider_kind"])
+        for issue in payload["issues"]
+    }
+    assert ("live_provider_without_allowed_hosts", "live_json_http_search", "search") in issue_keys
+    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
+    assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
 def test_phase92_cli_chat_live_retrieval_blocks_without_env_gate(tmp_path: Path, capsys, monkeypatch) -> None:
     _clear_live_env(monkeypatch)
     journal_path = tmp_path / "journal.jsonl"
@@ -368,6 +404,8 @@ def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
     _clear_live_env(monkeypatch)
     monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
     monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS", "api.example.com")
+    monkeypatch.setenv("HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS", "docs.example.com")
     search_transport = _Transport(
         HttpTransportResponse(
             status_code=200,
@@ -432,6 +470,8 @@ def test_phase92_cli_agent_live_research_depth_counts_query_and_fetch_budget(
     _clear_live_env(monkeypatch)
     monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
     monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS", "api.example.com")
+    monkeypatch.setenv("HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS", "docs.example.com")
     search_transport, fetch_transport = _live_success_transports()
     monkeypatch.setattr(
         cli.LiveRetrievalConfig,
@@ -485,6 +525,8 @@ def test_phase92_cli_chat_live_retrieval_forces_retrieval_recipe(
     _clear_live_env(monkeypatch)
     monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
     monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS", "api.example.com")
+    monkeypatch.setenv("HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS", "docs.example.com")
     search_transport, fetch_transport = _live_success_transports()
     monkeypatch.setattr(
         cli.LiveRetrievalConfig,
@@ -532,6 +574,8 @@ def test_phase92_cli_resident_live_retrieval_processes_retrieval_task(
     _clear_live_env(monkeypatch)
     monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
     monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ENDPOINT", "https://api.example.com/search")
+    monkeypatch.setenv("HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS", "api.example.com")
+    monkeypatch.setenv("HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS", "docs.example.com")
     search_transport, fetch_transport = _live_success_transports()
     monkeypatch.setattr(
         cli.LiveRetrievalConfig,

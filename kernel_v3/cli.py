@@ -830,6 +830,14 @@ def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | 
             "reason": "live_search_endpoint_not_configured",
             "live_config": config.safe_diagnostics(),
         }
+    allowed_host_issues = _live_retrieval_allowed_host_issues(config)
+    if allowed_host_issues:
+        return {
+            "status": "blocked",
+            "reason": "live_retrieval_allowed_hosts_not_configured",
+            "live_config": config.safe_diagnostics(),
+            "issues": allowed_host_issues,
+        }
     return config
 
 
@@ -856,6 +864,7 @@ def _live_retrieval_doctor_config(args) -> JsonObject:
             }
         )
     else:
+        issues.extend(_live_retrieval_allowed_host_issues(config))
         operator = config.build_operator()
     return {
         "requested": True,
@@ -874,6 +883,31 @@ def _live_retrieval_doctor_status(issues: list[JsonObject]) -> str:
     if "attention" in severities:
         return "attention"
     return "ok"
+
+
+def _live_retrieval_allowed_host_issues(config: LiveRetrievalConfig) -> list[JsonObject]:
+    issues: list[JsonObject] = []
+    if not config.search.allow_all_hosts and not config.search.allowed_hosts:
+        issues.append(
+            {
+                "component": "retrieval",
+                "severity": "error",
+                "code": "live_provider_without_allowed_hosts",
+                "provider_id": "live_json_http_search",
+                "provider_kind": "search",
+            }
+        )
+    if not config.fetch.allow_all_hosts and not config.fetch.allowed_hosts:
+        issues.append(
+            {
+                "component": "retrieval",
+                "severity": "error",
+                "code": "live_provider_without_allowed_hosts",
+                "provider_id": "live_http_fetch",
+                "provider_kind": "fetch",
+            }
+        )
+    return issues
 
 
 def _artifact_store(args, *, create_default: bool) -> ArtifactStore | None:

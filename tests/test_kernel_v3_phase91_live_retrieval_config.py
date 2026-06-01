@@ -99,6 +99,18 @@ def test_phase91_live_retrieval_inspection_flags_missing_allowed_hosts() -> None
     assert "configure allowed hosts for live retrieval providers" in inspection.recommended_actions
 
 
+def test_phase91_cli_live_retrieval_preflight_accepts_explicit_allow_all_hosts() -> None:
+    config = LiveRetrievalConfig.from_env(
+        {
+            "HOLO_V3_LIVE_RETRIEVAL": "1",
+            "HOLO_V3_LIVE_SEARCH_ENDPOINT": "https://api.example.com/search",
+            "HOLO_V3_LIVE_RETRIEVAL_ALLOW_ALL_HOSTS": "1",
+        }
+    )
+
+    assert cli._live_retrieval_allowed_host_issues(config) == []
+
+
 def test_phase91_cli_live_http_provider_inspection_blocks_without_endpoint(tmp_path: Path, capsys, monkeypatch) -> None:
     _clear_live_env(monkeypatch)
     journal_path = tmp_path / "journal.jsonl"
