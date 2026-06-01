@@ -382,6 +382,8 @@ class ContextPackCompiler:
 class ContextCompiler:
     def compile(self, task: TaskState, journal: JournalStore) -> ContextBundle:
         pack = ContextPackCompiler().compile(task, journal)
+        safe_input_text, input_redactions = Redactor().redact(task.input_text)
+        redactions = _ordered_unique([*pack.redactions, *input_redactions])
         event_ids = [
             str(record.get("event_id"))
             for section in pack.sections
@@ -398,11 +400,11 @@ class ContextCompiler:
                 "task_id": task.task_id,
                 "run_id": task.run_id,
                 "thread_id": task.thread_id,
-                "input_text": task.input_text,
+                "input_text": str(safe_input_text),
                 "context_pack_hash": pack.payload_hash,
                 "sections": pack.sections,
                 "source_refs": pack.source_refs,
-                "redactions": pack.redactions,
+                "redactions": redactions,
                 "budget": pack.budget,
             },
             token_budget=int(pack.budget["token_budget"]),

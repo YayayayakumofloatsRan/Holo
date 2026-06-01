@@ -46,6 +46,14 @@ feedback missing-evidence entries, and guard data. The journal remains the
 source of truth, but the default inspection surface avoids turning audits into
 a secret disclosure path.
 
+The loop's main journal path also applies the same boundary before writing
+secret-like dynamic fields. User input records, task input summaries, action
+payloads, observations, feedback, guards, and final result payloads keep their
+structure, but secret-like strings are replaced with redaction markers and a
+raw data hash. The in-process action/observation objects still flow through
+PolicyGate, ToolRegistry, and evaluators unchanged; the durable audit record
+does not persist the secret text.
+
 ## Semantic Task Graph
 
 Model-backed semantic intake is now normalized into a host-visible

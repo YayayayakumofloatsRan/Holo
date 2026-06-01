@@ -4,8 +4,8 @@ import json
 import time
 from collections.abc import Callable
 
-from kernel_v3.context import ContextCompiler
-from kernel_v3.contracts import CandidateAction, Event, Feedback, Observation
+from kernel_v3.context import ContextCompiler, Redactor, deterministic_hash
+from kernel_v3.contracts import CandidateAction, Event, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.journal import Journal
 from kernel_v3.planner import Planner
@@ -14,6 +14,9 @@ from kernel_v3.result import AgentResult
 from kernel_v3.session import SessionEngine, TaskState
 from kernel_v3.stop import StopController
 from kernel_v3.tools import ToolRegistry
+
+
+_JOURNAL_REDACTOR = Redactor()
 
 
 class LoopControllerV3:
@@ -92,7 +95,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=None,
             kind="resume",
-            data={**event.to_dict(), "user_input": user_input, "thread_id": task.thread_id},
+            data=_safe_journal_data({**event.to_dict(), "user_input": user_input, "thread_id": task.thread_id}),
             event_ref=event.event_id,
             state_delta={"status": "resumed"},
         )
@@ -124,7 +127,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=None,
             kind="event",
-            data=event.to_dict(),
+            data=_safe_journal_data(event.to_dict()),
             event_ref=event.event_id,
             state_delta={"status": "event_received"},
         )
@@ -133,12 +136,14 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=None,
             kind="task",
-            data={
-                "task_id": task.task_id,
-                "status": task.status,
-                "input_text": str(event.payload.get("text", "")),
-                "thread_id": task.thread_id,
-            },
+            data=_safe_journal_data(
+                {
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "input_text": str(event.payload.get("text", "")),
+                    "thread_id": task.thread_id,
+                }
+            ),
             event_ref=event.event_id,
             state_delta={"status": task.status},
         )
@@ -220,7 +225,7 @@ class LoopControllerV3:
                 run_id=task.run_id,
                 step_id=step_id,
                 kind="observation",
-                data=observation.to_dict(),
+                data=_safe_journal_data(observation.to_dict()),
                 event_ref=self._last_ref(task.task_id, "event_ref"),
                 action_ref=action.action_id,
                 observation_ref=observation.observation_id,
@@ -273,7 +278,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=step_id,
             kind="action",
-            data=action.to_dict(),
+            data=_safe_journal_data(action.to_dict()),
             event_ref=self._last_ref(task.task_id, "event_ref"),
             action_ref=action.action_id,
             state_delta={"action_kind": action.kind},
@@ -347,7 +352,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=step_id,
             kind="feedback",
-            data=feedback.to_dict(),
+            data=_safe_journal_data(feedback.to_dict()),
             event_ref=self._last_ref(task.task_id, "event_ref"),
             action_ref=action.action_id,
             observation_ref=observation.observation_id,
@@ -361,7 +366,7 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=step_id,
             kind="guard",
-            data={"stop_reason": stop_reason, **data},
+            data=_safe_journal_data({"stop_reason": stop_reason, **data}),
             event_ref=self._last_ref(task.task_id, "event_ref"),
             state_delta={"status": "step_limit_exceeded", "stop_reason": stop_reason},
         )
@@ -447,13 +452,15 @@ class LoopControllerV3:
             run_id=task.run_id,
             step_id=step_id,
             kind="result",
-            data={
-                "task_id": result.task_id,
-                "run_id": result.run_id,
-                "status": result.status,
-                "answer": result.answer,
-                "stop_reason": result.stop_reason,
-            },
+            data=_safe_journal_data(
+                {
+                    "task_id": result.task_id,
+                    "run_id": result.run_id,
+                    "status": result.status,
+                    "answer": result.answer,
+                    "stop_reason": result.stop_reason,
+                }
+            ),
             event_ref=self._last_ref(task.task_id, "event_ref"),
             feedback_ref=feedback.feedback_id,
             state_delta={"status": result.status},
@@ -466,6 +473,20 @@ class LoopControllerV3:
             if isinstance(value, str):
                 return value
         return None
+
+
+def _safe_journal_data(data: JsonObject) -> JsonObject:
+    redacted, markers = _JOURNAL_REDACTOR.redact(data)
+    if not markers:
+        return data
+    safe = dict(redacted) if isinstance(redacted, dict) else {"value": redacted}
+    existing = safe.get("redaction")
+    redaction = dict(existing) if isinstance(existing, dict) else {}
+    redaction["journal_data"] = "secret_like_fields_redacted"
+    redaction["markers"] = sorted(markers)
+    redaction["raw_data_hash"] = deterministic_hash(data)
+    safe["redaction"] = redaction
+    return safe
 
 
 def _network_cost_from_payload(payload: object) -> int | None:

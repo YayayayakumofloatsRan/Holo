@@ -131,6 +131,47 @@ def test_policy_blocks_disabled_network_fetch_even_with_network_permission():
         _remove_dir(root)
 
 
+def test_loop_redacts_secret_like_input_and_action_payload_before_journal_and_context():
+    secret_url = "https://example.invalid/report?access_token=loop-secret-token-1234567890"
+    action = CandidateAction(
+        action_id="act-secret-network",
+        kind="tool",
+        name="network.fetch",
+        description="fetch remote page",
+        score=1.0,
+        payload={"url": secret_url},
+        reasons=["test secret redaction"],
+        side_effect_class="network",
+    )
+    journal = JournalStore.in_memory()
+    planner = FakePlanner([action])
+    loop = LoopControllerV3(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=ToolRegistry.with_builtin_respond(),
+        evaluator=FakeEvaluator.stop_on_block(),
+    )
+
+    result = loop.run(f"fetch {secret_url}")
+
+    assert result.status == "blocked"
+    planner_state = planner.calls[0].state
+    assert planner_state["input_text"] == "[REDACTED:SECRET]"
+    assert "SECRET" in planner_state["redactions"]
+    event = journal.records(task_id=result.task_id, kind="event")[0]
+    task = journal.records(task_id=result.task_id, kind="task")[0]
+    action_record = journal.records(task_id=result.task_id, kind="action")[0]
+    assert event.data["payload"]["text"] == "[REDACTED:SECRET]"
+    assert task.data["input_text"] == "[REDACTED:SECRET]"
+    assert action_record.data["payload"]["url"] == "[REDACTED:SECRET]"
+    assert action_record.data["redaction"]["journal_data"] == "secret_like_fields_redacted"
+    encoded = json.dumps([record.to_dict() for record in journal.records(task_id=result.task_id)], ensure_ascii=False)
+    assert "loop-secret-token" not in encoded
+    assert "access_token" not in encoded
+
+
 def test_loop_max_steps_guard_journals_auditable_stop_after_continue_feedback():
     actions = [
         CandidateAction(
