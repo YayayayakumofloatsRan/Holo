@@ -363,6 +363,13 @@ finds one, it journals `resident_outbox_recovered`, completes the inbox, and
 does not re-run `ChatRuntime` or the agent loop. This prevents duplicated tool
 work and duplicated agent journal records after a partial worker failure.
 
+Before writing a new outbox after `ChatRuntime` returns, the worker must renew
+its queue lease. Successful renewals are journaled as `resident_lease_renewed`.
+If the lease was stolen or expired and reclaimed by another worker, the stale
+worker returns `lease_lost_before_outbox` and does not append a reply. This
+keeps long-running resident tasks from producing duplicate outbound messages
+after ownership changes.
+
 Failed delivery recovery is an explicit resident operation. `resident
 retry-outbox <outbox_id>` records retry metadata in the payload and journals
 `resident_outbox_retried`. Ordinary reply outboxes return to `ready`. Pending

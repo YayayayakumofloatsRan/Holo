@@ -32,6 +32,7 @@ def test_phase73_resident_worker_processes_inbox_to_outbox(tmp_path: Path):
     assert resident_kinds == [
         "resident_lease_acquired",
         "resident_inbox_claimed",
+        "resident_lease_renewed",
         "resident_outbox_appended",
         "resident_inbox_completed",
         "resident_lease_released",
@@ -275,6 +276,32 @@ def test_phase73_renew_lease_extends_running_message_claim(tmp_path: Path):
     assert before is not None
     assert after is not None
     assert after > before
+
+
+def test_phase73_worker_does_not_append_outbox_after_losing_lease(tmp_path: Path):
+    clock = _ManualClock(start=1_000)
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)
+    journal = JournalStore.in_memory()
+    queue.enqueue(thread_id="resident-thread", text="slow work", message_id="in-stolen")
+
+    result = ResidentRuntime(
+        queue=queue,
+        chat_runtime=_LeaseStealingChatRuntime(queue=queue, clock=clock),
+        worker_id="worker-old",
+        lease_ttl_ms=10,
+        journal=journal,
+    ).run_once()
+
+    inbox = queue.inbox_messages()[0]
+    blocked = journal.records(kind="resident_worker_blocked")[-1].data
+    assert result.status == "blocked"
+    assert result.reason == "lease_lost_before_outbox"
+    assert queue.outbox_messages() == []
+    assert inbox.status == "running"
+    assert inbox.lease_owner == "worker-new"
+    assert inbox.attempts == 2
+    assert blocked["reason"] == "lease_lost_before_outbox"
+    assert not journal.records(kind="resident_outbox_appended")
 
 
 def test_phase73_needs_user_input_writes_pending_outbox_without_self_continuation(tmp_path: Path):
@@ -1535,6 +1562,44 @@ class _StaticChatRuntime:
             summary=None,
             trace_refs=["final-1"],
         )
+
+
+class _LeaseStealingChatRuntime:
+    def __init__(self, *, queue: ResidentQueue, clock) -> None:
+        self.queue = queue
+        self.clock = clock
+
+    def receive(self, text: str, *, thread_id: str):
+        self.clock.advance(1_000)
+        assert self.queue.acquire_lease(worker_id="worker-new", ttl_ms=30_000) is not None
+        assert self.queue.claim_next(worker_id="worker-new", lease_ttl_ms=30_000) is not None
+        return ChatRuntimeResult(
+            status="completed",
+            thread_id=thread_id,
+            turn_id="turn-stolen",
+            route="new_task",
+            task_id="task-stolen",
+            run_id="run-stolen",
+            answer="stale worker answer must not be delivered",
+            final_answer=None,
+            failure_report=None,
+            pending_question=None,
+            command_result=None,
+            summary=None,
+            trace_refs=[],
+        )
+
+
+class _ManualClock:
+    def __init__(self, *, start: int) -> None:
+        self.current = start
+
+    def __call__(self) -> int:
+        self.current += 1
+        return self.current
+
+    def advance(self, delta_ms: int) -> None:
+        self.current += delta_ms
 
 
 def _clock(start: int = 1_000):

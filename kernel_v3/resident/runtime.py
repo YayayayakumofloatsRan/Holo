@@ -280,6 +280,11 @@ class ResidentRuntime:
                     reason="lease_lost_before_outbox",
                     payload=_with_schedule_tick({}, schedule_tick),
                 )
+            self._journal_event(
+                "resident_lease_renewed",
+                {"worker_id": self.worker_id, "message_id": message.message_id, "lease": renewed.to_dict()},
+                state_delta={"resident_lease_status": renewed.status, "resident_message_id": message.message_id},
+            )
             outbox = self.queue.append_outbox(
                 in_reply_to=message.message_id,
                 thread_id=message.thread_id,
