@@ -432,6 +432,52 @@ def test_phase73_memory_approval_command_answers_review_outbox(tmp_path: Path):
     assert runtime.run_loop(max_iterations=1).status == "idle"
 
 
+def test_phase73_memory_reject_command_answers_review_outbox_without_commit(tmp_path: Path):
+    queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
+    journal = JournalStore.in_memory()
+    memory = MemoryStore.in_memory(clock_ms=_clock())
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(
+            journal=journal,
+            memory_store=memory,
+            processor_fabric=fake_fabric(
+                {"semantic.intake": _memory_write_intake("resident prefers terse reports")},
+                journal=journal,
+            ),
+        ),
+        memory_store=memory,
+        semantic_mode="model",
+    )
+    runtime = ResidentRuntime(queue=queue, chat_runtime=chat, worker_id="worker-memory", journal=journal)
+    queue.enqueue(thread_id="resident-memory", text="remember resident prefers terse reports", message_id="in-memory-review")
+
+    runtime.run_once()
+    proposal_id = memory.proposals()[0].proposal_id
+    pending_outbox = queue.outbox_messages()[0]
+    queue.enqueue(
+        thread_id="resident-memory",
+        text=f"/memory reject {proposal_id} no",
+        message_id="in-memory-reject",
+    )
+    second = runtime.run_once()
+
+    outboxes = {item.in_reply_to: item for item in queue.outbox_messages()}
+    rejected = outboxes["in-memory-reject"]
+    answered = outboxes["in-memory-review"]
+    assert answered.outbox_id == pending_outbox.outbox_id
+    assert answered.status == "answered"
+    assert rejected.status == "ready"
+    assert rejected.payload["command_result"]["result"]["resolved_pending"] == {
+        "pending_type": "memory_review",
+        "memory_proposal_ids": [proposal_id],
+        "decision": "rejected",
+    }
+    assert second.payload["answered_pending_outbox_ids"] == [pending_outbox.outbox_id]
+    assert memory.recall(query="resident", scope={"thread_id": "resident-memory"}).total == 0
+    assert memory.proposals()[0].approval_status == "rejected"
+
+
 def test_phase73_answering_pending_question_marks_old_outbox_answered(tmp_path: Path):
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=_clock())
     journal = JournalStore.in_memory()
