@@ -157,6 +157,14 @@
   searches. They remain source pointers rather than cached market content;
   source policy marks central-bank, Treasury, and fund disclosures as primary
   families and transcript/rating sources as secondary context.
+- Retrieval replanning now has an explicit host-state packet:
+  `context.state.agent_replan_hints`. It is compiled from journal records after
+  each iteration and journaled in `agent_work_plan_update`. For insufficient
+  retrieval it includes missing facets/source authority, attempted
+  query/strategy/provider summaries, recent payload hashes, suggested query
+  and search-strategy changes, and `do_not_finalize_until` rules. This gives a
+  live model a structured next-action interface instead of forcing it to infer
+  loop state from raw record history or fixed phrase behavior.
 
 ## Validation
 
@@ -222,6 +230,11 @@ Additional deterministic coverage now includes:
 - a two-iteration retrieval loop test shows that weak-source evidence creates
   source-authority feedback, the second planner call sees that gap, and a retry
   against an SEC source finalizes with citations.
+- the same replan test now asserts that the second planner context and
+  `agent_work_plan_update` contain `agent_replan_hints` with missing
+  source-authority state, suggested official-source query terms, search
+  strategy changes, recent payload hashes, and host-owned
+  `do_not_finalize_until` rules.
 - live retrieval/corpus bridge tests show that a configured corpus is searched
   before live HTTP, and that an agent's first live SEC fetch is indexed into
   corpus so a second run can answer from artifact-backed corpus evidence without

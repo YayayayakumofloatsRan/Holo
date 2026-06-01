@@ -103,6 +103,11 @@ Kernel v3 currently contains the infrastructure for:
 - retrieval workloop feedback that carries missing query facets and missing
   source-authority signals into the next planner packet, allowing bounded
   replan attempts without weakening host termination guards;
+- planner-visible `agent_replan_hints` compiled from journal records after
+  insufficient retrieval. The packet carries missing facets/source authority,
+  attempted query/strategy/provider summaries, payload hashes to avoid
+  repeating, suggested next search strategies/query hints, and
+  `do_not_finalize_until` rules for the next model planner call;
 - adaptive search strategy selection for retrieval: when configured, a model
   planner can propose `metadata.search_strategy` values such as `corpus_only`,
   `fresh_live`, `aggregate`, `structured`, or `crawl`, and the host selects only

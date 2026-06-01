@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -847,6 +848,12 @@ class _AgentContextCompiler:
                 "semantic_state_space": semantic_state_space_catalog(),
                 "research_source_directory": _research_source_directory_metadata(self.recipe),
                 "agent_runtime_directive": _planner_directive(self.recipe),
+                "agent_replan_hints": _agent_replan_hints(
+                    journal,
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    recipe=self.recipe,
+                ),
                 "context_pack_hash": pack.payload_hash,
                 "sections": pack.sections,
                 "source_refs": pack.source_refs,
@@ -935,6 +942,7 @@ class _RecipeBoundPlanner:
                     "feedback_status": feedback.status if feedback is not None else None,
                     "feedback_stop_reason": feedback.stop_reason if feedback is not None else None,
                     "feedback_missing_evidence": list(feedback.missing_evidence) if feedback is not None else [],
+                    "replan_hints": context.state.get("agent_replan_hints", {}),
                     "selected_action": _action_plan_preview(action),
                     "status": status,
                 }
@@ -1744,6 +1752,288 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     }
 
 
+def _agent_replan_hints(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+) -> JsonObject:
+    feedback = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="feedback")
+    termination = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="termination_decision")
+    evidence = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="evidence_sufficiency")
+    report = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="retrieval_report")
+    actions = [
+        record for record in journal.records(task_id=task_id, kind="action")
+        if record.run_id == run_id
+    ]
+    hints: JsonObject = {
+        "status": "none",
+        "recipe_mode": recipe.mode,
+        "iteration_index": len(actions) + 1,
+        "latest_feedback": _feedback_hint(feedback),
+        "latest_termination": _termination_hint(termination),
+        "latest_evidence_sufficiency": _evidence_sufficiency_hint(evidence),
+        "avoid_repeating": _avoid_repeating_hints(actions),
+        "suggested_next_action": "follow_recipe_or_answer_if_sufficient",
+    }
+    if recipe.mode != "retrieval_answer":
+        return hints
+    retrieval = _retrieval_replan_hints(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        report_record=report,
+        evidence_record=evidence,
+    )
+    hints["retrieval"] = retrieval
+    if retrieval.get("needs_replan") is True:
+        hints["status"] = "needs_replan"
+        hints["suggested_next_action"] = "propose_materially_new_retrieval_run"
+    elif _evidence_sufficient(evidence):
+        hints["status"] = "ready_to_finalize"
+        hints["suggested_next_action"] = "finalize_without_more_retrieval"
+    elif actions:
+        hints["status"] = "continue_or_fail_under_host_guards"
+        hints["suggested_next_action"] = "change_query_source_or_strategy_if_continuing"
+    return hints
+
+
+def _retrieval_replan_hints(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    report_record,
+    evidence_record,
+) -> JsonObject:
+    report_data = dict(report_record.data) if report_record is not None else {}
+    diagnostics = _json_object(report_data.get("diagnostics"))
+    evaluation = _json_object(diagnostics.get("evaluation_diagnostics"))
+    evidence_data = dict(evidence_record.data) if evidence_record is not None else {}
+    evidence_diagnostics = _json_object(evidence_data.get("diagnostics"))
+    missing = _ordered_unique(
+        [
+            *_string_list(evidence_data.get("missing")),
+            *_string_list(evaluation.get("missing_query_facets")),
+            *_string_list(evidence_diagnostics.get("missing_source_authority")),
+        ]
+    )
+    attempts = _retrieval_attempt_hints(journal, task_id=task_id, run_id=run_id)
+    source_authority = _json_object(evaluation.get("source_authority") or evidence_diagnostics.get("source_authority"))
+    requirement = _string_value(
+        evaluation.get("source_authority_requirement")
+        or evidence_diagnostics.get("source_authority_requirement")
+    )
+    report_status = _string_value(report_data.get("status"))
+    report_reason = _string_value(diagnostics.get("reason") or evaluation.get("reason") or report_status)
+    strategy_hints = _suggested_retrieval_strategies(
+        missing=missing,
+        report_reason=report_reason,
+        requirement=requirement,
+        attempts=attempts,
+    )
+    query_hints = _suggested_query_hints(
+        base_query=_string_value(report_data.get("preview") or diagnostics.get("goal_query") or diagnostics.get("query")),
+        missing=missing,
+        requirement=requirement,
+    )
+    needs_replan = bool(report_record is not None and report_status != "sufficient")
+    return {
+        "needs_replan": needs_replan,
+        "latest_report_status": report_status,
+        "latest_report_reason": report_reason,
+        "missing": missing,
+        "missing_query_facets": _string_list(evaluation.get("missing_query_facets")),
+        "covered_query_facets": _string_list(evaluation.get("covered_query_facets")),
+        "source_authority_requirement": requirement,
+        "source_authority": source_authority,
+        "suggested_search_strategies": strategy_hints,
+        "suggested_query_hints": query_hints,
+        "attempted_queries": _ordered_unique([item["query"] for item in attempts if isinstance(item.get("query"), str)]),
+        "attempted_search_strategies": _ordered_unique(
+            [item["search_strategy"] for item in attempts if isinstance(item.get("search_strategy"), str)]
+        ),
+        "attempted_provider_ids": _ordered_unique(
+            [
+                provider
+                for item in attempts
+                for provider in item.get("provider_ids", [])
+                if isinstance(provider, str)
+            ]
+        ),
+        "attempts": attempts[-6:],
+        "do_not_finalize_until": _do_not_finalize_until(missing=missing, requirement=requirement),
+    }
+
+
+def _feedback_hint(record) -> JsonObject:
+    if record is None:
+        return {}
+    return {
+        "status": _string_value(record.data.get("status")),
+        "stop_reason": _string_value(record.data.get("stop_reason")),
+        "missing_evidence": _string_list(record.data.get("missing_evidence")),
+    }
+
+
+def _termination_hint(record) -> JsonObject:
+    if record is None:
+        return {}
+    diagnostics = _json_object(record.data.get("diagnostics"))
+    return {
+        "decision": _string_value(record.data.get("decision")),
+        "reason": _string_value(record.data.get("reason")),
+        "override": bool(record.data.get("override")),
+        "evidence_missing": _string_list(diagnostics.get("evidence_missing")),
+        "progress_type": _string_value(diagnostics.get("progress_type")),
+        "no_progress_count": diagnostics.get("no_progress_count") if isinstance(diagnostics.get("no_progress_count"), int) else None,
+    }
+
+
+def _evidence_sufficiency_hint(record) -> JsonObject:
+    if record is None:
+        return {}
+    return {
+        "sufficient": bool(record.data.get("sufficient")),
+        "reason": _string_value(record.data.get("reason")),
+        "missing": _string_list(record.data.get("missing")),
+        "evidence_count": record.data.get("evidence_count") if isinstance(record.data.get("evidence_count"), int) else None,
+        "citation_count": record.data.get("citation_count") if isinstance(record.data.get("citation_count"), int) else None,
+    }
+
+
+def _avoid_repeating_hints(actions: list) -> JsonObject:
+    recent = actions[-6:]
+    return {
+        "recent_action_count": len(actions),
+        "recent_action_names": _ordered_unique(
+            [str(record.data.get("name") or record.data.get("kind") or "") for record in recent if record.data]
+        ),
+        "recent_payload_hashes": _ordered_unique(
+            [
+                hashlib.sha256(
+                    json.dumps(record.data.get("payload", {}), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
+                for record in recent
+            ]
+        ),
+    }
+
+
+def _retrieval_attempt_hints(journal: JournalStore, *, task_id: str, run_id: str) -> list[JsonObject]:
+    attempts: list[JsonObject] = []
+    action_records = [
+        record for record in journal.records(task_id=task_id, kind="action")
+        if record.run_id == run_id
+    ]
+    payload_by_action = {record.action_ref: _json_object(record.data.get("payload")) for record in action_records if record.action_ref}
+    for record in journal.records(task_id=task_id, kind="retrieval_search_attempt"):
+        if record.run_id != run_id:
+            continue
+        payload = payload_by_action.get(record.action_ref, {})
+        metadata = _json_object(payload.get("metadata"))
+        diagnostics = _json_object(record.data.get("diagnostics"))
+        provider_diagnostics = _json_object(diagnostics.get("provider_diagnostics"))
+        provider_ids = _string_list(provider_diagnostics.get("selected_provider_ids"))
+        if not provider_ids and _string_value(provider_diagnostics.get("selected_provider_id")):
+            provider_ids = [_string_value(provider_diagnostics.get("selected_provider_id"))]
+        sources = record.data.get("sources")
+        source_families = []
+        source_authority_levels = []
+        if isinstance(sources, list):
+            for source in sources[:8]:
+                if not isinstance(source, dict):
+                    continue
+                source_metadata = _json_object(source.get("metadata"))
+                source_families.append(_string_value(source_metadata.get("source_family")))
+                source_authority_levels.append(_string_value(source_metadata.get("authority_level")))
+        attempts.append(
+            {
+                "query": _string_value(record.data.get("query") or payload.get("query")),
+                "search_strategy": _string_value(metadata.get("search_strategy") or provider_diagnostics.get("selected_strategy")),
+                "provider_ids": provider_ids,
+                "status": _string_value(record.data.get("status")),
+                "source_count": len(sources) if isinstance(sources, list) else 0,
+                "source_families": _ordered_unique([item for item in source_families if item]),
+                "source_authority_levels": _ordered_unique([item for item in source_authority_levels if item]),
+            }
+        )
+    return attempts
+
+
+def _suggested_retrieval_strategies(
+    *,
+    missing: list[str],
+    report_reason: str,
+    requirement: str,
+    attempts: list[JsonObject],
+) -> list[str]:
+    attempted = {
+        str(item.get("search_strategy"))
+        for item in attempts
+        if isinstance(item.get("search_strategy"), str) and item.get("search_strategy")
+    }
+    suggestions: list[str] = []
+    if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
+        suggestions.extend(["structured", "aggregate", "fresh_live", "crawl"])
+    if any(item.startswith("query_facet:") for item in missing):
+        suggestions.extend(["aggregate", "fresh_live", "crawl"])
+    if "retrieval_evidence" in missing or "sufficient_retrieval_evidence" in missing:
+        suggestions.extend(["aggregate", "structured", "crawl", "fresh_live"])
+    if report_reason in {"no_primary_source_for_research_profile", "no_required_authority_source_for_research_profile"}:
+        suggestions.extend(["structured", "aggregate", "fresh_live"])
+    result = [item for item in _ordered_unique(suggestions) if item not in attempted]
+    return result or ["aggregate", "fresh_live", "structured"]
+
+
+def _suggested_query_hints(*, base_query: str, missing: list[str], requirement: str) -> list[str]:
+    additions: list[str] = []
+    if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
+        additions.extend(["official filing", "annual report", "10-K 10-Q", "issuer investor relations", "exchange disclosure"])
+    facet_terms = {
+        "query_facet:model": "models",
+        "query_facet:authentication": "authentication API key bearer token",
+        "query_facet:pricing": "pricing billing",
+        "query_facet:token": "token context length",
+        "query_facet:rate_limit": "rate limit quota",
+        "query_facet:endpoint": "endpoint base URL",
+    }
+    additions.extend(term for marker, term in facet_terms.items() if marker in missing)
+    if not additions:
+        return []
+    base = base_query.strip()
+    if not base:
+        return _ordered_unique(additions)[:6]
+    return _ordered_unique([f"{base} {addition}" for addition in additions])[:6]
+
+
+def _do_not_finalize_until(*, missing: list[str], requirement: str) -> list[str]:
+    rules: list[str] = []
+    if "citation_refs" in missing:
+        rules.append("valid citation_refs exist")
+    if "retrieval_evidence" in missing or "sufficient_retrieval_evidence" in missing:
+        rules.append("retrieval report status is sufficient")
+    if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
+        rules.append("primary source authority requirement is satisfied")
+    for item in missing:
+        if item.startswith("query_facet:"):
+            rules.append(f"{item} covered")
+    return _ordered_unique(rules)
+
+
+def _latest_journal_record(journal: JournalStore, *, task_id: str, run_id: str, kind: str):
+    records = [
+        record for record in journal.records(task_id=task_id, kind=kind)
+        if record.run_id == run_id
+    ]
+    return records[-1] if records else None
+
+
+def _evidence_sufficient(record) -> bool:
+    return bool(record is not None and record.data.get("sufficient") is True)
+
+
 def _semantic_intake_metadata(recipe: TaskRecipe) -> JsonObject:
     value = recipe.metadata.get("semantic_intake")
     return dict(value) if isinstance(value, dict) else {}
@@ -2283,6 +2573,10 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def _json_object(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _capability_payloads_from_step(raw_step: JsonObject, tool_name: str) -> list[JsonObject]:

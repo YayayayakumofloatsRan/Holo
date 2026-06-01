@@ -189,6 +189,17 @@ host configuration, not model authority. If the evaluator asks to continue but
 the loop stops making progress, repeats the same payload, or exceeds a guard,
 the workloop returns a failure report instead of running forever.
 
+After an insufficient retrieval iteration, the next planner context includes
+`state.agent_replan_hints`. This is a compact journal-derived packet, not model
+memory and not a tool. It records the latest feedback, evidence sufficiency,
+retrieval report status, missing query facets, source-authority gaps, attempted
+queries/provider ids/search strategies, recent action payload hashes,
+suggested query/search-strategy changes, and `do_not_finalize_until` rules.
+The planner contract tells live models to use this packet to propose one
+materially different safe action and avoid final answers while host evidence
+rules are unmet. The host still enforces PolicyGate, repetition detection,
+evidence sufficiency, and final termination.
+
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, roleplay, document/report work,
 workspace, retrieval, web research, finance, memory, artifact, data, database,

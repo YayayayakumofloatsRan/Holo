@@ -119,6 +119,22 @@ def test_phase103_source_authority_gap_feedback_drives_model_retrieval_replan() 
     updates = journal.records(task_id=result.task_id, kind="agent_work_plan_update")
     assert "source_authority:primary" in updates[1].data["feedback_missing_evidence"]
     assert "primary_source" in updates[1].data["feedback_missing_evidence"]
+    replan = updates[1].data["replan_hints"]
+    assert replan["status"] == "needs_replan"
+    assert replan["suggested_next_action"] == "propose_materially_new_retrieval_run"
+    assert replan["avoid_repeating"]["recent_payload_hashes"]
+    retrieval_replan = replan["retrieval"]
+    assert retrieval_replan["needs_replan"] is True
+    assert retrieval_replan["latest_report_status"] == "insufficient_evidence"
+    assert "primary_source" in retrieval_replan["missing"]
+    assert "source_authority:primary" in retrieval_replan["missing"]
+    assert "structured" in retrieval_replan["suggested_search_strategies"]
+    assert "official filing" in " ".join(retrieval_replan["suggested_query_hints"])
+    assert "primary source authority requirement is satisfied" in retrieval_replan["do_not_finalize_until"]
+    contexts = journal.records(task_id=result.task_id, kind="context")
+    second_context_replan = contexts[1].data["state"]["agent_replan_hints"]
+    assert second_context_replan["status"] == "needs_replan"
+    assert second_context_replan["retrieval"]["source_authority_requirement"] == "primary"
     reports = journal.records(task_id=result.task_id, kind="retrieval_report")
     assert reports[0].data["status"] == "insufficient_evidence"
     assert reports[-1].data["status"] == "sufficient"
