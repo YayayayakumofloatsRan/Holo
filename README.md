@@ -17,8 +17,9 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/agent/`: single-agent runtime, task recipes, semantic task graph,
   workloop termination, and final answer/failure report assembly.
 - `kernel_v3/capabilities.py`: host-visible capability/state catalog spanning
-  conversation, workspace, retrieval, finance, memory, artifact, data, code,
-  project, resident, transport, calendar, system, and security capabilities.
+  conversation, roleplay, document/report work, workspace, retrieval, web
+  research, finance, memory, artifact, data, code, project, resident,
+  transport, calendar, system, and security capabilities.
 - `kernel_v3/chat/`: multi-turn thread runtime, routing, pending user input,
   journal-derived summaries, and memory admin surfaces.
 - `kernel_v3/processors/`: schema-first processor fabric, fake providers,
@@ -69,14 +70,19 @@ Kernel v3 currently contains the infrastructure for:
   which compile to host-validated retrieval with the finance fundamentals
   source policy instead of collapsing into workspace mode;
 - a broader semantic capability/state surface for Hermes-style growth:
-  artifact generation, data/table analysis, code/test work, project/task
-  status, calendar/reminder intent, transport boundaries, credential/secret
-  boundaries, and device-control boundaries are represented explicitly even
-  when they are only planned or host-only;
+  roleplay/persona, document/report/email drafting, artifact generation,
+  web/market research, finance competitive landscape, data/table analysis,
+  code/test work, project/task status, calendar/reminder intent, transport
+  boundaries, credential/secret boundaries, browser/session boundaries, and
+  device-control boundaries are represented explicitly even when they are only
+  planned or host-only;
 - multi-turn chat over journal-derived thread state;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
 - bounded retrieval with evidence/citation reports and source quality policy;
+- bounded crawl discovery now ranks discovered page/sitemap candidates against
+  the query before applying the source budget, so limited fetch budgets prefer
+  relevant research pages over generic navigation links;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;

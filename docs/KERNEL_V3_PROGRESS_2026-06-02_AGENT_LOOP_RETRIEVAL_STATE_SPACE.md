@@ -73,6 +73,23 @@
   `--max-agent-artifact-bytes`). Model-planner workspace/retrieval/write modes
   get bounded long-loop defaults, while callers can explicitly tighten or
   expand the guard ceilings.
+- The semantic capability/state catalog now has a broader Hermes-oriented
+  ontology rather than a workspace-shaped mode list. It exposes roleplay,
+  knowledge explanation, document/report/email drafting, web research, market
+  news/data, competitive landscape, browser/session boundary, external API,
+  and long-running monitor domains, plus state axes for intent scope,
+  execution surface, output contract, evidence, permissions, resident state,
+  and user control.
+- Task graph routing now maps `web.research`, `finance.market_news`,
+  `finance.market_data`, and `finance.competitive_landscape` to the retrieval
+  recipe and `retrieval.run` when host policy permits. High-risk capabilities
+  such as device control remain blocked host boundaries instead of becoming
+  fake tools.
+- Bounded crawl discovery now ranks discovered page/sitemap candidates against
+  query and metadata terms before applying the source budget. Seed URLs remain
+  in the returned source set for provenance, but the crawler no longer spends a
+  tight source budget on the first unrelated navigation links when a more
+  relevant research page is present later in the page or sitemap.
 
 ## Validation
 
@@ -85,7 +102,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-470 passed
+474 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -117,6 +134,13 @@ Additional deterministic coverage now includes:
 - a model-planner dynamic workspace loop that performs 11 planner/evaluator
   processor cycles, 11 `file.read` actions, 11 work-plan updates, and then
   finalizes from journal-derived evidence/citations.
+- broad direct capabilities such as roleplay/persona remain direct-answer
+  nodes rather than being collapsed into workspace;
+- market-news/web-research semantic capabilities route to `retrieval.run` and
+  finalize from citations;
+- dangerous device-control capability remains a blocked host boundary;
+- bounded crawl query ranking preserves a relevant AAPL 10-K revenue link under
+  a two-source budget even when unrelated navigation links appear first.
 
 Live model scenarios:
 

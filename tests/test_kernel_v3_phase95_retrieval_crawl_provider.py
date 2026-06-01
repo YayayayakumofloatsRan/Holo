@@ -101,6 +101,45 @@ def test_phase95_bounded_crawl_search_provider_discovers_links_with_host_allowli
     assert "docs.example.com" not in dumped
 
 
+def test_phase95_bounded_crawl_query_ranking_preserves_relevant_links_under_source_limit() -> None:
+    transport = _Transport(
+        {
+            "https://docs.example.com/index.html": HttpTransportResponse(
+                status_code=200,
+                mime_type="text/html",
+                body=(
+                    b"<html><body>"
+                    b'<a href="/about.html">About the site</a>'
+                    b'<a href="/support/contact.html">Contact support</a>'
+                    b'<a href="/investor/aapl-10-k-revenue.html">AAPL 10-K revenue filing</a>'
+                    b"</body></html>"
+                ),
+            )
+        }
+    )
+    provider = BoundedCrawlSearchProvider(
+        enabled=True,
+        seed_urls=["https://docs.example.com/index.html"],
+        allowed_hosts=["docs.example.com"],
+        max_links_per_page=5,
+        include_sitemaps=False,
+        transport=transport,
+    )
+
+    sources = provider.search("AAPL 10-K revenue filing", goal=_goal(max_sources=2), plan=_plan())
+
+    assert [source.uri for source in sources] == [
+        "https://docs.example.com/index.html",
+        "https://docs.example.com/investor/aapl-10-k-revenue.html",
+    ]
+    assert float(sources[1].metadata["query_relevance_score"]) > 0
+    assert "revenue" in sources[1].metadata["matched_query_terms"]
+    diagnostics = provider.search_diagnostics()
+    assert diagnostics["query_aware_ranking"] is True
+    assert diagnostics["candidate_source_count"] == 3
+    assert diagnostics["matched_candidate_count"] >= 1
+
+
 def test_phase95_bounded_crawl_search_provider_does_not_fetch_when_source_budget_is_zero() -> None:
     transport = _Transport(
         {

@@ -13,6 +13,18 @@ from kernel_v3.contracts import JsonObject
 
 
 _MAX_GRAPH_NODES = 32
+_RETRIEVAL_CAPABILITIES = {
+    "finance.fundamentals_research",
+    "finance.market_news",
+    "finance.market_data",
+    "finance.competitive_landscape",
+    "retrieval.run",
+    "web.research",
+}
+_WORKSPACE_READ_CAPABILITIES = {"workspace.search", "file.read", "workspace:read"}
+_WORKSPACE_WRITE_CAPABILITIES = {"workspace.write", "workspace:write"}
+_SYSTEM_CAPABILITIES = {"system.time"}
+_EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace.write", "system.time"}
 
 
 def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
@@ -263,17 +275,15 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         "clarify_first",
     }:
         return requested
-    if "system.time" in capabilities:
+    if _has_any(capabilities, _SYSTEM_CAPABILITIES):
         return "system_answer"
-    if "finance.fundamentals_research" in capabilities:
+    if _has_any(capabilities, _RETRIEVAL_CAPABILITIES):
         return "retrieval_answer"
-    if "retrieval.run" in capabilities:
-        return "retrieval_answer"
-    if any(capability in capabilities for capability in {"workspace.write", "workspace:write"}):
+    if _has_any(capabilities, _WORKSPACE_WRITE_CAPABILITIES):
         return "workspace_write"
-    if any(capability in capabilities for capability in {"workspace.search", "file.read", "workspace:read"}):
+    if _has_any(capabilities, _WORKSPACE_READ_CAPABILITIES):
         return "workspace_answer"
-    if kind == "retrieval_research":
+    if kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research"}:
         return "retrieval_answer"
     if kind == "workspace_read":
         return "workspace_answer"
@@ -292,11 +302,9 @@ def _action_kind_for_node(node: TaskGraphNode) -> str:
 
 def _tool_for_node(node: TaskGraphNode) -> str | None:
     capabilities = set(node.required_capabilities)
-    if "finance.fundamentals_research" in capabilities:
+    if capabilities & _RETRIEVAL_CAPABILITIES:
         return "retrieval.run"
-    if "retrieval.run" in capabilities:
-        return "retrieval.run"
-    if "workspace.write" in capabilities or "workspace:write" in capabilities:
+    if capabilities & _WORKSPACE_WRITE_CAPABILITIES:
         return "workspace.write"
     if {"workspace.search", "file.read"}.issubset(capabilities):
         return "workspace.search,file.read"
@@ -304,9 +312,9 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
         return "workspace.search"
     if "file.read" in capabilities:
         return "file.read"
-    if "system.time" in capabilities:
+    if capabilities & _SYSTEM_CAPABILITIES:
         return "system.time"
-    if node.kind == "retrieval_research":
+    if node.kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research"}:
         return "retrieval.run"
     if node.kind == "workspace_read":
         return "workspace.search,file.read"
@@ -316,12 +324,8 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
 def _capability_plan(capabilities: list[str]) -> JsonObject:
     if not capabilities:
         return {"action_family": "respond", "tools": [], "requires_evidence": False}
-    tools = [
-        capability
-        for capability in capabilities
-        if capability in {"retrieval.run", "workspace.search", "file.read", "workspace.write", "system.time"}
-    ]
-    if "finance.fundamentals_research" in capabilities and "retrieval.run" not in tools:
+    tools = [capability for capability in capabilities if capability in _EXECUTABLE_TOOL_CAPABILITIES]
+    if _has_any(capabilities, _RETRIEVAL_CAPABILITIES) and "retrieval.run" not in tools:
         tools.append("retrieval.run")
     if "workspace:write" in capabilities and "workspace.write" not in tools:
         tools.append("workspace.write")
@@ -331,11 +335,8 @@ def _capability_plan(capabilities: list[str]) -> JsonObject:
         "requires_evidence": any(
             capability in capabilities
             for capability in {
-                "finance.fundamentals_research",
-                "retrieval.run",
-                "workspace.search",
-                "file.read",
-                "workspace:read",
+                *_RETRIEVAL_CAPABILITIES,
+                *_WORKSPACE_READ_CAPABILITIES,
             }
         ),
     }
@@ -348,24 +349,21 @@ def _evidence_required(kind: str, capabilities: list[str], *, metadata: JsonObje
     if any(
         capability in capabilities
         for capability in {
-            "finance.fundamentals_research",
-            "retrieval.run",
-            "workspace.search",
-            "file.read",
-            "workspace:read",
+            *_RETRIEVAL_CAPABILITIES,
+            *_WORKSPACE_READ_CAPABILITIES,
         }
     ):
         return True
-    return kind in {"retrieval_research", "workspace_read"}
+    return kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research", "workspace_read"}
 
 
 def _citations_required(kind: str, capabilities: list[str], *, metadata: JsonObject) -> bool:
     value = metadata.get("citations_required")
     if isinstance(value, bool):
         return value
-    if "retrieval.run" in capabilities or "finance.fundamentals_research" in capabilities:
+    if _has_any(capabilities, _RETRIEVAL_CAPABILITIES):
         return True
-    return kind == "retrieval_research"
+    return kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research"}
 
 
 def _step_status(
@@ -421,6 +419,10 @@ def _is_blocked(capability: str) -> bool:
     if not capability:
         return False
     return capability not in SAFE_SEMANTIC_CAPABILITIES
+
+
+def _has_any(capabilities: list[str], markers: set[str]) -> bool:
+    return bool(set(capabilities) & markers)
 
 
 def _string_list(value: object) -> list[str]:

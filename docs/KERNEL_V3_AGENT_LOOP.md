@@ -189,11 +189,26 @@ the loop stops making progress, repeats the same payload, or exceeds a guard,
 the workloop returns a failure report instead of running forever.
 
 The capability catalog in context is intentionally broader than the currently
-enabled tool set. It exposes conversation, workspace, retrieval, finance,
-memory, resident, transport, and system families with statuses such as
-`enabled`, `available_with_permission`, `not_configured`, `planned`, and
-`host_only`. The model can reason over that state space, but only enabled or
-permissioned host tools become executable actions.
+enabled tool set. It exposes conversation, roleplay, document/report work,
+workspace, retrieval, web research, finance, memory, artifact, data, code,
+project, resident, transport, calendar, browser/session boundaries, system,
+and security families with statuses such as `enabled`,
+`available_with_permission`, `not_configured`, `planned`, and `host_only`. It
+also exposes state axes such as intent scope, execution surface, evidence,
+permissions, output contract, resident state, and user control. This is not a
+phrase table: the model chooses broad semantic labels and capability ids; the
+host maps only known executable capability families to recipes and keeps
+planned, host-only, credential, transport, browser, and device boundaries out
+of `ToolRegistry`.
+
+Non-workspace research capabilities can still become executable when there is
+a safe host route. For example, `web.research`, `finance.market_news`,
+`finance.market_data`, and `finance.competitive_landscape` compile to the
+retrieval recipe and `retrieval.run` rather than being collapsed into
+workspace mode. Conversely, high-risk capabilities such as
+`device.input.control`, live transports, browser session attachment, direct
+credential reads, and shell execution remain host boundaries even if the model
+names them correctly.
 
 Model planner actions are also rebound to recipe constraints before execution.
 For example, a live model may propose only `{"name":"retrieval.run",
@@ -210,6 +225,13 @@ providers, then return evidence/citations into the same workloop termination
 path. Crawled HTML is stored raw as artifacts but evidence spans are extracted
 from readable body text, so downstream evaluator/synthesizer packets see
 citations instead of raw page chrome.
+
+Bounded crawl discovery now ranks discovered page and sitemap candidates
+against query/metadata terms before applying the source budget. Seed URLs stay
+visible as provenance, but if a page exposes many links the crawler prefers
+query-matching research pages over generic navigation links. This improves the
+agent loop under small `max_sources`/`max_fetches` guards without adding a
+site-specific phrase table.
 
 ## Durable Memory Boundary
 

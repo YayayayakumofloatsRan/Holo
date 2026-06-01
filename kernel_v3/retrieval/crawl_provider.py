@@ -5,6 +5,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import replace
 from html.parser import HTMLParser
 
 from kernel_v3.contracts import JsonObject
@@ -16,6 +17,7 @@ from kernel_v3.retrieval.http_provider import HttpTransport, HttpTransportRespon
 
 URL_PATTERN = re.compile(r"https?://[^\s<>'\")\]]+", re.IGNORECASE)
 SITEMAP_LOC_PATTERN = re.compile(r"<loc>\s*([^<]+?)\s*</loc>", re.IGNORECASE)
+QUERY_TERM_PATTERN = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
 SAFE_SCHEMES = {"http", "https"}
 
 
@@ -189,12 +191,14 @@ class BoundedCrawlSearchProvider:
                 "plan_id": plan.plan_id,
             }
             return []
-        sources: list[SearchSource] = []
+        seed_sources: list[SearchSource] = []
+        candidate_sources: list[SearchSource] = []
         fetched = 0
         failed = 0
         fetched_sitemaps = 0
         failed_sitemaps = 0
         seen_sitemaps: set[str] = set()
+        seen_source_uris: set[str] = set()
         for seed in seeds[: self.max_pages]:
             validation = _validate_url(
                 seed,
@@ -208,13 +212,13 @@ class BoundedCrawlSearchProvider:
             seed_source = _source_from_url(
                 seed,
                 provider_id=self.provider_id,
-                index=len(sources) + 1,
+                index=len(seed_sources) + 1,
                 title="crawl seed",
                 snippet="Seed URL for bounded crawl discovery.",
                 metadata={"source_kind": "crawl_seed"},
             )
             if seed_source is not None:
-                sources.append(seed_source)
+                _append_unique_source(seed_sources, seed_source, seen_uris=seen_source_uris)
             response = self._fetch_discovery_url(seed)
             if response is None:
                 failed += 1
@@ -223,8 +227,6 @@ class BoundedCrawlSearchProvider:
             if response is not None and _response_ok(response, self.max_bytes):
                 body = response.body.decode("utf-8", errors="replace")
                 for link in _extract_links(body, base_url=seed)[: self.max_links_per_page]:
-                    if len(sources) >= source_limit:
-                        break
                     if not _validate_url(
                         link["url"],
                         allowed_schemes=self.allowed_schemes,
@@ -233,22 +235,22 @@ class BoundedCrawlSearchProvider:
                     ).get("status") == "ok":
                         continue
                     _append_unique_source(
-                        sources,
+                        candidate_sources,
                         _source_from_url(
                             link["url"],
                             provider_id=self.provider_id,
-                            index=len(sources) + 1,
+                            index=len(seed_sources) + len(candidate_sources) + 1,
                             title=link["text"] or _title_from_url(link["url"]),
                             snippet=f"Discovered from seed page. Path: {_path_text(link['url'])}",
                             metadata={"source_kind": "crawl_discovered", "seed_hash": _hash(seed)},
                         ),
-                        limit=source_limit,
+                        seen_uris=seen_source_uris,
                     )
             elif response is not None:
                 failed += 1
-            if self.include_sitemaps and len(sources) < source_limit:
+            if self.include_sitemaps:
                 for sitemap_url in _sitemap_candidates(seed):
-                    if len(sources) >= source_limit or sitemap_url in seen_sitemaps:
+                    if sitemap_url in seen_sitemaps:
                         break
                     seen_sitemaps.add(sitemap_url)
                     if not _validate_url(
@@ -269,8 +271,6 @@ class BoundedCrawlSearchProvider:
                         continue
                     sitemap_body = sitemap_response.body.decode("utf-8", errors="replace")
                     for link in _extract_sitemap_links(sitemap_body, base_url=sitemap_url)[: self.max_sitemap_urls]:
-                        if len(sources) >= source_limit:
-                            break
                         if not _validate_url(
                             link,
                             allowed_schemes=self.allowed_schemes,
@@ -279,17 +279,20 @@ class BoundedCrawlSearchProvider:
                         ).get("status") == "ok":
                             continue
                         _append_unique_source(
-                            sources,
+                            candidate_sources,
                             _source_from_url(
                                 link,
                                 provider_id=self.provider_id,
-                                index=len(sources) + 1,
+                                index=len(seed_sources) + len(candidate_sources) + 1,
                                 title=_title_from_url(link),
                                 snippet=f"Discovered from sitemap. Path: {_path_text(link)}",
                                 metadata={"source_kind": "crawl_sitemap", "sitemap_hash": _hash(sitemap_url)},
                             ),
-                            limit=source_limit,
+                            seen_uris=seen_source_uris,
                         )
+        query_terms = _query_terms(query, goal.metadata)
+        ranked_candidates = _rank_crawl_candidates(candidate_sources, query_terms=query_terms)
+        sources = _reindex_sources([*seed_sources, *ranked_candidates][:source_limit], query_terms=query_terms)
         self._last_search_diagnostics = {
             "status": "ok" if sources else "failed" if failed or failed_sitemaps else "empty",
             "seed_count": len(seeds),
@@ -297,11 +300,15 @@ class BoundedCrawlSearchProvider:
             "failed_seed_count": failed,
             "fetched_sitemap_count": fetched_sitemaps,
             "failed_sitemap_count": failed_sitemaps,
+            "candidate_source_count": len(candidate_sources),
+            "ranked_candidate_count": len(ranked_candidates),
+            "matched_candidate_count": sum(1 for source in ranked_candidates if float(source.metadata.get("query_relevance_score") or 0.0) > 0.0),
+            "query_aware_ranking": True,
             "source_count": len(sources),
             "query_hash": _hash(query),
             "plan_id": plan.plan_id,
         }
-        return sources[:source_limit]
+        return sources
 
     def _fetch_discovery_url(self, url: str, *, accept: str = "text/html,text/plain,application/xhtml+xml") -> HttpTransportResponse | None:
         try:
@@ -391,12 +398,100 @@ def _response_ok(response: HttpTransportResponse, max_bytes: int) -> bool:
     return 200 <= response.status_code < 300 and len(response.body) <= max_bytes
 
 
-def _append_unique_source(sources: list[SearchSource], source: SearchSource | None, *, limit: int) -> None:
-    if source is None or len(sources) >= limit:
+def _append_unique_source(sources: list[SearchSource], source: SearchSource | None, *, seen_uris: set[str]) -> None:
+    if source is None or source.uri in seen_uris:
         return
-    if source.uri in {item.uri for item in sources}:
-        return
+    seen_uris.add(source.uri)
     sources.append(source)
+
+
+def _rank_crawl_candidates(sources: list[SearchSource], *, query_terms: list[str]) -> list[SearchSource]:
+    scored: list[tuple[float, int, SearchSource]] = []
+    for index, source in enumerate(sources):
+        score, matched = _query_relevance(source, query_terms=query_terms)
+        metadata = dict(source.metadata)
+        metadata["query_relevance_score"] = round(score, 6)
+        if matched:
+            metadata["matched_query_terms"] = matched[:12]
+        scored.append((score, index, replace(source, metadata=metadata)))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [source for _score, _index, source in scored]
+
+
+def _reindex_sources(sources: list[SearchSource], *, query_terms: list[str]) -> list[SearchSource]:
+    result: list[SearchSource] = []
+    for index, source in enumerate(sources, start=1):
+        score, matched = _query_relevance(source, query_terms=query_terms)
+        metadata = dict(source.metadata)
+        metadata["rank"] = index
+        metadata.setdefault("query_relevance_score", round(score, 6))
+        if matched:
+            metadata.setdefault("matched_query_terms", matched[:12])
+        result.append(replace(source, metadata=metadata))
+    return result
+
+
+def _query_relevance(source: SearchSource, *, query_terms: list[str]) -> tuple[float, list[str]]:
+    if not query_terms:
+        return 0.0, []
+    haystack = " ".join(
+        [
+            source.title,
+            source.snippet,
+            _path_text(source.uri),
+            urllib.parse.urlparse(source.uri).hostname or "",
+        ]
+    ).lower()
+    matched = [term for term in query_terms if term in haystack]
+    if not matched:
+        return 0.0, []
+    return len(matched) / max(1, len(query_terms)), matched
+
+
+def _query_terms(query: str, metadata: JsonObject) -> list[str]:
+    raw_values = [query]
+    raw_values.extend(_metadata_text_values(metadata))
+    terms: list[str] = []
+    for value in raw_values:
+        for token in QUERY_TERM_PATTERN.findall(str(value).lower()):
+            if len(token) >= 2:
+                terms.append(token)
+            if _contains_cjk(token) and len(token) >= 4:
+                terms.extend(token[index : index + 2] for index in range(0, len(token) - 1))
+    return _ordered_unique(terms)[:80]
+
+
+def _metadata_text_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        result: list[str] = []
+        for key, item in value.items():
+            if str(key).lower() in {"api_key", "token", "password", "secret", "authorization"}:
+                continue
+            result.extend(_metadata_text_values(item))
+        return result
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_metadata_text_values(item))
+        return result
+    return []
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _candidate_urls(query: str, metadata: JsonObject) -> list[str]:

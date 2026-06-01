@@ -126,6 +126,186 @@ def test_phase94_semantic_capability_catalog_is_not_workspace_only():
     assert catalog["executable_tools_by_recipe"]["system_answer"] == ["system.time"]
     assert "calendar.schedule" in catalog["not_default_or_requires_configuration"]
     assert "device.input.control" in catalog["not_default_or_requires_configuration"]
+    assert "execution_surface" in catalog["state_dimensions"]
+    assert "intent_scope" in catalog["state_dimensions"]
+    assert "output_contract" in catalog["state_dimensions"]
+    assert "semantic_slots" in catalog
+    assert "document" in families
+    assert "roleplay.perform" in families["conversation"]
+    assert "web.research" in families["retrieval"]
+    assert "finance.competitive_landscape" in families["finance"]
+    assert "report_generation" in catalog["task_domains"]
+    assert "long_running_monitoring" in catalog["task_domains"]
+    assert "browser_navigation_boundary" in catalog["task_domains"]
+
+
+def test_phase94_broad_direct_capabilities_do_not_collapse_to_workspace():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "roleplay",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "roleplay",
+                        "text": "扮演一个初出茅庐的律师，说明你会怎么做",
+                        "sequence_index": 1,
+                        "required_capabilities": ["roleplay.perform", "conversation.respond"],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {"persona": "junior_lawyer"},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": "我会先确认事实、识别法律问题、列证据清单，再说明我不能替代执业律师意见。",
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "扮演一个初出茅庐的律师，你会怎么做",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    assert graph["validation"]["status"] == "ready"
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert plan["selected_mode"] == "direct_answer"
+    assert plan["steps"][0]["kind"] == "roleplay"
+    assert plan["steps"][0]["tool_name"] is None
+    assert plan["steps"][0]["metadata"]["capability_plan"]["action_family"] == "host_capability"
+
+
+def test_phase94_web_and_market_news_capabilities_route_to_retrieval_not_workspace():
+    journal = JournalStore.in_memory()
+    query = "今天的市场热点新闻"
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "market_news_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "market_news_research",
+                        "text": query,
+                        "sequence_index": 1,
+                        "required_capabilities": ["web.research", "finance.market_news"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "evidence_required": True,
+                            "citations_required": True,
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                query: [
+                    _source(
+                        "market-news-source",
+                        "https://example.com/markets/today",
+                        "今天的市场热点新闻",
+                        "今天的市场热点新闻包括利率、股票和大宗商品。",
+                    )
+                ]
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://example.com/markets/today": (
+                    "今天的市场热点新闻包括利率、股票和大宗商品，提供市场热点新闻的可引用证据。"
+                )
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        "搜索一下今天的热点新闻",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    assert result.mode == "retrieval_answer"
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    assert graph["validation"]["status"] == "ready"
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert plan["selected_mode"] == "retrieval_answer"
+    assert plan["steps"][0]["tool_name"] == "retrieval.run"
+    assert plan["steps"][0]["metadata"]["capability_plan"]["tools"] == ["retrieval.run"]
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["name"] for record in actions] == ["retrieval.run"]
+    assert actions[0].data["payload"]["query"] == query
+    assert result.final_answer is not None
+    assert result.final_answer["citation_refs"]
+
+
+def test_phase94_dangerous_device_capability_remains_a_host_boundary():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "device_control_boundary",
+                "suggested_mode": "direct_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "device_control_boundary",
+                        "text": "控制一下我的鼠标",
+                        "sequence_index": 1,
+                        "required_capabilities": ["device.input.control"],
+                        "risk": "destructive",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "控制一下我的鼠标",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "needs_user_input"
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    assert graph["validation"]["status"] == "needs_user_confirmation"
+    assert graph["validation"]["blocked_capabilities"] == ["device.input.control"]
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert plan["steps"][0]["status"] == "blocked"
+    assert plan["steps"][0]["tool_name"] is None
 
 
 def test_phase94_non_workspace_safe_capabilities_do_not_force_clarification():
