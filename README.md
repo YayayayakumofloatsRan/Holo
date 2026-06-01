@@ -179,6 +179,11 @@ Kernel v3 currently contains the infrastructure for:
   Macro-data finance tasks also prefer government-statistic, central-bank, and
   Treasury source families so company-filing templates do not pollute CPI/rate
   style retrieval.
+- FiscalData structured source generation for US Treasury data. When a
+  retrieval payload carries `fiscaldata_api_path`, Holo derives the official
+  `api.fiscaldata.treasury.gov/services/api/fiscal_service/...` JSON endpoint
+  with bounded fields/filter/sort/page parameters. It validates the official
+  path prefix and rejects unsafe query params before exposing the source.
 - Template-driven official source-query expansion for finance fundamentals.
   Source directory entries can declare safe `query_url_templates`; Holo renders
   them from host metadata such as company, ticker, metric, and query, validates
@@ -293,6 +298,10 @@ The live retrieval chain is now broader than a single search endpoint:
 - `fred_structured_search` generates official FRED series-page and CSV
   observation candidates from host/model-supplied `fred_series_id` metadata. It
   performs no network request by itself and rejects unsafe series identifiers;
+- `fiscaldata_structured_search` generates official US Treasury FiscalData API
+  candidates from host/model-supplied `fiscaldata_api_path` metadata. It
+  performs no network request by itself and validates the endpoint path plus
+  query parameters;
 - `research_source_query_search` expands curated source-directory
   `query_url_templates` into official search URLs, such as Companies House
   company search and FRED series search, after placeholder and host validation.
@@ -465,6 +474,12 @@ journaled extraction spans such as `series_id=CPIAUCSL`. The next
 official series page and CSV candidates. This keeps the model in charge of the
 semantic next step while the host owns URL construction, ranking, artifacts,
 citations, and stop conditions.
+For US Treasury/FiscalData tasks, the same pattern exists through
+`agent_replan_hints.retrieval.suggested_fiscaldata_endpoints`: after a dataset
+discovery step exposes an official `/services/api/fiscal_service/...` path in
+extracted spans, the next model planner packet can propose a normal
+`retrieval.run` payload with `fiscaldata_api_path`, and the host
+`fiscaldata_structured_search` provider constructs the bounded API candidate.
 SEC source expansion is intentionally scoped to SEC/EDGAR/10-K/10-Q style
 queries, so generic "annual report" language for ASX/HKEX/SGX issuers does not
 silently route to EDGAR.

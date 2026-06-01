@@ -63,6 +63,17 @@
   exposes a suggested `retrieval.run` payload with `fred_series_id`, primary
   source requirement, macro-data task kind, and structured search strategy.
   Raw fetched bodies remain in ArtifactStore.
+- `fiscaldata_structured_search` was added as a second official macro/finance
+  structured provider. Given `fiscaldata_api_path`, it emits the official US
+  Treasury FiscalData JSON API URL with safe optional fields/filter/sort/page
+  parameters. It validates the FiscalData path prefix, rejects path traversal
+  and secret-like query parameters, and marks the candidate as primary
+  `treasury_data`.
+- Agent replan context now also derives
+  `retrieval.suggested_fiscaldata_endpoints` from journaled extraction spans
+  containing official `/services/api/fiscal_service/...` paths. The next
+  planner packet can use the suggested payload to fetch the structured API
+  response through normal host validation.
 - Live retrieval fallback construction now includes the SEC structured provider
   before generic configured search providers, so finance fundamentals tasks can
   use primary SEC URLs without relying on a broad web search API.

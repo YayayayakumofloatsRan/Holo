@@ -73,6 +73,8 @@ def test_phase91_live_retrieval_config_builds_inspectable_operator() -> None:
     provider_ids = {item["provider_id"] for item in inspection.diagnostics["provider_chain"]}
     assert {
         "direct_url_search",
+        "fiscaldata_structured_search",
+        "fred_structured_search",
         "sec_edgar_structured_search",
         "research_source_query_search",
         "live_json_http_search",
@@ -151,6 +153,8 @@ def test_phase91_cli_live_http_provider_inspection_allows_structured_search_with
         for item in payload["inspection"]["diagnostics"]["provider_chain"]
     }
     assert {
+        "fiscaldata_structured_search",
+        "fred_structured_search",
         "sec_edgar_structured_search",
         "research_source_query_search",
         "live_http_fetch",

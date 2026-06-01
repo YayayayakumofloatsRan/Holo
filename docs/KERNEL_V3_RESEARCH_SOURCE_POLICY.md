@@ -135,6 +135,14 @@ official FRED series page and `fredgraph.csv` observations URL as primary
 `government_statistic` sources. The provider rejects unsafe series ids and
 records only safe diagnostics.
 
+`fiscaldata_structured_search` is the equivalent structured generator for US
+Treasury FiscalData. When the payload includes `fiscaldata_api_path`, it emits
+an official `api.fiscaldata.treasury.gov/services/api/fiscal_service/...` JSON
+endpoint with optional safe `fields`, `filter`, `sort`, and bounded
+`page[size]` parameters. The provider rejects non-FiscalData paths, path
+traversal, secret-like filters, and malformed query parameters before returning
+a source.
+
 Macro-data finance tasks use the same `finance_fundamentals` profile, but the
 host adds `research_task_kind="macro_data"` plus preferred source families:
 government statistics, central-bank statistics, and Treasury data. That ranking
@@ -146,6 +154,11 @@ After a FRED search-result page is fetched, the agent can derive
 such as `series_id=CPIAUCSL`. The next planner packet can use that suggested
 payload as a normal `retrieval.run` action; PolicyGate, provider ranking,
 ArtifactStore, citations, and workloop termination still remain host-owned.
+
+After a FiscalData dataset discovery page is fetched, the agent can derive
+`agent_replan_hints.retrieval.suggested_fiscaldata_endpoints` from extraction
+spans containing an official `/services/api/fiscal_service/...` path. The model
+still emits a normal `retrieval.run`; the host builds and validates the API URL.
 
 ## Research Corpus
 

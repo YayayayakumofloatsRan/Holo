@@ -285,6 +285,14 @@ The `fred_structured_search` provider converts that metadata into official FRED
 series-page and CSV candidates; it does not fetch the network itself or bypass
 ranking, artifacts, citations, or termination policy.
 
+Treasury/FiscalData continuation uses the same shape through
+`retrieval.suggested_fiscaldata_endpoints`. It is derived only from extracted
+spans containing an official `/services/api/fiscal_service/...` path. The
+suggested payload carries `fiscaldata_api_path`, primary-source requirements,
+macro-data task kind, and structured search strategy; the
+`fiscaldata_structured_search` provider then constructs the bounded official
+FiscalData API URL with safe query parameters.
+
 The capability catalog in context is intentionally broader than the currently
 enabled tool set. It exposes conversation, roleplay, document/report work,
 workspace, retrieval, web research, finance, legal, medical, education,

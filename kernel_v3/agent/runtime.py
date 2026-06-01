@@ -1973,6 +1973,12 @@ def _retrieval_replan_hints(
         run_id=run_id,
         recipe=recipe,
     )
+    suggested_fiscaldata_endpoints = _suggested_fiscaldata_endpoints(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+    )
     needs_replan = bool(report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
     return {
         "needs_replan": needs_replan,
@@ -1990,6 +1996,7 @@ def _retrieval_replan_hints(
         "suggested_source_targets": source_targets,
         "suggested_filing_documents": suggested_filing_documents,
         "suggested_macro_series": suggested_macro_series,
+        "suggested_fiscaldata_endpoints": suggested_fiscaldata_endpoints,
         "attempted_queries": _ordered_unique([item["query"] for item in attempts if isinstance(item.get("query"), str)]),
         "attempted_search_strategies": _ordered_unique(
             [item["search_strategy"] for item in attempts if isinstance(item.get("search_strategy"), str)]
@@ -2222,6 +2229,94 @@ def _normalize_fred_series_id(value: str) -> str | None:
     if normalized in {"FRED", "SERIES", "DATA", "SEARCH", "OFFICIAL", "CSV", "MACRO"}:
         return None
     return normalized
+
+
+def _suggested_fiscaldata_endpoints(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+) -> list[JsonObject]:
+    if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID:
+        return []
+    candidates: list[JsonObject] = []
+    seen: set[str] = set()
+    for record in journal.records(task_id=task_id, kind="retrieval_extraction"):
+        if record.run_id != run_id:
+            continue
+        document = _json_object(record.data.get("document"))
+        uri = _string_value(document.get("uri"))
+        spans = record.data.get("spans")
+        span_items = spans if isinstance(spans, list) else []
+        span_text = " ".join(
+            str(span.get("text") or "")
+            for span in span_items
+            if isinstance(span, dict)
+        )
+        for endpoint_path in _fiscaldata_paths_from_extracted_text(f"{uri} {span_text}"):
+            if endpoint_path in seen:
+                continue
+            seen.add(endpoint_path)
+            label = endpoint_path.rsplit("/", 1)[-1]
+            query = f"FiscalData {label} official Treasury API data"
+            payload_metadata = {
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "fiscaldata_api_path": endpoint_path,
+                "source_authority_requirement": "primary",
+                "source_family": "treasury_data",
+                "preferred_source_families": ["treasury_data", "government_statistic", "central_bank_statistic"],
+                "research_task_kind": "macro_data",
+                "search_strategy": "structured",
+            }
+            candidates.append(
+                {
+                    "source": "fiscaldata_extracted_endpoint",
+                    "source_record_id": record.record_id,
+                    "source_uri": uri,
+                    "fiscaldata_api_path": endpoint_path,
+                    "query": query,
+                    "suggested_payload": {
+                        "query": query,
+                        "metadata": payload_metadata,
+                    },
+                }
+            )
+            if len(candidates) >= 5:
+                return candidates
+    return candidates
+
+
+def _fiscaldata_paths_from_extracted_text(text: str) -> list[str]:
+    if not text:
+        return []
+    candidates: list[str] = []
+    patterns = [
+        re.compile(
+            r"api\.fiscaldata\.treasury\.gov(?P<path>/services/api/fiscal_service/[A-Za-z0-9_./-]{3,240})",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:fiscaldata_api_path|fiscaldata_endpoint|treasury_api_path|endpoint_path)\s*[:=]\s*"
+            r"(?P<path>/services/api/fiscal_service/[A-Za-z0-9_./-]{3,240})",
+            re.IGNORECASE,
+        ),
+    ]
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            path = _normalize_fiscaldata_api_path(match.group("path"))
+            if path:
+                candidates.append(path)
+    return _ordered_unique(candidates)
+
+
+def _normalize_fiscaldata_api_path(value: str) -> str | None:
+    text = value.strip().rstrip(".,;:)")
+    if not text.startswith("/services/api/fiscal_service/"):
+        return None
+    if ".." in text or not re.fullmatch(r"/services/api/fiscal_service/[A-Za-z0-9_./-]{3,240}", text):
+        return None
+    return text
 
 
 def _feedback_hint(record) -> JsonObject:

@@ -389,6 +389,7 @@ def _strategy_providers(providers: list[SearchProvider], *, request: dict[str, o
                 "direct_url_search",
                 "sec_edgar_structured_search",
                 "fred_structured_search",
+                "fiscaldata_structured_search",
                 "research_source_query_search",
                 "research_source_directory_search",
             }
