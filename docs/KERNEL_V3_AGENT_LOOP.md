@@ -358,6 +358,10 @@ raises, the report still returns `error` with the component, failure code,
 exception type, and redacted exception message instead of crashing the operator
 path. This keeps long-running memory and research operation auditable without
 exposing raw artifact payloads.
+The CLI `resident doctor` command also appends a compact
+`resident_doctor_report` journal record. That record keeps component statuses,
+issue codes, recommended actions, selected safe counters, and a hash of the
+full returned report; inspection samples and raw payloads are not embedded.
 
 Crash recovery is outbox-aware. If a worker already wrote an outbox but crashed
 or lost ownership before completing the inbox message, a later worker that

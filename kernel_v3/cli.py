@@ -49,7 +49,7 @@ from kernel_v3.retrieval import (
     inspect_retrieval_providers,
 )
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
-from kernel_v3.resident.projection import resident_inbox_event, resident_outbox_event
+from kernel_v3.resident.projection import resident_doctor_event, resident_inbox_event, resident_outbox_event
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
@@ -1141,8 +1141,23 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             research_profile_id=args.research_profile,
         ).inspect(sample_limit=args.sample_limit)
         live_status = _live_retrieval_doctor_status(live_retrieval["issues"])
+        status = _combined_health(report.status, live_status)
+        journal.append(
+            task_id=None,
+            run_id="resident-cli",
+            step_id=None,
+            kind="resident_doctor_report",
+            data=resident_doctor_event(
+                report,
+                overall_status=status,
+                live_retrieval_status=live_status if live_retrieval["requested"] else None,
+                live_retrieval_issues=live_retrieval["issues"] if live_retrieval["requested"] else None,
+                live_retrieval_config=live_retrieval["config"] if live_retrieval["requested"] else None,
+            ),
+            state_delta={"resident_doctor_status": status},
+        )
         return {
-            "status": _combined_health(report.status, live_status),
+            "status": status,
             "doctor": report.to_dict(),
             **(
                 {

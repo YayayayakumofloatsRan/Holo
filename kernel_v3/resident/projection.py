@@ -4,7 +4,13 @@ import hashlib
 import json
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.resident.contracts import InboundMessage, OutboxMessage, ResidentSchedule, ResidentScheduleTickResult
+from kernel_v3.resident.contracts import (
+    InboundMessage,
+    OutboxMessage,
+    ResidentDoctorReport,
+    ResidentSchedule,
+    ResidentScheduleTickResult,
+)
 
 
 COMMAND_MANIFEST_TEXT_LIMIT = 160
@@ -115,6 +121,59 @@ def resident_schedule_tick_event(result: ResidentScheduleTickResult | object) ->
     }
 
 
+def resident_doctor_event(
+    report: ResidentDoctorReport,
+    *,
+    overall_status: str | None = None,
+    live_retrieval_status: str | None = None,
+    live_retrieval_issues: list[JsonObject] | None = None,
+    live_retrieval_config: JsonObject | None = None,
+) -> JsonObject:
+    payload = report.to_dict()
+    issues = _doctor_issue_manifests(payload.get("issues"))
+    event: JsonObject = {
+        "status": overall_status or report.status,
+        "doctor_status": report.status,
+        "generated_at_ms": report.generated_at_ms,
+        "configured": dict(report.configured),
+        "component_statuses": {
+            "queue": _component_status(payload, "queue_inspection"),
+            "schedule": _component_status(payload, "schedule_inspection"),
+            "memory": _component_status(payload, "memory_inspection"),
+            "corpus": _component_status(payload, "corpus_inspection"),
+            "retrieval": _component_status(payload, "retrieval_provider_inspection"),
+        },
+        "queue_status": _inspection_child(payload, "queue_inspection", "queue_status"),
+        "schedule_status": _inspection_child(payload, "schedule_inspection", "schedule_status"),
+        "memory_summary": _memory_inspection_summary(payload.get("memory_inspection")),
+        "corpus_summary": _corpus_inspection_summary(payload.get("corpus_inspection")),
+        "retrieval_summary": _retrieval_inspection_summary(payload.get("retrieval_provider_inspection")),
+        "issue_count": len(issues),
+        "issues": issues[:COMMAND_MANIFEST_LIST_LIMIT],
+        "issues_truncated": len(issues) > COMMAND_MANIFEST_LIST_LIMIT,
+        "recommended_actions": _string_list(payload.get("recommended_actions"))[:COMMAND_MANIFEST_LIST_LIMIT],
+        "recommended_actions_truncated": len(_string_list(payload.get("recommended_actions")))
+        > COMMAND_MANIFEST_LIST_LIMIT,
+        "report_hash": _text_hash(_stable_json(payload)),
+        "redaction": {
+            "doctor_report": "summary_hash_only",
+            "inspection_samples": "omitted",
+            "raw_payloads": "not_embedded",
+        },
+    }
+    live_issues = list(live_retrieval_issues or [])
+    if live_retrieval_status is not None or live_issues or live_retrieval_config is not None:
+        event["live_retrieval"] = {
+            "status": live_retrieval_status,
+            "issue_count": len(live_issues),
+            "issues": _doctor_issue_manifests(live_issues)[:COMMAND_MANIFEST_LIST_LIMIT],
+            "issues_truncated": len(live_issues) > COMMAND_MANIFEST_LIST_LIMIT,
+            "config": _compact_command_value(live_retrieval_config or {}, depth=0, key="live_retrieval_config"),
+            "redaction": {"config": "safe_diagnostics_only"},
+        }
+    return event
+
+
 def _final_answer_manifest(final_answer: JsonObject) -> JsonObject:
     return {
         "citation_refs": _string_list(final_answer.get("citation_refs")),
@@ -203,6 +262,103 @@ def _pending_question_payload_manifest(value: object) -> JsonObject | None:
     if "question_hash" in value and isinstance(value.get("redaction"), dict):
         return dict(value)
     return _pending_question_manifest(value)
+
+
+def _component_status(payload: JsonObject, key: str) -> str | None:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    return status if isinstance(status, str) else None
+
+
+def _inspection_child(payload: JsonObject, key: str, child_key: str) -> JsonObject | None:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        return None
+    child = value.get(child_key)
+    return dict(child) if isinstance(child, dict) else None
+
+
+def _memory_inspection_summary(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "status": value.get("status"),
+        "active_count": value.get("active_count", 0),
+        "expired_count": value.get("expired_count", 0),
+        "deleted_count": value.get("deleted_count", 0),
+        "sensitive_count": value.get("sensitive_count", 0),
+        "proposal_counts": _dict_value(value.get("proposal_counts")),
+        "shadow_candidate_count": value.get("shadow_candidate_count", 0),
+        "tombstone_count": value.get("tombstone_count", 0),
+        "audit_record_count": value.get("audit_record_count", 0),
+        "provenance_consistency": _without_keys(_dict_value(value.get("provenance_consistency")), {"samples"}),
+    }
+
+
+def _corpus_inspection_summary(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    corpus_status = _dict_value(value.get("corpus_status"))
+    return {
+        "status": value.get("status"),
+        "document_count": corpus_status.get("document_count", 0),
+        "primary_usable_count": corpus_status.get("primary_usable_count", 0),
+        "profile_counts": _dict_value(corpus_status.get("profile_counts")),
+        "inspection_scope": _dict_value(corpus_status.get("inspection_scope")),
+        "artifact_consistency": _dict_value(value.get("artifact_consistency")),
+    }
+
+
+def _retrieval_inspection_summary(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    diagnostics = _dict_value(value.get("diagnostics"))
+    return {
+        "status": value.get("status"),
+        "network_access": bool(value.get("network_access", False)),
+        "provider_count": diagnostics.get("provider_count", 0),
+        "search_provider_ids": _string_list(diagnostics.get("search_provider_ids")),
+        "fetch_provider_ids": _string_list(diagnostics.get("fetch_provider_ids")),
+        "provider_chain": _compact_command_value(diagnostics.get("provider_chain", []), depth=0, key="provider_chain"),
+        "research_profile_id": diagnostics.get("research_profile_id"),
+    }
+
+
+def _doctor_issue_manifests(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [_doctor_issue_manifest(item) for item in value if isinstance(item, dict)]
+
+
+def _doctor_issue_manifest(issue: JsonObject) -> JsonObject:
+    selected_keys = (
+        "component",
+        "severity",
+        "code",
+        "provider_id",
+        "provider_kind",
+        "research_profile_id",
+        "profile_id",
+        "count",
+        "document_count",
+        "stale_count",
+        "missing_artifact_ref_count",
+        "missing_artifact_blob_count",
+        "reason",
+    )
+    result = {key: issue[key] for key in selected_keys if key in issue}
+    result["details_hash"] = _text_hash(_stable_json(issue))
+    return result
+
+
+def _dict_value(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _without_keys(value: JsonObject, keys: set[str]) -> JsonObject:
+    return {key: item for key, item in value.items() if key not in keys}
 
 
 def _metadata_manifest(metadata: JsonObject) -> JsonObject:

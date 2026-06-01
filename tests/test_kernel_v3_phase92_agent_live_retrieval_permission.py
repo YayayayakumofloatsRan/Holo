@@ -253,7 +253,14 @@ def test_phase92_cli_resident_doctor_reports_live_retrieval_config_gap(
     assert {"live_retrieval_not_enabled", "live_search_endpoint_not_configured"}.issubset(issue_codes)
     assert payload["live_retrieval_config"]["enabled"] is False
     assert payload["doctor"]["retrieval_provider_inspection"] is not None
-    assert JournalStore(journal_path, index_path=index_path).records() == []
+    event = _resident_doctor_record(journal_path, index_path)
+    assert event["status"] == "error"
+    assert event["doctor_status"] == payload["doctor"]["status"]
+    assert event["live_retrieval"]["status"] == "error"
+    assert {"live_retrieval_not_enabled", "live_search_endpoint_not_configured"}.issubset(
+        {issue["code"] for issue in event["live_retrieval"]["issues"]}
+    )
+    assert event["live_retrieval"]["config"]["enabled"] is False
 
 
 def test_phase92_cli_resident_doctor_inspects_live_retrieval_without_network(
@@ -296,7 +303,12 @@ def test_phase92_cli_resident_doctor_inspects_live_retrieval_without_network(
         for item in payload["doctor"]["retrieval_provider_inspection"]["diagnostics"]["provider_chain"]
     }
     assert {"live_json_http_search", "live_http_fetch"}.issubset(provider_ids)
-    assert JournalStore(journal_path, index_path=index_path).records() == []
+    event = _resident_doctor_record(journal_path, index_path)
+    assert event["status"] == "attention"
+    assert event["live_retrieval"]["status"] == "ok"
+    assert event["live_retrieval"]["issue_count"] == 0
+    assert event["live_retrieval"]["config"]["enabled"] is True
+    assert event["retrieval_summary"]["network_access"] is True
 
 
 def test_phase92_cli_resident_doctor_flags_live_retrieval_without_allowed_hosts(
@@ -338,7 +350,14 @@ def test_phase92_cli_resident_doctor_flags_live_retrieval_without_allowed_hosts(
     }
     assert ("live_provider_without_allowed_hosts", "live_json_http_search", "search") in issue_keys
     assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
-    assert JournalStore(journal_path, index_path=index_path).records() == []
+    event = _resident_doctor_record(journal_path, index_path)
+    assert event["status"] == "error"
+    assert event["retrieval_summary"]["network_access"] is True
+    assert {
+        (issue["code"], issue["provider_id"], issue["provider_kind"])
+        for issue in event["issues"]
+        if issue["code"] == "live_provider_without_allowed_hosts"
+    } == issue_keys
 
 
 def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
@@ -609,6 +628,12 @@ def _live_success_transports() -> tuple[_Transport, _Transport]:
         )
     )
     return search_transport, fetch_transport
+
+
+def _resident_doctor_record(journal_path: Path, index_path: Path) -> dict[str, object]:
+    records = JournalStore(journal_path, index_path=index_path).records(kind="resident_doctor_report")
+    assert len(records) == 1
+    return records[0].data
 
 
 def _clear_live_env(monkeypatch) -> None:

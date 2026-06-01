@@ -218,6 +218,22 @@ def test_phase77_cli_resident_doctor_includes_configured_memory_and_corpus(tmp_p
     assert doctor["schedule_inspection"]["schedule_status"]["due_count"] == 1
     assert doctor["memory_inspection"]["proposal_counts"]["pending"] == 1
     assert doctor["corpus_inspection"]["issues"][0]["code"] == "empty_corpus"
+    records = JournalStore(journal, index_path=index).records(kind="resident_doctor_report")
+    assert len(records) == 1
+    event = records[0].data
+    assert event["status"] == "needs_review"
+    assert event["component_statuses"]["queue"] == "attention"
+    assert event["component_statuses"]["schedule"] == "attention"
+    assert event["component_statuses"]["memory"] == "needs_review"
+    assert event["component_statuses"]["corpus"] == "attention"
+    assert event["memory_summary"]["proposal_counts"]["pending"] == 1
+    assert event["corpus_summary"]["document_count"] == 0
+    assert event["report_hash"]
+    assert event["redaction"]["doctor_report"] == "summary_hash_only"
+    encoded_event = json.dumps(event, ensure_ascii=False)
+    assert '"samples"' not in encoded_event
+    assert "doctor pending work" not in encoded_event
+    assert "doctor scheduled work" not in encoded_event
 
 
 def _memory_item(

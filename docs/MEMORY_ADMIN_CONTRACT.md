@@ -146,5 +146,9 @@ For long-running resident operation, `holo-v3 resident doctor` aggregates the
 read-only memory inspection with resident queue, schedule, and configured
 research-corpus inspections. The doctor report is an operator snapshot only: it
 does not approve proposals, write durable memory, enqueue work, retrieve
-documents, or execute tools. If memory and artifact stores are configured, the
-doctor report includes the same memory provenance/artifact consistency check.
+documents, or execute tools. The CLI records a compact
+`resident_doctor_report` manifest in the journal for audit replay; the manifest
+contains statuses, issue codes, safe counters, recommended actions, and a report
+hash, not inspection samples or raw payloads. If memory and artifact stores are
+configured, the doctor report includes the same memory provenance/artifact
+consistency check.
