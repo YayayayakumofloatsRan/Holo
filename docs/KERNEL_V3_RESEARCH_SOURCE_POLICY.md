@@ -208,6 +208,8 @@ HOLO_V3_LIVE_SEARCH_RESULTS_PATH=results
 HOLO_V3_LIVE_CRAWL_SEED_URLS=https://docs.example.com/
 HOLO_V3_LIVE_CRAWL_MAX_PAGES=3
 HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE=20
+HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS=1
+HOLO_V3_LIVE_CRAWL_MAX_SITEMAP_URLS=50
 HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS=20
 HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES=1000000
 ```
@@ -224,13 +226,29 @@ The live search side is a fallback chain, not a single hard-coded provider:
 - configured `live_json_http_search` calls an operator-provided JSON search
   endpoint;
 - `bounded_crawl_search` fetches explicit seed pages, extracts bounded links,
-  and never stores raw seed bodies in journal diagnostics;
+  optionally discovers same-host `sitemap.xml` URLs, and never stores raw seed
+  bodies or sitemap bodies in journal diagnostics;
 - `research_source_directory_search` exposes profile source directories such
   as finance fundamentals without fetching by itself.
 
 At least one of `HOLO_V3_LIVE_SEARCH_ENDPOINT` or
 `HOLO_V3_LIVE_CRAWL_SEED_URLS` must be configured for `--mode live-http`.
 This allows crawl-only smoke tests while preserving explicit network gating.
+Sitemap discovery is on by default for configured crawl seeds and can be
+disabled with `HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS=0`.
+
+Fetched HTML bodies remain raw artifacts. Evidence extraction first projects
+HTML into readable text, skipping script/style/head/nav/header/footer/template
+content, then ranks span candidates by query term coverage. This prevents a
+page title, navigation bar, or embedded script from satisfying evidence when
+the body lacks useful content. Extraction diagnostics journal only text-mode
+metadata and span counts; raw bodies stay in `ArtifactStore`.
+
+Ranking considers title, snippet, URI/path text, crawl source kind, and a small
+cross-language retrieval lexicon for common Chinese research terms such as
+模型, 文档, 鉴权, 认证, and 定价. This is a retrieval bridge, not an intent or answer
+table: it helps Chinese prompts select English documentation URLs while the
+model still proposes the task and the host still validates and executes.
 
 Agent execution has a second, separate gate. Even if a host injects a live
 `RetrievalOperator`, `retrieval.run` is registered as a network tool and

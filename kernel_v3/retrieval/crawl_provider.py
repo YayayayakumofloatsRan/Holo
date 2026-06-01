@@ -15,6 +15,7 @@ from kernel_v3.retrieval.http_provider import HttpTransport, HttpTransportRespon
 
 
 URL_PATTERN = re.compile(r"https?://[^\s<>'\")\]]+", re.IGNORECASE)
+SITEMAP_LOC_PATTERN = re.compile(r"<loc>\s*([^<]+?)\s*</loc>", re.IGNORECASE)
 SAFE_SCHEMES = {"http", "https"}
 
 
@@ -127,6 +128,8 @@ class BoundedCrawlSearchProvider:
         max_bytes: int = 1_000_000,
         max_pages: int = 3,
         max_links_per_page: int = 20,
+        include_sitemaps: bool = True,
+        max_sitemap_urls: int = 50,
         user_agent: str = "holo-kernel-v3/1.0",
         transport: HttpTransport | None = None,
     ) -> None:
@@ -139,6 +142,8 @@ class BoundedCrawlSearchProvider:
         self.max_bytes = max(1, int(max_bytes))
         self.max_pages = max(0, int(max_pages))
         self.max_links_per_page = max(0, int(max_links_per_page))
+        self.include_sitemaps = bool(include_sitemaps)
+        self.max_sitemap_urls = max(0, int(max_sitemap_urls))
         self.user_agent = user_agent
         self.transport = transport or _urllib_transport
         self._last_search_diagnostics: JsonObject = {}
@@ -153,10 +158,13 @@ class BoundedCrawlSearchProvider:
             "max_bytes": self.max_bytes,
             "max_pages": self.max_pages,
             "max_links_per_page": self.max_links_per_page,
+            "include_sitemaps": self.include_sitemaps,
+            "max_sitemap_urls": self.max_sitemap_urls,
         }
 
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
-        if int(goal.max_sources) <= 0:
+        source_limit = max(0, int(goal.max_sources))
+        if source_limit <= 0:
             self._last_search_diagnostics = {
                 "status": "empty",
                 "reason": "max_sources_exhausted",
@@ -184,6 +192,9 @@ class BoundedCrawlSearchProvider:
         sources: list[SearchSource] = []
         fetched = 0
         failed = 0
+        fetched_sitemaps = 0
+        failed_sitemaps = 0
+        seen_sitemaps: set[str] = set()
         for seed in seeds[: self.max_pages]:
             validation = _validate_url(
                 seed,
@@ -204,51 +215,104 @@ class BoundedCrawlSearchProvider:
             )
             if seed_source is not None:
                 sources.append(seed_source)
-            try:
-                response = self.transport(
-                    seed,
-                    {"User-Agent": self.user_agent, "Accept": "text/html,text/plain,application/xhtml+xml"},
-                    self.timeout_seconds,
-                    self.max_bytes,
-                )
-            except Exception:
+            response = self._fetch_discovery_url(seed)
+            if response is None:
                 failed += 1
-                continue
-            fetched += 1
-            if response.status_code < 200 or response.status_code >= 300 or len(response.body) > self.max_bytes:
+            else:
+                fetched += 1
+            if response is not None and _response_ok(response, self.max_bytes):
+                body = response.body.decode("utf-8", errors="replace")
+                for link in _extract_links(body, base_url=seed)[: self.max_links_per_page]:
+                    if len(sources) >= source_limit:
+                        break
+                    if not _validate_url(
+                        link["url"],
+                        allowed_schemes=self.allowed_schemes,
+                        allowed_hosts=self.allowed_hosts,
+                        allow_all_hosts=self.allow_all_hosts,
+                    ).get("status") == "ok":
+                        continue
+                    _append_unique_source(
+                        sources,
+                        _source_from_url(
+                            link["url"],
+                            provider_id=self.provider_id,
+                            index=len(sources) + 1,
+                            title=link["text"] or _title_from_url(link["url"]),
+                            snippet=f"Discovered from seed page. Path: {_path_text(link['url'])}",
+                            metadata={"source_kind": "crawl_discovered", "seed_hash": _hash(seed)},
+                        ),
+                        limit=source_limit,
+                    )
+            elif response is not None:
                 failed += 1
-                continue
-            body = response.body.decode("utf-8", errors="replace")
-            for link in _extract_links(body, base_url=seed)[: self.max_links_per_page]:
-                if len(sources) >= max(0, int(goal.max_sources)):
-                    break
-                if not _validate_url(
-                    link["url"],
-                    allowed_schemes=self.allowed_schemes,
-                    allowed_hosts=self.allowed_hosts,
-                    allow_all_hosts=self.allow_all_hosts,
-                ).get("status") == "ok":
-                    continue
-                source = _source_from_url(
-                    link["url"],
-                    provider_id=self.provider_id,
-                    index=len(sources) + 1,
-                    title=link["text"] or "discovered page",
-                    snippet=f"Discovered from seed page. Query: {_bounded_text(query, 160)}",
-                    metadata={"source_kind": "crawl_discovered", "seed_hash": _hash(seed)},
-                )
-                if source is not None and source.uri not in {item.uri for item in sources}:
-                    sources.append(source)
+            if self.include_sitemaps and len(sources) < source_limit:
+                for sitemap_url in _sitemap_candidates(seed):
+                    if len(sources) >= source_limit or sitemap_url in seen_sitemaps:
+                        break
+                    seen_sitemaps.add(sitemap_url)
+                    if not _validate_url(
+                        sitemap_url,
+                        allowed_schemes=self.allowed_schemes,
+                        allowed_hosts=self.allowed_hosts,
+                        allow_all_hosts=self.allow_all_hosts,
+                    ).get("status") == "ok":
+                        failed_sitemaps += 1
+                        continue
+                    sitemap_response = self._fetch_discovery_url(sitemap_url, accept="application/xml,text/xml,text/plain")
+                    if sitemap_response is None:
+                        failed_sitemaps += 1
+                        continue
+                    fetched_sitemaps += 1
+                    if not _response_ok(sitemap_response, self.max_bytes):
+                        failed_sitemaps += 1
+                        continue
+                    sitemap_body = sitemap_response.body.decode("utf-8", errors="replace")
+                    for link in _extract_sitemap_links(sitemap_body, base_url=sitemap_url)[: self.max_sitemap_urls]:
+                        if len(sources) >= source_limit:
+                            break
+                        if not _validate_url(
+                            link,
+                            allowed_schemes=self.allowed_schemes,
+                            allowed_hosts=self.allowed_hosts,
+                            allow_all_hosts=self.allow_all_hosts,
+                        ).get("status") == "ok":
+                            continue
+                        _append_unique_source(
+                            sources,
+                            _source_from_url(
+                                link,
+                                provider_id=self.provider_id,
+                                index=len(sources) + 1,
+                                title=_title_from_url(link),
+                                snippet=f"Discovered from sitemap. Path: {_path_text(link)}",
+                                metadata={"source_kind": "crawl_sitemap", "sitemap_hash": _hash(sitemap_url)},
+                            ),
+                            limit=source_limit,
+                        )
         self._last_search_diagnostics = {
-            "status": "ok" if sources else "failed" if failed else "empty",
+            "status": "ok" if sources else "failed" if failed or failed_sitemaps else "empty",
             "seed_count": len(seeds),
             "fetched_seed_count": fetched,
             "failed_seed_count": failed,
+            "fetched_sitemap_count": fetched_sitemaps,
+            "failed_sitemap_count": failed_sitemaps,
             "source_count": len(sources),
             "query_hash": _hash(query),
             "plan_id": plan.plan_id,
         }
-        return sources[: max(0, int(goal.max_sources))]
+        return sources[:source_limit]
+
+    def _fetch_discovery_url(self, url: str, *, accept: str = "text/html,text/plain,application/xhtml+xml") -> HttpTransportResponse | None:
+        try:
+            return self.transport(
+                url,
+                {"User-Agent": self.user_agent, "Accept": accept},
+                self.timeout_seconds,
+                self.max_bytes,
+            )
+        except Exception:
+            return None
 
     def search_diagnostics(self) -> JsonObject:
         return dict(self._last_search_diagnostics)
@@ -297,6 +361,42 @@ def _extract_links(body: str, *, base_url: str) -> list[JsonObject]:
             continue
         links.append({"url": url, "text": str(item.get("text") or "")})
     return links
+
+
+def _extract_sitemap_links(body: str, *, base_url: str) -> list[str]:
+    links: list[str] = []
+    for raw in SITEMAP_LOC_PATTERN.findall(body):
+        url = urllib.parse.urljoin(base_url, html_unescape(raw.strip()))
+        if _safe_url(url):
+            links.append(url)
+    return _safe_unique_urls(links)
+
+
+def html_unescape(value: str) -> str:
+    return value.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+
+
+def _sitemap_candidates(seed_url: str) -> list[str]:
+    parsed = urllib.parse.urlparse(seed_url)
+    if not parsed.scheme or not parsed.hostname:
+        return []
+    root = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
+    candidates = [urllib.parse.urljoin(root, "sitemap.xml")]
+    if parsed.path.lower().endswith("sitemap.xml"):
+        candidates.insert(0, seed_url)
+    return _safe_unique_urls(candidates)
+
+
+def _response_ok(response: HttpTransportResponse, max_bytes: int) -> bool:
+    return 200 <= response.status_code < 300 and len(response.body) <= max_bytes
+
+
+def _append_unique_source(sources: list[SearchSource], source: SearchSource | None, *, limit: int) -> None:
+    if source is None or len(sources) >= limit:
+        return
+    if source.uri in {item.uri for item in sources}:
+        return
+    sources.append(source)
 
 
 def _candidate_urls(query: str, metadata: JsonObject) -> list[str]:
@@ -357,7 +457,7 @@ def _source_from_url(
     if not _safe_url(url):
         return None
     parsed = urllib.parse.urlparse(url)
-    display_title = title if title and title != "direct URL" else (parsed.path.strip("/") or parsed.hostname or url)
+    display_title = title if title and title != "direct URL" else _title_from_url(url)
     return SearchSource(
         source_id=f"{provider_id}-{_hash(url)[:12]}-{index}",
         uri=url,
@@ -366,6 +466,23 @@ def _source_from_url(
         provider=provider_id,
         metadata={"rank": index, **metadata},
     )
+
+
+def _title_from_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path.strip("/")
+    if not path:
+        return parsed.hostname or url
+    stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    if not stem:
+        stem = path
+    return _bounded_text(stem.replace("_", " ").replace("-", " "), 240)
+
+
+def _path_text(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    path = " ".join(parsed.path.strip("/").replace("_", " ").replace("-", " ").split("/"))
+    return _bounded_text(path or (parsed.hostname or ""), 240)
 
 
 def _research_profile_id(metadata: JsonObject) -> str | None:

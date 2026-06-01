@@ -17,6 +17,7 @@ from kernel_v3.retrieval import (
     SourceDirectorySearchProvider,
     provider_capability,
 )
+from kernel_v3.retrieval.rank import rank_sources
 
 
 def test_phase95_direct_url_search_provider_extracts_safe_urls_without_network() -> None:
@@ -122,6 +123,123 @@ def test_phase95_bounded_crawl_search_provider_does_not_fetch_when_source_budget
     assert provider.search_diagnostics()["reason"] == "max_sources_exhausted"
 
 
+def test_phase95_bounded_crawl_search_provider_discovers_sitemap_urls_and_rank_prefers_relevant_pages() -> None:
+    transport = _Transport(
+        {
+            "https://docs.example.com/": HttpTransportResponse(
+                status_code=200,
+                mime_type="text/html",
+                body=b"<html><body>No static anchors in this shell.</body></html>",
+            ),
+            "https://docs.example.com/sitemap.xml": HttpTransportResponse(
+                status_code=200,
+                mime_type="application/xml",
+                body=(
+                    b"<urlset>"
+                    b"<url><loc>https://docs.example.com/</loc></url>"
+                    b"<url><loc>https://docs.example.com/quick_start/token_usage</loc></url>"
+                    b"<url><loc>https://docs.example.com/quick_start/pricing</loc></url>"
+                    b"<url><loc>https://docs.example.com/news/changelog</loc></url>"
+                    b"</urlset>"
+                ),
+            ),
+        }
+    )
+    provider = BoundedCrawlSearchProvider(
+        enabled=True,
+        seed_urls=["https://docs.example.com/"],
+        allowed_hosts=["docs.example.com"],
+        transport=transport,
+    )
+    goal = SearchGoal(
+        goal_id="goal-sitemap",
+        query="DeepSeek API 文档 模型 鉴权方式",
+        max_sources=5,
+        max_fetches=2,
+    )
+
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+    ranked = rank_sources(goal, sources)
+
+    assert provider.search_diagnostics()["fetched_sitemap_count"] == 1
+    assert {source.metadata["source_kind"] for source in sources} >= {"crawl_seed", "crawl_sitemap"}
+    assert {item.uri for item in ranked[:2]} == {
+        "https://docs.example.com/quick_start/pricing",
+        "https://docs.example.com/quick_start/token_usage",
+    }
+
+
+def test_phase95_agent_live_crawl_uses_sitemap_discovery_for_relevant_fetches() -> None:
+    journal = JournalStore.in_memory()
+    crawl_transport = _Transport(
+        {
+            "https://docs.example.com/": HttpTransportResponse(
+                status_code=200,
+                mime_type="text/html",
+                body=b"<html><body>No static anchors in this shell.</body></html>",
+            ),
+            "https://docs.example.com/sitemap.xml": HttpTransportResponse(
+                status_code=200,
+                mime_type="application/xml",
+                body=(
+                    b"<urlset>"
+                    b"<url><loc>https://docs.example.com/</loc></url>"
+                    b"<url><loc>https://docs.example.com/quick_start/token_usage</loc></url>"
+                    b"<url><loc>https://docs.example.com/quick_start/pricing</loc></url>"
+                    b"</urlset>"
+                ),
+            ),
+        }
+    )
+    fetch_transport = _Transport(
+        {
+            "https://docs.example.com/quick_start/pricing": HttpTransportResponse(
+                status_code=200,
+                body=b"Models and Pricing: deepseek-chat and deepseek-reasoner are API models.",
+                mime_type="text/plain",
+            ),
+            "https://docs.example.com/quick_start/token_usage": HttpTransportResponse(
+                status_code=200,
+                body=b"Token Usage and authentication: use the Authorization header with a Bearer token.",
+                mime_type="text/plain",
+            ),
+        }
+    )
+    operator = LiveRetrievalConfig.from_env(
+        {
+            "HOLO_V3_LIVE_RETRIEVAL": "1",
+            "HOLO_V3_LIVE_CRAWL_SEED_URLS": "https://docs.example.com/",
+            "HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS": "docs.example.com",
+            "HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS": "docs.example.com",
+        }
+    ).build_operator(crawl_transport=crawl_transport, fetch_transport=fetch_transport)
+    runtime = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        retrieval_operator=operator,
+    )
+
+    result = runtime.run(
+        "Research DeepSeek API 文档 模型 鉴权方式",
+        mode="retrieval",
+        execution_metadata={
+            "retrieval": {
+                "allow_network": True,
+                "max_network_fetches": 2,
+                "max_fetches": 2,
+            }
+        },
+    )
+
+    assert result.status == "completed"
+    assert {call["url"] for call in fetch_transport.calls} == {
+        "https://docs.example.com/quick_start/pricing",
+        "https://docs.example.com/quick_start/token_usage",
+    }
+    search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
+    assert search.data["diagnostics"]["provider_diagnostics"]["selected_provider_id"] == "bounded_crawl_search"
+
+
 def test_phase95_agent_live_retrieval_can_use_direct_url_search_provider() -> None:
     journal = JournalStore.in_memory()
     fetch_transport = _Transport(
@@ -202,6 +320,7 @@ def test_phase95_agent_live_retrieval_can_use_bounded_crawl_without_search_endpo
             "HOLO_V3_LIVE_CRAWL_SEED_URLS": "https://docs.example.com/index.html",
             "HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS": "docs.example.com",
             "HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS": "docs.example.com",
+            "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS": "0",
         }
     ).build_operator(crawl_transport=crawl_transport, fetch_transport=fetch_transport)
     runtime = AgentRuntime(

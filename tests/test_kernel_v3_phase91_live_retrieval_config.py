@@ -246,5 +246,7 @@ def _clear_live_env(monkeypatch) -> None:
         "HOLO_V3_LIVE_CRAWL_SEED_URLS",
         "HOLO_V3_LIVE_CRAWL_MAX_PAGES",
         "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE",
+        "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS",
+        "HOLO_V3_LIVE_CRAWL_MAX_SITEMAP_URLS",
     ]:
         monkeypatch.delenv(name, raising=False)

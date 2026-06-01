@@ -35,6 +35,8 @@ LIVE_SEARCH_API_KEY_PREFIX_ENV = "HOLO_V3_LIVE_SEARCH_API_KEY_PREFIX"
 LIVE_CRAWL_SEED_URLS_ENV = "HOLO_V3_LIVE_CRAWL_SEED_URLS"
 LIVE_CRAWL_MAX_PAGES_ENV = "HOLO_V3_LIVE_CRAWL_MAX_PAGES"
 LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV = "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE"
+LIVE_CRAWL_INCLUDE_SITEMAPS_ENV = "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS"
+LIVE_CRAWL_MAX_SITEMAP_URLS_ENV = "HOLO_V3_LIVE_CRAWL_MAX_SITEMAP_URLS"
 LIVE_TIMEOUT_SECONDS_ENV = "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS"
 LIVE_MAX_BYTES_ENV = "HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES"
 
@@ -141,6 +143,8 @@ class LiveCrawlSearchConfig:
     max_bytes: int = 1_000_000
     max_pages: int = 3
     max_links_per_page: int = 20
+    include_sitemaps: bool = True
+    max_sitemap_urls: int = 50
     user_agent: str = "holo-kernel-v3/1.0"
 
     @property
@@ -158,6 +162,8 @@ class LiveCrawlSearchConfig:
             max_bytes=self.max_bytes,
             max_pages=self.max_pages,
             max_links_per_page=self.max_links_per_page,
+            include_sitemaps=self.include_sitemaps,
+            max_sitemap_urls=self.max_sitemap_urls,
             user_agent=self.user_agent,
             transport=transport,
         )
@@ -174,6 +180,8 @@ class LiveCrawlSearchConfig:
             "max_bytes": self.max_bytes,
             "max_pages": self.max_pages,
             "max_links_per_page": self.max_links_per_page,
+            "include_sitemaps": self.include_sitemaps,
+            "max_sitemap_urls": self.max_sitemap_urls,
         }
 
 
@@ -218,6 +226,8 @@ class LiveRetrievalConfig:
                 max_bytes=max_bytes,
                 max_pages=_positive_int(values.get(LIVE_CRAWL_MAX_PAGES_ENV), default=3),
                 max_links_per_page=_positive_int(values.get(LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV), default=20),
+                include_sitemaps=not _falsey(values.get(LIVE_CRAWL_INCLUDE_SITEMAPS_ENV)),
+                max_sitemap_urls=_positive_int(values.get(LIVE_CRAWL_MAX_SITEMAP_URLS_ENV), default=50),
             ),
             fetch=LiveHttpFetchConfig(
                 enabled=enabled,
@@ -259,6 +269,10 @@ class LiveRetrievalConfig:
 
 def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _falsey(value: object) -> bool:
+    return str(value or "").strip().lower() in {"0", "false", "no", "off"}
 
 
 def _optional(value: object) -> str | None:

@@ -185,6 +185,14 @@ interaction preferences before the action reaches `PolicyGate` and loop guards.
 This keeps model packets broad and semantic while keeping budgets and
 permissions host-owned.
 
+Live retrieval is one of the expanded non-workspace state spaces. The agent can
+enter a network retrieval recipe, use host-configured direct URL, JSON search,
+bounded crawl, sitemap discovery, source-directory, corpus, and fetch
+providers, then return evidence/citations into the same workloop termination
+path. Crawled HTML is stored raw as artifacts but evidence spans are extracted
+from readable body text, so downstream evaluator/synthesizer packets see
+citations instead of raw page chrome.
+
 ## Durable Memory Boundary
 
 Durable memory uses a split audit model. `MemoryStore` is the memory subsystem's

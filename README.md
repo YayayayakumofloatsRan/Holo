@@ -159,6 +159,7 @@ The live retrieval chain is now broader than a single search endpoint:
   access;
 - `bounded_crawl_search` can discover links from explicit seed URLs only when
   `HOLO_V3_LIVE_RETRIEVAL=1`, crawl seeds, and host allowlists are configured;
+  it can also inspect same-host `sitemap.xml` within bounded limits;
 - `research_source_directory_search` exposes domain source directories such as
   finance fundamentals without fetching anything by itself;
 - configured JSON HTTP search providers can sit in the same fallback chain.
@@ -195,9 +196,11 @@ python3 holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方
 ```
 
 Current live crawl is intentionally basic: it can prove the loop, permissions,
-artifact storage, evidence, citations, and synthesis path, but richer web
-search, page readability extraction, and finance-specific source adapters are
-still the next capability layer.
+artifact storage, evidence, citations, and synthesis path. It now strips
+script/style/head/nav/header/footer markup before evidence extraction, so
+journaled spans prefer readable page body while raw fetched HTML remains in
+`ArtifactStore`. Richer web search APIs, deeper readability heuristics, and
+finance-specific source adapters are still the next capability layer.
 
 ## Validation
 

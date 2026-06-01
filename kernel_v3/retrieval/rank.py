@@ -35,18 +35,19 @@ def rank_sources(
     terms = _terms(goal.query)
     ranked: list[RankedSource] = []
     for source in sources:
-        haystack = f"{source.title} {source.snippet}".lower()
+        haystack = _source_haystack(source)
         hits = sum(1 for term in terms if term in haystack)
         term_score = hits / max(1, len(terms))
         reasons = ["query_term_match"] if hits else ["provider_result"]
         metadata = dict(source.metadata)
+        source_kind_adjustment = _source_kind_score_adjustment(metadata)
         if research_profile is not None:
             assessment = assess_search_source(source, profile=research_profile)
-            score = (term_score * 0.2) + (assessment.authority_score * 0.8)
+            score = (term_score * 0.2) + (assessment.authority_score * 0.8) + source_kind_adjustment
             metadata["source_assessment"] = assessment.to_dict()
             reasons.append(f"authority:{assessment.authority_level}")
         else:
-            score = term_score
+            score = term_score + source_kind_adjustment
         ranked.append(
             RankedSource(
                 source_id=source.source_id,
@@ -81,11 +82,41 @@ def _terms(text: str) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for term in text.lower().replace("-", " ").split():
-        if not term or term in seen:
-            continue
-        seen.add(term)
-        terms.append(term)
+        for candidate in [term, *_term_aliases(term)]:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            terms.append(candidate)
     return terms
+
+
+def _source_haystack(source: SearchSource) -> str:
+    uri_text = source.uri.replace("_", " ").replace("-", " ").replace("/", " ")
+    return f"{source.title} {source.snippet} {uri_text}".lower()
+
+
+def _source_kind_score_adjustment(metadata: dict[str, object]) -> float:
+    source_kind = metadata.get("source_kind")
+    if source_kind == "crawl_seed":
+        return -0.08
+    if source_kind in {"crawl_discovered", "crawl_sitemap", "direct_url"}:
+        return 0.03
+    return 0.0
+
+
+def _term_aliases(term: str) -> list[str]:
+    aliases: list[str] = []
+    if "文档" in term:
+        aliases.extend(["docs", "documentation"])
+    if "模型" in term:
+        aliases.extend(["model", "models", "pricing"])
+    if "鉴权" in term or "认证" in term or "授权" in term:
+        aliases.extend(["auth", "authentication", "authorization", "token", "key"])
+    if "接口" in term:
+        aliases.append("api")
+    if "价格" in term or "定价" in term:
+        aliases.extend(["price", "pricing"])
+    return aliases
 
 
 def _profile_query_templates(profile: ResearchProfile) -> list[str]:

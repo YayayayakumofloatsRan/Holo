@@ -313,7 +313,16 @@ class RetrievalOperator:
                     "goal_id": goal.goal_id,
                     "document": document.to_dict(),
                     "spans": [span.to_dict() for span in document_spans],
-                    "diagnostics": {"span_count": len(document_spans)},
+                    "diagnostics": {
+                        "span_count": len(document_spans),
+                        "text_modes": _ordered_unique(
+                            [
+                                str(span.metadata.get("text_mode"))
+                                for span in document_spans
+                                if isinstance(span.metadata.get("text_mode"), str)
+                            ]
+                        ),
+                    },
                 },
                 action_ref=action_ref,
                 artifact_refs=[document.artifact_id],
