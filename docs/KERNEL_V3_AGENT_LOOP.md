@@ -192,6 +192,16 @@ is exhausted, `AgentRuntime` returns a `FailureReport` with
 unsupported complete answer. Dynamic retry/replan paths remain safe because a
 new report for the same planned `goal_id` replaces the older status.
 
+Dynamic model planner mode receives the same coverage signal through
+`state.agent_replan_hints`. Planned retrieval goal ids are derived from the
+semantic task plan as well as executed actions, so the model can declare a
+multi-subgoal research plan first and then execute it one bounded action at a
+time. If one planned subgoal is insufficient while a later subgoal succeeds,
+the next planner packet still has `status=needs_replan`,
+`incomplete_planned_goal_ids`, and `do_not_finalize_until` rules for the failed
+subgoal. A model can then retry only that `goal_id`, and host finalization will
+allow synthesis once the latest report for every planned goal is sufficient.
+
 Inside a single retrieval payload, the model may also provide explicit
 `queries` or `query_templates`. These are search attempts for one subgoal, not
 separate agent actions. If `max_queries` is omitted, the host derives the

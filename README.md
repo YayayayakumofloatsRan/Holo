@@ -120,6 +120,11 @@ Kernel v3 currently contains the infrastructure for:
   attempted query/strategy/provider summaries, payload hashes to avoid
   repeating, suggested next search strategies/query hints, and
   `do_not_finalize_until` rules for the next model planner call;
+- dynamic planner retries for planned retrieval subgoals: semantic task plans
+  can declare multiple `goal-plan-*` retrieval subgoals, and
+  `agent_replan_hints` reports incomplete subgoal ids even when the latest
+  retrieval report itself was sufficient, allowing the model planner to retry
+  only the failed subgoal before finalization;
 - adaptive search strategy selection for retrieval: when configured, a model
   planner can propose `metadata.search_strategy` values such as `corpus_only`,
   `fresh_live`, `aggregate`, `structured`, or `crawl`, and the host selects only

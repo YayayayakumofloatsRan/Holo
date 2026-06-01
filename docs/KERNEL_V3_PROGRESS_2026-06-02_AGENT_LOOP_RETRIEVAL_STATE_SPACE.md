@@ -183,6 +183,11 @@
   omits `max_queries`, the host derives the default from the explicit list
   length before global retrieval caps. Research-depth defaults no longer
   accidentally truncate a structured multi-query search plan.
+- Dynamic model planner mode now receives planned retrieval coverage in
+  `agent_replan_hints`. Planned subgoal ids are derived from the semantic task
+  plan as well as executed actions, so the model can declare several research
+  subgoals up front, execute them one at a time, and retry only the incomplete
+  subgoal when host coverage remains insufficient.
 
 ## Validation
 
@@ -195,7 +200,7 @@ Offline kernel v3 regression:
 Result:
 
 ```text
-497 passed
+498 passed
 ```
 
 Additional deterministic coverage now includes:
@@ -267,6 +272,11 @@ Additional deterministic coverage now includes:
   with three explicit queries and no model-specified `max_queries` still
   performs three bounded search attempts, even under light research-depth
   defaults, and finalizes from the primary SEC result.
+- a dynamic model-planner test now executes four planner/tool iterations:
+  three planned finance retrieval subgoals, one weak margin source, a later
+  successful services source, then a host-packet-driven retry of only
+  `goal-plan-1-2`. The run finalizes only after planned coverage becomes
+  sufficient for every subgoal.
 - live retrieval/corpus bridge tests show that a configured corpus is searched
   before live HTTP, and that an agent's first live SEC fetch is indexed into
   corpus so a second run can answer from artifact-backed corpus evidence without

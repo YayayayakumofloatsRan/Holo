@@ -249,7 +249,7 @@ class AgentRuntime:
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
         if result.status == "needs_user_input":
             if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
-                planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id)
+                planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id, recipe)
                 failure = self._failure(
                     result.task_id,
                     result.run_id,
@@ -428,13 +428,13 @@ class AgentRuntime:
         citations = _retrieval_citations(self.journal, task_id, run_id)
         if report is None:
             return None, self._failure(task_id, run_id, "missing_retrieval_report", next_action="retry_retrieval")
-        planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id)
+        planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id, recipe)
         if planned_coverage.get("required") is True and not planned_coverage.get("sufficient"):
             return None, self._failure(
                 task_id,
                 run_id,
                 "planned_retrieval_subgoals_incomplete",
-                missing_evidence=_planned_retrieval_missing_evidence(self.journal, task_id, run_id),
+                missing_evidence=_planned_retrieval_missing_evidence(self.journal, task_id, run_id, recipe),
                 next_action="refine_failed_retrieval_subgoals",
             )
         if report.status != "sufficient":
@@ -1815,7 +1815,10 @@ def _agent_replan_hints(
     hints["retrieval"] = retrieval
     if retrieval.get("needs_replan") is True:
         hints["status"] = "needs_replan"
-        hints["suggested_next_action"] = "propose_materially_new_retrieval_run"
+        if retrieval.get("incomplete_planned_goal_ids"):
+            hints["suggested_next_action"] = "retry_incomplete_planned_retrieval_subgoals"
+        else:
+            hints["suggested_next_action"] = "propose_materially_new_retrieval_run"
     elif _evidence_sufficient(evidence):
         hints["status"] = "ready_to_finalize"
         hints["suggested_next_action"] = "finalize_without_more_retrieval"
@@ -1838,6 +1841,8 @@ def _retrieval_replan_hints(
     evaluation = _json_object(diagnostics.get("evaluation_diagnostics"))
     evidence_data = dict(evidence_record.data) if evidence_record is not None else {}
     evidence_diagnostics = _json_object(evidence_data.get("diagnostics"))
+    planned_coverage = _json_object(evidence_diagnostics.get("planned_retrieval_coverage"))
+    incomplete_planned_goal_ids = _string_list(planned_coverage.get("incomplete_goal_ids"))
     missing = _ordered_unique(
         [
             *_string_list(evidence_data.get("missing")),
@@ -1864,12 +1869,14 @@ def _retrieval_replan_hints(
         missing=missing,
         requirement=requirement,
     )
-    needs_replan = bool(report_record is not None and report_status != "sufficient")
+    needs_replan = bool(report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
     return {
         "needs_replan": needs_replan,
         "latest_report_status": report_status,
         "latest_report_reason": report_reason,
         "missing": missing,
+        "planned_retrieval_coverage": planned_coverage,
+        "incomplete_planned_goal_ids": incomplete_planned_goal_ids,
         "missing_query_facets": _string_list(evaluation.get("missing_query_facets")),
         "covered_query_facets": _string_list(evaluation.get("covered_query_facets")),
         "source_authority_requirement": requirement,
@@ -1926,6 +1933,7 @@ def _evidence_sufficiency_hint(record) -> JsonObject:
         "missing": _string_list(record.data.get("missing")),
         "evidence_count": record.data.get("evidence_count") if isinstance(record.data.get("evidence_count"), int) else None,
         "citation_count": record.data.get("citation_count") if isinstance(record.data.get("citation_count"), int) else None,
+        "planned_retrieval_coverage": _json_object(_json_object(record.data.get("diagnostics")).get("planned_retrieval_coverage")),
     }
 
 
@@ -2045,6 +2053,8 @@ def _do_not_finalize_until(*, missing: list[str], requirement: str) -> list[str]
     for item in missing:
         if item.startswith("query_facet:"):
             rules.append(f"{item} covered")
+        if item.startswith("retrieval_subgoal:"):
+            rules.append(f"{item} sufficient")
     return _ordered_unique(rules)
 
 
@@ -2759,8 +2769,8 @@ def _latest_retrieval_report(journal: JournalStore, task_id: str, run_id: str) -
     return RetrievalReport.from_dict(records[-1].data)
 
 
-def _planned_retrieval_coverage(journal: JournalStore, task_id: str, run_id: str) -> JsonObject:
-    planned_goal_ids: list[str] = []
+def _planned_retrieval_coverage(journal: JournalStore, task_id: str, run_id: str, recipe: TaskRecipe) -> JsonObject:
+    planned_goal_ids: list[str] = _planned_retrieval_goal_ids_from_recipe(recipe)
     for record in journal.records(task_id=task_id, kind="action"):
         if record.run_id != run_id:
             continue
@@ -2808,8 +2818,47 @@ def _planned_retrieval_coverage(journal: JournalStore, task_id: str, run_id: str
     }
 
 
-def _planned_retrieval_missing_evidence(journal: JournalStore, task_id: str, run_id: str) -> list[str]:
-    coverage = _planned_retrieval_coverage(journal, task_id, run_id)
+def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe) -> list[str]:
+    plan = _task_execution_plan_metadata(recipe)
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return []
+    goal_ids: list[str] = []
+    for raw_step in steps:
+        if not isinstance(raw_step, dict):
+            continue
+        if str(raw_step.get("status") or "") != "ready":
+            continue
+        if str(raw_step.get("tool_name") or "") != "retrieval.run":
+            continue
+        sequence = _plan_step_index(raw_step)
+        metadata = raw_step.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        capability_args = metadata.get("capability_args")
+        capability_args = capability_args if isinstance(capability_args, dict) else {}
+        payloads = _retrieval_payloads_from_capability_args(capability_args.get("retrieval.run"))
+        if not payloads:
+            continue
+        total = len(payloads)
+        for index, payload in enumerate(payloads, start=1):
+            goal_id = payload.get("goal_id")
+            if isinstance(goal_id, str) and goal_id:
+                goal_ids.append(goal_id)
+            else:
+                goal_ids.append(f"goal-plan-{sequence}" if total == 1 else f"goal-plan-{sequence}-{index}")
+    return _ordered_unique(goal_ids)
+
+
+def _retrieval_payloads_from_capability_args(value: object) -> list[JsonObject]:
+    if isinstance(value, dict):
+        return [dict(value)]
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    return []
+
+
+def _planned_retrieval_missing_evidence(journal: JournalStore, task_id: str, run_id: str, recipe: TaskRecipe) -> list[str]:
+    coverage = _planned_retrieval_coverage(journal, task_id, run_id, recipe)
     incomplete = _string_list(coverage.get("incomplete_goal_ids"))
     if not incomplete:
         return []

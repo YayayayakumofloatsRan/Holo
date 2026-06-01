@@ -334,6 +334,7 @@ def assess_evidence_sufficiency(
         journal,
         task_id=task_id,
         run_id=run_id,
+        recipe=recipe,
     )
     report_diagnostics = _dict_or_empty(latest_retrieval_report.data.get("diagnostics")) if latest_retrieval_report else {}
     evaluation_diagnostics = _dict_or_empty(report_diagnostics.get("evaluation_diagnostics"))
@@ -618,8 +619,8 @@ def _latest_run_record(journal: JournalStore, *, task_id: str, run_id: str, kind
     return records[-1] if records else None
 
 
-def _planned_retrieval_coverage(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
-    planned_goal_ids: list[str] = []
+def _planned_retrieval_coverage(journal: JournalStore, *, task_id: str, run_id: str, recipe: TaskRecipe) -> JsonObject:
+    planned_goal_ids: list[str] = _planned_retrieval_goal_ids_from_recipe(recipe)
     for record in journal.records(task_id=task_id, kind="action"):
         if record.run_id != run_id:
             continue
@@ -664,6 +665,48 @@ def _planned_retrieval_coverage(journal: JournalStore, *, task_id: str, run_id: 
         "incomplete_goal_ids": incomplete,
         "latest_status_by_goal_id": statuses,
     }
+
+
+def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe) -> list[str]:
+    plan = recipe.metadata.get("task_execution_plan")
+    if not isinstance(plan, dict):
+        return []
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return []
+    goal_ids: list[str] = []
+    for raw_step in steps:
+        if not isinstance(raw_step, dict):
+            continue
+        if str(raw_step.get("status") or "") != "ready":
+            continue
+        if str(raw_step.get("tool_name") or "") != "retrieval.run":
+            continue
+        sequence = raw_step.get("sequence_index")
+        sequence_id = sequence if isinstance(sequence, int) and sequence > 0 else 1_000_000
+        metadata = raw_step.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        capability_args = metadata.get("capability_args")
+        capability_args = capability_args if isinstance(capability_args, dict) else {}
+        payloads = _retrieval_payloads_from_capability_args(capability_args.get("retrieval.run"))
+        if not payloads:
+            continue
+        total = len(payloads)
+        for index, payload in enumerate(payloads, start=1):
+            goal_id = payload.get("goal_id")
+            if isinstance(goal_id, str) and goal_id:
+                goal_ids.append(goal_id)
+            else:
+                goal_ids.append(f"goal-plan-{sequence_id}" if total == 1 else f"goal-plan-{sequence_id}-{index}")
+    return _ordered_unique(goal_ids)
+
+
+def _retrieval_payloads_from_capability_args(value: object) -> list[JsonObject]:
+    if isinstance(value, dict):
+        return [dict(value)]
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    return []
 
 
 def _decision_missing_evidence(decision: TerminationDecision) -> list[str]:
