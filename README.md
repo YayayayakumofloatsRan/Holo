@@ -518,6 +518,50 @@ The live retrieval chain is now broader than a single search endpoint:
   live providers, corpus hits are fetched from artifact blobs, and new live
   fetches are written back to the corpus.
 
+The built-in research source directory is the host-owned catalog of trusted
+entry points. It is separate from web search: the directory tells Holo where a
+profile should look first, while the corpus stores fetched, artifact-backed
+documents for fast local reuse.
+
+For finance fundamentals, the current trusted catalog includes primary sources
+such as SEC EDGAR filings, SEC CompanyFacts/submissions, SEC financial statement
+datasets, issuer investor-relations pages, CNINFO/SSE/SZSE, HKEX, Companies
+House, SEDAR+, ASX, EDINET, SGX, FRED/BEA/BLS, World Bank/IMF/BIS/OECD, central
+bank portals, US Treasury/FiscalData, and fund/ETF disclosures. It also includes
+secondary market/news context such as Yahoo Finance, Nasdaq, MarketWatch,
+Reuters, Bloomberg, Financial Times, CNBC, AP, transcript aggregators, and
+credit-rating agency entry points. Secondary sources do not satisfy
+primary-source requirements by themselves.
+
+Inspect the trusted source directory:
+
+```bash
+holo-v3 sources list --profile finance_fundamentals --authority primary
+holo-v3 sources families --profile finance_fundamentals
+holo-v3 sources seeds --profile finance_fundamentals --family treasury_data
+```
+
+Build or refresh a local high-speed corpus from real fetched documents:
+
+```bash
+holo-v3 retrieve "AAPL 10-K revenue and margin" \
+  --live-retrieval \
+  --live-web-search-provider bing_html \
+  --live-search-strategy aggregate \
+  --profile finance_fundamentals \
+  --artifact-log kernel_v3/.holo-v3-artifacts.jsonl \
+  --corpus-log kernel_v3/.holo-v3-corpus.jsonl \
+  --corpus-index kernel_v3/.holo-v3-corpus.sqlite \
+  --index-corpus
+
+holo-v3 retrieve "AAPL 10-K revenue" \
+  --from-corpus \
+  --profile finance_fundamentals \
+  --artifact-log kernel_v3/.holo-v3-artifacts.jsonl \
+  --corpus-log kernel_v3/.holo-v3-corpus.jsonl \
+  --corpus-index kernel_v3/.holo-v3-corpus.sqlite
+```
+
 For crawl-only live inspection:
 
 ```bash

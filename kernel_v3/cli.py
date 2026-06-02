@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import sys
+import urllib.parse
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
@@ -28,6 +29,7 @@ from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.policy import PolicyGate
+from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.processors import (
     CHAT_ROUTE_PROMPT_CONTRACT,
     EVALUATOR_PROMPT_CONTRACT,
@@ -53,6 +55,7 @@ from kernel_v3.research import (
     RESEARCH_DEPTHS,
     ResearchCorpusStore,
     research_depth_defaults,
+    source_directory_for_profile,
 )
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
@@ -470,6 +473,35 @@ def main(argv: list[str] | None = None) -> int:
     corpus_audit.add_argument("--limit", type=int, default=20)
     corpus_sub.add_parser("index")
 
+    sources_parser = sub.add_parser("sources")
+    sources_sub = sources_parser.add_subparsers(dest="sources_command", required=True)
+    sources_list = sources_sub.add_parser("list")
+    sources_list.add_argument(
+        "--profile",
+        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        default=FINANCE_FUNDAMENTALS_PROFILE_ID,
+    )
+    sources_list.add_argument("--authority", choices=["primary", "secondary", "weak"], default=None)
+    sources_list.add_argument("--family", default=None)
+    sources_list.add_argument("--source-id", default=None)
+    sources_list.add_argument("--limit", type=int, default=100)
+    sources_seeds = sources_sub.add_parser("seeds")
+    sources_seeds.add_argument(
+        "--profile",
+        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        default=FINANCE_FUNDAMENTALS_PROFILE_ID,
+    )
+    sources_seeds.add_argument("--authority", choices=["primary", "secondary", "weak"], default=None)
+    sources_seeds.add_argument("--family", default=None)
+    sources_seeds.add_argument("--source-id", default=None)
+    sources_seeds.add_argument("--limit", type=int, default=100)
+    sources_families = sources_sub.add_parser("families")
+    sources_families.add_argument(
+        "--profile",
+        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        default=FINANCE_FUNDAMENTALS_PROFILE_ID,
+    )
+
     trace_parser = sub.add_parser("trace")
     trace_parser.add_argument("task_id")
     trace_parser.add_argument("--verbose", action="store_true")
@@ -803,6 +835,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "corpus":
         payload = _corpus_command(args)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload.get("status") != "failed" else 1
+
+    if args.command == "sources":
+        payload = _sources_command(args)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0 if payload.get("status") != "failed" else 1
 
@@ -1436,6 +1473,159 @@ def _corpus_command(args) -> dict[str, object]:
     if command == "index":
         return {"status": "ok", "documents": store.index_documents()}
     return {"status": "failed", "reason": f"unknown_corpus_command:{command}"}
+
+
+def _sources_command(args) -> dict[str, object]:
+    profile_id = getattr(args, "profile", None) or FINANCE_FUNDAMENTALS_PROFILE_ID
+    entries = _filtered_source_entries(
+        profile_id=profile_id,
+        authority=getattr(args, "authority", None),
+        family=getattr(args, "family", None),
+        source_id=getattr(args, "source_id", None),
+    )
+    command = args.sources_command
+    if command == "list":
+        limited = entries[: _positive_limit(getattr(args, "limit", 100), default=100)]
+        return {
+            "status": "ok",
+            "profile": profile_id,
+            "total": len(entries),
+            "returned": len(limited),
+            "facets": _source_directory_facets(entries),
+            "sources": [_source_entry_payload(entry) for entry in limited],
+        }
+    if command == "seeds":
+        seeds = _source_seed_payloads(entries)
+        limited = seeds[: _positive_limit(getattr(args, "limit", 100), default=100)]
+        return {
+            "status": "ok",
+            "profile": profile_id,
+            "total": len(seeds),
+            "returned": len(limited),
+            "seeds": limited,
+            "usage": {
+                "purpose": "seed or refresh a local research corpus; seed URLs are source pointers, not evidence by themselves",
+                "recommended_command": (
+                    "holo-v3 retrieve '<query or seed url>' --live-retrieval "
+                    "--profile finance_fundamentals --index-corpus"
+                ),
+            },
+        }
+    if command == "families":
+        return {
+            "status": "ok",
+            "profile": profile_id,
+            "facets": _source_directory_facets(entries),
+        }
+    return {"status": "failed", "reason": f"unknown_sources_command:{command}"}
+
+
+def _filtered_source_entries(
+    *,
+    profile_id: str,
+    authority: str | None = None,
+    family: str | None = None,
+    source_id: str | None = None,
+):
+    entries = source_directory_for_profile(profile_id)
+    if authority:
+        entries = [entry for entry in entries if entry.authority_level == authority]
+    if family:
+        normalized_family = family.strip().lower()
+        entries = [entry for entry in entries if entry.source_family.lower() == normalized_family]
+    if source_id:
+        normalized_source_id = source_id.strip().lower()
+        entries = [entry for entry in entries if entry.source_id.lower() == normalized_source_id]
+    return entries
+
+
+def _source_entry_payload(entry) -> dict[str, object]:
+    return {
+        "source_id": entry.source_id,
+        "title": entry.title,
+        "profile_id": entry.profile_id,
+        "source_family": entry.source_family,
+        "authority_level": entry.authority_level,
+        "base_url": entry.base_url,
+        "allowed_hosts": list(entry.allowed_hosts),
+        "use_cases": list(entry.use_cases),
+        "required_identifiers": list(entry.required_identifiers),
+        "query_hints": list(entry.query_hints),
+        "crawl_notes": list(entry.crawl_notes),
+        "seed_url_count": len(_seed_urls_for_entry(entry)),
+    }
+
+
+def _source_directory_facets(entries) -> dict[str, object]:
+    families: dict[str, int] = {}
+    authorities: dict[str, int] = {}
+    for entry in entries:
+        families[entry.source_family] = families.get(entry.source_family, 0) + 1
+        authorities[entry.authority_level] = authorities.get(entry.authority_level, 0) + 1
+    return {
+        "source_families": dict(sorted(families.items())),
+        "authority_levels": dict(sorted(authorities.items())),
+    }
+
+
+def _source_seed_payloads(entries) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        for seed in _seed_urls_for_entry(entry):
+            if seed["url"] in seen:
+                continue
+            seen.add(seed["url"])
+            result.append(
+                {
+                    "source_id": entry.source_id,
+                    "title": entry.title,
+                    "source_family": entry.source_family,
+                    "authority_level": entry.authority_level,
+                    **seed,
+                }
+            )
+    return result
+
+
+def _seed_urls_for_entry(entry) -> list[dict[str, object]]:
+    seeds: list[dict[str, object]] = []
+    if _safe_seed_url(entry.base_url):
+        seeds.append({"seed_kind": "base_url", "url": entry.base_url})
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    crawl_seed_urls = metadata.get("crawl_seed_urls")
+    if isinstance(crawl_seed_urls, list):
+        for url in crawl_seed_urls:
+            if isinstance(url, str) and _safe_seed_url(url):
+                seeds.append({"seed_kind": "crawl_seed_url", "url": url})
+    query_templates = metadata.get("query_url_templates")
+    if isinstance(query_templates, list):
+        for template in query_templates:
+            if not isinstance(template, dict):
+                continue
+            raw = template.get("template")
+            if isinstance(raw, str) and _template_is_static_seed(raw) and _safe_seed_url(raw):
+                seeds.append(
+                    {
+                        "seed_kind": "static_query_template",
+                        "template_id": str(template.get("template_id") or ""),
+                        "url": raw,
+                    }
+                )
+    return seeds
+
+
+def _safe_seed_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return False
+    if not parsed.hostname or parsed.username or parsed.password:
+        return False
+    return not contains_secret_like_content(parsed.geturl())
+
+
+def _template_is_static_seed(template: str) -> bool:
+    return "{" not in template and "}" not in template
 
 
 def _memory_command(args, journal: JournalStore) -> dict[str, object]:
