@@ -538,8 +538,16 @@ Inspect the trusted source directory:
 ```bash
 holo-v3 sources list --profile finance_fundamentals --authority primary
 holo-v3 sources families --profile finance_fundamentals
+holo-v3 sources plan "NVIDIA 10-K fundamentals revenue margin SEC filing" \
+  --profile finance_fundamentals
 holo-v3 sources seeds --profile finance_fundamentals --family treasury_data
 ```
+
+`sources plan` is the fast website-index route. It hashes the user query in
+the returned payload and ranks trusted sites by task/source metadata, so the
+agent can prefer official filing/statistics/issuer portals before using generic
+web search. It is not a table of answers and it does not treat source pointers
+as evidence.
 
 Build or refresh a local high-speed corpus from real fetched documents:
 

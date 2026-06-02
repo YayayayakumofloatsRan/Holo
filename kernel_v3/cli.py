@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import os
@@ -70,6 +71,7 @@ from kernel_v3.retrieval import (
     UnconfiguredSearchProvider,
     inspect_retrieval_providers,
 )
+from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
 from kernel_v3.retrieval.live_config import (
     LIVE_ALLOW_ALL_HOSTS_ENV,
     LIVE_CRAWL_INCLUDE_SITEMAPS_ENV,
@@ -495,6 +497,16 @@ def main(argv: list[str] | None = None) -> int:
     sources_seeds.add_argument("--family", default=None)
     sources_seeds.add_argument("--source-id", default=None)
     sources_seeds.add_argument("--limit", type=int, default=100)
+    sources_plan = sources_sub.add_parser("plan")
+    sources_plan.add_argument("query")
+    sources_plan.add_argument(
+        "--profile",
+        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        default=FINANCE_FUNDAMENTALS_PROFILE_ID,
+    )
+    sources_plan.add_argument("--authority", choices=["primary", "secondary", "weak"], default=None)
+    sources_plan.add_argument("--family", default=None)
+    sources_plan.add_argument("--limit", type=int, default=12)
     sources_families = sources_sub.add_parser("families")
     sources_families.add_argument(
         "--profile",
@@ -1517,6 +1529,29 @@ def _sources_command(args) -> dict[str, object]:
             "profile": profile_id,
             "facets": _source_directory_facets(entries),
         }
+    if command == "plan":
+        limit = _positive_limit(getattr(args, "limit", 12), default=12)
+        ranked = rank_source_directory_entries(entries, query=args.query, metadata={"research_profile": profile_id})
+        planned = []
+        for ranked_entry in ranked[:limit]:
+            entry = ranked_entry.entry
+            payload = _source_entry_payload(entry)
+            payload["relevance_score"] = round(ranked_entry.score, 6)
+            payload["matched_query_terms"] = list(ranked_entry.matched_terms)
+            payload["seed_urls"] = _seed_urls_for_entry(entry)[:5]
+            planned.append(payload)
+        return {
+            "status": "ok",
+            "profile": profile_id,
+            "query_hash": _hash_for_cli(args.query),
+            "total_candidates": len(entries),
+            "returned": len(planned),
+            "strategy": {
+                "primary": "use ranked trusted sites before generic web search",
+                "fallback": "use live web search only when the site index cannot identify enough relevant entry points",
+            },
+            "sources": planned,
+        }
     return {"status": "failed", "reason": f"unknown_sources_command:{command}"}
 
 
@@ -1626,6 +1661,10 @@ def _safe_seed_url(url: str) -> bool:
 
 def _template_is_static_seed(template: str) -> bool:
     return "{" not in template and "}" not in template
+
+
+def _hash_for_cli(value: object) -> str:
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
 def _memory_command(args, journal: JournalStore) -> dict[str, object]:

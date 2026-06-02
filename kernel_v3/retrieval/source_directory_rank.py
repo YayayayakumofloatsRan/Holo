@@ -34,7 +34,7 @@ def rank_source_directory_entries(
     scored: list[tuple[float, int, object, list[str]]] = []
     for index, entry in enumerate(entries):
         text = source_directory_entry_text(entry).lower()
-        matched = [term for term in query_terms if term in text]
+        matched = _matched_query_terms(query_terms, text)
         score = _base_score(query_terms=query_terms, matched=matched)
         score += 0.08 * sum(1 for term in task_terms if term and term in text)
         family = str(getattr(entry, "source_family", "") or "")
@@ -72,7 +72,7 @@ def rank_source_directory_sources(
     scored: list[tuple[float, int, SearchSource, list[str]]] = []
     for index, source in enumerate(sources):
         text = source_directory_source_text(source).lower()
-        matched = [term for term in query_terms if term in text]
+        matched = _matched_query_terms(query_terms, text)
         score = _base_score(query_terms=query_terms, matched=matched)
         score += 0.08 * sum(1 for term in task_terms if term and term in text)
         family = str(source.metadata.get("source_family") or "")
@@ -230,6 +230,15 @@ def _base_score(*, query_terms: list[str], matched: list[str]) -> float:
     if not query_terms:
         return 0.0
     return len(matched) / max(1, len(query_terms))
+
+
+def _matched_query_terms(query_terms: list[str], candidate_text: str) -> list[str]:
+    candidate_terms = set(query_terms_for_source_directory(candidate_text, {}))
+    matched: list[str] = []
+    for term in query_terms:
+        if term in candidate_terms:
+            matched.append(term)
+    return matched
 
 
 def _metadata_string(metadata: JsonObject, key: str) -> str:
