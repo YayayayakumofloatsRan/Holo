@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Protocol
 
 from kernel_v3.context import ArtifactStore
@@ -24,7 +25,7 @@ from kernel_v3.retrieval.contracts import (
 )
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator
 from kernel_v3.retrieval.extract import extract_spans
-from kernel_v3.retrieval.providers import FetchProvider, SearchProvider, provider_capability
+from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
 from kernel_v3.retrieval.rank import plan_queries, rank_sources
 from kernel_v3.tools import ToolRegistry, ToolResult
 
@@ -60,12 +61,14 @@ class RetrievalOperator:
         evaluator: EvidenceEvaluator | None = None,
         preview_chars: int = 160,
         corpus_store: CorpusStore | None = None,
+        fetch_concurrency: int = 8,
     ) -> None:
         self.search_provider = search_provider
         self.fetch_provider = fetch_provider
         self.evaluator = evaluator or EvidenceEvaluator()
         self.preview_chars = preview_chars
         self.corpus_store = corpus_store
+        self.fetch_concurrency = max(1, int(fetch_concurrency))
         self.network_access = bool(
             getattr(search_provider, "live_network", False)
             or getattr(fetch_provider, "live_network", False)
@@ -103,6 +106,7 @@ class RetrievalOperator:
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
                 **_budget_clamp_diagnostics(requested_goal, goal),
+                "fetch_concurrency": min(self.fetch_concurrency, max(1, goal.max_fetches)),
                 "provider_capabilities": self.provider_capabilities(),
                 **(_research_query_strategy_diagnostics(research_profile) if research_profile is not None else {}),
             },
@@ -202,14 +206,12 @@ class RetrievalOperator:
         documents: list[tuple[FetchedDocument, str]] = []
         fetch_attempt_ids: list[str] = []
         source_by_id = {source.source_id: source for source in _dedupe_sources(sources)}
-        for index, ranked_source in enumerate(ranked[: goal.max_fetches], start=1):
-            source = source_by_id[ranked_source.source_id]
-            fetch_error = None
-            try:
-                response = self.fetch_provider.fetch(source)
-            except Exception as exc:  # pragma: no cover - concrete providers decide error types.
-                response = None
-                fetch_error = type(exc).__name__
+        fetch_jobs = [
+            (index, ranked_source, source_by_id[ranked_source.source_id])
+            for index, ranked_source in enumerate(ranked[: goal.max_fetches], start=1)
+            if ranked_source.source_id in source_by_id
+        ]
+        for index, ranked_source, source, response, fetch_error in self._fetch_ranked_sources(fetch_jobs):
             fetch_id = f"fetch-{goal.goal_id}-{index}"
             artifact_refs: list[str] = []
             if response is not None and response.status == "ok":
@@ -411,6 +413,7 @@ class RetrievalOperator:
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
                 **_budget_clamp_diagnostics(requested_goal, goal),
+                "fetch_concurrency": min(self.fetch_concurrency, max(1, len(fetch_jobs))),
                 "provider_capabilities": self.provider_capabilities(),
                 "search_attempt_count": len(search_attempt_ids),
                 "fetch_attempt_count": len(fetch_attempt_ids),
@@ -437,6 +440,44 @@ class RetrievalOperator:
             artifact_refs=report.artifact_refs,
         )
         return report
+
+    def _fetch_ranked_sources(
+        self,
+        fetch_jobs: list[tuple[int, RankedSource, SearchSource]],
+    ) -> list[tuple[int, RankedSource, SearchSource, FetchResponse | None, str | None]]:
+        if len(fetch_jobs) <= 1 or self.fetch_concurrency <= 1:
+            return [self._fetch_one(index, ranked_source, source) for index, ranked_source, source in fetch_jobs]
+        workers = min(self.fetch_concurrency, len(fetch_jobs))
+        results: dict[int, tuple[int, RankedSource, SearchSource, FetchResponse | None, str | None]] = {}
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="holo-retrieval-fetch") as executor:
+            future_by_index = {
+                executor.submit(self._fetch_one, index, ranked_source, source): index
+                for index, ranked_source, source in fetch_jobs
+            }
+            for future in as_completed(future_by_index):
+                index = future_by_index[future]
+                try:
+                    results[index] = future.result()
+                except Exception as exc:  # pragma: no cover - _fetch_one already catches provider exceptions.
+                    ranked_source, source = next(
+                        (ranked, source)
+                        for item_index, ranked, source in fetch_jobs
+                        if item_index == index
+                    )
+                    results[index] = (index, ranked_source, source, None, type(exc).__name__)
+        return [results[index] for index in sorted(results)]
+
+    def _fetch_one(
+        self,
+        index: int,
+        ranked_source: RankedSource,
+        source: SearchSource,
+    ) -> tuple[int, RankedSource, SearchSource, FetchResponse | None, str | None]:
+        try:
+            response = self.fetch_provider.fetch(source)
+            return index, ranked_source, source, response, None
+        except Exception as exc:  # pragma: no cover - concrete providers decide error types.
+            return index, ranked_source, source, None, type(exc).__name__
 
     def _record_corpus_document(
         self,

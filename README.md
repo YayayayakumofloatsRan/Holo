@@ -98,9 +98,15 @@ Kernel v3 currently contains the infrastructure for:
   `metadata.capability_args["retrieval.run"]` payload arrays, so one LLM packet
   can drive multi-subtopic research while each retrieval remains host-validated;
 - run-level planned retrieval coverage: for multi-subtopic research, Holo
-  tracks the latest retrieval report for each host-planned `goal-plan-*`
-  subgoal and refuses to finalize if any subgoal remains missing or
-  insufficient;
+  tracks the latest retrieval report for each required host-planned
+  `goal-plan-*` subgoal and refuses to finalize while a required subgoal
+  remains missing or insufficient. Opportunistic expansion payloads are still
+  visible in diagnostics and planner context, but a failed expansion does not
+  block a final answer once required evidence is sufficient;
+- model-planner retrieval binding: if a model proposes `retrieval.run` without
+  a `goal_id`, the host binds it to the next incomplete required planned
+  retrieval subgoal. The model can focus on query/source/strategy while the
+  host preserves plan coverage and termination semantics;
 - explicit multi-query retrieval payloads: when a model/host payload supplies
   `queries` or `query_templates`, Holo derives a safe default `max_queries` from
   that list so one retrieval subgoal can run multiple bounded search attempts
@@ -477,6 +483,13 @@ safety caps. These are ceilings, not mandatory spend; the loop now accounts
 for actual fetch attempts when a retrieval report is available. Planner
 decisions, provider output, ranking, evidence sufficiency, repetition, and
 loop guards still decide when to stop.
+
+Fetch is parallelized inside `RetrievalOperator` with bounded
+`fetch_concurrency` while ArtifactStore writes and journal records remain in
+rank order. Search query execution remains ordered because provider diagnostics
+are stateful; provider-level fanout should be implemented inside aggregate or
+adaptive search providers where each child provider can report its own
+diagnostics safely.
 
 The live retrieval chain is now broader than a single search endpoint:
 

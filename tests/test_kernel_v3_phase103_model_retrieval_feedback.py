@@ -127,10 +127,11 @@ def test_phase103_source_authority_gap_feedback_drives_model_retrieval_replan() 
     assert "primary_source" in updates[1].data["feedback_missing_evidence"]
     replan = updates[1].data["replan_hints"]
     assert replan["status"] == "needs_replan"
-    assert replan["suggested_next_action"] == "propose_materially_new_retrieval_run"
+    assert replan["suggested_next_action"] == "retry_incomplete_planned_retrieval_subgoals"
     assert replan["avoid_repeating"]["recent_payload_hashes"]
     retrieval_replan = replan["retrieval"]
     assert retrieval_replan["needs_replan"] is True
+    assert retrieval_replan["incomplete_planned_goal_ids"] == ["goal-plan-1-1"]
     assert retrieval_replan["latest_report_status"] == "insufficient_evidence"
     assert "primary_source" in retrieval_replan["missing"]
     assert "source_authority:primary" in retrieval_replan["missing"]

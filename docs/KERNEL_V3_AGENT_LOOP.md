@@ -1039,6 +1039,53 @@ timeout 360 env HOLO_V3_LIVE_FINANCE=1 HOLO_V3_LIVE_MODEL=1 \
   .venv/bin/python -m pytest -q tests/live/test_kernel_v3_phase101_live_finance_retrieval.py
 ```
 
+## Iteration 2026-06-02
+
+Retrieval-loop and console hardening completed in this iteration:
+
+- retrieval plans now distinguish required subgoals from opportunistic
+  expansion subgoals. Required `goal-plan-*` items gate finalization; optional
+  expansion failures are diagnostics and replan signals, not hard blockers once
+  required evidence/citations are sufficient;
+- model-planner `retrieval.run` actions that omit `goal_id` are host-bound to
+  the next incomplete required planned retrieval subgoal. This keeps LLM packets
+  simpler while preserving host-owned plan coverage;
+- default finance research plans retain the original user/model query as the
+  required subgoal, then append official filing, SEC/companyfacts, market-data,
+  news, competitor, or macro expansion payloads as opportunistic subgoals;
+- action ordering prioritizes required tool actions before opportunistic
+  expansion actions across the whole task plan, so a later required subtopic is
+  not delayed behind optional expansion for an earlier subtopic;
+- the synthesizer gets a bounded citation repair pass when evidence/citations
+  exist but model JSON omits `citation_refs`. The repair call must cite known
+  citation ids and still goes through the same schema validation;
+- `RetrievalOperator` fetches ranked sources with bounded parallelism, then
+  writes artifacts and journal records in rank order. Query planning/search
+  remains ordered because search provider diagnostics are stateful;
+- interactive CLI colors were reduced to a calmer gray/white/green/orange/red
+  palette while keeping model/tool/retrieval/evidence/failure phases visible.
+
+Data-structure note: red-black trees are not the current bottleneck. Retrieval
+performance is dominated by network discovery, fetch latency, source ranking,
+dedupe, and evidence extraction. The useful structure here is a scored/priority
+candidate pipeline plus bounded parallel fetch; balanced trees would only matter
+after we introduce a large in-memory index that needs ordered range queries.
+
+Validation used:
+
+```bash
+.venv/bin/pytest -q tests/test_kernel_v3_phase4_retrieval_fsm.py
+.venv/bin/pytest -q tests/test_kernel_v3_phase94_capability_space_and_long_loop.py
+.venv/bin/pytest -q \
+  tests/test_kernel_v3_phase103_model_retrieval_feedback.py \
+  tests/test_kernel_v3_phase105_adaptive_search_strategy.py \
+  tests/test_kernel_v3_phase106_fred_structured_provider.py \
+  tests/test_kernel_v3_phase107_fiscaldata_structured_provider.py \
+  tests/test_kernel_v3_phase95_retrieval_crawl_provider.py \
+  tests/test_kernel_v3_phase99_source_query_provider.py
+.venv/bin/pytest -q tests/test_kernel_v3_*.py
+```
+
 ## Iteration 2026-06-01
 
 Hardening completed in this iteration:

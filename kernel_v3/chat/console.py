@@ -115,7 +115,7 @@ def print_chat_turn_human(
 ):
     if start_index is None:
         start_index = len(runtime.journal.records())
-    print(style("processing...", "bold_cyan", color=color))
+    print(style("processing...", "bold_white", color=color))
     sys.stdout.flush()
     payload = receive_with_live_activity(runtime, text, thread_id=thread_id, start_index=start_index, color=color)
     print(render_chat_result(payload, color=color))
@@ -497,7 +497,7 @@ def parse_stage_settings(args: list[str]) -> tuple[JsonObject, JsonObject | None
 
 
 def interactive_settings_menu(*, default_scope: str, color: bool) -> tuple[str | None, JsonObject | None]:
-    print(style("Model settings", "bold_cyan", color=color))
+    print(style("Model settings", "bold_white", color=color))
     scope = input("scope [thread/global] (thread): ").strip().lower() or default_scope
     if scope not in {"thread", "global"}:
         scope = default_scope
@@ -552,7 +552,7 @@ def list_stage_aliases() -> list[str]:
 
 
 def chat_banner(thread_id: str, *, color: bool) -> str:
-    title = style("Holo Kernel v3 chat", "bold_cyan", color=color)
+    title = style("Holo Kernel v3 chat", "bold_white", color=color)
     hint = "Commands: /thread new <id>, /thread switch <id>, /threads, /history, /settings, /json on, /color off, /quit"
     return f"{title}\n{style('Thread', 'dim', color=color)}: {thread_id}\n{style(hint, 'dim', color=color)}"
 
@@ -588,7 +588,7 @@ def print_chat_local_result(payload: JsonObject, *, output_mode: str, color: boo
                 if not isinstance(item, dict):
                     continue
                 role = str(item.get("role") or "event")
-                label = style(role, "cyan" if role == "user" else "green", color=color)
+                label = style(role, "white" if role == "user" else "green", color=color)
                 meta = str(item.get("meta") or "")
                 text = str(item.get("text") or "")
                 suffix = f" {style(meta, 'dim', color=color)}" if meta else ""
@@ -639,14 +639,14 @@ def render_chat_result(payload: object, *, color: bool) -> str:
         lines.append(f"{event_label('answer', color=color)} {highlight_answer_text(answer, color=color)}")
     pending = data.get("pending_question")
     if isinstance(pending, dict) and pending.get("question"):
-        lines.append(style("needs input:", "yellow", color=color) + f" {pending['question']}")
+        lines.append(style("needs input:", "orange", color=color) + f" {pending['question']}")
     failure = data.get("failure_report")
     if isinstance(failure, dict) and failure:
         reason = failure.get("reason") or failure.get("status") or "failed"
         lines.append(style("failure:", "red", color=color) + f" {reason}")
         missing = failure.get("missing_evidence")
         if isinstance(missing, list) and missing:
-            lines.append(style("missing:", "yellow", color=color) + f" {compact_list(missing, limit=6)}")
+            lines.append(style("missing:", "orange", color=color) + f" {compact_list(missing, limit=6)}")
         attempted = failure.get("attempted_actions")
         if isinstance(attempted, list) and attempted:
             lines.append(style("attempted:", "dim", color=color) + f" {compact_list(attempted, limit=6)}")

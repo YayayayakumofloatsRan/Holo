@@ -272,6 +272,7 @@ limitations string array, used_evidence string array.
 Example:
 {"answer":"The available evidence supports the answer, with one limitation noted.","citation_refs":["cite-1"],"confidence":0.82,"limitations":["Only provided evidence was used."],"used_evidence":["ev-1"]}
 Only cite provided citation ids. Do not invent sources.
+If the prompt contains required_citation_refs and that array is non-empty, citation_refs must include at least one of those exact ids.
 Answer every explicit question or subtask in the provided task_goal when evidence supports it.
 If evidence does not support part of the task_goal, state that limit in limitations instead of omitting the part.
 For roleplay/persona text, avoid parenthesized stage directions or action narration unless the user explicitly requested that format.

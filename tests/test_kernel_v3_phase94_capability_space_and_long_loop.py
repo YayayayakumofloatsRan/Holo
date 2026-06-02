@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kernel_v3.agent import AgentRuntime, SemanticIntake, task_graph_from_semantic
+from kernel_v3.agent import AgentRuntime, SemanticIntake, build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.capabilities import semantic_capability_catalog
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
@@ -548,6 +548,48 @@ def test_phase94_state_profiles_include_operating_state_beyond_resource_mode():
         for axis, value in profile["state_axes"].items():
             assert axis in dimensions
             assert value in dimensions[axis]
+
+
+def test_phase94_finance_intake_without_payload_gets_structured_retrieval_subgoals():
+    intake = SemanticIntake(
+        intake_id="semantic-intake-finance-default-plan",
+        goal="检索一下APPLE INC的市盈率、股价、基本面信息等等",
+        primary_intent="finance_fundamentals_research",
+        suggested_mode="retrieval_answer",
+        compound=False,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "finance_fundamentals_research",
+                "text": "APPLE INC 市盈率、股价、基本面信息",
+                "sequence_index": 1,
+                "required_capabilities": ["finance.fundamentals_research"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            }
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+
+    graph = task_graph_from_semantic(intake)
+    plan = build_task_execution_plan(graph, validate_task_graph(graph))
+    step = plan.steps[0]
+    payloads = step["metadata"]["capability_args"]["retrieval.run"]
+
+    assert step["tool_name"] == "retrieval.run"
+    assert len(payloads) >= 3
+    queries = " ".join(payload["query"] for payload in payloads)
+    metadata = [payload["metadata"] for payload in payloads]
+    assert "SEC EDGAR" in queries
+    assert "PE ratio" in queries
+    assert all(item["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID for item in metadata)
+    assert any(item["source_authority_requirement"] == "primary" for item in metadata)
+    assert any(item["research_task_kind"] == "market_data" for item in metadata)
+    assert any(item["search_strategy"] == "structured" for item in metadata)
 
 
 def test_phase94_agent_context_exposes_state_profile_summary_to_planner():

@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 from kernel_v3.context import ArtifactStore, ContextCompiler
@@ -128,6 +130,43 @@ def test_phase4_retrieval_bounds_sources_fetches_and_spans():
     assert report.diagnostics["network_access"] is False
     assert report.diagnostics["budget"]["max_fetches"] == 1
     assert report.diagnostics["provider_capabilities"] == capabilities
+
+
+def test_phase4_retrieval_fetches_ranked_sources_concurrently_but_journals_in_rank_order():
+    sources = [
+        _source(f"src-{index}", f"https://example.test/{index}", f"Kernel v3 source {index}", "Kernel v3 retrieval")
+        for index in range(4)
+    ]
+    fetch_provider = ConcurrentFetchProvider(
+        {
+            source.uri: f"Kernel v3 retrieval evidence from {source.source_id}."
+            for source in sources
+        },
+        sleep_seconds=0.02,
+    )
+    journal = JournalStore.in_memory()
+
+    report = RetrievalOperator(
+        search_provider=FakeSearchProvider({"Kernel v3 retrieval": sources}),
+        fetch_provider=fetch_provider,
+        fetch_concurrency=4,
+    ).run(
+        SearchGoal(goal_id="goal-parallel-fetch", query="Kernel v3 retrieval", max_fetches=4),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-parallel-fetch",
+        run_id="run-1",
+    )
+
+    fetch_attempts = journal.records(task_id="task-parallel-fetch", kind="retrieval_fetch_attempt")
+    assert fetch_provider.max_active > 1
+    assert [record.data["fetch_id"] for record in fetch_attempts] == [
+        "fetch-goal-parallel-fetch-1",
+        "fetch-goal-parallel-fetch-2",
+        "fetch-goal-parallel-fetch-3",
+        "fetch-goal-parallel-fetch-4",
+    ]
+    assert report.diagnostics["fetch_concurrency"] == 4
 
 
 def test_phase4_retrieval_operator_clamps_oversized_goal_budgets():
@@ -663,6 +702,32 @@ class RaisingSearchProvider:
 class RaisingFetchProvider:
     def fetch(self, source):
         raise RuntimeError("fetch failed")
+
+
+class ConcurrentFetchProvider:
+    provider_id = "concurrent_fetch"
+    live_network = False
+    default_enabled = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+
+    def __init__(self, responses_by_uri: dict[str, str], *, sleep_seconds: float) -> None:
+        self.responses_by_uri = dict(responses_by_uri)
+        self.sleep_seconds = sleep_seconds
+        self._lock = threading.Lock()
+        self._active = 0
+        self.max_active = 0
+
+    def fetch(self, source):
+        with self._lock:
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+        try:
+            time.sleep(self.sleep_seconds)
+            return FetchResponse(status="ok", body=self.responses_by_uri[source.uri])
+        finally:
+            with self._lock:
+                self._active -= 1
 
 
 class LiveNetworkSearchProvider:

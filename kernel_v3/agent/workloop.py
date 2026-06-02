@@ -464,7 +464,14 @@ def assess_evidence_sufficiency(
         sufficient = False
         missing.append("retrieval_evidence")
         reason = "missing_retrieval_evidence"
-    if recipe.mode == "retrieval_answer" and latest_report_status and latest_report_status != "sufficient":
+    latest_report_goal_id = str(latest_retrieval_report.data.get("goal_id")) if latest_retrieval_report else ""
+    latest_report_is_required = _retrieval_goal_required(recipe, latest_report_goal_id)
+    if (
+        recipe.mode == "retrieval_answer"
+        and latest_report_status
+        and latest_report_status != "sufficient"
+        and (not retrieval_evidence or latest_report_is_required)
+    ):
         sufficient = False
         missing.append("sufficient_retrieval_evidence")
         missing.extend(f"query_facet:{facet}" for facet in missing_query_facets)
@@ -547,8 +554,18 @@ def decide_termination(
             override = True
     elif feedback.status == "continue":
         if "remaining_plan_actions" in feedback.missing_evidence:
-            decision = "continue"
-            reason = "planned_actions_remaining"
+            planned_retrieval_coverage = _dict_or_empty(evidence.diagnostics.get("planned_retrieval_coverage"))
+            if (
+                recipe.mode == "retrieval_answer"
+                and evidence.sufficient
+                and planned_retrieval_coverage.get("sufficient") is True
+            ):
+                decision = "final_answer"
+                reason = "evidence_sufficient_overrode_optional_plan_actions"
+                override = True
+            else:
+                decision = "continue"
+                reason = "planned_actions_remaining"
         elif recipe.mode == "workspace_answer" and _feedback_requires_workspace_file_read(feedback):
             decision = "continue"
             reason = "workspace_file_read_requested"
@@ -582,9 +599,13 @@ def decide_termination(
             decision = "blocked"
             reason = "policy_or_tool_blocked"
     elif feedback.status in {"failed", "step_limit_exceeded"}:
-        if evidence.sufficient and feedback.status == "failed" and feedback.stop_reason == "processor_failed":
+        if evidence.sufficient and feedback.status == "failed":
             decision = "final_answer"
-            reason = "evidence_sufficient_overrode_processor_failure"
+            reason = (
+                "evidence_sufficient_overrode_processor_failure"
+                if feedback.stop_reason == "processor_failed"
+                else "evidence_sufficient_overrode_failed_feedback"
+            )
             override = True
         elif _network_budget_guard_with_evidence(observation=observation, evidence=evidence):
             decision = "final_answer"
@@ -780,6 +801,8 @@ def _latest_run_record(journal: JournalStore, *, task_id: str, run_id: str, kind
 
 def _planned_retrieval_coverage(journal: JournalStore, *, task_id: str, run_id: str, recipe: TaskRecipe) -> JsonObject:
     planned_goal_ids: list[str] = _planned_retrieval_goal_ids_from_recipe(recipe)
+    optional_goal_ids: list[str] = _planned_retrieval_goal_ids_from_recipe(recipe, required=False)
+    diagnostic_goal_ids: list[str] = [*planned_goal_ids, *optional_goal_ids]
     for record in journal.records(task_id=task_id, kind="action"):
         if record.run_id != run_id:
             continue
@@ -790,13 +813,16 @@ def _planned_retrieval_coverage(journal: JournalStore, *, task_id: str, run_id: 
             continue
         goal_id = payload.get("goal_id")
         if isinstance(goal_id, str) and goal_id.startswith("goal-plan-"):
-            planned_goal_ids.append(goal_id)
+            diagnostic_goal_ids.append(goal_id)
     planned_goal_ids = _ordered_unique(planned_goal_ids)
+    optional_goal_ids = [goal_id for goal_id in _ordered_unique(optional_goal_ids) if goal_id not in set(planned_goal_ids)]
+    diagnostic_goal_ids = _ordered_unique([*diagnostic_goal_ids, *planned_goal_ids, *optional_goal_ids])
     if not planned_goal_ids:
         return {
             "required": False,
             "sufficient": True,
             "planned_goal_ids": [],
+            "optional_goal_ids": optional_goal_ids,
             "complete_goal_ids": [],
             "incomplete_goal_ids": [],
             "latest_status_by_goal_id": {},
@@ -810,23 +836,26 @@ def _planned_retrieval_coverage(journal: JournalStore, *, task_id: str, run_id: 
             reports_by_goal[goal_id] = dict(record.data)
     incomplete: list[str] = []
     statuses: JsonObject = {}
-    for goal_id in planned_goal_ids:
+    for goal_id in diagnostic_goal_ids:
         report = reports_by_goal.get(goal_id)
         status = str(report.get("status")) if report is not None else "missing_report"
         statuses[goal_id] = status
+    for goal_id in planned_goal_ids:
+        status = statuses.get(goal_id, "missing_report")
         if status != "sufficient":
             incomplete.append(goal_id)
     return {
         "required": True,
         "sufficient": not incomplete,
         "planned_goal_ids": planned_goal_ids,
+        "optional_goal_ids": optional_goal_ids,
         "complete_goal_ids": [goal_id for goal_id in planned_goal_ids if goal_id not in set(incomplete)],
         "incomplete_goal_ids": incomplete,
         "latest_status_by_goal_id": statuses,
     }
 
 
-def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe) -> list[str]:
+def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe, *, required: bool = True) -> list[str]:
     plan = recipe.metadata.get("task_execution_plan")
     if not isinstance(plan, dict):
         return []
@@ -852,12 +881,36 @@ def _planned_retrieval_goal_ids_from_recipe(recipe: TaskRecipe) -> list[str]:
             continue
         total = len(payloads)
         for index, payload in enumerate(payloads, start=1):
+            if _retrieval_payload_required(payload) != required:
+                continue
             goal_id = payload.get("goal_id")
             if isinstance(goal_id, str) and goal_id:
                 goal_ids.append(goal_id)
             else:
                 goal_ids.append(f"goal-plan-{sequence_id}" if total == 1 else f"goal-plan-{sequence_id}-{index}")
     return _ordered_unique(goal_ids)
+
+
+def _retrieval_goal_required(recipe: TaskRecipe, goal_id: str) -> bool:
+    if not goal_id:
+        return True
+    required = set(_planned_retrieval_goal_ids_from_recipe(recipe, required=True))
+    optional = set(_planned_retrieval_goal_ids_from_recipe(recipe, required=False))
+    if goal_id in required:
+        return True
+    if goal_id in optional:
+        return False
+    return True
+
+
+def _retrieval_payload_required(payload: JsonObject) -> bool:
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    for container in (payload, metadata):
+        value = container.get("subgoal_required")
+        if isinstance(value, bool):
+            return value
+    return True
 
 
 def _retrieval_payloads_from_capability_args(value: object) -> list[JsonObject]:

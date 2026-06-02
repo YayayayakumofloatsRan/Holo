@@ -2,40 +2,40 @@ from __future__ import annotations
 
 
 THEME = {
-    "blue": "34",
-    "bold_cyan": "1;36",
+    "bold_gray": "1;90",
     "bold_green": "1;32",
-    "bold_magenta": "1;35",
+    "bold_orange": "1;38;5;208",
     "bold_red": "1;31",
-    "bold_yellow": "1;33",
-    "cyan": "36",
+    "bold_white": "1;37",
+    "gray": "90",
+    "gray_green": "38;5;108",
+    "gray_orange": "38;5;172",
+    "gray_red": "38;5;167",
     "dim": "2",
     "green": "32",
     "light": "97",
-    "magenta": "35",
     "orange": "38;5;208",
     "red": "31",
     "white": "37",
-    "yellow": "33",
 }
 
 
 EVENT_STYLES = {
-    "action": "bold_yellow",
+    "action": "gray_orange",
     "answer": "bold_green",
-    "chat": "bold_green",
+    "chat": "gray_green",
     "context": "dim",
-    "evidence": "green",
+    "evidence": "gray_green",
     "failure": "bold_red",
     "final": "bold_green",
-    "memory": "magenta",
-    "model": "bold_cyan",
-    "observe": "green",
-    "policy": "yellow",
-    "reason": "bold_magenta",
-    "retrieval": "blue",
-    "route": "magenta",
-    "tool": "bold_yellow",
+    "memory": "gray",
+    "model": "bold_white",
+    "observe": "gray_green",
+    "policy": "gray_orange",
+    "reason": "gray",
+    "retrieval": "white",
+    "route": "gray",
+    "tool": "gray_orange",
 }
 
 
@@ -43,15 +43,15 @@ def status_style(status: str) -> str:
     if status in {"completed", "ok", "ready"}:
         return "green"
     if status in {"needs_user_input", "blocked", "canceled"}:
-        return "yellow"
+        return "orange"
     if status in {"failed", "error"}:
         return "red"
-    return "cyan"
+    return "white"
 
 
 def event_style(category: str, *, status: str | None = None) -> str:
     if status in {"failed", "error", "blocked"}:
-        return "bold_red" if status in {"failed", "error"} else "bold_yellow"
+        return "bold_red" if status in {"failed", "error"} else "bold_orange"
     if status in {"completed", "ok", "ready", "sufficient"}:
         return "green"
     return EVENT_STYLES.get(category, "dim")

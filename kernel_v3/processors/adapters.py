@@ -155,7 +155,35 @@ class Synthesizer:
                 used_evidence=[],
                 error="processor_failed",
             )
-        return _final_answer_from_json(outcome.parsed, citations=citations, evidence=evidence)
+        answer = _final_answer_from_json(outcome.parsed, citations=citations, evidence=evidence)
+        if answer.error == "missing_citation_refs" and citations:
+            retry = self.fabric.run_json(
+                task_type="synthesizer.answer",
+                task_id=task_id,
+                run_id=run_id,
+                context_id=f"{context_id}-citation-repair",
+                prompt=_synthesizer_prompt(
+                    report,
+                    evidence,
+                    citations,
+                    retry_instruction=(
+                        "Previous synthesizer output omitted citation_refs. "
+                        "Return a corrected JSON object. citation_refs must include one or more ids "
+                        "from required_citation_refs, and used_evidence must include matching evidence ids."
+                    ),
+                ),
+                schema=SYNTHESIZER_SCHEMA,
+                provider=self.provider,
+                model=self.model,
+                parameters={
+                    "adapter": "Synthesizer",
+                    "retrieval_report_id": report.report_id,
+                    "repair_reason": "missing_citation_refs",
+                },
+            )
+            if retry.parsed is not None:
+                return _final_answer_from_json(retry.parsed, citations=citations, evidence=evidence)
+        return answer
 
 
 def _planner_prompt(context: ContextBundle, feedback: Feedback | None) -> str:
@@ -180,6 +208,8 @@ def _synthesizer_prompt(
     report: RetrievalReport,
     evidence: list[EvidenceItem],
     citations: list[CitationItem],
+    *,
+    retry_instruction: str | None = None,
 ) -> str:
     preferences = _interaction_preferences_from_report(report)
     evidence_preview_chars = _positive_int(
@@ -195,16 +225,21 @@ def _synthesizer_prompt(
         "task_goal": _task_goal_from_report(report),
         "interaction_preferences": preferences,
         "response_language": preferences.get("response_language"),
+        "required_citation_refs": [item.citation_id for item in citations],
+        "required_evidence_refs": [item.evidence_id for item in evidence],
         "answer_requirements": [
             "Answer every explicit question or subtask in task_goal when supported by provided evidence.",
             "If any part is unsupported, include it in limitations.",
             "Use only provided citation_refs and evidence ids.",
+            "If required_citation_refs is non-empty, citation_refs must include at least one provided citation id.",
             "Use the response_language preference as the default user-visible language unless the user explicitly requested another language.",
         ],
         "retrieval_report": report.to_dict(),
         "evidence": [_compact_evidence_for_provider(item, preview_chars=evidence_preview_chars) for item in evidence],
         "citations": [_compact_citation_for_provider(item, preview_chars=citation_preview_chars) for item in citations],
     }
+    if retry_instruction:
+        payload["retry_instruction"] = retry_instruction
     return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
 
 

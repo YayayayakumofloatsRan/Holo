@@ -1290,8 +1290,8 @@ def test_phase62_human_console_activity_colors_public_agent_phases():
     activity = render_chat_activity(journal.records(task_id="task-color"), color=True)
 
     assert "\033[" in activity
-    assert "\033[1;36m[model] model request planner.propose" in activity
-    assert "  \033[2m·\033[0m \033[1;33m[tool] action retrieval.run" in activity
+    assert "\033[1;37m[model] model request planner.propose" in activity
+    assert "  \033[2m·\033[0m \033[38;5;172m[tool] action retrieval.run" in activity
     assert "    \033[2m·\033[0m \033[32m[retrieval] retrieval search query=DeepSeek API" in activity
     assert "[model]" in activity
     assert "[tool]" in activity

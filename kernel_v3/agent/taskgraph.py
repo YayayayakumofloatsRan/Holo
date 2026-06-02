@@ -33,6 +33,7 @@ _SYSTEM_TOOL_CAPABILITIES = {"system.time"}
 _SYSTEM_HOST_CAPABILITIES = {"system.environment"}
 _SYSTEM_CAPABILITIES = _SYSTEM_TOOL_CAPABILITIES | _SYSTEM_HOST_CAPABILITIES | {"system.process"}
 _EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.list", "workspace.search", "file.read", "workspace.write", "system.time"}
+_FINANCE_FUNDAMENTALS_PROFILE_ID = "finance_fundamentals"
 
 
 def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
@@ -207,6 +208,9 @@ def build_task_execution_plan(
     for index, node in enumerate(graph_nodes, start=1):
         status = _step_status(node, validation=validation, rejected=rejected)
         approval_required = status in {"needs_confirmation", "blocked", "invalid"}
+        capability_args = _capability_args(node.metadata)
+        if not capability_args:
+            capability_args = _default_capability_args_for_node(node)
         steps.append(
             TaskExecutionStep(
                 step_id=f"plan-step-{index}",
@@ -226,7 +230,7 @@ def build_task_execution_plan(
                 metadata={
                     "node_allowed": node.node_id in allowed,
                     "node_metadata": dict(node.metadata),
-                    "capability_args": _capability_args(node.metadata),
+                    "capability_args": capability_args,
                     "capability_plan": _json_object(node.metadata.get("capability_plan")),
                 },
             )
@@ -295,6 +299,150 @@ def _capability_args(metadata: JsonObject) -> JsonObject:
         elif isinstance(payload, list):
             result[key] = [dict(item) for item in payload if isinstance(item, dict)]
     return result
+
+
+def _default_capability_args_for_node(node: TaskGraphNode) -> JsonObject:
+    capabilities = set(node.required_capabilities)
+    if not capabilities.intersection(_RETRIEVAL_CAPABILITIES):
+        return {}
+    if not capabilities.intersection(
+        {
+            "finance.fundamentals_research",
+            "finance.market_data",
+            "finance.market_news",
+            "finance.macro_data",
+            "finance.competitive_landscape",
+        }
+    ):
+        return {}
+    query = " ".join(str(node.goal or "").split()) or "financial research"
+    payloads: list[JsonObject] = []
+    payloads.append(
+        _finance_retrieval_payload(
+            query=query,
+            task_kind=_primary_finance_task_kind(capabilities),
+            authority="secondary_or_better",
+            strategy="aggregate",
+            profile_id=_profile_for_finance_capabilities(capabilities),
+            required=True,
+        )
+    )
+    if "finance.fundamentals_research" in capabilities:
+        payloads.extend(
+            [
+                _finance_retrieval_payload(
+                    query=f"{query} official annual report 10-K 10-Q investor relations revenue earnings margin cash flow",
+                    task_kind="fundamentals",
+                    authority="primary",
+                    strategy="aggregate",
+                    profile_id=_FINANCE_FUNDAMENTALS_PROFILE_ID,
+                    required=False,
+                ),
+                _finance_retrieval_payload(
+                    query=f"{query} SEC EDGAR companyfacts submissions 10-K 10-Q financial statements",
+                    task_kind="fundamentals",
+                    authority="primary",
+                    strategy="structured",
+                    profile_id=_FINANCE_FUNDAMENTALS_PROFILE_ID,
+                    required=False,
+                ),
+            ]
+        )
+    if "finance.market_data" in capabilities or "finance.fundamentals_research" in capabilities:
+        payloads.append(
+            _finance_retrieval_payload(
+                query=f"{query} stock price PE ratio market cap valuation quote",
+                task_kind="market_data",
+                authority="secondary_or_better",
+                strategy="aggregate",
+                profile_id=_profile_for_finance_capabilities(capabilities),
+                required=False,
+            )
+        )
+    if "finance.market_news" in capabilities:
+        payloads.append(
+            _finance_retrieval_payload(
+                query=f"{query} latest earnings release market news official investor relations",
+                task_kind="market_news",
+                authority="secondary_or_better",
+                strategy="fresh_live",
+                profile_id=_profile_for_finance_capabilities(capabilities),
+                required=False,
+            )
+        )
+    if "finance.competitive_landscape" in capabilities:
+        payloads.append(
+            _finance_retrieval_payload(
+                query=f"{query} competitors peer comparison industry landscape",
+                task_kind="competitive_landscape",
+                authority="secondary_or_better",
+                strategy="aggregate",
+                profile_id=_profile_for_finance_capabilities(capabilities),
+                required=False,
+            )
+        )
+    if "finance.macro_data" in capabilities:
+        payloads.append(
+            _finance_retrieval_payload(
+                query=f"{query} official macroeconomic data FRED central bank treasury statistics",
+                task_kind="macro_data",
+                authority="primary",
+                strategy="structured",
+                profile_id=_profile_for_finance_capabilities(capabilities),
+                required=False,
+            )
+        )
+    return {"retrieval.run": payloads} if payloads else {}
+
+
+def _primary_finance_task_kind(capabilities: set[str]) -> str:
+    for capability, task_kind in [
+        ("finance.fundamentals_research", "fundamentals"),
+        ("finance.market_data", "market_data"),
+        ("finance.market_news", "market_news"),
+        ("finance.competitive_landscape", "competitive_landscape"),
+        ("finance.macro_data", "macro_data"),
+    ]:
+        if capability in capabilities:
+            return task_kind
+    return "finance_research"
+
+
+def _profile_for_finance_capabilities(capabilities: set[str]) -> str | None:
+    if capabilities.intersection(
+        {
+            "finance.fundamentals_research",
+            "finance.market_data",
+            "finance.market_news",
+            "finance.macro_data",
+            "finance.competitive_landscape",
+        }
+    ):
+        return _FINANCE_FUNDAMENTALS_PROFILE_ID
+    return None
+
+
+def _finance_retrieval_payload(
+    *,
+    query: str,
+    task_kind: str,
+    authority: str,
+    strategy: str,
+    profile_id: str | None,
+    required: bool,
+) -> JsonObject:
+    metadata: JsonObject = {
+        "research_task_kind": task_kind,
+        "source_authority_requirement": authority,
+        "search_strategy": strategy,
+        "subgoal_required": required,
+    }
+    if profile_id:
+        metadata["research_profile"] = profile_id
+    return {
+        "query": query,
+        "metadata": metadata,
+    }
 
 
 def _json_object(value: object) -> JsonObject:

@@ -409,6 +409,55 @@ def test_phase5_synthesizer_only_uses_known_citation_refs_and_fails_unknown_refs
     assert bad.error == "unknown_citation_refs:cit\u0065-missing"
 
 
+def test_phase5_synthesizer_repairs_missing_citation_refs_with_known_refs():
+    report, evidence, citation = _retrieval_contracts()
+    provider = CapturingFakeJsonProvider(
+        {
+            "synthesizer.answer": [
+                {
+                    "answer": "Kernel v3 cites evidence.",
+                    "citation_refs": [],
+                    "confidence": 0.2,
+                    "limitations": [],
+                    "used_evidence": ["ev-1"],
+                },
+                {
+                    "answer": "Kernel v3 cites evidence.",
+                    "citation_refs": ["cite-1"],
+                    "confidence": 0.82,
+                    "limitations": [],
+                    "used_evidence": ["ev-1"],
+                },
+            ]
+        }
+    )
+    journal = JournalStore.in_memory()
+
+    answer = Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    ).synthesize(
+        task_id="task-synth-repair",
+        run_id="run-synth-repair",
+        context_id="ctx-synth-repair",
+        report=report,
+        evidence=[evidence],
+        citations=[citation],
+    )
+
+    retry_prompt = json.loads(provider.prompts[-1])
+    assert answer.status == "ok"
+    assert answer.citation_refs == ["cite-1"]
+    assert len(provider.prompts) == 2
+    assert retry_prompt["required_citation_refs"] == ["cite-1"]
+    assert retry_prompt["required_evidence_refs"] == ["ev-1"]
+    assert "retry_instruction" in retry_prompt
+    assert len(journal.records(task_id="task-synth-repair", kind="processor_request")) == 2
+
+
 def test_phase5_timeout_provider_produces_failed_processor_result():
     journal = JournalStore.in_memory()
 
@@ -1440,7 +1489,9 @@ class CapturingFakeJsonProvider(FakeJsonProvider):
     def __init__(self, responses):
         super().__init__(responses)
         self.last_prompt = ""
+        self.prompts = []
 
     def run(self, request):
         self.last_prompt = request.prompt
+        self.prompts.append(request.prompt)
         return super().run(request)
