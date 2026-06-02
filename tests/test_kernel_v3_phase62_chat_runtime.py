@@ -301,7 +301,18 @@ def test_phase62_cli_chat_once_status_and_summary(tmp_path: Path):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
 
-    once = _run_cli("--journal", str(journal), "--index", str(index), "chat", "--thread", "cli-thread", "--once", "hello cli")
+    once = _run_cli(
+        "--journal",
+        str(journal),
+        "--index",
+        str(index),
+        "chat",
+        "--offline",
+        "--thread",
+        "cli-thread",
+        "--once",
+        "hello cli",
+    )
     payload = json.loads(once.stdout)
     assert payload["status"] == "completed"
 
@@ -331,12 +342,25 @@ def test_phase62_root_holo_v3_launcher_executes_cli():
     assert "chat" in result.stdout
 
 
+def test_phase62_bare_holo_v3_defaults_to_live_chat_and_errors_when_not_enabled(capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    status = cli.main([])
+
+    output = capsys.readouterr().out
+    assert status == 1
+    assert "blocked" in output
+    assert "live_model_not_enabled" in output
+    assert "DEEPSEEK_API_KEY" in output
+
+
 def test_phase62_cli_chat_pipe_mode_stays_json(tmp_path: Path, capsys, monkeypatch):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
     monkeypatch.setattr(sys, "stdin", io.StringIO("hello through pipe\n"))
 
-    status = cli.main(["--journal", str(journal), "--index", str(index), "chat", "--thread", "cli-pipe"])
+    status = cli.main(["--journal", str(journal), "--index", str(index), "chat", "--offline", "--thread", "cli-pipe"])
 
     output = capsys.readouterr().out.strip()
     payload = json.loads(output)
@@ -362,6 +386,7 @@ def test_phase62_cli_chat_human_mode_can_switch_threads(tmp_path: Path, capsys, 
             "--index",
             str(index),
             "chat",
+            "--offline",
             "--thread",
             "cli-alpha",
             "--output",
@@ -385,6 +410,7 @@ def test_phase62_cli_chat_human_mode_can_switch_threads(tmp_path: Path, capsys, 
 
 def test_phase62_cli_chat_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
 
@@ -409,8 +435,35 @@ def test_phase62_cli_chat_model_mode_is_live_gated(tmp_path: Path, capsys, monke
     assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
 
 
+def test_phase62_cli_chat_defaults_to_live_model(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--thread",
+            "cli-default-live-thread",
+            "--once",
+            "hello",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
+    assert JournalStore(journal, index_path=index).records() == []
+
+
 def test_phase62_cli_chat_online_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
 
@@ -433,6 +486,84 @@ def test_phase62_cli_chat_online_mode_is_live_gated(tmp_path: Path, capsys, monk
     assert status == 1
     assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
     assert JournalStore(journal, index_path=index).records() == []
+
+
+def test_phase62_cli_chat_deepseek_key_enables_default_live_without_holo_gate(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-present")
+    monkeypatch.setattr(
+        cli,
+        "_live_processor_fabric",
+        lambda _provider, journal, **_kwargs: fake_fabric(
+            {
+                "chat.route": {
+                    "route": "new_task",
+                    "command": None,
+                    "target_task_id": None,
+                    "confidence": 0.95,
+                    "reasons": ["key_enabled_route"],
+                },
+                "semantic.intake": {
+                    "primary_intent": "direct_answer",
+                    "suggested_mode": "direct_answer",
+                    "compound": False,
+                    "requires_clarification": False,
+                    "intents": [
+                        {
+                            "kind": "direct_answer",
+                            "text": "hello",
+                            "sequence_index": 1,
+                            "required_capabilities": [],
+                            "risk": "none",
+                            "status": "ready",
+                            "metadata": {},
+                        }
+                    ],
+                    "blocked_capabilities": [],
+                    "warnings": [],
+                    "response_hint": None,
+                    "clarification_question": None,
+                },
+                "planner.propose": {
+                    "action_id": "act-key-enabled-direct",
+                    "kind": "respond",
+                    "name": None,
+                    "description": "key-enabled default live answer",
+                    "payload": {"text": "key-enabled-live-response"},
+                    "score": 0.95,
+                    "reasons": ["key_enabled_live"],
+                    "side_effect_class": "none",
+                },
+                "evaluator.assess": {
+                    "status": "final_answer_ready",
+                    "answer": None,
+                    "stop_reason": "completed",
+                    "missing_evidence": [],
+                },
+            },
+            journal=journal,
+        ),
+    )
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--thread",
+            "cli-key-live-thread",
+            "--once",
+            "hello",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 0
+    assert payload["answer"] == "key-enabled-live-response"
 
 
 def test_phase62_cli_chat_online_mode_uses_model_backed_processors(tmp_path: Path, capsys, monkeypatch):

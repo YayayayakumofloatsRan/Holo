@@ -30,11 +30,20 @@ renders compact colored status headers, task/run refs, answers, pending
 questions, and trace counts. Machine paths stay stable: `--once` and piped
 stdin emit JSON by default unless `--output human` is requested.
 
+The bare `holo-v3` command normalizes to interactive `chat` in live model mode.
+If `DEEPSEEK_API_KEY` is absent, the console fails fast with
+`live_model_not_enabled`; it does not silently run fake processors.
+`HOLO_V3_LIVE_MODEL=1` is still accepted for explicit live-smoke commands, but
+the interactive product entry point can use the provider key directly.
+Offline/fake execution is an explicit operator choice via
+`holo-v3 chat --offline ...`.
+
 The interactive console has local commands for thread and display management:
 `/thread switch <id>`, `/thread new <id>`, `/threads`, `/json on|off`,
 `/color on|off`, and `/quit`. These commands only select the journal-backed
 thread or change rendering; runtime commands such as `/status`, `/summary`,
 `/trace`, `/plan`, and `/memory` are still handled by `ChatRuntime`.
+ANSI color choices are centralized in `kernel_v3/chat/theme.py`.
 
 ## Adaptive Processor Generation
 

@@ -16,6 +16,7 @@ from kernel_v3.chat.console import (
     chat_color_enabled,
     chat_output_mode,
     render_chat_result,
+    render_status_notice,
     run_chat_console,
 )
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler, merge_context_budget
@@ -82,7 +83,7 @@ def _add_online_model_arg(command_parser: argparse.ArgumentParser) -> None:
         "--live-model",
         dest="online",
         action="store_true",
-        help="Enable the model-backed semantic stack for interactive runs. Still gated by HOLO_V3_LIVE_MODEL=1.",
+        help="Enable the model-backed semantic stack. Chat defaults to live unless --offline is passed.",
     )
 
 
@@ -201,6 +202,13 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--turn-router", choices=["fake", "model"], default="fake")
     _add_online_model_arg(chat_parser)
+    chat_parser.add_argument(
+        "--offline",
+        dest="online",
+        action="store_false",
+        help="Use fake/offline processors for deterministic local checks. The interactive default is live.",
+    )
+    chat_parser.set_defaults(online=True)
     chat_parser.add_argument("--model", default=None)
     chat_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     chat_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -527,8 +535,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "chat":
-        if _agent_uses_live_model(args) and os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
-            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+        live_block = _chat_live_model_block(args)
+        if live_block is not None:
+            if chat_output_mode(args, once=args.once is not None) == "human":
+                print(
+                    render_status_notice(
+                        {
+                            **live_block,
+                            "message": "Default holo-v3 chat is live. Configure DEEPSEEK_API_KEY, or run an explicit offline/fake subcommand.",
+                        },
+                        color=chat_color_enabled(args),
+                    )
+                )
+            else:
+                print(json.dumps(live_block, sort_keys=True))
             return 1
         live_retrieval = _live_retrieval_config_for_args(args)
         if isinstance(live_retrieval, dict):
@@ -823,6 +843,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
+    if not argv:
+        return ["chat", "--output", "human"]
     if "context" not in argv:
         return argv
     try:
@@ -1573,6 +1595,16 @@ def _agent_uses_live_model(args) -> bool:
             getattr(args, "turn_router", "fake"),
         )
     )
+
+
+def _chat_live_model_block(args) -> JsonObject | None:
+    if not _agent_uses_live_model(args):
+        return None
+    if str(os.environ.get("DEEPSEEK_API_KEY", "") or "").strip():
+        return None
+    if os.environ.get("HOLO_V3_LIVE_MODEL") == "1":
+        return {"status": "blocked", "reason": "missing_deepseek_api_key"}
+    return {"status": "blocked", "reason": "live_model_not_enabled"}
 
 
 def _processor_mode(args, name: str) -> str:

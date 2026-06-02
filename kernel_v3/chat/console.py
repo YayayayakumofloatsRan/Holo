@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from kernel_v3.chat.runtime import ChatRuntime
+from kernel_v3.chat.theme import status_style, style
 from kernel_v3.contracts import JsonObject
 
 
@@ -265,6 +266,18 @@ def render_chat_result(payload: object, *, color: bool) -> str:
     return "\n".join(lines)
 
 
+def render_status_notice(payload: JsonObject, *, color: bool) -> str:
+    status = str(payload.get("status", "unknown"))
+    reason = str(payload.get("reason") or payload.get("error") or "")
+    message = str(payload.get("message") or "")
+    lines = [style(status, status_style(status), color=color)]
+    if reason:
+        lines[0] = f"{lines[0]} {style(reason, 'dim', color=color)}"
+    if message:
+        lines.append(message)
+    return "\n".join(lines)
+
+
 def chat_answer_text(data: JsonObject) -> str | None:
     answer = data.get("answer")
     if isinstance(answer, str) and answer:
@@ -317,29 +330,3 @@ def thread_state_line(state: JsonObject) -> str:
         f"recent_tasks={len(state.get('recent_task_refs') or [])}",
     ]
     return " ".join(parts)
-
-
-def status_style(status: str) -> str:
-    if status in {"completed", "ok", "ready"}:
-        return "green"
-    if status in {"needs_user_input", "blocked", "canceled"}:
-        return "yellow"
-    if status in {"failed", "error"}:
-        return "red"
-    return "cyan"
-
-
-def style(text: str, style_name: str, *, color: bool) -> str:
-    if not color:
-        return text
-    codes = {
-        "bold_cyan": "1;36",
-        "bold_green": "1;32",
-        "cyan": "36",
-        "dim": "2",
-        "green": "32",
-        "red": "31",
-        "yellow": "33",
-    }
-    code = codes.get(style_name)
-    return f"\033[{code}m{text}\033[0m" if code else text

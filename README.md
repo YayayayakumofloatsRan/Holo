@@ -229,12 +229,29 @@ After installation, `holo-v3` is available on the WSL user PATH through
 `~/.local/bin/holo-v3`. The launcher resolves the repository root and uses
 `.venv/bin/python` when the local virtualenv exists.
 
+The product entry point is now the bare command:
+
+```bash
+holo-v3
+```
+
+Bare `holo-v3` starts the interactive chat console in live model mode. If
+`DEEPSEEK_API_KEY` is not configured, it fails fast instead of silently falling
+back to fake/offline processors. `HOLO_V3_LIVE_MODEL=1` remains accepted for
+explicit live-smoke commands, but the interactive product entry point can use
+the DeepSeek key directly. Deterministic offline checks must be explicit, for
+example:
+
+```bash
+holo-v3 chat --offline --thread demo --once "what can you do?"
+```
+
 ```bash
 holo-v3 tools
 holo-v3 agent "explain kernel v3" --mode direct
 holo-v3 agent "扮演一个谨慎的初级律师，说明你会怎么做" --mode semantic
 holo-v3 agent "what time is it in UTC?" --mode system
-holo-v3 chat --thread demo --once "what can you do?"
+holo-v3 chat --thread demo
 holo-v3 providers
 holo-v3 provider-smoke --fake
 holo-v3 retrieve "sample topic"
@@ -249,6 +266,8 @@ a TTY: colored status headers, compact task/run refs, and the current
 Use `/thread switch <id>` or `/thread new <id>` inside the interactive console
 to move between journal-backed chat threads, `/threads` to list known threads,
 `/json on|off` to toggle raw JSON, and `/color on|off` for ANSI styling.
+Console colors live in `kernel_v3/chat/theme.py`, separate from command
+routing and chat runtime logic.
 
 Live model calls are gated:
 
