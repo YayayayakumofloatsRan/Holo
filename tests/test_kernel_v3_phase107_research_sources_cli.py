@@ -3,7 +3,7 @@ from pathlib import Path
 
 from kernel_v3 import cli
 from kernel_v3.journal import JournalStore
-from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, site_index_plan
 
 
 def test_phase107_sources_cli_lists_curated_finance_sources(tmp_path: Path, capsys) -> None:
@@ -150,3 +150,19 @@ def test_phase107_sources_cli_plans_finance_research_against_site_index(tmp_path
     assert any(source["authority_level"] == "primary" for source in payload["sources"])
     assert any(source["seed_urls"] for source in payload["sources"])
     assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
+def test_phase107_site_index_plan_is_reusable_outside_cli() -> None:
+    payload = site_index_plan(
+        profile_id=FINANCE_FUNDAMENTALS_PROFILE_ID,
+        query="Apple latest Reuters CNBC market news earnings",
+        family="reputable_news",
+        limit=3,
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["returned"] == 1
+    assert payload["sources"][0]["source_id"] == "finance-reputable-market-news"
+    assert payload["sources"][0]["source_family"] == "reputable_news"
+    assert payload["sources"][0]["authority_level"] == "secondary"
+    assert "Apple" not in json.dumps(payload, ensure_ascii=False)
