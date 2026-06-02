@@ -86,6 +86,36 @@ def test_real_workspace_read_only_tools_work_under_workspace_root():
         _remove_dir(root)
 
 
+def test_tool_executor_exception_becomes_failed_observation():
+    registry = ToolRegistry()
+
+    def _raise(_action):
+        raise TimeoutError("tool did not respond")
+
+    registry.register("unstable.tool", _raise)
+    action = CandidateAction(
+        action_id="act-timeout",
+        kind="tool",
+        name="unstable.tool",
+        description="unstable tool",
+        score=1.0,
+        payload={},
+        reasons=[],
+        side_effect_class="read",
+    )
+
+    result = registry.execute_with_artifacts(action, policy_decision=_allowed_decision(action))
+
+    assert result.observation.status == "failed"
+    assert result.observation.kind == "tool_result"
+    assert result.observation.content == {
+        "error": "tool_execution_failed",
+        "tool": "unstable.tool",
+        "error_type": "TimeoutError",
+    }
+    assert result.artifact_refs
+
+
 def test_workspace_search_payload_is_validated_canonicalized_and_bounded():
     root = Path("kernel_v3/.test-phase2-search-schema")
     _reset_dir(root)

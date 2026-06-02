@@ -28,16 +28,16 @@ _FINANCE_DEPTH_DEFAULTS: dict[str, JsonObject] = {
         "max_spans_per_document": 2,
     },
     "balanced": {
-        "max_queries": 3,
-        "max_sources": 10,
-        "max_fetches": 4,
-        "max_spans_per_document": 3,
+        "max_queries": 64,
+        "max_sources": 2_000,
+        "max_fetches": 1_024,
+        "max_spans_per_document": 48,
     },
     "deep": {
-        "max_queries": 4,
-        "max_sources": 20,
-        "max_fetches": 8,
-        "max_spans_per_document": 5,
+        "max_queries": 128,
+        "max_sources": 5_000,
+        "max_fetches": 2_048,
+        "max_spans_per_document": 64,
     },
 }
 
@@ -79,7 +79,7 @@ def finance_fundamentals_profile() -> ResearchProfile:
             "default_output_boundary": "facts_inferences_risks_limitations",
             "freshness_max_age_ms": 15552000000,
             "investment_recommendation": "not_without_explicit_user_scope_and_evidence",
-            "default_research_depth": "balanced",
+            "default_research_depth": "deep",
             "query_strategy": {
                 "strategy_id": "finance_primary_source_expansion",
                 "templates": list(_FINANCE_QUERY_TEMPLATES),

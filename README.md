@@ -328,9 +328,10 @@ holo-v3 agent "read README.md and summarize it" --online --response-language zh
 ```
 
 Live agent/chat/resident runs expose both input/context and output-generation
-controls. `--context-profile large` is the default for live interactive runs;
-`huge` and `provider` allow much larger host prompt budgets when the target
-model can handle them. `--max-output-tokens provider` omits the provider
+controls. `--context-profile provider` is the default for live interactive
+runs, giving the host packet a provider-scale input budget when the target
+model can handle it. `large` and `huge` remain available as explicit smaller
+operator caps. `--max-output-tokens provider` omits the provider
 `max_tokens` field, while `auto` uses Holo's route defaults and an integer sets
 an explicit output cap.
 Generation defaults to host-adaptive mode and is quality-oriented by default:
@@ -354,7 +355,7 @@ usefulness rather than token minimization.
 ```bash
 HOLO_V3_LIVE_MODEL=1 holo-v3 agent "inspect a large workspace file" \
   --online \
-  --context-profile huge \
+  --context-profile provider \
   --latency-target thorough \
   --max-output-tokens provider \
   --temperature 0.2
@@ -366,6 +367,14 @@ operator for that run without requiring `HOLO_V3_LIVE_RETRIEVAL=1`, while
 network fetches still require `PolicyGate` permission, fetch budgets, and
 either host allowlists or the explicit `--live-allow-all-hosts` smoke-test
 override. Do not add fake sources to make a live run look successful.
+
+For real research work, live defaults are intentionally roomy rather than
+demo-sized: live network budget defaults to `4096`, the finance fundamentals
+profile defaults to `deep`, and that depth expands retrieval to `128` queries,
+`5000` ranked sources, `2048` fetches, and `64` spans per document before the
+retrieval operator's global safety caps. These are ceilings, not mandatory
+spend; planner decisions, provider output, ranking, evidence sufficiency,
+repetition, and loop guards still decide when to stop.
 
 The live retrieval chain is now broader than a single search endpoint:
 

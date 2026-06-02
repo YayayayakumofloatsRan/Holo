@@ -128,6 +128,36 @@ class WorkloopEvaluator:
         run_id = str(context.state["run_id"])
         step_id = _observation_step(self.journal, task_id=task_id, observation_id=observation.observation_id)
         base = self.inner.evaluate(context, observation)
+        return self._evaluate_with_base(
+            observation,
+            base,
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+        )
+
+    def finalize_guard(self, context, observation: Observation, base: Feedback) -> Feedback:
+        self.calls += 1
+        task_id = str(context.state["task_id"])
+        run_id = str(context.state["run_id"])
+        step_id = _observation_step(self.journal, task_id=task_id, observation_id=observation.observation_id)
+        return self._evaluate_with_base(
+            observation,
+            base,
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+        )
+
+    def _evaluate_with_base(
+        self,
+        observation: Observation,
+        base: Feedback,
+        *,
+        task_id: str,
+        run_id: str,
+        step_id: str | None,
+    ) -> Feedback:
         progress = assess_progress(
             self.journal,
             task_id=task_id,

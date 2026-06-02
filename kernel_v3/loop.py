@@ -235,6 +235,14 @@ class LoopControllerV3:
                 current_feedback = self._limit_feedback(task.run_id, "max_tool_calls")
                 self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
                 self._append_guard(task, "max_tool_calls", step_id=step_id, data={"tool_calls": tool_calls})
+                current_feedback = self._finalize_guard_feedback(
+                    context,
+                    observation,
+                    current_feedback,
+                    task=task,
+                    action=action,
+                    step_id=step_id,
+                )
                 return self._result(task, current_feedback, step_id=step_id)
             if observation.status == "blocked" and observation.content == {"reason": "max_network_fetches"}:
                 current_feedback = self._limit_feedback(task.run_id, "max_network_fetches")
@@ -251,6 +259,14 @@ class LoopControllerV3:
                         "max_network_fetches": self.max_network_fetches,
                     },
                 )
+                current_feedback = self._finalize_guard_feedback(
+                    context,
+                    observation,
+                    current_feedback,
+                    task=task,
+                    action=action,
+                    step_id=step_id,
+                )
                 return self._result(task, current_feedback, step_id=step_id)
             current_feedback = self.evaluator.evaluate(context, observation)
             self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
@@ -260,6 +276,14 @@ class LoopControllerV3:
                 current_feedback = self._limit_feedback(task.run_id, stop_reason)
                 self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
                 self._append_guard(task, stop_reason, step_id=step_id, data=data)
+                current_feedback = self._finalize_guard_feedback(
+                    context,
+                    observation,
+                    current_feedback,
+                    task=task,
+                    action=action,
+                    step_id=step_id,
+                )
                 return self._result(task, current_feedback, step_id=step_id)
             if self.stop_controller.should_stop(current_feedback):
                 return self._result(task, current_feedback, step_id=step_id)
@@ -269,6 +293,14 @@ class LoopControllerV3:
                 current_feedback = self._limit_feedback(task.run_id, stop_reason)
                 self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
                 self._append_guard(task, stop_reason, step_id=step_id, data=data)
+                current_feedback = self._finalize_guard_feedback(
+                    context,
+                    observation,
+                    current_feedback,
+                    task=task,
+                    action=action,
+                    step_id=step_id,
+                )
                 return self._result(task, current_feedback, step_id=step_id)
 
     def _record_action(
@@ -376,6 +408,26 @@ class LoopControllerV3:
             event_ref=self._last_ref(task.task_id, "event_ref"),
             state_delta={"status": "step_limit_exceeded", "stop_reason": stop_reason},
         )
+
+    def _finalize_guard_feedback(
+        self,
+        context,
+        observation: Observation,
+        feedback: Feedback,
+        *,
+        task: TaskState,
+        action: CandidateAction,
+        step_id: str,
+    ) -> Feedback:
+        finalizer = getattr(self.evaluator, "finalize_guard", None)
+        if not callable(finalizer):
+            return feedback
+        finalized = finalizer(context, observation, feedback)
+        if not isinstance(finalized, Feedback):
+            return feedback
+        if finalized.feedback_id != feedback.feedback_id:
+            self._append_feedback(task, finalized, action=action, observation=observation, step_id=step_id)
+        return finalized
 
     def _pre_execution_guard(
         self,

@@ -92,13 +92,18 @@ from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
 
 
+DEFAULT_LIVE_NETWORK_FETCH_BUDGET = 4096
+DEFAULT_RESEARCH_DEPTH = "deep"
+DEFAULT_LIVE_CONTEXT_PROFILE = "provider"
+
+
 def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument(
         "--live-retrieval",
         action="store_true",
         help="Enable live retrieval for this command. Network use still requires PolicyGate permission and host allowlists.",
     )
-    command_parser.add_argument("--live-max-network-fetches", type=int, default=3)
+    command_parser.add_argument("--live-max-network-fetches", type=int, default=DEFAULT_LIVE_NETWORK_FETCH_BUDGET)
     command_parser.add_argument(
         "--live-allow-all-hosts",
         action="store_true",
@@ -144,7 +149,7 @@ def _add_context_budget_args(command_parser: argparse.ArgumentParser, *, default
         "--context-profile",
         choices=["compact", "large", "huge", "provider"],
         default=default_profile,
-        help="Host prompt/input budget profile. Live model runs default to large.",
+        help="Host prompt/input budget profile. Live model runs default to provider-scale input budgets.",
     )
     command_parser.add_argument("--context-token-budget", type=int, default=None)
     command_parser.add_argument("--context-section-budget", type=int, default=None)
@@ -214,11 +219,11 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     _add_generation_args(agent_parser)
     _add_agent_loop_args(agent_parser)
-    _add_context_budget_args(agent_parser, default_profile="large")
+    _add_context_budget_args(agent_parser, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(agent_parser)
     agent_parser.add_argument("--citations-required", action="store_true")
     agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
-    agent_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
+    agent_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(agent_parser)
 
     answer_parser = sub.add_parser("answer")
@@ -227,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_response_language_arg(answer_parser)
     answer_parser.add_argument("--citations-required", action="store_true")
     answer_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
-    answer_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
+    answer_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
 
     chat_parser = sub.add_parser("chat")
     chat_parser.add_argument("--thread", default="default")
@@ -259,10 +264,10 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     _add_generation_args(chat_parser)
     _add_agent_loop_args(chat_parser)
-    _add_context_budget_args(chat_parser, default_profile="large")
+    _add_context_budget_args(chat_parser, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(chat_parser)
     chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
-    chat_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
+    chat_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(chat_parser)
 
     chat_status_parser = sub.add_parser("chat-status")
@@ -317,10 +322,10 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run_once.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     _add_generation_args(resident_run_once)
-    _add_context_budget_args(resident_run_once, default_profile="large")
+    _add_context_budget_args(resident_run_once, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(resident_run_once)
     resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
-    resident_run_once.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
+    resident_run_once.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(resident_run_once)
     resident_run_once.add_argument("--tick-schedules", action="store_true")
     resident_run_once.add_argument("--schedule-tick-limit", type=int, default=20)
@@ -341,10 +346,10 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
     resident_run.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
     _add_generation_args(resident_run)
-    _add_context_budget_args(resident_run, default_profile="large")
+    _add_context_budget_args(resident_run, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(resident_run)
     resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
-    resident_run.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default="balanced")
+    resident_run.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(resident_run)
     resident_run.add_argument("--tick-schedules", action="store_true")
     resident_run.add_argument("--schedule-tick-limit", type=int, default=20)

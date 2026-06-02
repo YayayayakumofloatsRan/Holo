@@ -23,9 +23,9 @@ def test_phase87_agent_execution_metadata_applies_research_profile_to_retrieval(
     action = journal.records(task_id=result.task_id, kind="action")[0].data
     report = journal.records(task_id=result.task_id, kind="retrieval_report")[-1].data
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
-    assert action["payload"]["max_queries"] == 3
-    assert action["payload"]["max_sources"] == 10
-    assert action["payload"]["max_fetches"] == 4
+    assert action["payload"]["max_queries"] == 128
+    assert action["payload"]["max_sources"] == 5000
+    assert action["payload"]["max_fetches"] == 2048
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert report["diagnostics"]["reason"] == "insufficient_evidence"
     assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "unconfigured_search"
@@ -94,8 +94,8 @@ def test_phase87_cli_agent_exposes_research_profile_flag(tmp_path: Path) -> None
 
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert action["payload"]["metadata"]["research_depth"] == "deep"
-    assert action["payload"]["max_queries"] == 4
-    assert action["payload"]["max_fetches"] == 8
+    assert action["payload"]["max_queries"] == 128
+    assert action["payload"]["max_fetches"] == 2048
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert report["diagnostics"]["reason"] == "insufficient_evidence"
     assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "unconfigured_search"

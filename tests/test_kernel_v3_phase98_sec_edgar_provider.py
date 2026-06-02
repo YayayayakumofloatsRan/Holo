@@ -235,7 +235,10 @@ def test_phase98_agent_uses_sec_provider_in_multi_step_finance_loop():
     )
     decisions = journal.records(task_id=result.task_id, kind="termination_decision")
     assert [record.data["decision"] for record in decisions] == ["continue", "final_answer"]
-    assert len(result.final_answer["citation_refs"]) == 2
+    citation_refs = result.final_answer["citation_refs"]
+    assert len(citation_refs) >= 2
+    assert any("goal-plan-1" in ref for ref in citation_refs)
+    assert any("goal-plan-2" in ref for ref in citation_refs)
 
 
 def test_phase98_agent_continues_from_sec_submissions_to_primary_filing_document():
@@ -356,7 +359,10 @@ def test_phase98_agent_continues_from_sec_submissions_to_primary_filing_document
     assert primary_url in fetch_uris
     decisions = journal.records(task_id=result.task_id, kind="termination_decision")
     assert [record.data["decision"] for record in decisions] == ["continue", "final_answer"]
-    assert len(result.final_answer["citation_refs"]) == 2
+    citation_refs = result.final_answer["citation_refs"]
+    assert len(citation_refs) >= 2
+    assert any("goal-plan-1" in ref for ref in citation_refs)
+    assert any("goal-plan-2" in ref for ref in citation_refs)
 
 
 def _plan() -> QueryPlan:

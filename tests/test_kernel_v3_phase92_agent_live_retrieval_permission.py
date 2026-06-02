@@ -219,7 +219,7 @@ def test_phase92_cli_agent_live_retrieval_allows_structured_search_without_endpo
                 FINANCE_FUNDAMENTALS_PROFILE_ID,
                 "--live-retrieval",
                 "--live-max-network-fetches",
-                "8",
+                "4096",
             ]
         )
         == 0
@@ -670,9 +670,9 @@ def test_phase92_cli_agent_live_research_depth_counts_query_and_fetch_budget(
     assert fetch_transport.calls == []
     action = journal.records(task_id=payload["task_id"], kind="action")[0].data
     guard = journal.records(task_id=payload["task_id"], kind="guard")[-1].data
-    assert action["payload"]["network_fetch_count"] == 4
+    assert action["payload"]["network_fetch_count"] == 65
     assert guard["stop_reason"] == "max_network_fetches"
-    assert guard["requested_network_fetches"] == 4
+    assert guard["requested_network_fetches"] == 65
     assert guard["max_network_fetches"] == 3
 
 

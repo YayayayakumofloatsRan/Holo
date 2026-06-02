@@ -30,10 +30,10 @@ from kernel_v3.tools import ToolRegistry, ToolResult
 
 
 RETRIEVAL_BUDGET_CAPS = {
-    "max_queries": 4,
-    "max_sources": 20,
-    "max_fetches": 10,
-    "max_spans_per_document": 5,
+    "max_queries": 256,
+    "max_sources": 10_000,
+    "max_fetches": 4_096,
+    "max_spans_per_document": 128,
 }
 
 

@@ -60,6 +60,20 @@ _FINANCE_RESEARCH_PROFILE_CAPABILITIES = {
     "finance.competitive_landscape",
 }
 
+DEFAULT_RETRIEVAL_MAX_STEPS = 2048
+DEFAULT_RETRIEVAL_MAX_TOOL_CALLS = 1024
+DEFAULT_RETRIEVAL_MAX_ARTIFACT_BYTES = 4_000_000_000
+DEFAULT_MODEL_DYNAMIC_MAX_STEPS = 2048
+DEFAULT_MODEL_DYNAMIC_MAX_TOOL_CALLS = 1024
+DEFAULT_MODEL_DYNAMIC_MAX_ARTIFACT_BYTES = 4_000_000_000
+LOOP_GUARD_STOP_REASONS = {
+    "max_tool_calls",
+    "max_network_fetches",
+    "max_total_artifact_bytes",
+    "max_steps",
+    "max_duration_ms",
+}
+
 
 class AgentRuntime:
     def __init__(
@@ -451,19 +465,32 @@ class AgentRuntime:
         report = _latest_retrieval_report(self.journal, task_id, run_id)
         evidence = _retrieval_evidence(self.journal, task_id, run_id)
         citations = _retrieval_citations(self.journal, task_id, run_id)
+        terminal_reason = _latest_termination_failure_reason(self.journal, task_id, run_id) or loop_stop_reason
         if report is None:
-            return None, self._failure(task_id, run_id, "missing_retrieval_report", next_action="retry_retrieval")
-        planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id, recipe)
-        if planned_coverage.get("required") is True and not planned_coverage.get("sufficient"):
+            reason = terminal_reason if terminal_reason in LOOP_GUARD_STOP_REASONS else "missing_retrieval_report"
             return None, self._failure(
                 task_id,
                 run_id,
-                "planned_retrieval_subgoals_incomplete",
+                reason,
+                missing_evidence=_missing_evidence(self.journal, task_id, run_id),
+                next_action="increase_budget_or_retry_retrieval" if reason in LOOP_GUARD_STOP_REASONS else "retry_retrieval",
+            )
+        planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id, recipe)
+        if planned_coverage.get("required") is True and not planned_coverage.get("sufficient"):
+            reason = terminal_reason if terminal_reason in LOOP_GUARD_STOP_REASONS else "planned_retrieval_subgoals_incomplete"
+            return None, self._failure(
+                task_id,
+                run_id,
+                reason,
                 missing_evidence=_planned_retrieval_missing_evidence(self.journal, task_id, run_id, recipe),
-                next_action="refine_failed_retrieval_subgoals",
+                next_action=(
+                    "increase_budget_or_refine_failed_retrieval_subgoals"
+                    if reason in LOOP_GUARD_STOP_REASONS
+                    else "refine_failed_retrieval_subgoals"
+                ),
             )
         if report.status != "sufficient":
-            reason = _latest_termination_failure_reason(self.journal, task_id, run_id) or loop_stop_reason or f"retrieval_{report.status}"
+            reason = terminal_reason or f"retrieval_{report.status}"
             return None, self._failure(
                 task_id,
                 run_id,
@@ -1192,10 +1219,10 @@ def task_recipe(
         return TaskRecipe(
             recipe_id="recipe-retrieval-answer",
             allowed_tools=["retrieval.run"],
-            max_steps=3,
-            max_tool_calls=2,
+            max_steps=DEFAULT_RETRIEVAL_MAX_STEPS,
+            max_tool_calls=DEFAULT_RETRIEVAL_MAX_TOOL_CALLS,
             max_network_fetches=max_network_fetches,
-            max_total_artifact_bytes=1_000_000,
+            max_total_artifact_bytes=DEFAULT_RETRIEVAL_MAX_ARTIFACT_BYTES,
             permission_profile="read_write",
             citations_required=bool(required),
             finalizer="retrieval_synthesizer",
@@ -1318,9 +1345,9 @@ def _with_runtime_loop_budget(recipe: TaskRecipe, *, planner_mode: str) -> TaskR
     max_tool_calls = _positive_metadata_int(loop.get("max_tool_calls"), default=0) if loop else 0
     max_artifact_bytes = _positive_metadata_int(loop.get("max_total_artifact_bytes"), default=0) if loop else 0
     if model_dynamic:
-        max_steps = max(max_steps, 12)
-        max_tool_calls = max(max_tool_calls, 10)
-        max_artifact_bytes = max(max_artifact_bytes, 4_000_000)
+        max_steps = max(max_steps, DEFAULT_MODEL_DYNAMIC_MAX_STEPS)
+        max_tool_calls = max(max_tool_calls, DEFAULT_MODEL_DYNAMIC_MAX_TOOL_CALLS)
+        max_artifact_bytes = max(max_artifact_bytes, DEFAULT_MODEL_DYNAMIC_MAX_ARTIFACT_BYTES)
     if max_steps <= 0 and max_tool_calls <= 0 and max_artifact_bytes <= 0:
         return recipe
     return replace(

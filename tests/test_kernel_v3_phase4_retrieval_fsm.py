@@ -155,10 +155,10 @@ def test_phase4_retrieval_operator_clamps_oversized_goal_budgets():
         SearchGoal(
             goal_id="goal-oversized-budget",
             query="Kernel v3 retrieval",
-            max_queries=99,
-            max_sources=99,
-            max_fetches=99,
-            max_spans_per_document=99,
+            max_queries=99_999,
+            max_sources=99_999,
+            max_fetches=99_999,
+            max_spans_per_document=99_999,
         ),
         journal=journal,
         artifact_store=artifacts,
@@ -168,19 +168,19 @@ def test_phase4_retrieval_operator_clamps_oversized_goal_budgets():
 
     plan = journal.records(task_id="task-oversized-budget", kind="retrieval_query_plan")[0].data
     assert plan["diagnostics"]["budget"] == {
-        "max_queries": 4,
-        "max_sources": 20,
-        "max_fetches": 10,
-        "max_spans_per_document": 5,
+        "max_queries": 256,
+        "max_sources": 10_000,
+        "max_fetches": 4_096,
+        "max_spans_per_document": 128,
     }
     assert plan["diagnostics"]["requested_budget"] == {
-        "max_queries": 99,
-        "max_sources": 99,
-        "max_fetches": 99,
-        "max_spans_per_document": 99,
+        "max_queries": 99_999,
+        "max_sources": 99_999,
+        "max_fetches": 99_999,
+        "max_spans_per_document": 99_999,
     }
     assert plan["diagnostics"]["budget_clamped"] is True
-    assert len(journal.records(task_id="task-oversized-budget", kind="retrieval_fetch_attempt")) == 10
+    assert len(journal.records(task_id="task-oversized-budget", kind="retrieval_fetch_attempt")) == 30
     assert report.diagnostics["budget"] == plan["diagnostics"]["budget"]
     assert report.diagnostics["requested_budget"] == plan["diagnostics"]["requested_budget"]
 

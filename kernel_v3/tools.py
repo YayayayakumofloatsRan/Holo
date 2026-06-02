@@ -232,7 +232,19 @@ class ToolRegistry:
             )
         executable_action = replace(action, payload=canonical_payload)
         self.executed_actions.append(executable_action)
-        raw = self._tools[tool_name].executor(_action_with_execution_context(executable_action, execution_context))
+        try:
+            raw = self._tools[tool_name].executor(_action_with_execution_context(executable_action, execution_context))
+        except Exception as exc:
+            return _tool_result(
+                executable_action,
+                "failed",
+                {
+                    "error": "tool_execution_failed",
+                    "tool": tool_name,
+                    "error_type": type(exc).__name__,
+                },
+                kind="tool_result",
+            )
         result = raw if isinstance(raw, ToolResult) else _result_from_observation(raw)
         if result.artifact_refs:
             return result

@@ -19,6 +19,7 @@ from kernel_v3.contracts import Feedback, Observation
 from kernel_v3.journal import JournalStore
 from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
+from kernel_v3.retrieval.providers import FetchResponse
 from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 
 
@@ -386,6 +387,42 @@ def test_phase61_failure_report_contains_attempts_missing_evidence_observations_
     assert report["trace_refs"]
 
 
+def test_phase61_loop_guard_is_finalized_by_workloop_before_agent_result():
+    journal = JournalStore.in_memory()
+    fetch_provider = _LiveFetchProvider()
+    runtime = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        retrieval_operator=RetrievalOperator(
+            search_provider=_LiveSearchProvider(),
+            fetch_provider=fetch_provider,
+        ),
+    )
+
+    result = runtime.run(
+        "live retrieval budget guard",
+        mode="retrieval",
+        execution_metadata={
+            "retrieval": {
+                "allow_network": True,
+                "max_network_fetches": 1,
+                "max_fetches": 3,
+                "network_fetch_count": 3,
+            }
+        },
+    )
+
+    assert result.status == "failed"
+    assert result.failure_report["reason"] == "max_network_fetches"
+    assert fetch_provider.called is False
+    assert journal.records(task_id=result.task_id, kind="guard")[-1].data["stop_reason"] == "max_network_fetches"
+    decision = journal.records(task_id=result.task_id, kind="termination_decision")[-1].data
+    assert decision["decision"] == "failure_report"
+    assert decision["reason"] == "max_network_fetches"
+    assert journal.records(task_id=result.task_id, kind="progress_assessment")
+    assert journal.records(task_id=result.task_id, kind="evidence_sufficiency")
+
+
 def test_phase61_loop_controller_stays_free_of_workloop_tool_branches():
     source = Path("kernel_v3/loop.py").read_text(encoding="utf-8")
 
@@ -407,6 +444,24 @@ def _retrieval_recipe() -> TaskRecipe:
         context_budget_mode="standard",
         mode="retrieval_answer",
     )
+
+
+class _LiveSearchProvider:
+    live_network = True
+
+    def search(self, query, *, goal, plan):
+        return [SearchSource(source_id="src-live", uri="https://example.test/live", title="Live source", snippet="live")]
+
+
+class _LiveFetchProvider:
+    live_network = True
+
+    def __init__(self) -> None:
+        self.called = False
+
+    def fetch(self, source):
+        self.called = True
+        return FetchResponse(status="ok", body="live evidence")
 
 
 def test_phase61_cli_inspect_workloop_final_answer_and_failure_report(tmp_path: Path):

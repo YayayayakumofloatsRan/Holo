@@ -408,6 +408,14 @@ holo-v3 resident run-once \
 sets the live retrieval config enabled for that run without requiring
 `HOLO_V3_LIVE_RETRIEVAL=1`. The command still returns a blocked payload before
 starting the agent loop when live provider host allowlists are missing.
+
+The `--live-max-network-fetches 1` examples above are smoke-test-sized caps.
+Production live CLI defaults are deliberately larger: `holo-v3` defaults live
+retrieval to a `4096` network-fetch ceiling, and `finance_fundamentals` defaults
+to `deep` research depth (`128` query variants, `5000` source candidates,
+`2048` fetches, and `64` spans per document before global retrieval caps). These
+budgets are host-owned ceilings. Exhausting one journals a loop guard and is
+then finalized by the workloop as normal evidence for stop/failure decisions.
 `--live-allow-all-hosts` and `HOLO_V3_LIVE_RETRIEVAL_ALLOW_ALL_HOSTS=1` remain
 explicit smoke-test overrides; otherwise live search and fetch providers require
 bounded `allowed_hosts`.

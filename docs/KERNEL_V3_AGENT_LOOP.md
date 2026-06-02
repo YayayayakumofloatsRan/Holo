@@ -620,6 +620,17 @@ fields such as `max_fetches` / `network_fetch_count`, or from the manifest's
 `default_network_fetch_cost`. The loop does not branch on concrete tool names;
 this lets a future live retrieval/search operator declare bounded page-fetch
 cost without getting a special path in `LoopControllerV3`.
+When a guard is hit, the guard observation and `step_limit_exceeded` feedback
+are still finalized through the workloop evaluator. The loop records progress,
+repetition, evidence sufficiency, and a termination decision before producing
+the result, so a stalled tool or exhausted budget becomes normal loop evidence
+rather than an unreviewed controller abort.
+Tool executors are also exception-contained at the registry boundary. If a
+tool raises, including a timeout from a tool-specific timeout implementation,
+`ToolRegistry` returns a `failed` tool observation with the error type instead
+of letting the Python exception unwind the agent loop. Long-running tools should
+still implement their own concrete timeouts or cancellation handles; the harness
+turns the resulting failure into loop evidence.
 
 Research profiles can shape retrieval without adding domain logic to the loop.
 For example, the finance fundamentals profile contributes primary-source query
@@ -631,6 +642,12 @@ ordinary `retrieval.run` payload fields such as `max_queries`, `max_sources`,
 The retrieval operator journals the selected query strategy in
 `retrieval_query_plan` and still evaluates sufficiency through evidence,
 citations, and source authority.
+The default live research posture is provider-scale, not smoke-test scale:
+`holo-v3` uses the provider context profile for live runs, live retrieval grants
+a `4096` network-fetch ceiling by default, and the finance profile's default
+`deep` depth expands to `128` queries, `5000` sources, `2048` fetches, and `64`
+spans per document. These values are ceilings; ranking, provider availability,
+evidence sufficiency, repetition checks, and loop guards determine actual work.
 
 The finance source directory is not a content database. It is a structured map
 of where an agent should search for fundamentals evidence: SEC filings and
