@@ -944,11 +944,42 @@ def test_phase62_human_console_activity_renders_processor_action_and_termination
     activity = render_chat_activity(journal.records(task_id=result.task_id), color=False)
 
     assert "steps" in activity
+    assert "[action] action respond" in activity
+    assert "[policy] policy allowed=True" in activity
+    assert "[observe] observation source=respond" in activity
+    assert "[reason] termination decision=final_answer" in activity
+    assert "[final] final answer confidence=" in activity
     assert "action respond" in activity
     assert "policy allowed=True" in activity
     assert "observation source=respond" in activity
     assert "termination decision=final_answer" in activity
     assert "final answer confidence=" in activity
+
+
+def test_phase62_human_console_activity_colors_public_agent_phases():
+    journal = JournalStore.in_memory()
+    for kind, data in [
+        ("processor_request", {"task_type": "planner.propose", "provider": "deepseek", "model": "deepseek-v4-pro"}),
+        ("action", {"name": "retrieval.run", "side_effect_class": "network", "reasons": ["needs evidence"]}),
+        ("policy_decision", {"allowed": True, "reason": "allowed"}),
+        ("observation", {"source": "tool:retrieval.run", "status": "ok"}),
+        ("retrieval_search_attempt", {"query": "DeepSeek API", "status": "ok", "sources": [{"source_id": "src-1"}]}),
+        ("retrieval_evidence", {"evidence_id": "ev-1", "score": 0.91, "source_id": "src-1"}),
+        ("termination_decision", {"decision": "final_answer", "reason": "evidence_sufficient"}),
+        ("agent_final_answer", {"confidence": 0.87}),
+    ]:
+        journal.append(task_id="task-color", run_id="run-1", step_id=None, kind=kind, data=data)
+
+    activity = render_chat_activity(journal.records(task_id="task-color"), color=True)
+
+    assert "\033[" in activity
+    assert "[model]" in activity
+    assert "[tool]" in activity
+    assert "[policy]" in activity
+    assert "[retrieval]" in activity
+    assert "[evidence]" in activity
+    assert "[reason]" in activity
+    assert "[final]" in activity
 
 
 def test_phase62_human_console_failure_report_renders_actionable_details():
@@ -1037,6 +1068,39 @@ def test_phase62_human_console_streams_activity_before_final_result(capsys):
     assert "model request planner.propose" in output
     assert "action respond" in output
     assert output.index("model request planner.propose") < output.index("completed task=task-stream")
+
+
+def test_phase62_cli_once_human_output_streams_activity_before_final_result(tmp_path: Path, capsys):
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "chat",
+                "--thread",
+                "once-human",
+                "--once",
+                "explain Holo briefly",
+                "--output",
+                "human",
+                "--offline",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "processing..." in output
+    assert "steps" in output
+    assert "[route] route" in output
+    assert "[context] context compiled" in output
+    assert "completed task=" in output
+    assert output.index("steps") < output.index("completed task=")
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:

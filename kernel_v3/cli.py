@@ -15,6 +15,7 @@ from kernel_v3.chat.console import (
     ChatConsoleOptions,
     chat_color_enabled,
     chat_output_mode,
+    print_chat_turn_human,
     render_chat_result,
     render_status_notice,
     run_chat_console,
@@ -633,10 +634,15 @@ def main(argv: list[str] | None = None) -> int:
             execution_metadata=_runtime_execution_metadata(args),
         )
         if args.once is not None:
-            payload = runtime.receive(args.once, thread_id=args.thread)
             if chat_output_mode(args, once=True) == "human":
-                print(render_chat_result(payload, color=chat_color_enabled(args)))
+                payload = print_chat_turn_human(
+                    runtime,
+                    args.once,
+                    thread_id=args.thread,
+                    color=chat_color_enabled(args),
+                )
             else:
+                payload = runtime.receive(args.once, thread_id=args.thread)
                 print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
             return 0 if payload.status not in {"failed", "blocked"} else 1
         return run_chat_console(

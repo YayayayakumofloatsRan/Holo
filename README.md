@@ -265,20 +265,26 @@ holo-v3 resident status
 Interactive `holo-v3 chat` uses a human-readable terminal view when attached to
 a TTY: colored status headers, compact task/run refs, and the current
 `holo[thread]>` prompt. Scripted use stays machine-readable by default:
-`--once` and piped stdin still emit JSON unless `--output human` is requested.
+`--once` and piped stdin still emit JSON unless `--output human` is requested;
+when human output is requested, `--once` uses the same streaming activity view
+as the interactive shell.
 Use `/thread switch <id>` or `/thread new <id>` inside the interactive console
 to move between journal-backed chat threads, `/threads` to list known threads,
 `/history [limit]` to show recent user/assistant records for the current
 thread, `/json on|off` to toggle raw JSON, and `/color on|off` for ANSI styling.
 `/thread new <id>` writes a `chat_thread_event`, so an empty thread is visible
 in `/threads` before the first user turn.
-Human output prints a `processing...` marker and then streams a compact `steps`
-block as new journal records are written during the turn: route, model packets,
-public route/action reasons, policy, observation, retrieval search/fetch/extract
-events, evaluator feedback, workloop decisions, and final/failure records. This
-is journal-event streaming, not hidden chain-of-thought or token streaming.
-Console colors live in `kernel_v3/chat/theme.py`, separate from command routing
-and chat runtime logic.
+Human output prints a colored `processing...` marker and then streams a compact
+`steps` block as new journal records are written during the turn. Public phases
+are visually separated with stable labels such as `[model]`, `[route]`,
+`[reason]`, `[tool]`, `[policy]`, `[observe]`, `[retrieval]`, `[evidence]`,
+`[final]`, and `[failure]`. This lets a user see model packets, public
+route/action reasons, policy checks, tool calls, observations, retrieval
+search/fetch/extract events, evaluator feedback, workloop decisions, and
+final/failure records while the turn is running. This is journal-event
+streaming, not hidden chain-of-thought or token streaming. Console colors live
+in `kernel_v3/chat/theme.py`, separate from command routing and chat runtime
+logic.
 
 Pending `ask_user` state does not force the next turn to resume the old task in
 model-routed chat. The route packet receives the pending task summary, but a

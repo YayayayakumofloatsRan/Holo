@@ -28,7 +28,9 @@ operators outside the controller.
 `ChatRuntime`; it does not add another decision layer. In a terminal, chat
 renders compact colored status headers, task/run refs, answers, pending
 questions, and trace counts. Machine paths stay stable: `--once` and piped
-stdin emit JSON by default unless `--output human` is requested.
+stdin emit JSON by default unless `--output human` is requested. When human
+output is requested, `--once` uses the same streaming activity renderer as the
+interactive shell instead of waiting silently for the final payload.
 
 The bare `holo-v3` command normalizes to interactive `chat` in live model mode.
 If `DEEPSEEK_API_KEY` is absent, the console fails fast with
@@ -60,8 +62,11 @@ The console polls the same `JournalStore` that the agent loop writes to, so user
 can see processor requests, route decisions, public model-provided reasons,
 actions, policy decisions, tool observations, retrieval search/fetch/extract
 records, evaluator feedback, and workloop termination decisions before the final
-answer is rendered. This is an inspectable event stream, not hidden
-chain-of-thought, and it does not give the model any extra execution authority.
+answer is rendered. The human renderer now uses stable colored phase labels:
+`[model]`, `[route]`, `[reason]`, `[tool]`, `[policy]`, `[observe]`,
+`[retrieval]`, `[evidence]`, `[final]`, and `[failure]`. This is an inspectable
+event stream, not hidden chain-of-thought, and it does not give the model any
+extra execution authority.
 
 Processor/provider failures inside model planning are not treated as missing
 user input. The failing packet remains visible in the journal, but AgentRuntime

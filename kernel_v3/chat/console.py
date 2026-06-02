@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from kernel_v3.chat.runtime import ChatRuntime
-from kernel_v3.chat.theme import status_style, style
+from kernel_v3.chat.theme import event_style, status_style, style
 from kernel_v3.contracts import JsonObject
 
 
@@ -74,12 +74,26 @@ def handle_chat_line(
         payload = runtime.receive(stripped, thread_id=thread_id)
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
     else:
-        print(style("processing...", "dim", color=color))
-        sys.stdout.flush()
-        payload = receive_with_live_activity(runtime, stripped, thread_id=thread_id, start_index=start_index, color=color)
-        print(render_chat_result(payload, color=color))
+        print_chat_turn_human(runtime, stripped, thread_id=thread_id, start_index=start_index, color=color)
     sys.stdout.flush()
     return False, thread_id, output_mode, color
+
+
+def print_chat_turn_human(
+    runtime: ChatRuntime,
+    text: str,
+    *,
+    thread_id: str,
+    start_index: int | None = None,
+    color: bool,
+):
+    if start_index is None:
+        start_index = len(runtime.journal.records())
+    print(style("processing...", "bold_cyan", color=color))
+    sys.stdout.flush()
+    payload = receive_with_live_activity(runtime, text, thread_id=thread_id, start_index=start_index, color=color)
+    print(render_chat_result(payload, color=color))
+    return payload
 
 
 def receive_with_live_activity(
@@ -378,7 +392,7 @@ def render_chat_result(payload: object, *, color: bool) -> str:
     lines = [f"{header} {style(' '.join(refs), 'dim', color=color)}"]
     answer = chat_answer_text(data)
     if answer:
-        lines.append(answer)
+        lines.append(f"{event_label('answer', color=color)} {answer}")
     pending = data.get("pending_question")
     if isinstance(pending, dict) and pending.get("question"):
         lines.append(style("needs input:", "yellow", color=color) + f" {pending['question']}")
@@ -419,74 +433,160 @@ def render_chat_activity(records: list[object], *, color: bool) -> str:
 
 
 def chat_activity_line(kind: str, data: JsonObject, *, color: bool) -> str | None:
-    prefix = style("·", "dim", color=color)
     if kind == "context":
-        return f"{prefix} context compiled id={data.get('context_id')} sections={len(data.get('packs') or data.get('sections') or [])}"
+        return activity_line(
+            "context",
+            f"context compiled id={data.get('context_id')} sections={len(data.get('packs') or data.get('sections') or [])}",
+            color=color,
+        )
     if kind == "chat_routing_decision":
-        return f"{prefix} route {data.get('route')} reasons={compact_list(data.get('reasons'))}"
+        return activity_line("route", f"route {data.get('route')} reasons={compact_list(data.get('reasons'))}", color=color)
     if kind == "processor_request":
         task_type = data.get("task_type") or data.get("processor")
         provider = data.get("provider")
         model = data.get("model")
-        return f"{prefix} model request {task_type} provider={provider} model={model}"
+        params = data.get("parameters")
+        tail = processor_parameter_tail(params if isinstance(params, dict) else {})
+        return activity_line("model", f"model request {task_type} provider={provider} model={model}{tail}", color=color)
     if kind == "processor_result":
         task_type = data.get("task_type")
         status = data.get("status")
         duration = data.get("duration_ms")
         error = data.get("error")
-        tail = f" error={error}" if error else ""
-        return f"{prefix} model result {task_type} status={status} duration_ms={duration}{tail}"
+        usage = data.get("usage")
+        token_tail = processor_usage_tail(usage if isinstance(usage, dict) else {})
+        error_tail = f" error={error}" if error else ""
+        return activity_line(
+            "model",
+            f"model result {task_type} status={status} duration_ms={duration}{token_tail}{error_tail}",
+            status=str(status or ""),
+            color=color,
+        )
     if kind == "semantic_intake":
-        return f"{prefix} semantic intent={data.get('primary_intent')} mode={data.get('suggested_mode')} blocked={compact_list(data.get('blocked_capabilities'))}"
+        return activity_line(
+            "reason",
+            f"semantic intent={data.get('primary_intent')} mode={data.get('suggested_mode')} blocked={compact_list(data.get('blocked_capabilities'))}",
+            color=color,
+        )
     if kind == "semantic_task_plan":
-        return f"{prefix} task plan status={data.get('status')} mode={data.get('selected_mode')} steps={len(data.get('steps') or [])} blocked={compact_list(data.get('blocked_capabilities'))}"
+        return activity_line(
+            "reason",
+            f"task plan status={data.get('status')} mode={data.get('selected_mode')} steps={len(data.get('steps') or [])} blocked={compact_list(data.get('blocked_capabilities'))}",
+            status=str(data.get("status") or ""),
+            color=color,
+        )
     if kind == "action":
         action = data.get("name") or data.get("kind")
-        return f"{prefix} action {action} side_effect={data.get('side_effect_class')} reasons={compact_list(data.get('reasons'))}"
+        category = "action" if action == "respond" and data.get("side_effect_class") == "none" else "tool"
+        return activity_line(
+            category,
+            f"action {action} side_effect={data.get('side_effect_class')} reasons={compact_list(data.get('reasons'))}",
+            color=color,
+        )
     if kind == "policy_decision":
-        return f"{prefix} policy allowed={data.get('allowed')} reason={data.get('reason')}"
+        status = "ok" if data.get("allowed") else "blocked"
+        return activity_line("policy", f"policy allowed={data.get('allowed')} reason={data.get('reason')}", status=status, color=color)
     if kind == "observation":
         source = data.get("source") or data.get("kind")
-        return f"{prefix} observation source={source} status={data.get('status')}"
+        category = "tool" if str(source).startswith("tool:") else "observe"
+        return activity_line(category, f"observation source={source} status={data.get('status')}", status=str(data.get("status") or ""), color=color)
     if kind == "feedback":
-        return f"{prefix} evaluator feedback status={data.get('status')} missing={compact_list(data.get('missing_evidence'))} stop={data.get('stop_reason')}"
+        return activity_line(
+            "reason",
+            f"evaluator feedback status={data.get('status')} missing={compact_list(data.get('missing_evidence'))} stop={data.get('stop_reason')}",
+            status=str(data.get("status") or ""),
+            color=color,
+        )
     if kind == "retrieval_query_plan":
         diagnostics = data.get("diagnostics")
         query_count = diagnostics.get("query_count") if isinstance(diagnostics, dict) else None
-        return f"{prefix} retrieval query plan queries={query_count or len(data.get('queries') or [])} max_sources={data.get('max_sources')} max_fetches={data.get('max_fetches')}"
+        return activity_line(
+            "retrieval",
+            f"retrieval query plan queries={query_count or len(data.get('queries') or [])} max_sources={data.get('max_sources')} max_fetches={data.get('max_fetches')}",
+            color=color,
+        )
     if kind == "retrieval_search_attempt":
-        return f"{prefix} retrieval search query={preview_history_text(str(data.get('query') or ''), limit=80)} status={data.get('status')} sources={len(data.get('sources') or [])}"
+        return activity_line(
+            "retrieval",
+            f"retrieval search query={preview_history_text(str(data.get('query') or ''), limit=80)} status={data.get('status')} sources={len(data.get('sources') or [])}",
+            status=str(data.get("status") or ""),
+            color=color,
+        )
     if kind == "retrieval_rank_sources":
-        return f"{prefix} retrieval rank sources={len(data.get('ranked_sources') or [])}"
+        return activity_line("retrieval", f"retrieval rank sources={len(data.get('ranked_sources') or [])}", color=color)
     if kind == "retrieval_fetch_attempt":
-        return f"{prefix} retrieval fetch source={data.get('source_id')} status={data.get('status')} bytes={data.get('size_bytes')}"
+        return activity_line(
+            "retrieval",
+            f"retrieval fetch source={data.get('source_id')} status={data.get('status')} bytes={data.get('size_bytes')}",
+            status=str(data.get("status") or ""),
+            color=color,
+        )
     if kind == "retrieval_extraction":
         diagnostics = data.get("diagnostics")
         span_count = diagnostics.get("span_count") if isinstance(diagnostics, dict) else len(data.get("spans") or [])
         document = data.get("document")
         title = document.get("title") if isinstance(document, dict) else None
-        return f"{prefix} retrieval extract spans={span_count} doc={preview_history_text(str(title or ''), limit=80)}"
+        return activity_line("retrieval", f"retrieval extract spans={span_count} doc={preview_history_text(str(title or ''), limit=80)}", color=color)
     if kind == "retrieval_evidence":
-        return f"{prefix} evidence {data.get('evidence_id')} score={data.get('score')} source={data.get('source_id')}"
+        return activity_line("evidence", f"evidence {data.get('evidence_id')} score={data.get('score')} source={data.get('source_id')}", color=color)
     if kind == "retrieval_citation":
-        return f"{prefix} citation {data.get('citation_id')} evidence={data.get('evidence_id')}"
+        return activity_line("evidence", f"citation {data.get('citation_id')} evidence={data.get('evidence_id')}", color=color)
     if kind == "retrieval_report":
-        return f"{prefix} retrieval report status={data.get('status')} evidence={data.get('evidence_count')} citations={data.get('citation_count')}"
+        return activity_line(
+            "retrieval",
+            f"retrieval report status={data.get('status')} evidence={data.get('evidence_count')} citations={data.get('citation_count')}",
+            status=str(data.get("status") or ""),
+            color=color,
+        )
     if kind == "progress_assessment":
-        return f"{prefix} progress made={data.get('made_progress')} type={data.get('progress_type')} score={data.get('progress_score')}"
+        return activity_line("reason", f"progress made={data.get('made_progress')} type={data.get('progress_type')} score={data.get('progress_score')}", color=color)
     if kind == "repetition_signal":
-        return f"{prefix} repetition repeated={data.get('repeated')} type={data.get('repeat_type')}"
+        status = "blocked" if data.get("repeated") else None
+        return activity_line("reason", f"repetition repeated={data.get('repeated')} type={data.get('repeat_type')}", status=status, color=color)
     if kind == "evidence_sufficiency":
-        return f"{prefix} evidence sufficient={data.get('sufficient')} reason={data.get('reason')}"
+        status = "sufficient" if data.get("sufficient") else "blocked"
+        return activity_line("reason", f"evidence sufficient={data.get('sufficient')} reason={data.get('reason')}", status=status, color=color)
     if kind == "termination_decision":
-        return f"{prefix} termination decision={data.get('decision')} reason={data.get('reason')}"
+        return activity_line("reason", f"termination decision={data.get('decision')} reason={data.get('reason')}", color=color)
     if kind == "agent_final_answer":
-        return f"{prefix} final answer confidence={data.get('confidence')}"
+        return activity_line("final", f"final answer confidence={data.get('confidence')}", color=color)
     if kind == "agent_failure_report":
-        return f"{prefix} failure reason={data.get('reason')}"
+        return activity_line("failure", f"failure reason={data.get('reason')}", status="failed", color=color)
     if kind == "chat_agent_result":
-        return f"{prefix} chat result status={data.get('status')} route={data.get('route')}"
+        return activity_line("chat", f"chat result status={data.get('status')} route={data.get('route')}", status=str(data.get("status") or ""), color=color)
     return None
+
+
+def activity_line(category: str, text: str, *, color: bool, status: str | None = None) -> str:
+    return f"{style('·', 'dim', color=color)} {event_label(category, status=status, color=color)} {text}"
+
+
+def event_label(category: str, *, color: bool, status: str | None = None) -> str:
+    label = f"[{category}]"
+    return style(label, event_style(category, status=status), color=color)
+
+
+def processor_parameter_tail(parameters: JsonObject) -> str:
+    parts: list[str] = []
+    for key, label in (
+        ("thinking", "thinking"),
+        ("reasoning_effort", "effort"),
+        ("temperature", "temp"),
+        ("timeout_seconds", "timeout"),
+    ):
+        value = parameters.get(key)
+        if value is not None:
+            parts.append(f"{label}={value}")
+    return " " + " ".join(parts) if parts else ""
+
+
+def processor_usage_tail(usage: JsonObject) -> str:
+    total = usage.get("total_tokens")
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    if total is None and prompt is None and completion is None:
+        return ""
+    return f" tokens={total or '-'} prompt={prompt or '-'} completion={completion or '-'}"
 
 
 def compact_list(value: object, *, limit: int = 3) -> str:
