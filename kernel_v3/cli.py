@@ -107,7 +107,8 @@ from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
 
 
-DEFAULT_LIVE_NETWORK_FETCH_BUDGET = 4096
+DEFAULT_LIVE_NETWORK_FETCH_BUDGET = 409_600
+DEFAULT_LIVE_RETRIEVAL_FETCH_BUDGET = 4_096
 DEFAULT_RESEARCH_DEPTH = "deep"
 DEFAULT_LIVE_CONTEXT_PROFILE = "provider"
 DEFAULT_LIVE_WEB_SEARCH_PROVIDERS = "bing_html,duckduckgo_html"
@@ -258,6 +259,13 @@ def main(argv: list[str] | None = None) -> int:
     agent_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     agent_parser.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     _add_online_model_arg(agent_parser)
+    agent_parser.add_argument(
+        "--offline",
+        dest="online",
+        action="store_false",
+        help="Use fake/offline processors only for deterministic host diagnostics. Product agent runs default to live.",
+    )
+    agent_parser.set_defaults(online=True)
     agent_parser.add_argument("--model", default=None)
     agent_parser.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     agent_parser.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -362,6 +370,13 @@ def main(argv: list[str] | None = None) -> int:
     resident_run_once.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     resident_run_once.add_argument("--turn-router", choices=["fake", "model"], default="fake")
     _add_online_model_arg(resident_run_once)
+    resident_run_once.add_argument(
+        "--offline",
+        dest="online",
+        action="store_false",
+        help="Use fake/offline processors only for deterministic host diagnostics. Resident runs default to live.",
+    )
+    resident_run_once.set_defaults(online=True)
     resident_run_once.add_argument("--model", default=None)
     resident_run_once.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run_once.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -386,6 +401,13 @@ def main(argv: list[str] | None = None) -> int:
     resident_run.add_argument("--semantic-intake", choices=["fake", "model"], default="fake")
     resident_run.add_argument("--turn-router", choices=["fake", "model"], default="fake")
     _add_online_model_arg(resident_run)
+    resident_run.add_argument(
+        "--offline",
+        dest="online",
+        action="store_false",
+        help="Use fake/offline processors only for deterministic host diagnostics. Resident runs default to live.",
+    )
+    resident_run.set_defaults(online=True)
     resident_run.add_argument("--model", default=None)
     resident_run.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
     resident_run.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
@@ -1219,7 +1241,12 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
         total_budget = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
         retrieval["max_network_fetches"] = total_budget
         max_queries = _positive_limit(retrieval.get("max_queries"), default=0) if "max_queries" in retrieval else 0
-        requested_fetches = _positive_limit(retrieval.get("max_fetches"), default=total_budget) if "max_fetches" in retrieval else total_budget
+        per_action_fetch_default = min(total_budget, DEFAULT_LIVE_RETRIEVAL_FETCH_BUDGET)
+        requested_fetches = (
+            _positive_limit(retrieval.get("max_fetches"), default=per_action_fetch_default)
+            if "max_fetches" in retrieval
+            else per_action_fetch_default
+        )
         remaining_fetch_budget = max(1, total_budget - max_queries) if max_queries else total_budget
         retrieval["max_fetches"] = min(requested_fetches, remaining_fetch_budget)
         if max_queries:

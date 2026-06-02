@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.workloop import WorkloopConfig
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors import FakeJsonProvider, FakeMalformedJsonProvider, ProcessorFabric, ProcessorRouter
@@ -69,6 +70,7 @@ def test_phase6_retrieval_answer_refuses_final_when_citations_required_but_absen
             search_provider=FakeSearchProvider({"missing evidence": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(repeated_action_limit=2, repeated_missing_evidence_limit=2, no_progress_step_limit=2),
     )
 
     result = runtime.run("missing evidence", mode="retrieval", citations_required=True)
@@ -226,6 +228,7 @@ def test_phase6_failed_retrieval_returns_failure_report_not_invented_answer():
             search_provider=FakeSearchProvider({"no source": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(repeated_action_limit=2, repeated_missing_evidence_limit=2, no_progress_step_limit=2),
     )
 
     result = runtime.run("no source", mode="retrieval")
@@ -334,11 +337,12 @@ def test_phase6_cli_agent_answer_and_inspect_run(tmp_path: Path):
         "--corpus-log",
         str(corpus_log),
         "--corpus-index",
-        str(corpus_index),
-        "agent",
-        "Kernel v3 retrieval",
-        "--mode",
-        "retrieval",
+            str(corpus_index),
+            "agent",
+            "--offline",
+            "Kernel v3 retrieval",
+            "--mode",
+            "retrieval",
     )
     agent_payload = json.loads(agent.stdout)
     assert agent_payload["status"] == "completed"

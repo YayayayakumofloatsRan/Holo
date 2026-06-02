@@ -52,6 +52,7 @@ def test_phase61_retrieval_without_new_evidence_continues_once_then_fails():
             search_provider=FakeSearchProvider({"missing": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(repeated_action_limit=2, repeated_missing_evidence_limit=2, no_progress_step_limit=2),
     )
 
     result = runtime.run("missing", mode="retrieval")
@@ -76,6 +77,7 @@ def test_phase61_retrieval_resume_gets_fresh_repetition_budget_and_unique_action
             search_provider=FakeSearchProvider({"missing": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(repeated_action_limit=2, repeated_missing_evidence_limit=2, no_progress_step_limit=2),
     )
 
     first = runtime.run("missing", mode="retrieval")
@@ -109,6 +111,7 @@ def test_phase61_retrieval_resume_does_not_reuse_previous_run_evidence():
             search_provider=FakeSearchProvider({"missing": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(repeated_action_limit=2, repeated_missing_evidence_limit=2, no_progress_step_limit=2),
     )
 
     second = failing_runtime.resume(first.task_id, "missing", mode="retrieval")
@@ -141,6 +144,7 @@ def test_phase61_repeated_same_retrieval_query_sets_repetition_signal():
             search_provider=FakeSearchProvider({"repeat": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(repeated_action_limit=2, repeated_missing_evidence_limit=2, no_progress_step_limit=2),
     )
 
     result = runtime.run("repeat", mode="retrieval")
@@ -453,6 +457,7 @@ def test_phase61_evaluator_continue_is_overridden_at_repeated_no_progress_thresh
             search_provider=FakeSearchProvider({"missing": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(no_progress_step_limit=2),
     )
 
     result = runtime.run("missing", mode="retrieval")
@@ -580,6 +585,7 @@ def test_phase61_failure_report_contains_attempts_missing_evidence_observations_
             search_provider=FakeSearchProvider({"missing": []}),
             fetch_provider=FakeFetchProvider({}),
         ),
+        workloop_config=WorkloopConfig(repeated_action_limit=2, repeated_missing_evidence_limit=2, no_progress_step_limit=2),
     )
 
     result = runtime.run("missing", mode="retrieval")
@@ -735,11 +741,12 @@ def test_phase61_cli_inspect_workloop_final_answer_and_failure_report(tmp_path: 
         "--corpus-log",
         str(corpus_log),
         "--corpus-index",
-        str(corpus_index),
-        "agent",
-        "Kernel v3 retrieval",
-        "--mode",
-        "retrieval",
+            str(corpus_index),
+            "agent",
+            "--offline",
+            "Kernel v3 retrieval",
+            "--mode",
+            "retrieval",
     )
     ok_payload = json.loads(ok.stdout)
     workloop = _run_cli("--journal", str(journal), "--index", str(index), "inspect-workloop", ok_payload["task_id"])
@@ -754,9 +761,10 @@ def test_phase61_cli_inspect_workloop_final_answer_and_failure_report(tmp_path: 
         "--journal",
         str(journal),
         "--index",
-        str(index),
-        "agent",
-        "answer",
+            str(index),
+            "agent",
+            "--offline",
+            "answer",
         "--mode",
         "direct",
         "--citations-required",

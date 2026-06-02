@@ -88,6 +88,7 @@ def test_phase87_cli_agent_exposes_research_profile_flag(tmp_path: Path) -> None
             "--index",
             str(index_path),
             "agent",
+            "--offline",
             "AAPL 2024 revenue",
             "--research-profile",
             FINANCE_FUNDAMENTALS_PROFILE_ID,

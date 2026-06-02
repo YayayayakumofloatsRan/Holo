@@ -102,9 +102,9 @@ class TerminationDecision(Contract):
 
 @dataclass(frozen=True, kw_only=True)
 class WorkloopConfig:
-    repeated_action_limit: int = 2
-    repeated_missing_evidence_limit: int = 2
-    no_progress_step_limit: int = 2
+    repeated_action_limit: int = 16
+    repeated_missing_evidence_limit: int = 32
+    no_progress_step_limit: int = 16
 
 
 class WorkloopEvaluator:
@@ -586,6 +586,10 @@ def decide_termination(
             decision = "final_answer"
             reason = "evidence_sufficient_overrode_processor_failure"
             override = True
+        elif _network_budget_guard_with_evidence(observation=observation, evidence=evidence):
+            decision = "final_answer"
+            reason = "network_budget_guard_with_partial_evidence"
+            override = True
         elif not evidence.sufficient and feedback.status == "failed" and recipe.allowed_tools:
             decision = "continue"
             reason = "insufficient_evidence_retry"
@@ -593,11 +597,23 @@ def decide_termination(
         else:
             decision = "failure_report"
             reason = feedback.stop_reason or feedback.status
-    if repetition.repeated and not _allows_repeated_signal_to_continue(feedback=feedback, repetition=repetition):
+    if _network_budget_guard_with_evidence(observation=observation, evidence=evidence) and decision != "final_answer":
+        decision = "final_answer"
+        reason = "network_budget_guard_with_partial_evidence"
+        override = True
+    if (
+        repetition.repeated
+        and not _allows_repeated_signal_to_continue(feedback=feedback, repetition=repetition)
+        and not _network_budget_guard_with_evidence(observation=observation, evidence=evidence)
+    ):
         decision = "failure_report"
         reason = "repeated_missing_evidence" if repetition.repeat_type == "same_missing_evidence" else "repeated_no_progress"
         override = True
-    if not progress.made_progress and no_progress_count >= config.no_progress_step_limit:
+    if (
+        not progress.made_progress
+        and no_progress_count >= config.no_progress_step_limit
+        and not _network_budget_guard_with_evidence(observation=observation, evidence=evidence)
+    ):
         decision = "failure_report"
         reason = "repeated_no_progress"
         override = True
@@ -628,6 +644,15 @@ def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: Repet
     if repetition.repeat_type != "same_missing_evidence":
         return False
     return "remaining_plan_actions" in feedback.missing_evidence
+
+
+def _network_budget_guard_with_evidence(*, observation: Observation | None, evidence: EvidenceSufficiency) -> bool:
+    if observation is None or observation.source != "loop_guard" or observation.status != "blocked":
+        return False
+    content = observation.content if isinstance(observation.content, dict) else {}
+    if content.get("reason") != "max_network_fetches":
+        return False
+    return evidence.evidence_count > 0 and bool(evidence.valid_citation_refs)
 
 
 def _feedback_requires_workspace_file_read(feedback: Feedback) -> bool:

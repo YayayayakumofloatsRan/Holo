@@ -90,8 +90,8 @@ def test_phase86_cli_agent_wires_persistent_corpus_store(tmp_path: Path) -> None
         "AAPL 2024 revenue corpus evidence from local indexed source.",
         "--index-corpus",
     )
-    first = json.loads(_run_cli(*base_args, "agent", "AAPL 2024 revenue", "--mode", "retrieval").stdout)
-    second = json.loads(_run_cli(*base_args, "agent", "AAPL 2024 revenue", "--mode", "retrieval").stdout)
+    first = json.loads(_run_cli(*base_args, "agent", "--offline", "AAPL 2024 revenue", "--mode", "retrieval").stdout)
+    second = json.loads(_run_cli(*base_args, "agent", "--offline", "AAPL 2024 revenue", "--mode", "retrieval").stdout)
     journal = JournalStore(journal_path, index_path=index_path)
 
     assert first["status"] == "completed"

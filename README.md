@@ -372,10 +372,10 @@ information" prompt merely because the evaluator suggested clarification.
 holo-v3 model-packet --provider deepseek --task-type semantic.intake --goal "search today's news" --show-prompt
 ```
 
-Live `chat`, `agent --online`, and resident model runs use
-`DEEPSEEK_API_KEY` from the environment. `HOLO_V3_LIVE_MODEL=1` remains
-accepted for explicit live-smoke workflows, but it is not required when the
-provider key is already configured.
+Live `chat`, `agent`, and resident model runs use `DEEPSEEK_API_KEY` from
+the environment. `HOLO_V3_LIVE_MODEL=1` remains accepted for explicit
+live-smoke workflows, but it is not required when the provider key is already
+configured. Use `--offline` only for explicit host diagnostics.
 
 `--mode semantic` is the broad safe non-tool recipe for roleplay, professional
 framing, strategy, project planning, communication drafting, product/risk
@@ -388,7 +388,7 @@ does not clearly request another language. Override this per run with
 `--response-language en` or set `HOLO_V3_RESPONSE_LANGUAGE=en`.
 
 ```bash
-holo-v3 agent "read README.md and summarize it" --online --response-language zh
+holo-v3 agent "read README.md and summarize it" --response-language zh
 ```
 
 Live agent/chat/resident runs expose both input/context and output-generation
@@ -423,7 +423,6 @@ usefulness rather than token minimization.
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 holo-v3 agent "inspect a large workspace file" \
-  --online \
   --context-profile provider \
   --latency-target thorough \
   --max-output-tokens provider \
@@ -442,12 +441,15 @@ result permission, curated source-directory allowlists, or the explicit
 live run look successful.
 
 For real research work, live defaults are intentionally roomy rather than
-demo-sized: live network budget defaults to `4096`, the finance fundamentals
-profile defaults to `deep`, and that depth expands retrieval to `128` queries,
-`5000` ranked sources, `2048` fetches, and `64` spans per document before the
-retrieval operator's global safety caps. These are ceilings, not mandatory
-spend; planner decisions, provider output, ranking, evidence sufficiency,
-repetition, and loop guards still decide when to stop.
+demo-sized: the total live network budget defaults to `409600`, while each
+`retrieval.run` defaults to at most `4096` fetch attempts before source ranking
+and provider limits. The finance fundamentals profile defaults to `deep`, and
+that depth expands retrieval to `128` queries, `5000` ranked sources, `2048`
+fetches, and `64` spans per document before the retrieval operator's global
+safety caps. These are ceilings, not mandatory spend; the loop now accounts
+for actual fetch attempts when a retrieval report is available. Planner
+decisions, provider output, ranking, evidence sufficiency, repetition, and
+loop guards still decide when to stop.
 
 The live retrieval chain is now broader than a single search endpoint:
 
@@ -605,7 +607,6 @@ role and let the host execute the web search/fetch/evidence pipeline:
 ```bash
 holo-v3 agent "搜索一下今天的热点新闻，并给出来源" \
   --mode retrieval \
-  --online \
   --planner model \
   --evaluator model \
   --synthesizer model \
@@ -646,7 +647,6 @@ before `PolicyGate` and loop guards see the action:
 ```bash
 holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方式" \
   --mode retrieval \
-  --online \
   --planner model \
   --evaluator model \
   --synthesizer model \
@@ -676,7 +676,6 @@ Recent live smoke, using real DeepSeek model calls and real
 ```bash
 holo-v3 agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
   --mode retrieval \
-  --online \
   --planner model \
   --evaluator model \
   --synthesizer model \

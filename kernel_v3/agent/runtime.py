@@ -79,6 +79,12 @@ LOOP_GUARD_STOP_REASONS = {
     "max_steps",
     "max_duration_ms",
 }
+PARTIAL_RETRIEVAL_TERMINAL_REASONS = {
+    "max_network_fetches",
+    "repeated_missing_evidence",
+    "repeated_no_progress",
+    "network_budget_guard_with_partial_evidence",
+}
 
 
 class AgentRuntime:
@@ -403,7 +409,7 @@ class AgentRuntime:
                 raise ValueError("model planner requires processor_fabric")
             planner = ModelPlanner(
                 fabric=self.processor_fabric,
-                allowed_tool_names=set(recipe.allowed_tools) or {"__no_tools_allowed__"},
+                allowed_tool_names=_planner_allowed_tool_names(recipe),
             )
             return _RecipeBoundPlanner(
                 inner=planner,
@@ -503,6 +509,27 @@ class AgentRuntime:
             )
         planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id, recipe)
         if planned_coverage.get("required") is True and not planned_coverage.get("sufficient"):
+            if _can_synthesize_partial_retrieval(
+                terminal_reason=terminal_reason,
+                evidence=evidence,
+                citations=citations,
+                recipe=recipe,
+            ):
+                report = _report_with_partial_retrieval_limitations(
+                    report,
+                    planned_coverage=planned_coverage,
+                    missing_evidence=_planned_retrieval_missing_evidence(self.journal, task_id, run_id, recipe),
+                    terminal_reason=terminal_reason,
+                )
+                return self._synthesize_retrieval_final(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    report=report,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesizer_mode=synthesizer_mode,
+                )
             reason = terminal_reason if terminal_reason in LOOP_GUARD_STOP_REASONS else "planned_retrieval_subgoals_incomplete"
             return None, self._failure(
                 task_id,
@@ -536,6 +563,27 @@ class AgentRuntime:
                 missing_evidence=["citation_refs"],
                 next_action="retry_retrieval_with_citable_sources",
             )
+        return self._synthesize_retrieval_final(
+            task_id,
+            run_id,
+            recipe=recipe,
+            report=report,
+            evidence=evidence,
+            citations=citations,
+            synthesizer_mode=synthesizer_mode,
+        )
+
+    def _synthesize_retrieval_final(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe,
+        report: RetrievalReport,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+        synthesizer_mode: str,
+    ) -> tuple[FinalAnswer | None, FailureReport | None]:
         report = _report_with_task_goal(report, recipe)
         synthesized = self._synthesize(
             task_id,
@@ -691,6 +739,7 @@ class AgentRuntime:
                 citations=citations,
             )
         answer = _grounded_answer(report=report, evidence=evidence, citations=citations)
+        report_limitations = _string_list(report.diagnostics.get("limitations")) if isinstance(report.diagnostics, dict) else []
         fabric = ProcessorFabric(
             providers={
                 "fake_json": FakeJsonProvider(
@@ -699,7 +748,7 @@ class AgentRuntime:
                             "answer": answer,
                             "citation_refs": [item.citation_id for item in citations],
                             "confidence": 0.8 if citations else 0.3,
-                            "limitations": [] if citations else ["missing_citation_refs"],
+                            "limitations": report_limitations or ([] if citations else ["missing_citation_refs"]),
                             "used_evidence": [item.evidence_id for item in evidence],
                         }
                     }
@@ -1188,6 +1237,11 @@ class _RecipeEvaluator:
             reason = content.get("reason")
             stop_reason = reason if isinstance(reason, str) and reason else "loop_guard"
             return _feedback(run_id, self.calls, "step_limit_exceeded", stop_reason, None, [stop_reason])
+        if observation.status == "blocked" and observation.source == "loop_guard":
+            content = observation.content if isinstance(observation.content, dict) else {}
+            reason = content.get("reason")
+            reason = reason if isinstance(reason, str) and reason else "loop_guard"
+            return _feedback(run_id, self.calls, "step_limit_exceeded", reason, None, [reason])
         if observation.status == "blocked":
             return _feedback(run_id, self.calls, "blocked", "blocked", None, ["policy_block"])
         if (
@@ -1215,6 +1269,13 @@ class _RecipeEvaluator:
         if isinstance(observation.content, dict):
             answer = observation.content.get("text")
         return _feedback(run_id, self.calls, "final_answer_ready", "completed", answer if isinstance(answer, str) else None, [])
+
+
+def _planner_allowed_tool_names(recipe: TaskRecipe) -> set[str]:
+    allowed = set(recipe.allowed_tools)
+    if recipe.mode == "retrieval_answer":
+        allowed.add("respond")
+    return allowed or {"__no_tools_allowed__"}
 
 
 def _bind_recipe_action_to_run(action: CandidateAction, context: ContextBundle) -> CandidateAction:
@@ -1892,6 +1953,19 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                 },
             },
             "allowed_tools": list(recipe.allowed_tools),
+            "allowed_non_tool_actions": [
+                {
+                    "kind": "respond",
+                    "use_when": (
+                        "retrieval is budget-limited, repeatedly unproductive, or sufficient partial evidence exists; "
+                        "summarize only observed evidence/citations and state limitations"
+                    ),
+                },
+                {
+                    "kind": "ask_user",
+                    "use_when": "the host needs explicit user permission or a missing target cannot be inferred from context",
+                },
+            ],
             "forbidden": ["web_search", "page_open", "network.fetch"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
@@ -4104,6 +4178,50 @@ def _report_with_task_goal(report: RetrievalReport, recipe: TaskRecipe) -> Retri
         diagnostics.setdefault("interaction_preferences", preferences)
         if isinstance(preferences.get("response_language"), str):
             diagnostics.setdefault("response_language", preferences["response_language"])
+    return replace(report, diagnostics=diagnostics)
+
+
+def _can_synthesize_partial_retrieval(
+    *,
+    terminal_reason: str | None,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    recipe: TaskRecipe,
+) -> bool:
+    if terminal_reason not in PARTIAL_RETRIEVAL_TERMINAL_REASONS:
+        return False
+    if not evidence:
+        return False
+    if recipe.citations_required and not citations:
+        return False
+    return True
+
+
+def _report_with_partial_retrieval_limitations(
+    report: RetrievalReport,
+    *,
+    planned_coverage: JsonObject,
+    missing_evidence: list[str],
+    terminal_reason: str | None,
+) -> RetrievalReport:
+    diagnostics = dict(report.diagnostics)
+    existing_limitations = diagnostics.get("limitations")
+    limitations = [str(item) for item in existing_limitations if isinstance(item, str)] if isinstance(existing_limitations, list) else []
+    limitations.extend(
+        [
+            "retrieval_completed_partially",
+            *missing_evidence,
+        ]
+    )
+    diagnostics.update(
+        {
+            "partial_answer": True,
+            "partial_answer_reason": terminal_reason or "retrieval_partial",
+            "planned_retrieval_coverage": planned_coverage,
+            "missing_evidence": _ordered_unique(missing_evidence),
+            "limitations": _ordered_unique(limitations),
+        }
+    )
     return replace(report, diagnostics=diagnostics)
 
 

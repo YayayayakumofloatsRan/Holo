@@ -282,7 +282,7 @@ def test_phase76_cli_schedule_tick_then_run_worker(tmp_path: Path, capsys):
     ticked = json.loads(capsys.readouterr().out)
     assert ticked["tick"]["enqueued_count"] == 1
 
-    assert cli.main([*base, "resident", "run", "--worker-id", "worker-cli-schedule", "--max-iterations", "2"]) == 0
+    assert cli.main([*base, "resident", "run", "--offline", "--worker-id", "worker-cli-schedule", "--max-iterations", "2"]) == 0
     loop = json.loads(capsys.readouterr().out)
     assert loop["processed_count"] == 1
     assert loop["queue_status"]["inbox_counts"]["completed"] == 1
@@ -321,6 +321,7 @@ def test_phase76_cli_run_can_tick_schedules_before_worker_loop(tmp_path: Path, c
                 *base,
                 "resident",
                 "run",
+                "--offline",
                 "--worker-id",
                 "worker-cli-run-schedule",
                 "--max-iterations",

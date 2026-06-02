@@ -903,6 +903,29 @@ def test_phase62_cli_chat_deepseek_key_enables_default_live_without_holo_gate(tm
     assert payload["answer"] == "key-enabled-live-response"
 
 
+def test_phase62_cli_agent_defaults_to_live_model(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "agent",
+            "hello",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert payload == {"reason": "live_model_not_enabled", "status": "blocked"}
+    assert JournalStore(journal, index_path=index).records() == []
+
+
 def test_phase62_cli_agent_deepseek_key_enables_online_without_holo_gate(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-present")
@@ -963,7 +986,6 @@ def test_phase62_cli_agent_deepseek_key_enables_online_without_holo_gate(tmp_pat
             str(index),
             "agent",
             "hello",
-            "--online",
         ]
     )
 

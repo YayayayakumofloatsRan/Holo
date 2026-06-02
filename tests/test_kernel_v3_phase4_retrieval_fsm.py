@@ -330,7 +330,7 @@ def test_phase4_retrieval_sanitizes_provider_metadata_and_diagnostics_raw_fields
 def test_phase4_retrieval_tool_uses_generic_registry_dispatch_without_loop_branches():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
-    registry = ToolRegistry()
+    registry = ToolRegistry.with_builtin_respond()
     register_retrieval_tool(
         registry,
         operator=_operator(body="Kernel v3 retrieval evidence for generic tool dispatch."),
@@ -471,6 +471,70 @@ def test_phase4_network_budget_accounts_for_declared_fetch_cost_before_execution
     assert guard.data["projected_network_fetches"] == 3
     assert guard.data["max_network_fetches"] == 1
     assert fetch_provider.called is False
+
+
+def test_phase4_network_budget_uses_bounded_preflight_and_actual_fetch_attempts():
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    registry = ToolRegistry.with_builtin_respond()
+    fetch_provider = LiveNetworkFetchProvider()
+    operator = RetrievalOperator(
+        search_provider=LiveNetworkSearchProvider(),
+        fetch_provider=fetch_provider,
+    )
+    register_retrieval_tool(
+        registry,
+        operator=operator,
+        journal=journal,
+        artifact_store=artifacts,
+    )
+    retrieval_action = CandidateAction(
+        action_id="act-live-retrieval-large-declared-budget",
+        kind="tool",
+        name="retrieval.run",
+        description="run live-capable retrieval with roomy declared budget",
+        score=1.0,
+        payload={
+            "query": "Kernel v3 retrieval",
+            "goal_id": "goal-live-large-declared-budget",
+            "max_sources": 5,
+            "max_fetches": 4096,
+        },
+        reasons=["network-capable retrieval"],
+        side_effect_class="read",
+    )
+    respond_action = CandidateAction(
+        action_id="act-budget-followup-response",
+        kind="respond",
+        name=None,
+        description="summarize observed retrieval state",
+        score=1.0,
+        payload={"text": "retrieval observed"},
+        reasons=["budget did not abort loop"],
+        side_effect_class="none",
+    )
+    loop = LoopControllerV3(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=FakePlanner([retrieval_action, respond_action]),
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator(
+            [
+                {"status": "continue", "stop_reason": None, "answer": None, "missing_evidence": ["continue"]},
+                {"status": "final_answer_ready", "stop_reason": "completed", "answer": "done", "missing_evidence": []},
+            ]
+        ),
+        max_network_fetches=6,
+    )
+
+    result = loop.run("retrieve live evidence")
+
+    assert result.status == "completed"
+    assert fetch_provider.called is True
+    assert not journal.records(task_id=result.task_id, kind="guard")
+    observations = journal.records(task_id=result.task_id, kind="observation")
+    assert [item.data["source"] for item in observations] == ["tool:retrieval.run", "respond"]
 
 
 def test_phase4_network_budget_uses_manifest_default_fetch_cost_when_payload_omits_cost():

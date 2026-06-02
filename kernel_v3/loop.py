@@ -215,7 +215,11 @@ class LoopControllerV3:
                     if action.kind == "tool":
                         tool_calls += 1
                     if self._is_network_action(action, manifest=manifest):
-                        network_fetches += self._network_action_cost(action, manifest=manifest)
+                        network_fetches += self._network_action_actual_cost(
+                            action,
+                            manifest=manifest,
+                            observation=observation,
+                        )
                     total_artifact_bytes += self._estimate_artifact_bytes(observation, artifact_refs)
             else:
                 observation = self._blocked_observation(task.run_id, action, decision.reason)
@@ -472,11 +476,30 @@ class LoopControllerV3:
             if isinstance(cost_field, str) and cost_field:
                 payload_cost = _network_cost_from_payload_field(action.payload, cost_field)
                 if payload_cost is not None:
+                    source_limit = _network_cost_from_payload_field(action.payload, "max_sources")
+                    if source_limit is not None:
+                        payload_cost = min(payload_cost, source_limit)
                     return max(1, payload_cost)
             default_cost = _positive_int(manifest_schema.get("default_network_fetch_cost"))
             if default_cost is not None:
                 return max(1, default_cost)
         return 1
+
+    def _network_action_actual_cost(self, action: CandidateAction, *, manifest, observation: Observation) -> int:
+        estimated = self._network_action_cost(action, manifest=manifest)
+        content = observation.content if isinstance(observation.content, dict) else {}
+        report = content.get("report") if isinstance(content, dict) else None
+        report = report if isinstance(report, dict) else {}
+        diagnostics = report.get("diagnostics") if isinstance(report, dict) else None
+        diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+        fetch_attempt_count = _positive_int(diagnostics.get("fetch_attempt_count"))
+        if fetch_attempt_count is None:
+            fetch_attempt_ids = report.get("fetch_attempt_ids") if isinstance(report, dict) else None
+            if isinstance(fetch_attempt_ids, list):
+                fetch_attempt_count = len([item for item in fetch_attempt_ids if isinstance(item, str) and item])
+        if fetch_attempt_count is not None:
+            return max(1, fetch_attempt_count)
+        return estimated
 
     def _estimate_artifact_bytes(self, observation: Observation, artifact_refs: list[object]) -> int:
         total = 0

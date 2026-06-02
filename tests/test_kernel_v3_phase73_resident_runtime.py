@@ -1429,7 +1429,7 @@ def test_phase73_cli_resident_enqueue_run_once_and_outbox(tmp_path: Path, capsys
     enqueued = json.loads(capsys.readouterr().out)
     assert enqueued["message"]["thread_id"] == "resident-cli"
 
-    assert cli.main([*base, "resident", "run-once", "--worker-id", "worker-cli"]) == 0
+    assert cli.main([*base, "resident", "run-once", "--offline", "--worker-id", "worker-cli"]) == 0
     processed = json.loads(capsys.readouterr().out)
     assert processed["status"] == "processed"
 
@@ -1660,7 +1660,7 @@ def test_phase73_cli_resident_requeue_dead_letter_and_journals(tmp_path: Path, c
     assert requeued["message"]["status"] == "pending"
     assert requeued["message"]["attempts"] == 0
 
-    assert cli.main([*base, "resident", "run-once", "--worker-id", "worker-cli-recovered"]) == 0
+    assert cli.main([*base, "resident", "run-once", "--offline", "--worker-id", "worker-cli-recovered"]) == 0
     processed = json.loads(capsys.readouterr().out)
     assert processed["status"] == "processed"
     assert cli.main([*base, "resident-trace"]) == 0
