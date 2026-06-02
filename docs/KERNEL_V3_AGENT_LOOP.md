@@ -290,6 +290,15 @@ host configuration, not model authority. If the evaluator asks to continue but
 the loop stops making progress, repeats the same payload, or exceeds a guard,
 the workloop returns a failure report instead of running forever.
 
+Repeated missing evidence is treated as a stop signal even when a later
+iteration collects marginal new artifacts or citations. The host compares the
+current evaluator-reported missing-evidence set against prior feedback. If the
+same critical gap, such as a required primary source, repeats past the threshold,
+the loop returns a `repeated_missing_evidence` failure report instead of spending
+the remaining network budget on more low-value retrievals. The exception is an
+explicit `remaining_plan_actions` signal, which allows an approved long plan to
+finish its queued steps before final termination is evaluated.
+
 After an insufficient retrieval iteration, the next planner context includes
 `state.agent_replan_hints`. This is a compact journal-derived packet, not model
 memory and not a tool. It records the latest feedback, evidence sufficiency,

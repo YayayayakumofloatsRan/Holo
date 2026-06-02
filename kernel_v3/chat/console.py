@@ -68,11 +68,18 @@ def handle_chat_line(
     local = handle_chat_local_command(stripped, runtime=runtime, thread_id=thread_id, output_mode=output_mode, color=color)
     if local is not None:
         return local
+    start_index = len(runtime.journal.records())
+    if output_mode == "human":
+        print(style("processing...", "dim", color=color))
+        sys.stdout.flush()
     payload = runtime.receive(stripped, thread_id=thread_id)
     if output_mode == "json":
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
     else:
         print(render_chat_result(payload, color=color))
+        activity = render_chat_activity(runtime.journal.records()[start_index:], color=color)
+        if activity:
+            print(activity)
     sys.stdout.flush()
     return False, thread_id, output_mode, color
 
@@ -302,6 +309,76 @@ def render_chat_result(payload: object, *, color: bool) -> str:
     if isinstance(trace_refs, list) and trace_refs:
         lines.append(style(f"trace_refs={len(trace_refs)}", "dim", color=color))
     return "\n".join(lines)
+
+
+def render_chat_activity(records: list[object], *, color: bool) -> str:
+    lines: list[str] = []
+    for record in records:
+        kind = str(getattr(record, "kind", "") or "")
+        data = getattr(record, "data", {})
+        if not isinstance(data, dict):
+            continue
+        line = chat_activity_line(kind, data, color=color)
+        if line:
+            lines.append(line)
+    if not lines:
+        return ""
+    return "\n".join([style("steps", "dim", color=color), *lines])
+
+
+def chat_activity_line(kind: str, data: JsonObject, *, color: bool) -> str | None:
+    prefix = style("·", "dim", color=color)
+    if kind == "chat_routing_decision":
+        return f"{prefix} route {data.get('route')} reasons={compact_list(data.get('reasons'))}"
+    if kind == "processor_request":
+        task_type = data.get("task_type") or data.get("processor")
+        provider = data.get("provider")
+        model = data.get("model")
+        return f"{prefix} model request {task_type} provider={provider} model={model}"
+    if kind == "processor_result":
+        task_type = data.get("task_type")
+        status = data.get("status")
+        duration = data.get("duration_ms")
+        error = data.get("error")
+        tail = f" error={error}" if error else ""
+        return f"{prefix} model result {task_type} status={status} duration_ms={duration}{tail}"
+    if kind == "semantic_intake":
+        return f"{prefix} semantic intent={data.get('primary_intent')} mode={data.get('suggested_mode')} blocked={compact_list(data.get('blocked_capabilities'))}"
+    if kind == "semantic_task_plan":
+        return f"{prefix} task plan status={data.get('status')} mode={data.get('selected_mode')} blocked={compact_list(data.get('blocked_capabilities'))}"
+    if kind == "action":
+        action = data.get("name") or data.get("kind")
+        return f"{prefix} action {action} side_effect={data.get('side_effect_class')}"
+    if kind == "policy_decision":
+        return f"{prefix} policy allowed={data.get('allowed')} reason={data.get('reason')}"
+    if kind == "observation":
+        source = data.get("source") or data.get("kind")
+        return f"{prefix} observation source={source} status={data.get('status')}"
+    if kind == "retrieval_report":
+        return f"{prefix} retrieval report status={data.get('status')} evidence={data.get('evidence_count')} citations={data.get('citation_count')}"
+    if kind == "progress_assessment":
+        return f"{prefix} progress made={data.get('made_progress')} type={data.get('progress_type')} score={data.get('progress_score')}"
+    if kind == "repetition_signal":
+        return f"{prefix} repetition repeated={data.get('repeated')} type={data.get('repeat_type')}"
+    if kind == "evidence_sufficiency":
+        return f"{prefix} evidence sufficient={data.get('sufficient')} reason={data.get('reason')}"
+    if kind == "termination_decision":
+        return f"{prefix} termination decision={data.get('decision')} reason={data.get('reason')}"
+    if kind == "agent_final_answer":
+        return f"{prefix} final answer confidence={data.get('confidence')}"
+    if kind == "agent_failure_report":
+        return f"{prefix} failure reason={data.get('reason')}"
+    if kind == "chat_agent_result":
+        return f"{prefix} chat result status={data.get('status')} route={data.get('route')}"
+    return None
+
+
+def compact_list(value: object, *, limit: int = 3) -> str:
+    if not isinstance(value, list) or not value:
+        return "[]"
+    items = [str(item) for item in value[:limit]]
+    suffix = ", ..." if len(value) > limit else ""
+    return "[" + ", ".join(items) + suffix + "]"
 
 
 def render_status_notice(payload: JsonObject, *, color: bool) -> str:

@@ -7,6 +7,7 @@ from pathlib import Path
 from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.chat import ChatRuntime
+from kernel_v3.chat.console import render_chat_activity
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 
@@ -81,6 +82,41 @@ def test_phase62_next_user_answer_resumes_same_task_and_clears_pending_state():
     assert state.pending_question is None
     assert "chat resume evidence" in resumed.answer
     assert journal.records(task_id=pending.task_id, kind="resume")
+
+
+def test_phase62_pending_question_does_not_swallow_model_routed_new_task():
+    journal = JournalStore.in_memory()
+    pending_chat = _chat_with_semantic(journal, [_workspace_read_intake()])
+    pending = pending_chat.receive("read the file", thread_id="thread-pending-new")
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "new_task",
+                "command": None,
+                "target_task_id": None,
+                "confidence": 0.94,
+                "reasons": ["fresh_request_despite_pending_question"],
+            },
+            "semantic.intake": _direct_intake(),
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+        turn_router_mode="model",
+    )
+
+    fresh = chat.receive("去检索一下 apple inc 的基本面信息", thread_id="thread-pending-new")
+
+    assert pending.status == "needs_user_input"
+    assert fresh.route == "new_task"
+    assert fresh.task_id != pending.task_id
+    assert not journal.records(task_id=pending.task_id, kind="resume")
+    route = journal.records(kind="chat_routing_decision")[-1].data
+    assert route["route"] == "new_task"
+    assert "fresh_request_despite_pending_question" in route["reasons"]
 
 
 def test_phase62_continue_after_completed_task_asks_for_clarification_not_resume():
@@ -760,6 +796,20 @@ def test_phase62_cli_chat_online_mode_uses_model_backed_processors(tmp_path: Pat
     assert "离线 host fallback" not in payload["answer"]
     assert {"semantic.intake", "planner.propose", "evaluator.assess"}.issubset(set(task_types))
     assert any(record.kind == "processor_request" and record.data.get("task_type") == "chat.route" for record in JournalStore(journal, index_path=index).records())
+
+
+def test_phase62_human_console_activity_renders_processor_action_and_termination():
+    journal = JournalStore.in_memory()
+    result = AgentRuntime(journal=journal).run("explain Holo briefly", mode="direct")
+
+    activity = render_chat_activity(journal.records(task_id=result.task_id), color=False)
+
+    assert "steps" in activity
+    assert "action respond" in activity
+    assert "policy allowed=True" in activity
+    assert "observation source=respond" in activity
+    assert "termination decision=final_answer" in activity
+    assert "final answer confidence=" in activity
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:

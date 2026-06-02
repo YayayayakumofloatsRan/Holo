@@ -215,10 +215,9 @@ class ChatRuntime:
                 reasons=["slash_command"],
             )
         if state.pending_question is not None:
-            plan_record = _latest_task_plan_record(self.journal, state.thread_id, task_id=str(state.pending_question["task_id"]))
-            if self.turn_router_mode == "model" and _is_pending_plan_confirmation(plan_record):
+            if self.turn_router_mode == "model":
                 routed = self._route_turn_with_model(message, state=state, turn_id=turn_id)
-                if routed is not None and routed.route == "answer_pending_question":
+                if routed is not None:
                     return routed
             return TurnRoutingDecision(
                 decision_id=f"route-{turn_id}",
@@ -1131,6 +1130,8 @@ def _chat_route_prompt(
     pending_plan: LedgerRecord | None,
 ) -> str:
     pending_plan_confirmation = _is_pending_plan_confirmation(pending_plan)
+    pending_task = _route_plan_summary(pending_plan)
+    continuable_task = _route_plan_summary(continuable_plan)
     payload = {
         "contract": CHAT_ROUTE_PROMPT_CONTRACT,
         "contract_version": 1,
@@ -1143,6 +1144,8 @@ def _chat_route_prompt(
             "recent_task_refs": list(state.recent_task_refs),
             "thread_summary_ref": state.thread_summary_ref,
         },
+        "pending_task": pending_task,
+        "continuable_task": continuable_task,
         "host_state": {
             "active_task_present": state.active_task_id is not None,
             "pending_user_input": state.pending_question is not None,
@@ -1153,16 +1156,57 @@ def _chat_route_prompt(
         },
         "host_rules": [
             "Do not execute commands, tools, memory writes, or transports.",
-            "If pending_user_input is true, route answer_pending_question unless the user explicitly asks a slash command.",
+            "pending_user_input is context, not a forced route.",
+            "Use answer_pending_question only when the turn directly answers the pending question or explicitly approves/rejects a pending plan.",
+            "Use answer_pending_question for missing slots or parameters of the same task, such as a filename, target, date range, approval, or rejection.",
+            "If the pending task is broad clarify_first and the new turn is a complete standalone goal, use new_task instead of resuming the old clarification task.",
+            "If the new turn changes domain, tool surface, or objective from the pending task, use new_task.",
+            "Use new_task when the turn is a clear fresh request, even if an older pending question exists.",
             "If pending_plan_confirmation is true, set command to approve_plan or reject_plan when the turn semantically approves or rejects.",
             "Use continue_plan only when the user wants to advance an unfinished approved task plan.",
             "Use continue_task only when the user wants to resume an active task.",
-            "Use summary when the user asks about prior conversation, recap, or what was discussed.",
+            "Use summary only when the user asks about prior conversation, recap, or what was discussed.",
+            "For current thread, host, agent, or runtime state queries, use new_task unless the user used a slash command.",
             "Use new_task when the turn is a fresh request or when continuation is vague but no active or continuable task exists.",
             "The host will validate route feasibility against thread state before acting.",
         ],
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _route_plan_summary(plan_record: LedgerRecord | None) -> JsonObject | None:
+    if plan_record is None:
+        return None
+    plan = dict(plan_record.data)
+    steps = plan.get("steps")
+    step_summaries: list[JsonObject] = []
+    if isinstance(steps, list):
+        for raw_step in steps[:4]:
+            if not isinstance(raw_step, dict):
+                continue
+            step_summaries.append(
+                {
+                    "step_id": raw_step.get("step_id"),
+                    "kind": raw_step.get("kind"),
+                    "goal": raw_step.get("goal"),
+                    "mode": raw_step.get("mode"),
+                    "action_kind": raw_step.get("action_kind"),
+                    "tool_name": raw_step.get("tool_name"),
+                    "status": raw_step.get("status"),
+                    "required_capabilities": _string_values(raw_step.get("required_capabilities")),
+                }
+            )
+    return {
+        "task_id": plan_record.task_id,
+        "run_id": plan_record.run_id,
+        "plan_id": plan.get("plan_id"),
+        "status": plan.get("status"),
+        "selected_mode": plan.get("selected_mode"),
+        "approval_required": plan.get("approval_required"),
+        "blocked_capabilities": _string_values(plan.get("blocked_capabilities")),
+        "confirmation_prompt": _string_or_none(plan.get("confirmation_prompt")),
+        "steps": step_summaries,
+    }
 
 
 def _decision_from_route_proposal(
@@ -1188,15 +1232,16 @@ def _decision_from_route_proposal(
                 command=command,
                 reasons=reasons,
             )
-        return TurnRoutingDecision(
-            decision_id=f"route-{turn_id}",
-            thread_id=state.thread_id,
-            turn_id=turn_id,
-            route="answer_pending_question",
-            task_id=str(state.pending_question["task_id"]),
-            command=None,
-            reasons=_ordered_unique([*reasons, "pending_user_input"]),
-        )
+        if route == "answer_pending_question":
+            return TurnRoutingDecision(
+                decision_id=f"route-{turn_id}",
+                thread_id=state.thread_id,
+                turn_id=turn_id,
+                route="answer_pending_question",
+                task_id=str(state.pending_question["task_id"]),
+                command=None,
+                reasons=_ordered_unique([*reasons, "pending_user_input"]),
+            )
     if route == "summary":
         return TurnRoutingDecision(
             decision_id=f"route-{turn_id}",

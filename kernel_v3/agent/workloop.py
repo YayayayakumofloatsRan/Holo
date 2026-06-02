@@ -509,9 +509,9 @@ def decide_termination(
         else:
             decision = "failure_report"
             reason = feedback.stop_reason or feedback.status
-    if repetition.repeated and not (repetition.repeat_type == "same_missing_evidence" and progress.made_progress):
+    if repetition.repeated and not _allows_repeated_signal_to_continue(feedback=feedback, repetition=repetition):
         decision = "failure_report"
-        reason = "repeated_no_progress"
+        reason = "repeated_missing_evidence" if repetition.repeat_type == "same_missing_evidence" else "repeated_no_progress"
         override = True
     if not progress.made_progress and no_progress_count >= config.no_progress_step_limit:
         decision = "failure_report"
@@ -538,6 +538,12 @@ def decide_termination(
             "no_progress_count": no_progress_count,
         },
     )
+
+
+def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: RepetitionSignal) -> bool:
+    if repetition.repeat_type != "same_missing_evidence":
+        return False
+    return "remaining_plan_actions" in feedback.missing_evidence
 
 
 def _feedback_from_decision(base: Feedback, decision: TerminationDecision, *, run_id: str, index: int) -> Feedback:
@@ -788,6 +794,8 @@ def _observation_hashes(journal: JournalStore, *, task_id: str, run_id: str) -> 
 
 
 def _missing_evidence_values(journal: JournalStore, *, task_id: str, run_id: str, latest: list[str]) -> list[tuple[str, str]]:
+    if not latest:
+        return []
     values = []
     for record in journal.records(task_id=task_id, kind="feedback"):
         if record.run_id != run_id:
@@ -795,8 +803,7 @@ def _missing_evidence_values(journal: JournalStore, *, task_id: str, run_id: str
         missing = record.data.get("missing_evidence")
         if isinstance(missing, list) and missing:
             values.append((_hash([str(item) for item in missing]), record.record_id))
-    if latest:
-        values.append((_hash([str(item) for item in latest]), "latest-feedback"))
+    values.append((_hash([str(item) for item in latest]), "latest-feedback"))
     return values
 
 

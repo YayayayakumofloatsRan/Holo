@@ -130,6 +130,11 @@ confidence number 0..1, reasons string array.
 Allowed routes: summary, new_task, continue_task, continue_plan, answer_pending_question.
 Allowed commands: approve_plan, reject_plan, or null.
 Use broad semantic judgment over the current user turn and provided thread state.
+Pending user input is context, not a forced route. Use answer_pending_question only
+when the turn directly supplies the missing information, approval, rejection, or
+parameter for the pending task. Use new_task for a complete standalone goal, even
+when an older broad clarification is pending. Use summary only for prior
+conversation recap, not current agent/runtime state.
 The model only classifies the turn. The host validates state, policy, pending questions,
 unfinished plans, and execution. Never request tool execution or memory writes here."""
 

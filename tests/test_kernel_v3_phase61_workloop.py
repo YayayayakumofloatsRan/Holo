@@ -4,9 +4,18 @@ import subprocess
 import sys
 
 from kernel_v3.agent import AgentRuntime
-from kernel_v3.agent.workloop import assess_progress, workloop_state
+from kernel_v3.agent.contracts import TaskRecipe
+from kernel_v3.agent.workloop import (
+    EvidenceSufficiency,
+    ProgressAssessment,
+    RepetitionSignal,
+    WorkloopConfig,
+    assess_progress,
+    decide_termination,
+    workloop_state,
+)
 from kernel_v3.context import ArtifactStore
-from kernel_v3.contracts import Observation
+from kernel_v3.contracts import Feedback, Observation
 from kernel_v3.journal import JournalStore
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
 
@@ -244,6 +253,115 @@ def test_phase61_evaluator_continue_is_overridden_at_repeated_no_progress_thresh
     assert latest_decision["override"] is True
 
 
+def test_phase61_repeated_missing_evidence_stops_even_when_marginal_progress_exists():
+    decision = decide_termination(
+        feedback=Feedback(
+            feedback_id="fb-1",
+            run_id="run-1",
+            status="continue",
+            stop_reason=None,
+            answer=None,
+            missing_evidence=["primary_source"],
+        ),
+        progress=ProgressAssessment(
+            assessment_id="progress-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-2",
+            made_progress=True,
+            progress_score=0.4,
+            progress_type="new_citation",
+            new_refs=["cite-2"],
+            signals=[],
+        ),
+        repetition=RepetitionSignal(
+            signal_id="repeat-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-2",
+            repeated=True,
+            repeat_type="same_missing_evidence",
+            repeat_count=2,
+            threshold=2,
+            repeated_refs=["fb-0", "latest-feedback"],
+        ),
+        evidence=EvidenceSufficiency(
+            sufficiency_id="evidence-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-2",
+            sufficient=False,
+            citations_required=True,
+            evidence_count=2,
+            citation_count=2,
+            valid_citation_refs=["cite-1", "cite-2"],
+            missing=["primary_source"],
+            reason="no_primary_source_for_research_profile",
+        ),
+        recipe=_retrieval_recipe(),
+        no_progress_count=0,
+        config=WorkloopConfig(),
+    )
+
+    assert decision.decision == "failure_report"
+    assert decision.reason == "repeated_missing_evidence"
+    assert decision.override is True
+
+
+def test_phase61_repeated_missing_evidence_does_not_stop_remaining_plan_actions():
+    decision = decide_termination(
+        feedback=Feedback(
+            feedback_id="fb-1",
+            run_id="run-1",
+            status="continue",
+            stop_reason=None,
+            answer=None,
+            missing_evidence=["remaining_plan_actions"],
+        ),
+        progress=ProgressAssessment(
+            assessment_id="progress-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-2",
+            made_progress=True,
+            progress_score=0.4,
+            progress_type="new_observation",
+            new_refs=["obs-2"],
+            signals=[],
+        ),
+        repetition=RepetitionSignal(
+            signal_id="repeat-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-2",
+            repeated=True,
+            repeat_type="same_missing_evidence",
+            repeat_count=2,
+            threshold=2,
+            repeated_refs=["fb-0", "latest-feedback"],
+        ),
+        evidence=EvidenceSufficiency(
+            sufficiency_id="evidence-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-2",
+            sufficient=False,
+            citations_required=False,
+            evidence_count=1,
+            citation_count=0,
+            valid_citation_refs=[],
+            missing=["remaining_plan_actions"],
+            reason="planned_actions_remaining",
+        ),
+        recipe=_retrieval_recipe(),
+        no_progress_count=0,
+        config=WorkloopConfig(),
+    )
+
+    assert decision.decision == "continue"
+    assert decision.reason == "planned_actions_remaining"
+
+
 def test_phase61_failure_report_contains_attempts_missing_evidence_observations_and_trace_refs():
     journal = JournalStore.in_memory()
     runtime = AgentRuntime(
@@ -268,6 +386,22 @@ def test_phase61_loop_controller_stays_free_of_workloop_tool_branches():
 
     for forbidden in ["progress_assessment", "repetition_signal", "evidence_sufficiency", "termination_decision"]:
         assert forbidden not in source
+
+
+def _retrieval_recipe() -> TaskRecipe:
+    return TaskRecipe(
+        recipe_id="recipe-test",
+        allowed_tools=["retrieval.run"],
+        max_steps=8,
+        max_tool_calls=8,
+        max_network_fetches=4,
+        max_total_artifact_bytes=128_000,
+        permission_profile="read_only",
+        citations_required=True,
+        finalizer="synthesizer",
+        context_budget_mode="standard",
+        mode="retrieval_answer",
+    )
 
 
 def test_phase61_cli_inspect_workloop_final_answer_and_failure_report(tmp_path: Path):
