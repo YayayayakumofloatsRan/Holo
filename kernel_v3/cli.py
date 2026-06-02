@@ -1881,6 +1881,7 @@ def _live_processor_fabric(
     if provider == "deepseek":
         router = deepseek_v4_router(
             profile=profile,
+            model=model,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
@@ -1903,6 +1904,7 @@ def _model_packet_payload(args) -> dict[str, object]:
     if provider_name == "deepseek":
         router = deepseek_v4_router(
             profile=getattr(args, "profile", "balanced"),
+            model=getattr(args, "model", None),
             thinking=thinking,
             reasoning_effort=getattr(args, "reasoning_effort", "high"),
             max_output_tokens=getattr(args, "max_output_tokens", "provider"),
@@ -1946,7 +1948,7 @@ def _model_packet_payload(args) -> dict[str, object]:
     parameters = adapt_generation_parameters(task_type=task_type, prompt=prompt, parameters=parameters)
     parameters["task_type"] = task_type
     parameters["provider"] = route.provider
-    parameters["model"] = route.model
+    parameters.setdefault("model", route.model)
     request = ProcessorRequest(
         request_id="proc-packet-preview",
         run_id="run-packet-preview",
@@ -1963,8 +1965,8 @@ def _model_packet_payload(args) -> dict[str, object]:
         "route": {
             "task_type": route.task_type,
             "provider": route.provider,
-            "model": route.model,
-            "timeout_seconds": route.timeout_seconds,
+            "model": parameters.get("model", route.model),
+            "timeout_seconds": parameters.get("timeout_seconds", route.timeout_seconds),
             "parameters": parameters,
         },
         "request": {

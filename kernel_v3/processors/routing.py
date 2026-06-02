@@ -29,12 +29,15 @@ class ProcessorRouter:
         timeout_seconds: int | None = None,
     ) -> ProcessorRoute:
         base = self._routes.get(task_type)
+        parameters = dict(base.parameters if base else {})
+        if model is not None:
+            parameters["model_locked"] = True
         return ProcessorRoute(
             task_type=task_type,
             provider=provider or (base.provider if base else self.default_provider),
             model=model or (base.model if base else self.default_model),
             timeout_seconds=timeout_seconds or (base.timeout_seconds if base else 30),
-            parameters=dict(base.parameters if base else {}),
+            parameters=parameters,
         )
 
     def to_dict(self) -> dict[str, dict[str, object]]:
@@ -44,6 +47,7 @@ class ProcessorRouter:
 def deepseek_v4_router(
     *,
     profile: str = "balanced",
+    model: str | None = None,
     thinking: str | None = None,
     reasoning_effort: str = "high",
     max_output_tokens: object = "provider",
@@ -56,6 +60,7 @@ def deepseek_v4_router(
         default_model=DEEPSEEK_V4_FLASH,
         routes=deepseek_v4_routes(
             profile=profile,
+            model=model,
             thinking=thinking,
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
@@ -69,6 +74,7 @@ def deepseek_v4_router(
 def deepseek_v4_routes(
     *,
     profile: str = "balanced",
+    model: str | None = None,
     thinking: str | None = None,
     reasoning_effort: str = "high",
     max_output_tokens: object = "provider",
@@ -96,20 +102,21 @@ def deepseek_v4_routes(
     elif profile == "balanced":
         specs = {
             "chat.route": (DEEPSEEK_V4_FLASH, "disabled", 384),
-            "semantic.intake": (DEEPSEEK_V4_PRO, "enabled", 1024),
-            "planner.propose": (DEEPSEEK_V4_PRO, "enabled", 1024),
-            "evaluator.assess": (DEEPSEEK_V4_PRO, "enabled", 768),
-            "synthesizer.answer": (DEEPSEEK_V4_PRO, "enabled", 1536),
+            "semantic.intake": (DEEPSEEK_V4_FLASH, "disabled", 1024),
+            "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 1024),
+            "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 768),
+            "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 1536),
         }
     else:
         raise ValueError(f"unknown DeepSeek V4 routing profile: {profile}")
 
     thinking_locked = thinking is not None
     temperature_locked = temperature is not None
+    model_locked = model is not None
     return {
         task_type: _deepseek_route(
             task_type,
-            model,
+            model or route_model,
             thinking=thinking or default_thinking,
             reasoning_effort=effort,
             max_tokens=_route_max_tokens(default_max_tokens, max_output_tokens),
@@ -118,8 +125,9 @@ def deepseek_v4_routes(
             latency_target=latency_target,
             thinking_locked=thinking_locked,
             temperature_locked=temperature_locked,
+            model_locked=model_locked,
         )
-        for task_type, (model, default_thinking, default_max_tokens) in specs.items()
+        for task_type, (route_model, default_thinking, default_max_tokens) in specs.items()
     }
 
 
@@ -135,6 +143,7 @@ def _deepseek_route(
     latency_target: str = "balanced",
     thinking_locked: bool = False,
     temperature_locked: bool = False,
+    model_locked: bool = False,
 ) -> ProcessorRoute:
     parameters: JsonObject = {
         "thinking": thinking,
@@ -142,6 +151,7 @@ def _deepseek_route(
         "latency_target": latency_target if latency_target in {"fast", "balanced", "quality", "thorough"} else "balanced",
         "thinking_locked": thinking_locked,
         "temperature_locked": temperature_locked,
+        "model_locked": model_locked,
     }
     if max_tokens is not None:
         parameters["max_tokens"] = max_tokens

@@ -2002,6 +2002,7 @@ def _thread_working_context(
         "resume_semantics": _resume_semantics(decision, pending=pending),
         "original_task": _task_origin_context(journal, task_id) if task_id else None,
         "recent_turns": _recent_turn_context(journal, state.thread_id, limit=8),
+        "recent_conversation": _recent_conversation_context(journal, state.thread_id, limit=12),
         "last_agent_result": _latest_agent_result_context(journal, state.thread_id),
         "last_answer_preview": _latest_answer_preview(journal, state.thread_id),
         "last_failure_reason": _latest_failure_reason(journal, state.thread_id),
@@ -2072,6 +2073,52 @@ def _recent_turn_context(journal: JournalStore, thread_id: str, *, limit: int) -
             }
         )
     return turns
+
+
+def _recent_conversation_context(journal: JournalStore, thread_id: str, *, limit: int) -> list[JsonObject]:
+    records = [
+        record
+        for record in journal.records()
+        if (
+            record.kind == "chat_turn"
+            and record.data.get("thread_id") == thread_id
+        )
+        or (
+            record.kind == "chat_agent_result"
+            and record.data.get("thread_id") == thread_id
+        )
+    ]
+    return [_compact_conversation_record(record) for record in records[-limit:]]
+
+
+def _compact_conversation_record(record: LedgerRecord) -> JsonObject:
+    data = record.data
+    if record.kind == "chat_turn":
+        return {
+            "record_ref": record.record_id,
+            "kind": "chat_turn",
+            "role": data.get("role"),
+            "turn_id": data.get("turn_id"),
+            "task_id": data.get("task_id"),
+            "text_preview": _preview(str(data.get("text") or ""), limit=480),
+        }
+    failure = data.get("failure_report") if isinstance(data.get("failure_report"), dict) else None
+    pending = data.get("pending_question") if isinstance(data.get("pending_question"), dict) else None
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else None
+    return {
+        "record_ref": record.record_id,
+        "kind": "chat_agent_result",
+        "role": "assistant",
+        "turn_id": data.get("turn_id"),
+        "task_id": data.get("task_id"),
+        "run_id": data.get("run_id"),
+        "route": data.get("route"),
+        "status": data.get("status"),
+        "answer_preview": _preview(str(data.get("answer") or ""), limit=640),
+        "failure_reason": failure.get("reason") if failure else None,
+        "pending_question": _compact_pending_question(pending),
+        "summary_preview": _preview(str(summary.get("text") or summary.get("summary") or ""), limit=360) if summary else None,
+    }
 
 
 def _latest_agent_result_context(journal: JournalStore, thread_id: str) -> JsonObject | None:

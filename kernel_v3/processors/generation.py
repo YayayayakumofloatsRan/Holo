@@ -7,6 +7,9 @@ from kernel_v3.contracts import JsonObject
 
 LATENCY_TARGETS = {"fast", "balanced", "quality", "thorough"}
 STRUCTURED_TASK_TYPES = {"chat.route", "semantic.intake", "planner.propose", "evaluator.assess"}
+DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
+DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
+DEEPSEEK_MODELS = {DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL, "deepseek-reasoner"}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -43,6 +46,16 @@ def adapt_generation_parameters(
     )
     explicit_thinking = bool(merged.get("thinking_locked"))
     explicit_temperature = bool(merged.get("temperature_locked"))
+    explicit_model = bool(merged.get("model_locked"))
+    model_before = str(merged.get("model") or "")
+
+    if not explicit_model:
+        merged["model"] = _model_for(
+            task_type=task_type,
+            assessment=assessment,
+            provider=str(merged.get("provider") or ""),
+            current_model=model_before,
+        )
 
     if not explicit_thinking:
         merged["thinking"] = _thinking_for(task_type=task_type, assessment=assessment)
@@ -57,12 +70,19 @@ def adapt_generation_parameters(
     if not explicit_temperature:
         merged["temperature"] = _temperature_for(task_type=task_type, assessment=assessment)
 
-    merged["timeout_seconds"] = _timeout_for(target=target, current=merged.get("timeout_seconds"))
+    merged["timeout_seconds"] = _timeout_for(
+        target=target,
+        current=merged.get("timeout_seconds"),
+        thinking_enabled=thinking_enabled,
+    )
     merged["generation_policy"] = {
         "mode": "auto",
         "assessment": assessment.to_dict(),
         "thinking_locked": explicit_thinking,
         "temperature_locked": explicit_temperature,
+        "model_locked": explicit_model,
+        "model_before": model_before,
+        "model_after": str(merged.get("model") or ""),
     }
     return merged
 
@@ -87,16 +107,24 @@ def _thinking_for(*, task_type: str, assessment: GenerationAssessment) -> str:
     if assessment.latency_target == "fast":
         return "disabled"
     if assessment.latency_target == "thorough":
+        if task_type == "chat.route":
+            return "disabled"
         return "enabled"
     if assessment.latency_target == "quality":
         if task_type == "chat.route":
             return "disabled"
         return "enabled"
-    if task_type in {"semantic.intake", "evaluator.assess"}:
-        return "enabled"
-    if task_type in {"planner.propose", "synthesizer.answer"}:
-        return "enabled"
     return "disabled"
+
+
+def _model_for(*, task_type: str, assessment: GenerationAssessment, provider: str, current_model: str) -> str:
+    if provider != "deepseek" and current_model not in DEEPSEEK_MODELS:
+        return current_model
+    if task_type == "chat.route" or assessment.latency_target == "fast":
+        return DEEPSEEK_FLASH_MODEL
+    if assessment.latency_target in {"quality", "thorough"}:
+        return DEEPSEEK_PRO_MODEL
+    return DEEPSEEK_FLASH_MODEL
 
 
 def _reasoning_effort_for(assessment: GenerationAssessment) -> str:
@@ -121,7 +149,7 @@ def _temperature_for(*, task_type: str, assessment: GenerationAssessment) -> flo
     return 0.0
 
 
-def _timeout_for(*, target: str, current: object) -> int:
+def _timeout_for(*, target: str, current: object, thinking_enabled: bool) -> int:
     try:
         parsed = int(current)
     except (TypeError, ValueError):
@@ -130,7 +158,9 @@ def _timeout_for(*, target: str, current: object) -> int:
     if target == "fast":
         return min(parsed, 30)
     if target == "balanced":
-        return max(parsed, 90)
+        if thinking_enabled:
+            return max(parsed, 90)
+        return min(max(parsed, 30), 60)
     if target == "quality":
         return max(parsed, 120)
     if target == "thorough":

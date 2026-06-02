@@ -138,6 +138,32 @@ def test_phase62_semantic_intake_prompt_includes_thread_working_context():
     assert any(turn["text_preview"] == "README.md" for turn in working["recent_turns"])
 
 
+def test_phase62_thread_working_context_includes_recent_conversation_results():
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "semantic.intake": [_direct_intake(), _direct_intake()],
+        }
+    )
+    fabric = ProcessorFabric(
+        providers={"fake_json": provider},
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    agent = AgentRuntime(journal=journal, processor_fabric=fabric)
+    chat = ChatRuntime(journal=journal, agent_runtime=agent, semantic_mode="model")
+
+    chat.receive("你能做什么？", thread_id="thread-dialogue-context")
+    chat.receive("接着说", thread_id="thread-dialogue-context")
+
+    prompt = json.loads(provider.last_prompt)
+    working = prompt["runtime_context"]["thread_working_context"]
+    dialogue = working["recent_conversation"]
+    assert any(item["kind"] == "chat_turn" and item["text_preview"] == "你能做什么？" for item in dialogue)
+    assert any(item["kind"] == "chat_agent_result" and item["role"] == "assistant" for item in dialogue)
+    assert any(item["kind"] == "chat_turn" and item["text_preview"] == "接着说" for item in dialogue)
+
+
 def test_phase62_pending_answer_can_change_resume_from_retrieval_to_direct_mode():
     journal = JournalStore.in_memory()
     journal.append(

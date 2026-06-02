@@ -62,11 +62,12 @@ class ProcessorFabric:
                 parameters=parameters,
             )
             self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
+            request_model = str(request.parameters.get("model") or route.model)
             result = ProcessorResult(
                 result_id=f"result-{request.request_id}",
                 request_id=request.request_id,
                 status="failed",
-                output={"provider": route.provider, "model": route.model},
+                output={"provider": route.provider, "model": request_model},
                 usage={},
                 error="provider_not_registered",
             )
@@ -77,7 +78,7 @@ class ProcessorFabric:
                 request=request,
                 result=result,
                 provider=route.provider,
-                model=route.model,
+                model=request_model,
                 task_type=task_type,
                 duration_ms=0,
             )
@@ -86,23 +87,23 @@ class ProcessorFabric:
                 result=result,
                 parsed=None,
                 provider=route.provider,
-                model=route.model,
+                model=request_model,
                 task_type=task_type,
                 duration_ms=0,
             )
 
-        provider_model = route.model
         request = self._request(
             task_type=task_type,
             run_id=run_id,
             context_id=context_id,
             prompt=prompt,
             route_provider=route.provider,
-            route_model=provider_model,
+            route_model=route.model,
             timeout_seconds=route.timeout_seconds,
             route_parameters=route.parameters,
             parameters=parameters,
         )
+        provider_model = str(request.parameters.get("model") or route.model)
         self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
         started = self.clock_ms()
         provider_result: ProcessorResult | None = None
@@ -247,7 +248,7 @@ class ProcessorFabric:
         merged = adapt_generation_parameters(task_type=task_type, prompt=prompt, parameters=merged)
         merged["task_type"] = task_type
         merged["provider"] = route_provider
-        merged["model"] = route_model
+        merged.setdefault("model", route_model)
         return ProcessorRequest(
             request_id=f"proc-{run_id}-{self._counter}",
             run_id=run_id,

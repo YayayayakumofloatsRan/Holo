@@ -383,14 +383,16 @@ model can handle it. `large` and `huge` remain available as explicit smaller
 operator caps. `--max-output-tokens provider` omits the provider
 `max_tokens` field, while `auto` uses Holo's route defaults and an integer sets
 an explicit output cap.
-Generation defaults to host-adaptive mode and is quality-oriented by default:
+Generation defaults to host-adaptive mode and is latency-oriented by default:
 `--generation-mode auto` adjusts thinking, reasoning effort, temperature, and
-timeout from the processor task, prompt size, and
+timeout from the processor task, prompt size, model choice, and
 `--latency-target fast|balanced|quality|thorough`. The default `balanced`
-target keeps reasoning enabled for semantic intake, planning, evaluation, and
-synthesis; `fast` is the explicit low-latency path. Use
-`--generation-mode manual` or explicit `--thinking/--temperature` overrides
-when a run needs fixed generation behavior.
+target keeps ordinary semantic intake, planning, evaluation, and synthesis on
+the lightweight DeepSeek V4 Flash route with thinking disabled, even when the
+host provides a large context packet. Pro/thinking is reserved for explicit
+`quality` / `thorough` targets or an explicit `--model` / `--thinking`
+override. Use `--generation-mode manual`, explicit `--model`, `--thinking`, or
+`--temperature` overrides when a run needs fixed generation behavior.
 Tool calls remain host-validated after model planning: every tool payload is
 checked against the tool manifest schema before execution. `workspace.list`
 returns bounded directory entries without shell execution, `workspace.search`

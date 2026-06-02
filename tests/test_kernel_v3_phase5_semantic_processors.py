@@ -684,18 +684,25 @@ def test_phase5_deepseek_v4_router_profiles_assign_component_models_and_tuning()
     evaluator = balanced.route("evaluator.assess")
     synthesizer = balanced.route("synthesizer.answer")
 
-    assert planner.model == DEEPSEEK_V4_PRO
-    assert planner.parameters["thinking"] == "enabled"
-    assert planner.parameters["reasoning_effort"] == "high"
-    assert planner.timeout_seconds == 90
-    assert evaluator.model == DEEPSEEK_V4_PRO
-    assert evaluator.parameters["thinking"] == "enabled"
-    assert evaluator.parameters["reasoning_effort"] == "high"
-    assert evaluator.timeout_seconds == 90
-    assert synthesizer.model == DEEPSEEK_V4_PRO
-    assert synthesizer.parameters["thinking"] == "enabled"
-    assert synthesizer.parameters["reasoning_effort"] == "high"
-    assert synthesizer.timeout_seconds == 90
+    assert planner.model == DEEPSEEK_V4_FLASH
+    assert planner.parameters["thinking"] == "disabled"
+    assert "reasoning_effort" not in planner.parameters
+    assert planner.timeout_seconds == 60
+    assert evaluator.model == DEEPSEEK_V4_FLASH
+    assert evaluator.parameters["thinking"] == "disabled"
+    assert "reasoning_effort" not in evaluator.parameters
+    assert evaluator.timeout_seconds == 60
+    assert synthesizer.model == DEEPSEEK_V4_FLASH
+    assert synthesizer.parameters["thinking"] == "disabled"
+    assert "reasoning_effort" not in synthesizer.parameters
+    assert synthesizer.timeout_seconds == 60
+
+    quality = deepseek_v4_router(profile="quality")
+    quality_planner = quality.route("planner.propose")
+    assert quality_planner.model == DEEPSEEK_V4_PRO
+    assert quality_planner.parameters["thinking"] == "enabled"
+    assert quality_planner.parameters["reasoning_effort"] == "high"
+    assert quality_planner.timeout_seconds == 90
 
 
 def test_phase5_deepseek_v4_router_exposes_user_reasoning_overrides():
@@ -720,6 +727,18 @@ def test_phase5_deepseek_v4_router_accepts_medium_reasoning_override():
 
     assert evaluator.parameters["thinking"] == "enabled"
     assert evaluator.parameters["reasoning_effort"] == "medium"
+
+
+def test_phase5_deepseek_v4_router_locks_explicit_model_override():
+    router = deepseek_v4_router(profile="balanced", model=DEEPSEEK_V4_PRO)
+
+    planner = router.route("planner.propose")
+    evaluator = router.route("evaluator.assess")
+
+    assert planner.model == DEEPSEEK_V4_PRO
+    assert planner.parameters["model_locked"] is True
+    assert evaluator.model == DEEPSEEK_V4_PRO
+    assert evaluator.parameters["model_locked"] is True
 
 
 def test_phase5_deepseek_v4_router_can_use_provider_default_output_tokens_and_temperature():
@@ -825,11 +844,11 @@ def test_phase5_deepseek_provider_payload_uses_component_route_tuning(monkeypatc
     )
 
     assert outcome.result.status == "ok"
-    assert provider.payload["model"] == DEEPSEEK_V4_PRO
-    assert provider.payload["thinking"] == {"type": "enabled"}
-    assert provider.payload["reasoning_effort"] == "high"
+    assert provider.payload["model"] == DEEPSEEK_V4_FLASH
+    assert provider.payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in provider.payload
     assert "max_tokens" not in provider.payload
-    assert "temperature" not in provider.payload
+    assert provider.payload["temperature"] == 0.0
 
 
 def test_phase5_deepseek_provider_retries_transient_network_errors(monkeypatch):
@@ -973,13 +992,77 @@ def test_phase5_adaptive_generation_raises_reasoning_for_large_quality_planner(m
     assert outcome.result.status == "ok"
     assert outcome.request.parameters["generation_policy"]["mode"] == "auto"
     assert outcome.request.parameters["generation_policy"]["assessment"]["complexity_band"] == "large"
+    assert outcome.request.parameters["model"] == DEEPSEEK_V4_PRO
     assert outcome.request.parameters["thinking"] == "enabled"
     assert outcome.request.parameters["reasoning_effort"] == "high"
     assert outcome.request.parameters["timeout_seconds"] == 120
+    assert provider.payload["model"] == DEEPSEEK_V4_PRO
     assert provider.payload["thinking"] == {"type": "enabled"}
     assert provider.payload["reasoning_effort"] == "high"
     assert provider.payload["temperature"] == 0.0
     assert "max_tokens" not in provider.payload
+
+
+def test_phase5_adaptive_generation_keeps_large_balanced_planner_on_flash(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    class CapturingDeepSeekProvider(DeepSeekProvider):
+        def __init__(self):
+            super().__init__(enabled=True)
+            self.payload = None
+
+        def _post_json(self, url, api_key, payload, timeout_seconds):
+            self.payload = dict(payload)
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action_id": "act-large-balanced",
+                                    "kind": "respond",
+                                    "name": None,
+                                    "description": "large balanced response",
+                                    "payload": {"text": "ok"},
+                                    "score": 0.9,
+                                    "reasons": ["large balanced generation"],
+                                    "side_effect_class": "none",
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    provider = CapturingDeepSeekProvider()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=deepseek_v4_router(
+            profile="balanced",
+            max_output_tokens="provider",
+            generation_mode="auto",
+            latency_target="balanced",
+        ),
+    )
+
+    outcome = fabric.run_json(
+        task_type="planner.propose",
+        run_id="run-large-balanced",
+        context_id="ctx-large-balanced",
+        prompt="large balanced planner context\n" + ("x" * 25_000),
+        schema=PLANNER_SCHEMA,
+    )
+
+    assert outcome.result.status == "ok"
+    assert outcome.request.parameters["generation_policy"]["assessment"]["complexity_band"] == "large"
+    assert outcome.request.parameters["model"] == DEEPSEEK_V4_FLASH
+    assert outcome.request.parameters["thinking"] == "disabled"
+    assert "reasoning_effort" not in outcome.request.parameters
+    assert outcome.request.parameters["timeout_seconds"] == 60
+    assert provider.payload["model"] == DEEPSEEK_V4_FLASH
+    assert provider.payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in provider.payload
 
 
 def test_phase5_adaptive_generation_respects_explicit_thinking_override(monkeypatch):
@@ -1123,6 +1206,39 @@ def test_phase5_cli_model_packet_prints_routed_deepseek_request_without_live_gat
     assert "max_tokens" not in payload["packet"]["body"]
     assert payload["packet"]["body"]["temperature"] == 0.2
     assert secret not in encoded
+
+
+def test_phase5_cli_model_packet_honors_explicit_model_override(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "cli-model-override-secret")
+
+    status = cli.main(
+        [
+            "--journal",
+            str(tmp_path / "journal.jsonl"),
+            "--index",
+            str(tmp_path / "journal.sqlite"),
+            "model-packet",
+            "--provider",
+            "deepseek",
+            "--task-type",
+            "planner.propose",
+            "--goal",
+            "分析一个复杂任务",
+            "--profile",
+            "balanced",
+            "--model",
+            DEEPSEEK_V4_PRO,
+            "--latency-target",
+            "fast",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 0
+    assert payload["route"]["parameters"]["model_locked"] is True
+    assert payload["packet"]["body"]["model"] == DEEPSEEK_V4_PRO
+    assert payload["route"]["parameters"]["generation_policy"]["model_locked"] is True
 
 
 def test_phase5_secrets_do_not_appear_in_journal_context_or_trace(monkeypatch):

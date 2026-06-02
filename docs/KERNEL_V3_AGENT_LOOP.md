@@ -83,16 +83,17 @@ and why Holo will not invent an unsupported answer.
 Thread continuity is now passed into the model-facing agent packets as compact
 working context. `ChatRuntime` derives `thread_working_context` from the
 journal for every agent run/resume: current route, pending question, original
-task, recent turns, latest agent result, latest failure/answer preview, and a
-bounded task trace of actions, observations, feedback, and final/failure
-records. `AgentRuntime` includes that context in `semantic.intake` and planner
-context. A pending-answer turn such as "continue" or "tell me what you know"
-is therefore interpreted against the original task instead of as an isolated
+task, recent user turns, an ordered compact conversation of user turns plus
+assistant results, latest failure/answer preview, and a bounded task trace of
+actions, observations, feedback, and final/failure records. `AgentRuntime`
+includes that context in `semantic.intake` and planner context. A pending-answer
+turn such as "continue" or "tell me what you know" is therefore interpreted
+against the original task and recent Holo result instead of as an isolated
 vague message. If the model-backed semantic intake says the pending answer has
-become a safe direct/semantic answer and citations were not explicitly
-required, the host may switch that resume run out of the previous retrieval
-recipe so the workloop can finalize a limited fallback answer rather than
-cycling forever behind a retrieval evidence gate.
+become a safe direct/semantic answer and citations were not explicitly required,
+the host may switch that resume run out of the previous retrieval recipe so the
+workloop can finalize a limited fallback answer rather than cycling forever
+behind a retrieval evidence gate.
 
 ## Adaptive Processor Generation
 
@@ -100,14 +101,16 @@ Live processor calls pass through a host-owned generation policy before the
 request reaches a provider. In `--generation-mode auto`, the policy derives a
 small `generation_policy` diagnostic from processor task type, prompt length,
 and `--latency-target fast|balanced|quality|thorough`, then adjusts thinking,
-reasoning effort, temperature, and timeout for that call. Defaults are
-quality-oriented: `balanced` keeps reasoning enabled for semantic intake,
-planning, evaluation, and synthesis, while `fast` is the explicit low-latency
-path. The host does not add a `max_tokens` cap by default when
+reasoning effort, temperature, timeout, and DeepSeek V4 model selection for
+that call. Defaults are latency-oriented: `balanced` keeps ordinary semantic
+intake, planning, evaluation, and synthesis on Flash with thinking disabled,
+even for large context packets. Pro/thinking is reserved for explicit
+`quality` / `thorough` targets or explicit `--model` / `--thinking` overrides.
+The host does not add a `max_tokens` cap by default when
 `--max-output-tokens provider` is used, so capable long-context models are not
-artificially shortened. Explicit controls such as
-`--generation-mode manual`, `--thinking enabled|disabled`, or `--temperature`
-remain user overrides.
+artificially shortened. Explicit controls such as `--generation-mode manual`,
+`--model`, `--thinking enabled|disabled`, or `--temperature` remain user
+overrides.
 
 This is not an intent table. It does not classify user phrases. It only tunes
 provider packet shape after the host has already chosen the processor task and
