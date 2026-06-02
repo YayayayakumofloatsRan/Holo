@@ -89,17 +89,17 @@ def deepseek_v4_routes(
         specs = {
             "chat.route": (DEEPSEEK_V4_FLASH, "disabled", 384),
             "semantic.intake": (DEEPSEEK_V4_PRO, "enabled", 1024),
-            "planner.propose": (DEEPSEEK_V4_PRO, "disabled", 512),
+            "planner.propose": (DEEPSEEK_V4_PRO, "enabled", 1024),
             "evaluator.assess": (DEEPSEEK_V4_PRO, "enabled", 768),
-            "synthesizer.answer": (DEEPSEEK_V4_PRO, "disabled", 1024),
+            "synthesizer.answer": (DEEPSEEK_V4_PRO, "enabled", 1536),
         }
     elif profile == "balanced":
         specs = {
             "chat.route": (DEEPSEEK_V4_FLASH, "disabled", 384),
             "semantic.intake": (DEEPSEEK_V4_PRO, "enabled", 1024),
-            "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 512),
+            "planner.propose": (DEEPSEEK_V4_PRO, "enabled", 1024),
             "evaluator.assess": (DEEPSEEK_V4_PRO, "enabled", 768),
-            "synthesizer.answer": (DEEPSEEK_V4_PRO, "disabled", 1024),
+            "synthesizer.answer": (DEEPSEEK_V4_PRO, "enabled", 1536),
         }
     else:
         raise ValueError(f"unknown DeepSeek V4 routing profile: {profile}")
@@ -153,7 +153,7 @@ def _deepseek_route(
         task_type=task_type,
         provider="deepseek",
         model=model,
-        timeout_seconds=60,
+        timeout_seconds=90 if thinking == "enabled" else 60,
         parameters=parameters,
     )
 

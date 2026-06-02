@@ -684,13 +684,18 @@ def test_phase5_deepseek_v4_router_profiles_assign_component_models_and_tuning()
     evaluator = balanced.route("evaluator.assess")
     synthesizer = balanced.route("synthesizer.answer")
 
-    assert planner.model == DEEPSEEK_V4_FLASH
-    assert planner.parameters["thinking"] == "disabled"
+    assert planner.model == DEEPSEEK_V4_PRO
+    assert planner.parameters["thinking"] == "enabled"
+    assert planner.parameters["reasoning_effort"] == "high"
+    assert planner.timeout_seconds == 90
     assert evaluator.model == DEEPSEEK_V4_PRO
     assert evaluator.parameters["thinking"] == "enabled"
     assert evaluator.parameters["reasoning_effort"] == "high"
+    assert evaluator.timeout_seconds == 90
     assert synthesizer.model == DEEPSEEK_V4_PRO
-    assert synthesizer.parameters["thinking"] == "disabled"
+    assert synthesizer.parameters["thinking"] == "enabled"
+    assert synthesizer.parameters["reasoning_effort"] == "high"
+    assert synthesizer.timeout_seconds == 90
 
 
 def test_phase5_deepseek_v4_router_exposes_user_reasoning_overrides():
@@ -970,7 +975,7 @@ def test_phase5_adaptive_generation_raises_reasoning_for_large_quality_planner(m
     assert outcome.request.parameters["generation_policy"]["assessment"]["complexity_band"] == "large"
     assert outcome.request.parameters["thinking"] == "enabled"
     assert outcome.request.parameters["reasoning_effort"] == "high"
-    assert outcome.request.parameters["timeout_seconds"] == 90
+    assert outcome.request.parameters["timeout_seconds"] == 120
     assert provider.payload["thinking"] == {"type": "enabled"}
     assert provider.payload["reasoning_effort"] == "high"
     assert provider.payload["temperature"] == 0.0
@@ -1028,7 +1033,7 @@ def test_phase5_adaptive_generation_respects_explicit_thinking_override(monkeypa
     assert outcome.request.parameters["generation_policy"]["thinking_locked"] is True
     assert outcome.request.parameters["thinking"] == "disabled"
     assert "reasoning_effort" not in outcome.request.parameters
-    assert outcome.request.parameters["timeout_seconds"] == 120
+    assert outcome.request.parameters["timeout_seconds"] == 180
     assert provider.payload["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in provider.payload
 
@@ -1066,6 +1071,8 @@ def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets
     user_message = packet["body"]["messages"][1]
     assert system_message["role"] == "system"
     assert "parenthesized stage directions" in system_message["content"]
+    assert "not token minimization" in system_message["content"]
+    assert "Do not be terse merely to save tokens" in system_message["content"]
     assert user_message["role"] == "user"
     assert isinstance(user_message["content"], dict)
     assert user_message["content"]["chars"] == len(request.prompt)

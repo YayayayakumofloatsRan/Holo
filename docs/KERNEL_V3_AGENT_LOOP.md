@@ -28,9 +28,12 @@ Live processor calls pass through a host-owned generation policy before the
 request reaches a provider. In `--generation-mode auto`, the policy derives a
 small `generation_policy` diagnostic from processor task type, prompt length,
 and `--latency-target fast|balanced|quality|thorough`, then adjusts thinking,
-reasoning effort, temperature, and timeout for that call. Short routing and
-planning packets stay fast by default; larger semantic/evaluation/synthesis
-packets can receive stronger reasoning. Explicit controls such as
+reasoning effort, temperature, and timeout for that call. Defaults are
+quality-oriented: `balanced` keeps reasoning enabled for semantic intake,
+planning, evaluation, and synthesis, while `fast` is the explicit low-latency
+path. The host does not add a `max_tokens` cap by default when
+`--max-output-tokens provider` is used, so capable long-context models are not
+artificially shortened. Explicit controls such as
 `--generation-mode manual`, `--thinking enabled|disabled`, or `--temperature`
 remain user overrides.
 

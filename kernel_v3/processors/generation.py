@@ -95,7 +95,7 @@ def _thinking_for(*, task_type: str, assessment: GenerationAssessment) -> str:
     if task_type in {"semantic.intake", "evaluator.assess"}:
         return "enabled"
     if task_type in {"planner.propose", "synthesizer.answer"}:
-        return "enabled" if assessment.complexity_band in {"large", "huge"} else "disabled"
+        return "enabled"
     return "disabled"
 
 
@@ -129,8 +129,10 @@ def _timeout_for(*, target: str, current: object) -> int:
     parsed = max(1, parsed)
     if target == "fast":
         return min(parsed, 30)
-    if target == "quality":
+    if target == "balanced":
         return max(parsed, 90)
-    if target == "thorough":
+    if target == "quality":
         return max(parsed, 120)
+    if target == "thorough":
+        return max(parsed, 180)
     return parsed

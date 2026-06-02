@@ -553,3 +553,20 @@ The live trace showed DeepSeek returning `semantic.intake`,
 single `respond` action, `allowed_tools` was empty, no workspace/retrieval/tool
 action ran, and processor prompts/results were journaled with preview/hash
 redaction rather than raw secret values.
+
+## Processor Packet Quality Follow-Up
+
+The live DeepSeek packet defaults were adjusted away from token-minimizing
+behavior:
+
+- `PROCESSOR_SYSTEM_PROMPT` now explicitly says user-visible JSON fields should
+  optimize for task completion and answer usefulness, not token minimization.
+- It tells the model not to be terse merely to save tokens and to cover every
+  explicit user request unless the user or response directive asks for brevity.
+- DeepSeek V4 `balanced` and `quality` routes now keep thinking enabled for
+  `semantic.intake`, `planner.propose`, `evaluator.assess`, and
+  `synthesizer.answer`; `fast` remains the explicit low-latency profile.
+- Enabled-thinking routes default to longer timeouts, and adaptive `balanced`,
+  `quality`, and `thorough` targets now use 90/120/180 second floors.
+- `--max-output-tokens provider` remains the live default, so Holo does not
+  impose a short `max_tokens` cap unless the operator explicitly provides one.

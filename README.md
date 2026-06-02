@@ -259,9 +259,12 @@ controls. `--context-profile large` is the default for live interactive runs;
 model can handle them. `--max-output-tokens provider` omits the provider
 `max_tokens` field, while `auto` uses Holo's route defaults and an integer sets
 an explicit output cap.
-Generation defaults to host-adaptive mode: `--generation-mode auto` adjusts
-thinking, reasoning effort, temperature, and timeout from the processor task,
-prompt size, and `--latency-target fast|balanced|quality|thorough`. Use
+Generation defaults to host-adaptive mode and is quality-oriented by default:
+`--generation-mode auto` adjusts thinking, reasoning effort, temperature, and
+timeout from the processor task, prompt size, and
+`--latency-target fast|balanced|quality|thorough`. The default `balanced`
+target keeps reasoning enabled for semantic intake, planning, evaluation, and
+synthesis; `fast` is the explicit low-latency path. Use
 `--generation-mode manual` or explicit `--thinking/--temperature` overrides
 when a run needs fixed generation behavior.
 Tool calls remain host-validated after model planning: every tool payload is
@@ -270,7 +273,9 @@ is bounded to preview matches so a bad query cannot exhaust the loop's artifact
 budget before a follow-up `file.read`.
 The current DeepSeek V4 router defaults to provider output-token limits for live
 interactive routes, so Holo does not clamp capable long-context models unless
-the operator explicitly passes an integer `--max-output-tokens`.
+the operator explicitly passes an integer `--max-output-tokens`. The processor
+system prompt also tells the model to optimize for task completion and answer
+usefulness rather than token minimization.
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "inspect a large workspace file" \
