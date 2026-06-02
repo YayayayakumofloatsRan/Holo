@@ -317,6 +317,11 @@ a TTY: colored status headers, compact task/run refs, and the current
 `--once` and piped stdin still emit JSON unless `--output human` is requested;
 when human output is requested, `--once` uses the same streaming activity view
 as the interactive shell.
+Console input is normalized before it reaches the agent loop: terminal
+backspace/delete controls are applied, control characters are stripped, and lone
+Unicode surrogate codepoints are replaced. The journal applies the same UTF-8
+safety boundary before canonical hashing/writing, so malformed terminal input
+cannot crash a turn.
 Use `/thread switch <id>` or `/thread new <id>` inside the interactive console
 to move between journal-backed chat threads, `/threads` to list known threads,
 `/history [limit]` to show recent user/assistant records for the current

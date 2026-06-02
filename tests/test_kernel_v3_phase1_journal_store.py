@@ -46,6 +46,30 @@ def test_journal_store_writes_canonical_jsonl_and_sqlite_index():
         _unlink(journal_path, index_path)
 
 
+def test_journal_store_replaces_lone_surrogates_before_hashing_and_writing():
+    journal_path = Path("kernel_v3/.test-phase1-surrogate-journal.jsonl")
+    _unlink(journal_path)
+    try:
+        store = JournalStore(journal_path=journal_path)
+
+        record = store.append(
+            task_id="task-surrogate",
+            run_id="run-surrogate",
+            step_id=None,
+            kind="chat_turn",
+            data={"text": "bad\udce6", "nested": {"key\ud800": "value\udfff"}},
+        )
+
+        line = journal_path.read_text(encoding="utf-8").strip()
+        decoded = json.loads(line)
+        assert record.data["text"] == "bad?"
+        assert decoded["data"]["text"] == "bad?"
+        assert decoded["data"]["nested"]["key?"] == "value?"
+        assert decoded["payload_hash"] == _canonical_hash(decoded["data"])
+    finally:
+        _unlink(journal_path)
+
+
 def test_phase0_journal_alias_uses_durable_store():
     journal_path = Path("kernel_v3/.test-phase1-journal-alias.jsonl")
     _unlink(journal_path)

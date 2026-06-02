@@ -31,6 +31,7 @@ from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.processors.contracts import CHAT_ROUTE_PROMPT_CONTRACT, CHAT_ROUTE_SCHEMA
+from kernel_v3.text_safety import normalize_chat_input
 from kernel_v3.trace import TraceRenderer
 
 
@@ -84,6 +85,7 @@ class ChatRuntime:
         self.thread_store = thread_store
 
     def receive(self, message: str, *, thread_id: str = "default") -> ChatRuntimeResult:
+        message = normalize_chat_input(message)
         normalized_thread = _normalize_thread_id(thread_id)
         before = self.build_thread_state(normalized_thread)
         turn = ChatTurn(

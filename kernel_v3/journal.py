@@ -6,10 +6,11 @@ import sqlite3
 from pathlib import Path
 
 from kernel_v3.contracts import JsonObject, LedgerRecord
+from kernel_v3.text_safety import replace_lone_surrogates, sanitize_json_object, sanitize_json_value
 
 
 def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(sanitize_json_value(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _payload_hash(payload: object) -> str:
@@ -56,22 +57,24 @@ class JournalStore:
         state_delta: JsonObject | None = None,
         artifact_refs: list[str] | None = None,
     ) -> LedgerRecord:
+        safe_data = sanitize_json_object(data)
+        safe_state_delta = sanitize_json_object(state_delta or {})
         record = LedgerRecord(
             schema_version=self.SCHEMA_VERSION,
             record_id=f"ledger-{len(self._records) + 1}",
-            task_id=task_id,
-            run_id=run_id,
-            step_id=step_id,
-            kind=kind,
-            data=data,
+            task_id=replace_lone_surrogates(task_id) if task_id is not None else None,
+            run_id=replace_lone_surrogates(run_id),
+            step_id=replace_lone_surrogates(step_id) if step_id is not None else None,
+            kind=replace_lone_surrogates(kind),
+            data=safe_data,
             recorded_at_ms=len(self._records) + 1,
-            event_ref=event_ref,
-            action_ref=action_ref,
-            observation_ref=observation_ref,
-            feedback_ref=feedback_ref,
-            state_delta=state_delta or {},
-            artifact_refs=list(artifact_refs or []),
-            payload_hash=_payload_hash(data),
+            event_ref=replace_lone_surrogates(event_ref) if event_ref is not None else None,
+            action_ref=replace_lone_surrogates(action_ref) if action_ref is not None else None,
+            observation_ref=replace_lone_surrogates(observation_ref) if observation_ref is not None else None,
+            feedback_ref=replace_lone_surrogates(feedback_ref) if feedback_ref is not None else None,
+            state_delta=safe_state_delta,
+            artifact_refs=[replace_lone_surrogates(ref) for ref in list(artifact_refs or [])],
+            payload_hash=_payload_hash(safe_data),
         )
         self._records.append(record)
         if self.path is not None:

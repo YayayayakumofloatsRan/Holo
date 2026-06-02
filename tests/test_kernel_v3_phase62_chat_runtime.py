@@ -56,6 +56,17 @@ def test_phase62_chat_journal_redacts_secret_like_turn_text_before_summary():
     assert "access_token" not in encoded
 
 
+def test_phase62_chat_input_normalizes_backspace_and_lone_surrogates():
+    journal = JournalStore.in_memory()
+    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
+
+    result = chat.receive("为什么世界是这么设计的x\b？\udce6", thread_id="thread-input-normalize")
+
+    turn = journal.records(kind="chat_turn")[0].data
+    assert result.thread_id == "thread-input-normalize"
+    assert turn["text"] == "为什么世界是这么设计的？?"
+
+
 def test_phase62_ask_user_result_creates_pending_question():
     journal = JournalStore.in_memory()
     chat = _chat_with_semantic(journal, [_workspace_read_intake()])

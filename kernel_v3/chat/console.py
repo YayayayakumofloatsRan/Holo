@@ -10,6 +10,7 @@ from typing import Any
 from kernel_v3.chat.runtime import ChatRuntime
 from kernel_v3.chat.theme import event_style, status_style, style
 from kernel_v3.contracts import JsonObject
+from kernel_v3.text_safety import normalize_chat_input
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -63,7 +64,7 @@ def handle_chat_line(
     output_mode: str,
     color: bool,
 ) -> tuple[bool, str, str, bool]:
-    stripped = text.strip()
+    stripped = normalize_chat_input(text)
     if not stripped:
         return False, thread_id, output_mode, color
     local = handle_chat_local_command(stripped, runtime=runtime, thread_id=thread_id, output_mode=output_mode, color=color)

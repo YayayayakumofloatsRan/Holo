@@ -39,6 +39,11 @@ If `DEEPSEEK_API_KEY` is absent, the console fails fast with
 the interactive product entry point can use the provider key directly.
 Offline/fake execution is an explicit operator choice via
 `holo-v3 chat --offline ...`.
+Terminal input is normalized before routing or journaling: interactive
+backspace/delete controls are applied, control characters are stripped, and
+lone Unicode surrogate codepoints are replaced with safe text. `JournalStore`
+also applies the same UTF-8 safety boundary before canonical hashing/writing so
+malformed terminal input cannot crash the agent loop.
 
 The interactive console has local commands for thread and display management:
 `/thread switch <id>`, `/thread new <id>`, `/threads`, `/history [limit]`,
