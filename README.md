@@ -278,13 +278,15 @@ Human output prints a colored `processing...` marker and then streams a compact
 `steps` block as new journal records are written during the turn. Public phases
 are visually separated with stable labels such as `[model]`, `[route]`,
 `[reason]`, `[tool]`, `[policy]`, `[observe]`, `[retrieval]`, `[evidence]`,
-`[final]`, and `[failure]`. This lets a user see model packets, public
-route/action reasons, policy checks, tool calls, observations, retrieval
-search/fetch/extract events, evaluator feedback, workloop decisions, and
-final/failure records while the turn is running. This is journal-event
-streaming, not hidden chain-of-thought or token streaming. Console colors live
-in `kernel_v3/chat/theme.py`, separate from command routing and chat runtime
-logic.
+`[final]`, and `[failure]`; labels keep the phase color, while the event body
+uses a lighter output color so it is visually distinct from typed user input.
+Human-mode command results also leave a blank line before the next prompt. This
+lets a user see model packets, public route/action reasons, policy checks, tool
+calls, observations, retrieval search/fetch/extract events, evaluator feedback,
+workloop decisions, and final/failure records while the turn is running. This is
+journal-event streaming, not hidden chain-of-thought or token streaming. Console
+colors live in `kernel_v3/chat/theme.py`, separate from command routing and chat
+runtime logic.
 
 Pending `ask_user` state does not force the next turn to resume the old task in
 model-routed chat. The route packet receives the pending task summary, but a

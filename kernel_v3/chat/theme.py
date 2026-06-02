@@ -11,6 +11,7 @@ THEME = {
     "cyan": "36",
     "dim": "2",
     "green": "32",
+    "light": "97",
     "magenta": "35",
     "red": "31",
     "white": "37",

@@ -64,9 +64,11 @@ actions, policy decisions, tool observations, retrieval search/fetch/extract
 records, evaluator feedback, and workloop termination decisions before the final
 answer is rendered. The human renderer now uses stable colored phase labels:
 `[model]`, `[route]`, `[reason]`, `[tool]`, `[policy]`, `[observe]`,
-`[retrieval]`, `[evidence]`, `[final]`, and `[failure]`. This is an inspectable
-event stream, not hidden chain-of-thought, and it does not give the model any
-extra execution authority.
+`[retrieval]`, `[evidence]`, `[final]`, and `[failure]`. Labels carry the phase
+color; event bodies use a lighter output color so they do not visually blend
+with typed user input. Human-mode command output leaves a blank line before the
+next prompt for readability. This is an inspectable event stream, not hidden
+chain-of-thought, and it does not give the model any extra execution authority.
 
 Processor/provider failures inside model planning are not treated as missing
 user input. The failing packet remains visible in the journal, but AgentRuntime

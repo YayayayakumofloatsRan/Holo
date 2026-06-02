@@ -973,6 +973,7 @@ def test_phase62_human_console_activity_colors_public_agent_phases():
     activity = render_chat_activity(journal.records(task_id="task-color"), color=True)
 
     assert "\033[" in activity
+    assert "\033[97m" in activity
     assert "[model]" in activity
     assert "[tool]" in activity
     assert "[policy]" in activity
@@ -980,6 +981,29 @@ def test_phase62_human_console_activity_colors_public_agent_phases():
     assert "[evidence]" in activity
     assert "[reason]" in activity
     assert "[final]" in activity
+
+
+def test_phase62_human_console_result_uses_light_answer_text():
+    payload = ChatRuntimeResult(
+        status="completed",
+        thread_id="thread-answer-color",
+        turn_id="turn-answer-color",
+        route="new_task",
+        task_id="task-answer-color",
+        run_id="run-1",
+        answer="这是最终回答。",
+        final_answer=None,
+        failure_report=None,
+        pending_question=None,
+        command_result=None,
+        summary=None,
+        trace_refs=["ledger-1"],
+    )
+
+    rendered = render_chat_result(payload, color=True)
+
+    assert "\033[1;32m[answer]\033[0m" in rendered
+    assert "\033[97m这是最终回答。\033[0m" in rendered
 
 
 def test_phase62_human_console_failure_report_renders_actionable_details():
@@ -1068,6 +1092,7 @@ def test_phase62_human_console_streams_activity_before_final_result(capsys):
     assert "model request planner.propose" in output
     assert "action respond" in output
     assert output.index("model request planner.propose") < output.index("completed task=task-stream")
+    assert output.endswith("\n\n")
 
 
 def test_phase62_cli_once_human_output_streams_activity_before_final_result(tmp_path: Path, capsys):

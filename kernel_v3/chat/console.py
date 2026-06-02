@@ -93,6 +93,7 @@ def print_chat_turn_human(
     sys.stdout.flush()
     payload = receive_with_live_activity(runtime, text, thread_id=thread_id, start_index=start_index, color=color)
     print(render_chat_result(payload, color=color))
+    print()
     return payload
 
 
@@ -376,6 +377,7 @@ def print_chat_local_result(payload: JsonObject, *, output_mode: str, color: boo
     else:
         lines.append(json.dumps(result, ensure_ascii=False, sort_keys=True))
     print("\n".join(lines))
+    print()
 
 
 def render_chat_result(payload: object, *, color: bool) -> str:
@@ -392,7 +394,7 @@ def render_chat_result(payload: object, *, color: bool) -> str:
     lines = [f"{header} {style(' '.join(refs), 'dim', color=color)}"]
     answer = chat_answer_text(data)
     if answer:
-        lines.append(f"{event_label('answer', color=color)} {answer}")
+        lines.append(f"{event_label('answer', color=color)} {output_text(answer, color=color)}")
     pending = data.get("pending_question")
     if isinstance(pending, dict) and pending.get("question"):
         lines.append(style("needs input:", "yellow", color=color) + f" {pending['question']}")
@@ -558,12 +560,16 @@ def chat_activity_line(kind: str, data: JsonObject, *, color: bool) -> str | Non
 
 
 def activity_line(category: str, text: str, *, color: bool, status: str | None = None) -> str:
-    return f"{style('·', 'dim', color=color)} {event_label(category, status=status, color=color)} {text}"
+    return f"{style('·', 'dim', color=color)} {event_label(category, status=status, color=color)} {output_text(text, color=color)}"
 
 
 def event_label(category: str, *, color: bool, status: str | None = None) -> str:
     label = f"[{category}]"
     return style(label, event_style(category, status=status), color=color)
+
+
+def output_text(text: str, *, color: bool) -> str:
+    return style(text, "light", color=color)
 
 
 def processor_parameter_tail(parameters: JsonObject) -> str:
