@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from kernel_v3.contracts import JsonObject
 from kernel_v3.processors.contracts import ProcessorRoute
 
 DEEPSEEK_V4_FLASH = "deepseek-v4-flash"
 DEEPSEEK_V4_PRO = "deepseek-v4-pro"
 DEEPSEEK_LEGACY_REASONER = "deepseek-reasoner"
+DEEPSEEK_V4_TASK_TYPES = (
+    "chat.route",
+    "semantic.intake",
+    "planner.propose",
+    "evaluator.assess",
+    "synthesizer.answer",
+)
 
 
 class ProcessorRouter:
@@ -42,6 +51,88 @@ class ProcessorRouter:
 
     def to_dict(self) -> dict[str, dict[str, object]]:
         return {task_type: route.__dict__ for task_type, route in self._routes.items()}
+
+    def route_overrides(self) -> dict[str, ProcessorRoute]:
+        return {
+            task_type: replace(route, parameters=dict(route.parameters))
+            for task_type, route in self._routes.items()
+        }
+
+    def replace_routes(self, routes: dict[str, ProcessorRoute]) -> None:
+        self._routes = {
+            task_type: replace(route, parameters=dict(route.parameters))
+            for task_type, route in routes.items()
+        }
+
+    def set_route(
+        self,
+        task_type: str,
+        *,
+        model: str | None = None,
+        thinking: str | None = None,
+        reasoning_effort: str | None = None,
+        temperature: float | None = None,
+        latency_target: str | None = None,
+        timeout_seconds: int | None = None,
+        model_locked: bool = True,
+        thinking_locked: bool = True,
+        temperature_locked: bool = True,
+    ) -> None:
+        base = self._routes.get(task_type) or ProcessorRoute(
+            task_type=task_type,
+            provider=self.default_provider,
+            model=self.default_model,
+            timeout_seconds=30,
+            parameters={},
+        )
+        parameters = dict(base.parameters)
+        if model is not None:
+            parameters["model_locked"] = bool(model_locked)
+        if thinking is not None:
+            parameters["thinking"] = thinking
+            parameters["thinking_locked"] = bool(thinking_locked)
+            if thinking != "enabled":
+                parameters.pop("reasoning_effort", None)
+        if reasoning_effort is not None and (thinking is None or thinking == "enabled"):
+            parameters["reasoning_effort"] = reasoning_effort
+        if temperature is not None:
+            parameters["temperature"] = temperature
+            parameters["temperature_locked"] = bool(temperature_locked)
+        if latency_target is not None:
+            parameters["latency_target"] = latency_target
+        self._routes[task_type] = replace(
+            base,
+            model=model or base.model,
+            timeout_seconds=timeout_seconds or base.timeout_seconds,
+            parameters=parameters,
+        )
+
+    def apply_profile(self, profile: str, *, reasoning_effort: str = "high") -> None:
+        if profile == "speed":
+            target_model = DEEPSEEK_V4_FLASH
+            thinking = "disabled"
+            latency_target = "fast"
+            effort = "low"
+        elif profile == "balanced":
+            target_model = DEEPSEEK_V4_FLASH
+            thinking = "disabled"
+            latency_target = "balanced"
+            effort = "medium"
+        elif profile == "quality":
+            target_model = DEEPSEEK_V4_PRO
+            thinking = "enabled"
+            latency_target = "quality"
+            effort = reasoning_effort if reasoning_effort in {"medium", "high", "max"} else "high"
+        else:
+            raise ValueError(f"unknown processor settings profile: {profile}")
+        for task_type in DEEPSEEK_V4_TASK_TYPES:
+            self.set_route(
+                task_type,
+                model=DEEPSEEK_V4_FLASH if task_type == "chat.route" else target_model,
+                thinking="disabled" if task_type == "chat.route" else thinking,
+                reasoning_effort=effort,
+                latency_target=latency_target,
+            )
 
 
 def deepseek_v4_router(

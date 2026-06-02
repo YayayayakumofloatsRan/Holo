@@ -177,7 +177,7 @@ class OpenAICompatibleProvider:
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         reasoning_effort = request.parameters.get("reasoning_effort")
-        if reasoning_effort in {"low", "medium", "high", "max"}:
+        if _thinking_enabled(thinking) and reasoning_effort in {"low", "medium", "high", "max"}:
             payload["reasoning_effort"] = str(reasoning_effort)
         return payload
 

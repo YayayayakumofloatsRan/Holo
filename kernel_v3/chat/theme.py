@@ -13,6 +13,7 @@ THEME = {
     "green": "32",
     "light": "97",
     "magenta": "35",
+    "orange": "38;5;208",
     "red": "31",
     "white": "37",
     "yellow": "33",

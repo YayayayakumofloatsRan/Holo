@@ -1136,6 +1136,7 @@ def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets
             "provider": "deepseek",
             "model": DEEPSEEK_V4_FLASH,
             "thinking": "disabled",
+            "reasoning_effort": "high",
             "max_tokens": 256,
             "timeout_seconds": 30,
         },
@@ -1149,6 +1150,7 @@ def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets
     assert packet["body"]["model"] == DEEPSEEK_V4_FLASH
     assert packet["body"]["response_format"] == {"type": "json_object"}
     assert packet["body"]["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in packet["body"]
     assert packet["body"]["temperature"] == 0.0
     system_message = packet["body"]["messages"][0]
     user_message = packet["body"]["messages"][1]
@@ -1161,6 +1163,17 @@ def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets
     assert user_message["content"]["chars"] == len(request.prompt)
     assert secret not in encoded
     assert request.prompt not in encoded
+
+
+def test_phase5_cli_providers_reports_flash_balanced_defaults():
+    payload = cli._providers_payload()
+    deepseek = next(item for item in payload if item["name"] == "deepseek")
+
+    assert deepseek["profiles"]["balanced"]["chat.route"] == DEEPSEEK_V4_FLASH
+    assert deepseek["profiles"]["balanced"]["planner.propose"] == DEEPSEEK_V4_FLASH
+    assert deepseek["profiles"]["quality"]["planner.propose"] == DEEPSEEK_V4_PRO
+    assert deepseek["thinking"]["default"] == "disabled"
+    assert deepseek["reasoning_effort"]["default"] == "medium"
 
 
 def test_phase5_cli_model_packet_prints_routed_deepseek_request_without_live_gate(tmp_path: Path, capsys, monkeypatch):

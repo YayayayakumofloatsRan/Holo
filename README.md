@@ -331,22 +331,49 @@ cannot crash a turn.
 Use `/thread switch <id>` or `/thread new <id>` inside the interactive console
 to move between journal-backed chat threads, `/threads` to list known threads,
 `/history [limit]` to show recent user/assistant records for the current
-thread, `/json on|off` to toggle raw JSON, and `/color on|off` for ANSI styling.
+thread, `/settings` to inspect or change live model routing, `/json on|off` to
+toggle raw JSON, and `/color on|off` for ANSI styling.
 `/thread new <id>` writes a `chat_thread_event`, so an empty thread is visible
 in `/threads` before the first user turn.
 Human output prints a colored `processing...` marker and then streams a compact
 `steps` block as new journal records are written during the turn. Public phases
 are visually separated with stable labels such as `[model]`, `[route]`,
 `[reason]`, `[tool]`, `[policy]`, `[observe]`, `[retrieval]`, `[evidence]`,
-`[final]`, and `[failure]`; labels keep the phase color, while the event body
-uses a lighter output color so it is visually distinct from typed user input.
-Human-mode command results also leave a blank line before the next prompt. This
-lets a user see model packets, public route/action reasons, policy checks, tool
-calls, observations, retrieval search/fetch/extract events, evaluator feedback,
+`[final]`, and `[failure]`; each event line keeps one phase color across both
+the label and body, with nested indentation for policy/tool/observation,
+retrieval/evidence, and workloop reasoning records. Human-mode command results
+also leave a blank line before the next prompt. Final answers highlight
+`cite-*` refs, URLs, and bolded important spans in orange. This lets a user see
+model packets, public route/action reasons, policy checks, tool calls,
+observations, retrieval search/fetch/extract events, evaluator feedback,
 workloop decisions, and final/failure records while the turn is running. This is
 journal-event streaming, not hidden chain-of-thought or token streaming. Console
 colors live in `kernel_v3/chat/theme.py`, separate from command routing and chat
 runtime logic.
+
+Interactive model routing can be configured globally or per thread:
+
+```text
+/settings
+/settings profile speed|balanced|quality
+/settings profile quality --global
+/settings set planner model pro thinking on effort high target quality
+/settings reset
+/settings reset --global
+```
+
+The global file is `.state/kernel_v3/settings/model.json`. Thread-local
+overrides live beside the transcript under
+`.state/kernel_v3/threads/<thread_id>/settings.json`. Effective settings start
+from the balanced display default: DeepSeek V4 Flash for every processor stage,
+thinking disabled, temperature `0.0`, and medium effort. That default is not
+treated as a hard lock; Holo's host-owned adaptive generation can still upgrade
+when the run asks for a quality/thorough target. User-saved global or thread
+settings are applied to the live `ProcessorRouter` before each turn and can
+lock the selected model, thinking mode, and temperature for the chosen stages.
+`chat.route` stays on Flash with thinking disabled even in quality profile, so
+thread routing remains fast while deeper semantic/planning/evaluation/synthesis
+stages can be upgraded.
 
 Pending `ask_user` state does not force the next turn to resume the old task in
 model-routed chat. The route packet receives the pending task summary, but a

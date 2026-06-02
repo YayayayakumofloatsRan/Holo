@@ -8,11 +8,25 @@ from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import AgentRuntimeResult
 from kernel_v3.chat import ChatRuntime
-from kernel_v3.chat.console import handle_chat_line, render_chat_activity, render_chat_result
+from kernel_v3.chat.console import (
+    apply_console_model_settings,
+    handle_chat_line,
+    handle_model_settings_command,
+    render_chat_activity,
+    render_chat_result,
+)
 from kernel_v3.chat.contracts import ChatRuntimeResult
+from kernel_v3.chat.settings import ModelSettingsStore, setting_update_for_profile
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
-from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
+from kernel_v3.processors import (
+    DEEPSEEK_V4_FLASH,
+    DEEPSEEK_V4_PRO,
+    FakeJsonProvider,
+    ProcessorFabric,
+    ProcessorRouter,
+    deepseek_v4_router,
+)
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
@@ -65,6 +79,76 @@ def test_phase62_chat_input_normalizes_backspace_and_lone_surrogates():
     turn = journal.records(kind="chat_turn")[0].data
     assert result.thread_id == "thread-input-normalize"
     assert turn["text"] == "为什么世界是这么设计的？?"
+
+
+def test_phase62_model_settings_store_keeps_global_and_thread_overrides_separate(tmp_path: Path):
+    store = ModelSettingsStore(global_path=tmp_path / "global-model.json", thread_root=tmp_path / "threads")
+
+    default_planner = store.effective_settings("alpha")["routes"]["planner.propose"]
+    assert default_planner["model"] == DEEPSEEK_V4_FLASH
+    assert default_planner["thinking"] == "disabled"
+    assert default_planner["model_locked"] is False
+    assert default_planner["thinking_locked"] is False
+
+    store.update_global(setting_update_for_profile("quality"))
+    alpha_quality = store.effective_settings("alpha")["routes"]["planner.propose"]
+    beta_quality = store.effective_settings("beta")["routes"]["planner.propose"]
+    assert alpha_quality["model"] == DEEPSEEK_V4_PRO
+    assert alpha_quality["thinking"] == "enabled"
+    assert alpha_quality["model_locked"] is True
+    assert alpha_quality["thinking_locked"] is True
+    assert beta_quality["model"] == DEEPSEEK_V4_PRO
+
+    store.update_thread("alpha", setting_update_for_profile("speed"))
+    alpha_speed = store.effective_settings("alpha")["routes"]["planner.propose"]
+    beta_still_quality = store.effective_settings("beta")["routes"]["planner.propose"]
+    assert alpha_speed["model"] == DEEPSEEK_V4_FLASH
+    assert alpha_speed["thinking"] == "disabled"
+    assert beta_still_quality["model"] == DEEPSEEK_V4_PRO
+    assert store.thread_path("alpha").exists()
+
+    store.reset_thread("alpha")
+    assert store.effective_settings("alpha")["routes"]["planner.propose"]["model"] == DEEPSEEK_V4_PRO
+
+
+def test_phase62_console_model_settings_restore_router_baseline_between_threads(tmp_path: Path):
+    journal = JournalStore.in_memory()
+    router = deepseek_v4_router(profile="balanced", generation_mode="auto", latency_target="quality")
+    fabric = ProcessorFabric(providers={}, router=router, journal=journal)
+    chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric))
+    store = ModelSettingsStore(global_path=tmp_path / "global-model.json", thread_root=tmp_path / "threads")
+
+    assert apply_console_model_settings(chat, "plain-thread", settings_store=store) is False
+    plain_planner = router.route("planner.propose")
+    assert plain_planner.model == DEEPSEEK_V4_FLASH
+    assert plain_planner.parameters["latency_target"] == "quality"
+    assert plain_planner.parameters["model_locked"] is False
+    assert plain_planner.parameters["thinking_locked"] is False
+
+    status, result = handle_model_settings_command(
+        ["set", "planner", "model", "pro", "thinking", "on", "effort", "high", "target", "quality"],
+        runtime=chat,
+        thread_id="quality-thread",
+        store=store,
+        output_mode="json",
+        color=False,
+    )
+
+    assert status == "ok"
+    assert result["applied_to_live_router"] is True
+    quality_planner = router.route("planner.propose")
+    assert quality_planner.model == DEEPSEEK_V4_PRO
+    assert quality_planner.parameters["thinking"] == "enabled"
+    assert quality_planner.parameters["reasoning_effort"] == "high"
+    assert quality_planner.parameters["model_locked"] is True
+    assert quality_planner.parameters["thinking_locked"] is True
+
+    assert apply_console_model_settings(chat, "plain-thread", settings_store=store) is False
+    restored_planner = router.route("planner.propose")
+    assert restored_planner.model == DEEPSEEK_V4_FLASH
+    assert restored_planner.parameters["latency_target"] == "quality"
+    assert restored_planner.parameters["model_locked"] is False
+    assert restored_planner.parameters["thinking_locked"] is False
 
 
 def test_phase62_ask_user_result_creates_pending_question():
@@ -1206,7 +1290,9 @@ def test_phase62_human_console_activity_colors_public_agent_phases():
     activity = render_chat_activity(journal.records(task_id="task-color"), color=True)
 
     assert "\033[" in activity
-    assert "\033[97m" in activity
+    assert "\033[1;36m[model] model request planner.propose" in activity
+    assert "  \033[2m·\033[0m \033[1;33m[tool] action retrieval.run" in activity
+    assert "    \033[2m·\033[0m \033[32m[retrieval] retrieval search query=DeepSeek API" in activity
     assert "[model]" in activity
     assert "[tool]" in activity
     assert "[policy]" in activity

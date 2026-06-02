@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 from dataclasses import dataclass
 from typing import Any
 
 from kernel_v3.chat.runtime import ChatRuntime
+from kernel_v3.chat.settings import (
+    ModelSettingsStore,
+    apply_model_settings_to_router,
+    normalize_model,
+    normalize_task_type,
+    normalize_thinking,
+    setting_update_for_profile,
+    setting_update_for_stage,
+    settings_for_display,
+)
 from kernel_v3.chat.theme import event_style, status_style, style
 from kernel_v3.contracts import JsonObject
 from kernel_v3.text_safety import normalize_chat_input
@@ -25,6 +36,8 @@ def run_chat_console(runtime: ChatRuntime, options: ChatConsoleOptions) -> int:
     current_thread = str(options.thread or "default")
     output_mode = chat_output_mode(options, once=False)
     color_enabled = chat_color_enabled(options)
+    settings_store = model_settings_store(runtime)
+    apply_console_model_settings(runtime, current_thread, settings_store=settings_store)
     if output_mode == "human":
         print(chat_banner(current_thread, color=color_enabled))
     if stream_is_tty(sys.stdin):
@@ -40,6 +53,7 @@ def run_chat_console(runtime: ChatRuntime, options: ChatConsoleOptions) -> int:
                 thread_id=current_thread,
                 output_mode=output_mode,
                 color=color_enabled,
+                settings_store=settings_store,
             )
             if exit_requested:
                 return 0
@@ -50,6 +64,7 @@ def run_chat_console(runtime: ChatRuntime, options: ChatConsoleOptions) -> int:
             thread_id=current_thread,
             output_mode=output_mode,
             color=color_enabled,
+            settings_store=settings_store,
         )
         if exit_requested:
             return 0
@@ -63,14 +78,24 @@ def handle_chat_line(
     thread_id: str,
     output_mode: str,
     color: bool,
+    settings_store: ModelSettingsStore | None = None,
 ) -> tuple[bool, str, str, bool]:
     stripped = normalize_chat_input(text)
     if not stripped:
         return False, thread_id, output_mode, color
-    local = handle_chat_local_command(stripped, runtime=runtime, thread_id=thread_id, output_mode=output_mode, color=color)
+    settings_store = settings_store or model_settings_store(runtime)
+    local = handle_chat_local_command(
+        stripped,
+        runtime=runtime,
+        thread_id=thread_id,
+        output_mode=output_mode,
+        color=color,
+        settings_store=settings_store,
+    )
     if local is not None:
         return local
     start_index = len(runtime.journal.records())
+    apply_console_model_settings(runtime, thread_id, settings_store=settings_store)
     if output_mode == "json":
         payload = runtime.receive(stripped, thread_id=thread_id)
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
@@ -167,11 +192,12 @@ def handle_chat_local_command(
     thread_id: str,
     output_mode: str,
     color: bool,
+    settings_store: ModelSettingsStore | None = None,
 ) -> tuple[bool, str, str, bool] | None:
     parts = text.split()
     command = parts[0].lower()
     args = parts[1:]
-    if command not in {"/thread", "/threads", "/history", "/color", "/json", "/quit", "/exit", "/help", "/?"}:
+    if command not in {"/thread", "/threads", "/history", "/settings", "/model", "/color", "/json", "/quit", "/exit", "/help", "/?"}:
         return None
     status = "ok"
     result: JsonObject
@@ -191,6 +217,10 @@ def handle_chat_local_command(
                 "/thread new <thread_id>",
                 "/threads",
                 "/history [limit]",
+                "/settings",
+                "/settings profile speed|balanced|quality [--global]",
+                "/settings set <stage> model flash|pro thinking on|off effort low|medium|high|max target fast|balanced|quality|thorough",
+                "/settings menu [--global]",
                 "/json on|off",
                 "/color on|off",
                 "/quit",
@@ -256,6 +286,18 @@ def handle_chat_local_command(
                 "event_ref": record.record_id,
                 "state": state,
             }
+        apply_console_model_settings(runtime, new_thread, settings_store=settings_store)
+    elif command in {"/settings", "/model"}:
+        settings_store = settings_store or model_settings_store(runtime)
+        status, result = handle_model_settings_command(
+            args,
+            runtime=runtime,
+            thread_id=thread_id,
+            store=settings_store,
+            output_mode=output_mode,
+            color=color,
+        )
+        apply_console_model_settings(runtime, thread_id, settings_store=settings_store)
     elif command == "/json":
         if not args:
             result = {"output": new_output}
@@ -317,9 +359,201 @@ def stream_is_tty(stream: object) -> bool:
     return bool(isatty()) if callable(isatty) else False
 
 
+def model_settings_store(runtime: ChatRuntime) -> ModelSettingsStore:
+    thread_store = getattr(runtime, "thread_store", None)
+    thread_root = getattr(thread_store, "root", None)
+    return ModelSettingsStore(thread_root=thread_root)
+
+
+def apply_console_model_settings(
+    runtime: ChatRuntime,
+    thread_id: str,
+    *,
+    settings_store: ModelSettingsStore | None = None,
+) -> bool:
+    fabric = getattr(getattr(runtime, "agent_runtime", None), "processor_fabric", None)
+    router = getattr(fabric, "router", None)
+    if router is None:
+        return False
+    base_attr = "_console_base_processor_routes"
+    if not hasattr(runtime, base_attr):
+        setattr(runtime, base_attr, router.route_overrides())
+    base_routes = getattr(runtime, base_attr)
+    if isinstance(base_routes, dict):
+        router.replace_routes(base_routes)
+    store = settings_store or model_settings_store(runtime)
+    configured = store.configured_settings(thread_id)
+    apply_model_settings_to_router(router, configured)
+    routes = configured.get("routes") if isinstance(configured.get("routes"), dict) else {}
+    return bool(routes)
+
+
+def handle_model_settings_command(
+    args: list[str],
+    *,
+    runtime: ChatRuntime,
+    thread_id: str,
+    store: ModelSettingsStore,
+    output_mode: str,
+    color: bool,
+) -> tuple[str, JsonObject]:
+    scope, args = parse_settings_scope(args)
+    if not args or args[0].lower() in {"show", "status"}:
+        return "ok", settings_payload(store, thread_id, scope=scope, applied=apply_console_model_settings(runtime, thread_id, settings_store=store))
+    subcommand = args[0].lower()
+    if subcommand == "menu":
+        if output_mode == "json" or not stream_is_tty(sys.stdin):
+            return "failed", {"error": "interactive_settings_menu_requires_tty", "usage": "/settings menu [--global]"}
+        menu_scope, update = interactive_settings_menu(default_scope=scope, color=color)
+        scope = menu_scope or scope
+        if update is None:
+            return "failed", {"error": "settings_menu_cancelled"}
+        save_model_settings(store, thread_id, scope=scope, update=update)
+        return "ok", settings_payload(store, thread_id, scope=scope, applied=apply_console_model_settings(runtime, thread_id, settings_store=store))
+    if subcommand == "profile":
+        if len(args) < 2:
+            return "failed", {"error": "missing_profile", "usage": "/settings profile speed|balanced|quality [--global]"}
+        update = setting_update_for_profile(args[1].lower())
+        if update is None:
+            return "failed", {"error": "invalid_profile", "choices": sorted(["speed", "balanced", "quality"])}
+        save_model_settings(store, thread_id, scope=scope, update=update)
+        return "ok", settings_payload(store, thread_id, scope=scope, applied=apply_console_model_settings(runtime, thread_id, settings_store=store))
+    if subcommand == "set":
+        if len(args) < 2:
+            return "failed", {"error": "missing_stage", "usage": "/settings set <stage> model flash|pro thinking on|off effort low|medium|high|max target fast|balanced|quality|thorough"}
+        task_type = normalize_task_type(args[1])
+        if task_type is None:
+            return "failed", {"error": "invalid_stage", "choices": list_stage_aliases()}
+        values, error = parse_stage_settings(args[2:])
+        if error is not None:
+            return "failed", error
+        current = store.effective_settings(thread_id)
+        current_route = dict((current.get("routes") or {}).get(task_type) or {})
+        current_route.update(values)
+        update = setting_update_for_stage(task_type, current_route)
+        save_model_settings(store, thread_id, scope=scope, update=update)
+        return "ok", settings_payload(store, thread_id, scope=scope, applied=apply_console_model_settings(runtime, thread_id, settings_store=store))
+    if subcommand == "reset":
+        if scope == "global":
+            store.reset_global()
+        else:
+            store.reset_thread(thread_id)
+        return "ok", settings_payload(store, thread_id, scope=scope, applied=apply_console_model_settings(runtime, thread_id, settings_store=store))
+    return "failed", {
+        "error": "unknown_settings_command",
+        "usage": "/settings [show] | /settings profile speed|balanced|quality [--global] | /settings set <stage> ... | /settings reset [--global]",
+    }
+
+
+def parse_settings_scope(args: list[str]) -> tuple[str, list[str]]:
+    scope = "thread"
+    kept: list[str] = []
+    for item in args:
+        lowered = item.lower()
+        if lowered in {"--global", "global", "system"}:
+            scope = "global"
+        elif lowered in {"--thread", "thread", "local"}:
+            scope = "thread"
+        else:
+            kept.append(item)
+    return scope, kept
+
+
+def parse_stage_settings(args: list[str]) -> tuple[JsonObject, JsonObject | None]:
+    values: JsonObject = {}
+    index = 0
+    while index < len(args):
+        key = args[index].lower()
+        value = args[index + 1] if index + 1 < len(args) else None
+        if value is None:
+            return values, {"error": "missing_setting_value", "key": key}
+        if key == "model":
+            model = normalize_model(value)
+            if model is None:
+                return values, {"error": "invalid_model", "choices": ["flash", "pro"]}
+            values["model"] = model
+        elif key == "thinking":
+            thinking = normalize_thinking(value)
+            if thinking is None:
+                return values, {"error": "invalid_thinking", "choices": ["on", "off"]}
+            values["thinking"] = thinking
+        elif key in {"effort", "reasoning", "reasoning_effort"}:
+            if value not in {"low", "medium", "high", "max"}:
+                return values, {"error": "invalid_effort", "choices": ["low", "medium", "high", "max"]}
+            values["reasoning_effort"] = value
+        elif key in {"target", "latency", "latency_target"}:
+            if value not in {"fast", "balanced", "quality", "thorough"}:
+                return values, {"error": "invalid_latency_target", "choices": ["fast", "balanced", "quality", "thorough"]}
+            values["latency_target"] = value
+        elif key in {"temp", "temperature"}:
+            try:
+                values["temperature"] = float(value)
+            except ValueError:
+                return values, {"error": "invalid_temperature"}
+        else:
+            return values, {"error": "unknown_stage_setting", "key": key}
+        index += 2
+    return values, None
+
+
+def interactive_settings_menu(*, default_scope: str, color: bool) -> tuple[str | None, JsonObject | None]:
+    print(style("Model settings", "bold_cyan", color=color))
+    scope = input("scope [thread/global] (thread): ").strip().lower() or default_scope
+    if scope not in {"thread", "global"}:
+        scope = default_scope
+    profile = input("profile [speed/balanced/quality/custom] (balanced): ").strip().lower() or "balanced"
+    if profile in {"speed", "balanced", "quality"}:
+        return scope, setting_update_for_profile(profile)
+    if profile != "custom":
+        return scope, None
+    task = normalize_task_type(input("stage [planner/evaluator/synthesizer/intake/route]: ").strip())
+    if task is None:
+        return scope, None
+    model = normalize_model(input("model [flash/pro] (flash): ").strip() or "flash")
+    thinking = normalize_thinking(input("thinking [on/off] (off): ").strip() or "off")
+    effort = input("effort [low/medium/high/max] (medium): ").strip().lower() or "medium"
+    target = input("target [fast/balanced/quality/thorough] (balanced): ").strip().lower() or "balanced"
+    if model is None or thinking is None or effort not in {"low", "medium", "high", "max"} or target not in {"fast", "balanced", "quality", "thorough"}:
+        return scope, None
+    return scope, setting_update_for_stage(
+        task,
+        {
+            "model": model,
+            "thinking": thinking,
+            "reasoning_effort": effort,
+            "latency_target": target,
+            "temperature": 0.0,
+        },
+    )
+
+
+def save_model_settings(store: ModelSettingsStore, thread_id: str, *, scope: str, update: JsonObject) -> JsonObject:
+    if scope == "global":
+        return store.update_global(update)
+    return store.update_thread(thread_id, update)
+
+
+def settings_payload(store: ModelSettingsStore, thread_id: str, *, scope: str, applied: bool) -> JsonObject:
+    settings = store.effective_settings(thread_id)
+    path = store.global_path if scope == "global" else store.thread_path(thread_id)
+    return {
+        "kind": "model_settings",
+        "scope": scope,
+        "thread_id": thread_id,
+        "applied_to_live_router": applied,
+        "path": str(path),
+        "settings": settings,
+        "settings_lines": settings_for_display(settings),
+    }
+
+
+def list_stage_aliases() -> list[str]:
+    return ["route", "intake", "planner", "evaluator", "synthesizer"]
+
+
 def chat_banner(thread_id: str, *, color: bool) -> str:
     title = style("Holo Kernel v3 chat", "bold_cyan", color=color)
-    hint = "Commands: /thread new <id>, /thread switch <id>, /threads, /history, /json on, /color off, /quit"
+    hint = "Commands: /thread new <id>, /thread switch <id>, /threads, /history, /settings, /json on, /color off, /quit"
     return f"{title}\n{style('Thread', 'dim', color=color)}: {thread_id}\n{style(hint, 'dim', color=color)}"
 
 
@@ -373,6 +607,13 @@ def print_chat_local_result(payload: JsonObject, *, output_mode: str, color: boo
     elif isinstance(result, dict) and "commands" in result:
         lines.append("CLI commands: " + ", ".join(str(item) for item in result.get("commands", [])))
         lines.append("Runtime commands: " + ", ".join(str(item) for item in result.get("runtime_commands", [])))
+    elif isinstance(result, dict) and result.get("kind") == "model_settings":
+        scope = str(result.get("scope") or "thread")
+        lines.append(style(f"scope: {scope}", "dim", color=color))
+        if result.get("path"):
+            lines.append(style(f"path: {result['path']}", "dim", color=color))
+        for line in result.get("settings_lines", []):
+            lines.append(str(line))
     elif isinstance(result, dict) and "message" in result:
         lines.append(str(result["message"]))
     else:
@@ -395,7 +636,7 @@ def render_chat_result(payload: object, *, color: bool) -> str:
     lines = [f"{header} {style(' '.join(refs), 'dim', color=color)}"]
     answer = chat_answer_text(data)
     if answer:
-        lines.append(f"{event_label('answer', color=color)} {output_text(answer, color=color)}")
+        lines.append(f"{event_label('answer', color=color)} {highlight_answer_text(answer, color=color)}")
     pending = data.get("pending_question")
     if isinstance(pending, dict) and pending.get("question"):
         lines.append(style("needs input:", "yellow", color=color) + f" {pending['question']}")
@@ -565,16 +806,48 @@ def chat_activity_line(kind: str, data: JsonObject, *, color: bool) -> str | Non
 
 
 def activity_line(category: str, text: str, *, color: bool, status: str | None = None) -> str:
-    return f"{style('·', 'dim', color=color)} {event_label(category, status=status, color=color)} {output_text(text, color=color)}"
+    line_style = event_style(category, status=status)
+    indent = activity_indent(category)
+    body = f"{event_label_text(category)} {text}"
+    return f"{indent}{style('·', 'dim', color=color)} {style(body, line_style, color=color)}"
 
 
 def event_label(category: str, *, color: bool, status: str | None = None) -> str:
-    label = f"[{category}]"
-    return style(label, event_style(category, status=status), color=color)
+    return style(event_label_text(category), event_style(category, status=status), color=color)
+
+
+def event_label_text(category: str) -> str:
+    return f"[{category}]"
+
+
+def activity_indent(category: str) -> str:
+    if category in {"retrieval", "evidence"}:
+        return "    "
+    if category in {"policy", "tool", "observe"}:
+        return "  "
+    if category in {"reason", "final", "failure", "chat"}:
+        return "  "
+    return ""
 
 
 def output_text(text: str, *, color: bool) -> str:
     return style(text, "light", color=color)
+
+
+def highlight_answer_text(text: str, *, color: bool) -> str:
+    if not color:
+        return text
+    pattern = re.compile(r"(cite-[A-Za-z0-9_.:-]+|https?://[^\s)）]+|\*\*[^*\n]{1,80}\*\*)")
+    parts: list[str] = []
+    cursor = 0
+    for match in pattern.finditer(text):
+        if match.start() > cursor:
+            parts.append(style(text[cursor : match.start()], "light", color=color))
+        parts.append(style(match.group(1), "orange", color=color))
+        cursor = match.end()
+    if cursor < len(text):
+        parts.append(style(text[cursor:], "light", color=color))
+    return "".join(parts) if parts else style(text, "light", color=color)
 
 
 def processor_parameter_tail(parameters: JsonObject) -> str:
