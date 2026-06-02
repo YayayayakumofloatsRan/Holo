@@ -106,13 +106,14 @@ def analyze_goal_with_processor(
     provider: str | None = None,
     model: str | None = None,
     response_language: str | None = None,
+    runtime_context: JsonObject | None = None,
 ) -> SemanticIntake:
     outcome = fabric.run_json(
         task_type="semantic.intake",
         task_id=task_id,
         run_id=run_id,
         context_id=context_id,
-        prompt=_semantic_prompt(goal, response_language=response_language),
+        prompt=_semantic_prompt(goal, response_language=response_language, runtime_context=runtime_context),
         schema=SEMANTIC_INTAKE_SCHEMA,
         provider=provider,
         model=model,
@@ -123,12 +124,18 @@ def analyze_goal_with_processor(
     return _intake_from_model(goal, outcome.parsed, fallback=analyze_goal(goal))
 
 
-def _semantic_prompt(goal: str, *, response_language: str | None = None) -> str:
+def _semantic_prompt(
+    goal: str,
+    *,
+    response_language: str | None = None,
+    runtime_context: JsonObject | None = None,
+) -> str:
     preferences = interaction_preferences(response_language=response_language)
     payload = {
         "contract": SEMANTIC_INTAKE_PROMPT_CONTRACT,
         "contract_version": 1,
         "user_goal": goal,
+        "runtime_context": _compact_runtime_context(runtime_context),
         "interaction_preferences": preferences,
         "response_language": preferences["response_language"],
         "host_capability_catalog": semantic_capability_catalog(),
@@ -158,12 +165,53 @@ def _semantic_prompt(goal: str, *, response_language: str | None = None) -> str:
             "Classify requests for hidden/private reasoning as private_reasoning and do not expose chain-of-thought.",
             "Classify local writing/report generation as workspace_write. Use status=ready when path and text can be proposed safely; use needs_user_input only when critical write target or content is missing.",
             "If a compound task includes blocked capabilities, ask for confirmation or scope reduction before execution.",
+            (
+                "When runtime_context.thread_working_context.route is answer_pending_question, "
+                "interpret user_goal as an answer to the pending question and original task, "
+                "not as a standalone vague request."
+            ),
+            (
+                "Use runtime_context.thread_working_context.original_task, pending_question, "
+                "recent_turns, and recent_task_trace to preserve thread-local working memory."
+            ),
+            (
+                "If the user accepts a fallback or limitation proposed by the previous assistant turn, "
+                "continue the original task under that limitation instead of asking a new generic clarification."
+            ),
             "If unsure, preserve uncertainty in clarification_question instead of forcing a keyword-style class.",
         ],
     }
     redacted, _markers = Redactor().redact(payload)
     safe = redacted if isinstance(redacted, dict) else {"user_goal": "[REDACTED:SECRET]"}
     return json.dumps(safe, ensure_ascii=False, sort_keys=True)
+
+
+def _compact_runtime_context(value: JsonObject | None) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    allowed: JsonObject = {}
+    for key in ("thread_working_context", "task_execution_step", "interaction_preferences", "agent_loop"):
+        item = value.get(key)
+        if isinstance(item, dict):
+            allowed[key] = _compact_prompt_value(item)
+    return allowed
+
+
+def _compact_prompt_value(value):
+    if isinstance(value, str):
+        return _compact_text(value, limit=640)
+    if isinstance(value, list):
+        return [_compact_prompt_value(item) for item in value[:12]]
+    if isinstance(value, dict):
+        return {str(key): _compact_prompt_value(item) for key, item in list(value.items())[:32]}
+    return value
+
+
+def _compact_text(text: str, *, limit: int) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)] + "..."
 
 
 def _intake_from_model(goal: str, data: JsonObject, *, fallback: SemanticIntake) -> SemanticIntake:

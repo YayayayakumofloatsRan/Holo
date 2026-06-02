@@ -187,11 +187,25 @@ class AgentRuntime:
             semantic_mode=semantic_mode,
             task_id=task_id,
             response_language=effective_language,
+            runtime_context=_semantic_runtime_context(execution_metadata),
         )
         task_graph = task_graph_from_semantic(intake)
         task_graph_validation = validate_task_graph(task_graph)
         task_plan = build_task_execution_plan(task_graph, task_graph_validation)
         selected_mode = task_plan.selected_mode if mode == "auto" else _select_mode(goal, mode)
+        if _pending_answer_prefers_semantic_mode(
+            execution_metadata,
+            intake,
+            requested_mode=mode,
+            citations_required=citations_required,
+        ):
+            selected_mode = task_plan.selected_mode
+            execution_metadata = dict(execution_metadata or {})
+            execution_metadata["mode_override"] = {
+                "from": mode,
+                "to": selected_mode,
+                "reason": "pending_answer_semantic_intake",
+            }
         if (
             selected_mode == "workspace_answer"
             and _workspace_target(goal, task_plan) is None
@@ -710,6 +724,7 @@ class AgentRuntime:
         semantic_mode: str,
         task_id: str | None,
         response_language: str,
+        runtime_context: JsonObject | None = None,
     ) -> SemanticIntake:
         if semantic_mode == "fake":
             return analyze_goal(goal)
@@ -726,6 +741,7 @@ class AgentRuntime:
             run_id=semantic_run_id,
             context_id=f"ctx-semantic-{semantic_task_id}-{semantic_run_id}",
             response_language=response_language,
+            runtime_context=runtime_context,
         )
 
     def _append_recipe(self, recipe: TaskRecipe, *, task_id: str, run_id: str) -> None:
@@ -975,6 +991,7 @@ class _AgentContextCompiler:
                     run_id=task.run_id,
                     recipe=self.recipe,
                 ),
+                "thread_working_context": _thread_working_context_metadata(self.recipe),
                 "context_pack_hash": pack.payload_hash,
                 "sections": pack.sections,
                 "source_refs": pack.source_refs,
@@ -2937,6 +2954,47 @@ def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
 def _agent_loop_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("agent_loop")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _thread_working_context_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("thread_working_context")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
+    if not isinstance(metadata, dict):
+        return {}
+    context: JsonObject = {}
+    for key in ("thread_working_context", "task_execution_step", "interaction_preferences", "agent_loop"):
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            context[key] = dict(value)
+    return context
+
+
+def _pending_answer_prefers_semantic_mode(
+    metadata: JsonObject | None,
+    intake: SemanticIntake,
+    *,
+    requested_mode: str,
+    citations_required: bool | None,
+) -> bool:
+    if citations_required is True:
+        return False
+    if intake.requires_clarification or intake.blocked_capabilities:
+        return False
+    if intake.suggested_mode not in {"direct_answer", "semantic_answer"}:
+        return False
+    if requested_mode in {"auto", "direct", "direct_answer", "semantic", "semantic_answer"}:
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    working = metadata.get("thread_working_context")
+    if not isinstance(working, dict):
+        return False
+    resume = working.get("resume_semantics")
+    resume = resume if isinstance(resume, dict) else {}
+    return working.get("route") == "answer_pending_question" and resume.get("same_task") is True
 
 
 def _research_source_directory_metadata(recipe: TaskRecipe) -> list[JsonObject]:

@@ -244,6 +244,11 @@ web queries.
 For retrieval.run, payload.metadata.search_strategy may propose one of fallback, aggregate, corpus_only, fresh_live, structured, or crawl when the context exposes an adaptive search provider. This only selects among host-configured providers; it does not grant network or tool permission.
 For long tasks, continue one bounded action at a time; the host owns loop budgets, progress detection, repetition detection, and final termination.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.
+If thread context shows a prior evidence-gathering attempt failed and the user
+explicitly accepts a non-current or non-cited fallback answer, provide the most
+useful limited answer the host can safely return, with clear limitations. Do not
+respond only with a generic refusal or tool-failure summary unless the request
+is unsafe, legally prohibited, or the user still requires cited/current evidence.
 For infeasible physical actions, unavailable tools, or unclear requests, propose respond/ask_user with the limitation; never invent tools.
 The model only proposes. The host validates policy and executes."""
 

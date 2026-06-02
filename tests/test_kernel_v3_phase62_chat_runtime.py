@@ -12,6 +12,7 @@ from kernel_v3.chat.console import handle_chat_line, render_chat_activity, rende
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
@@ -87,6 +88,94 @@ def test_phase62_next_user_answer_resumes_same_task_and_clears_pending_state():
     assert state.pending_question is None
     assert "chat resume evidence" in resumed.answer
     assert journal.records(task_id=pending.task_id, kind="resume")
+
+
+def test_phase62_pending_answer_passes_thread_working_context_to_agent_resume():
+    journal = JournalStore.in_memory()
+    pending_chat = _chat_with_semantic(journal, [_workspace_read_intake()])
+    pending = pending_chat.receive("read the file", thread_id="thread-context")
+    agent = CapturingAgentRuntime()
+    chat = ChatRuntime(journal=journal, agent_runtime=agent)  # type: ignore[arg-type]
+
+    resumed = chat.receive("README.md", thread_id="thread-context")
+
+    assert resumed.route == "answer_pending_question"
+    assert agent.resume_calls
+    metadata = agent.resume_calls[-1]["execution_metadata"]
+    working = metadata["thread_working_context"]
+    assert working["route"] == "answer_pending_question"
+    assert working["resume_semantics"]["same_task"] is True
+    assert working["pending_question"]["task_id"] == pending.task_id
+    assert working["original_task"]["input_text_preview"] == "read the file"
+    assert any(item["text_preview"] == "README.md" for item in working["recent_turns"])
+    assert any(item["kind"] == "observation" and item["status"] == "needs_user_input" for item in working["recent_task_trace"])
+
+
+def test_phase62_semantic_intake_prompt_includes_thread_working_context():
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "semantic.intake": [_workspace_read_intake(), _direct_intake()],
+        }
+    )
+    fabric = ProcessorFabric(
+        providers={"fake_json": provider},
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    agent = AgentRuntime(journal=journal, processor_fabric=fabric)
+    chat = ChatRuntime(journal=journal, agent_runtime=agent, semantic_mode="model")
+
+    pending = chat.receive("read the file", thread_id="thread-semantic-context")
+    chat.receive("README.md", thread_id="thread-semantic-context")
+
+    assert pending.status == "needs_user_input"
+    prompt = json.loads(provider.last_prompt)
+    working = prompt["runtime_context"]["thread_working_context"]
+    assert working["route"] == "answer_pending_question"
+    assert working["pending_question"]["task_id"] == pending.task_id
+    assert working["original_task"]["input_text_preview"] == "read the file"
+    assert any(turn["text_preview"] == "README.md" for turn in working["recent_turns"])
+
+
+def test_phase62_pending_answer_can_change_resume_from_retrieval_to_direct_mode():
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-existing",
+        run_id="run-1",
+        step_id=None,
+        kind="task",
+        data={
+            "task_id": "task-existing",
+            "status": "running",
+            "input_text": "查一下 Apple Inc 的基本面信息",
+            "thread_id": "thread-mode",
+        },
+        state_delta={"status": "running"},
+    )
+    fabric = fake_fabric({"semantic.intake": _direct_intake()}, journal=journal)
+    runtime = AgentRuntime(journal=journal, processor_fabric=fabric)
+
+    result = runtime.resume(
+        "task-existing",
+        "好的，告诉我你知道的东西",
+        thread_id="thread-mode",
+        mode="retrieval_answer",
+        semantic_mode="model",
+        execution_metadata={
+            "thread_working_context": {
+                "route": "answer_pending_question",
+                "pending_question": {"task_id": "task-existing"},
+                "resume_semantics": {"same_task": True},
+                "original_task": {"input_text_preview": "查一下 Apple Inc 的基本面信息"},
+            }
+        },
+    )
+
+    assert result.status == "completed"
+    assert result.mode == "direct_answer"
+    assert result.final_answer is not None
+    assert not [record for record in journal.records(task_id="task-existing", kind="action") if record.data.get("name") == "retrieval.run"]
 
 
 def test_phase62_pending_question_does_not_swallow_model_routed_new_task():
@@ -1185,6 +1274,71 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=True,
     )
+
+
+class CapturingAgentRuntime:
+    processor_fabric = None
+    memory_store = None
+
+    def __init__(self) -> None:
+        self.resume_calls: list[dict] = []
+
+    def resume(
+        self,
+        task_id: str,
+        user_input: str,
+        *,
+        thread_id: str,
+        mode: str,
+        planner_mode: str,
+        evaluator_mode: str,
+        synthesizer_mode: str,
+        semantic_mode: str,
+        execution_metadata: dict | None = None,
+        **_kwargs,
+    ) -> AgentRuntimeResult:
+        self.resume_calls.append(
+            {
+                "task_id": task_id,
+                "user_input": user_input,
+                "thread_id": thread_id,
+                "mode": mode,
+                "planner_mode": planner_mode,
+                "evaluator_mode": evaluator_mode,
+                "synthesizer_mode": synthesizer_mode,
+                "semantic_mode": semantic_mode,
+                "execution_metadata": dict(execution_metadata or {}),
+            }
+        )
+        return AgentRuntimeResult(
+            status="completed",
+            task_id=task_id,
+            run_id="run-captured",
+            mode=mode,
+            recipe_id="recipe-captured",
+            final_answer={
+                "answer": "captured",
+                "citation_refs": [],
+                "used_evidence": [],
+                "limitations": [],
+                "confidence": 0.5,
+                "task_id": task_id,
+                "run_id": "run-captured",
+                "trace_refs": [],
+            },
+            failure_report=None,
+            trace_refs=[],
+        )
+
+
+class CapturingFakeJsonProvider(FakeJsonProvider):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.last_prompt = ""
+
+    def run(self, request):
+        self.last_prompt = request.prompt
+        return super().run(request)
 
 
 def _chat_with_semantic(

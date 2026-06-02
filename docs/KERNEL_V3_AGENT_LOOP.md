@@ -80,6 +80,20 @@ ChatRuntime still produces user-visible text for failed agent results. A
 answer that explains what was attempted, what evidence/tool result was missing,
 and why Holo will not invent an unsupported answer.
 
+Thread continuity is now passed into the model-facing agent packets as compact
+working context. `ChatRuntime` derives `thread_working_context` from the
+journal for every agent run/resume: current route, pending question, original
+task, recent turns, latest agent result, latest failure/answer preview, and a
+bounded task trace of actions, observations, feedback, and final/failure
+records. `AgentRuntime` includes that context in `semantic.intake` and planner
+context. A pending-answer turn such as "continue" or "tell me what you know"
+is therefore interpreted against the original task instead of as an isolated
+vague message. If the model-backed semantic intake says the pending answer has
+become a safe direct/semantic answer and citations were not explicitly
+required, the host may switch that resume run out of the previous retrieval
+recipe so the workloop can finalize a limited fallback answer rather than
+cycling forever behind a retrieval evidence gate.
+
 ## Adaptive Processor Generation
 
 Live processor calls pass through a host-owned generation policy before the

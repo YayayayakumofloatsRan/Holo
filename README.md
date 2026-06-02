@@ -144,6 +144,10 @@ Kernel v3 currently contains the infrastructure for:
   resident, transport, and finance visible to model planning and host audit
   without making planned/host-only categories executable;
 - multi-turn chat over journal-derived thread state;
+- thread-local working context in processor packets: pending questions,
+  original task, recent turns, latest result/failure, and bounded task traces
+  are compacted into semantic/planner context so follow-up turns can continue
+  the same task without relying on phrase tables;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
 - bounded retrieval with evidence/citation reports and source quality policy;

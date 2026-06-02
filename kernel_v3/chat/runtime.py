@@ -163,7 +163,7 @@ class ChatRuntime:
                     evaluator_mode=self.evaluator_mode,
                     synthesizer_mode=self.synthesizer_mode,
                     semantic_mode=self.semantic_mode,
-                    execution_metadata=self._execution_metadata(),
+                    execution_metadata=self._agent_execution_metadata(state=before, turn=turn, decision=decision),
                 )
                 result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         elif decision.route == "continue_task":
@@ -177,7 +177,7 @@ class ChatRuntime:
                 evaluator_mode=self.evaluator_mode,
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode=self.semantic_mode,
-                execution_metadata=self._execution_metadata(),
+                execution_metadata=self._agent_execution_metadata(state=before, turn=turn, decision=decision),
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         else:
@@ -190,7 +190,7 @@ class ChatRuntime:
                 evaluator_mode=self.evaluator_mode,
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode=self.semantic_mode,
-                execution_metadata=self._execution_metadata(),
+                execution_metadata=self._agent_execution_metadata(state=before, turn=turn, decision=decision),
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
         self._append_record(
@@ -363,7 +363,7 @@ class ChatRuntime:
                 evaluator_mode=self.evaluator_mode,
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode=self.semantic_mode,
-                execution_metadata=self._execution_metadata(),
+                execution_metadata=self._agent_execution_metadata(state=state, turn=turn, decision=decision),
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
             return _replace_command_result(result, command.result)
@@ -500,7 +500,12 @@ class ChatRuntime:
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode="fake",
                 citations_required=_plan_step_citations_required(step),
-                execution_metadata=self._execution_metadata({"task_execution_step": dict(step)}),
+                execution_metadata=self._agent_execution_metadata(
+                    state=state,
+                    turn=turn,
+                    decision=decision,
+                    extra={"task_execution_step": dict(step)},
+                ),
             )
             decision_record = self._append_plan_decision(
                 turn,
@@ -583,7 +588,12 @@ class ChatRuntime:
                 synthesizer_mode=self.synthesizer_mode,
                 semantic_mode="fake",
                 citations_required=_plan_step_citations_required(step),
-                execution_metadata=self._execution_metadata({"task_execution_step": dict(step)}),
+                execution_metadata=self._agent_execution_metadata(
+                    state=state,
+                    turn=turn,
+                    decision=decision,
+                    extra={"task_execution_step": dict(step)},
+                ),
             )
             decision_record = self._append_plan_decision(
                 turn,
@@ -959,6 +969,23 @@ class ChatRuntime:
     def _execution_metadata(self, extra: JsonObject | None = None) -> JsonObject:
         result = dict(self.execution_metadata)
         result.update(dict(extra or {}))
+        return result
+
+    def _agent_execution_metadata(
+        self,
+        *,
+        state: ThreadState,
+        turn: ChatTurn,
+        decision: TurnRoutingDecision,
+        extra: JsonObject | None = None,
+    ) -> JsonObject:
+        result = self._execution_metadata(extra)
+        result["thread_working_context"] = _thread_working_context(
+            self.journal,
+            state=state,
+            turn=turn,
+            decision=decision,
+        )
         return result
 
     def _agent_result(
@@ -1949,6 +1976,231 @@ def _pending_for_task(journal: JournalStore, *, thread_id: str, task_id: str, ru
         created_at_ms=len(journal.records()) + 1,
         metadata=metadata,
     )
+
+
+def _thread_working_context(
+    journal: JournalStore,
+    *,
+    state: ThreadState,
+    turn: ChatTurn,
+    decision: TurnRoutingDecision,
+) -> JsonObject:
+    pending = state.pending_question if isinstance(state.pending_question, dict) else None
+    task_id = decision.task_id or state.active_task_id or (str(pending.get("task_id")) if pending and pending.get("task_id") else None)
+    return {
+        "kind": "thread_working_context",
+        "thread_id": state.thread_id,
+        "route": decision.route,
+        "route_reasons": list(decision.reasons),
+        "current_turn": {
+            "turn_id": turn.turn_id,
+            "role": turn.role,
+            "text_preview": _preview(turn.text, limit=480),
+            "task_id_before_turn": turn.task_id,
+        },
+        "pending_question": _compact_pending_question(pending),
+        "resume_semantics": _resume_semantics(decision, pending=pending),
+        "original_task": _task_origin_context(journal, task_id) if task_id else None,
+        "recent_turns": _recent_turn_context(journal, state.thread_id, limit=8),
+        "last_agent_result": _latest_agent_result_context(journal, state.thread_id),
+        "last_answer_preview": _latest_answer_preview(journal, state.thread_id),
+        "last_failure_reason": _latest_failure_reason(journal, state.thread_id),
+        "recent_task_trace": _recent_task_trace_context(journal, task_id, limit=16) if task_id else [],
+    }
+
+
+def _compact_pending_question(pending: JsonObject | None) -> JsonObject | None:
+    if not isinstance(pending, dict):
+        return None
+    return {
+        "pending_id": pending.get("pending_id"),
+        "thread_id": pending.get("thread_id"),
+        "task_id": pending.get("task_id"),
+        "run_id": pending.get("run_id"),
+        "question": _preview(str(pending.get("question") or ""), limit=480),
+        "source_ref": pending.get("source_ref"),
+        "metadata": _compact_json(pending.get("metadata"), limit=160),
+    }
+
+
+def _resume_semantics(decision: TurnRoutingDecision, *, pending: JsonObject | None) -> JsonObject:
+    if decision.route == "answer_pending_question":
+        return {
+            "same_task": True,
+            "interpretation": "current_user_turn_answers_pending_question",
+            "instruction": (
+                "Interpret the current user turn through the pending question and original task. "
+                "Do not ask a new generic clarification unless a critical slot is still missing."
+            ),
+            "pending_question_text": _preview(str((pending or {}).get("question") or ""), limit=480),
+        }
+    if decision.route == "continue_task":
+        return {
+            "same_task": True,
+            "interpretation": "current_user_turn_continues_active_task",
+        }
+    return {
+        "same_task": False,
+        "interpretation": "current_user_turn_starts_or_routes_task",
+    }
+
+
+def _task_origin_context(journal: JournalStore, task_id: str | None) -> JsonObject | None:
+    if not task_id:
+        return None
+    for record in journal.records(task_id=task_id, kind="task"):
+        return {
+            "task_id": task_id,
+            "run_id": record.run_id,
+            "thread_id": record.data.get("thread_id"),
+            "input_text_preview": _preview(str(record.data.get("input_text") or ""), limit=640),
+            "record_ref": record.record_id,
+        }
+    return None
+
+
+def _recent_turn_context(journal: JournalStore, thread_id: str, *, limit: int) -> list[JsonObject]:
+    turns: list[JsonObject] = []
+    for record in _thread_turn_records(journal, thread_id)[-limit:]:
+        turns.append(
+            {
+                "record_ref": record.record_id,
+                "turn_id": record.data.get("turn_id"),
+                "role": record.data.get("role"),
+                "task_id": record.data.get("task_id"),
+                "text_preview": _preview(str(record.data.get("text") or ""), limit=360),
+            }
+        )
+    return turns
+
+
+def _latest_agent_result_context(journal: JournalStore, thread_id: str) -> JsonObject | None:
+    for record in reversed(journal.records(kind="chat_agent_result")):
+        if record.data.get("thread_id") != thread_id or not _is_task_result(record.data):
+            continue
+        return {
+            "record_ref": record.record_id,
+            "task_id": record.data.get("task_id"),
+            "run_id": record.data.get("run_id"),
+            "route": record.data.get("route"),
+            "status": record.data.get("status"),
+            "answer_preview": _preview(str(record.data.get("answer") or ""), limit=360),
+            "pending_question": _compact_pending_question(record.data.get("pending_question") if isinstance(record.data.get("pending_question"), dict) else None),
+        }
+    return None
+
+
+def _recent_task_trace_context(journal: JournalStore, task_id: str | None, *, limit: int) -> list[JsonObject]:
+    if not task_id:
+        return []
+    trace_kinds = {
+        "task",
+        "resume",
+        "semantic_intake",
+        "semantic_task_plan",
+        "action",
+        "policy_decision",
+        "observation",
+        "feedback",
+        "guard",
+        "agent_failure_report",
+        "agent_final_answer",
+        "semantic_task_plan_final_answer",
+    }
+    records = [record for record in journal.records(task_id=task_id) if record.kind in trace_kinds]
+    return [_compact_trace_record(record) for record in records[-limit:]]
+
+
+def _compact_trace_record(record: LedgerRecord) -> JsonObject:
+    data = record.data
+    base: JsonObject = {
+        "record_ref": record.record_id,
+        "kind": record.kind,
+        "run_id": record.run_id,
+        "step_id": record.step_id,
+    }
+    if record.kind == "task":
+        base["input_text_preview"] = _preview(str(data.get("input_text") or ""), limit=360)
+    elif record.kind == "resume":
+        base["user_input_preview"] = _preview(str(data.get("user_input") or ""), limit=360)
+    elif record.kind == "semantic_intake":
+        base.update(
+            {
+                "primary_intent": data.get("primary_intent"),
+                "suggested_mode": data.get("suggested_mode"),
+                "requires_clarification": data.get("requires_clarification"),
+                "clarification_question": _preview(str(data.get("clarification_question") or ""), limit=240),
+                "blocked_capabilities": _string_values(data.get("blocked_capabilities")),
+            }
+        )
+    elif record.kind == "semantic_task_plan":
+        base.update(
+            {
+                "status": data.get("status"),
+                "selected_mode": data.get("selected_mode"),
+                "blocked_capabilities": _string_values(data.get("blocked_capabilities")),
+                "confirmation_prompt": _preview(str(data.get("confirmation_prompt") or ""), limit=240),
+            }
+        )
+    elif record.kind == "action":
+        payload = data.get("payload")
+        base.update(
+            {
+                "action_kind": data.get("kind"),
+                "name": data.get("name"),
+                "side_effect_class": data.get("side_effect_class"),
+                "payload": _compact_json(payload, limit=240),
+                "reasons": _string_values(data.get("reasons"))[:4],
+            }
+        )
+    elif record.kind == "policy_decision":
+        base.update({"allowed": data.get("allowed"), "reason": data.get("reason")})
+    elif record.kind == "observation":
+        base.update(
+            {
+                "status": data.get("status"),
+                "source": data.get("source"),
+                "observation_kind": data.get("kind"),
+                "content": _compact_json(data.get("content"), limit=320),
+            }
+        )
+    elif record.kind == "feedback":
+        base.update(
+            {
+                "status": data.get("status"),
+                "stop_reason": data.get("stop_reason"),
+                "answer_preview": _preview(str(data.get("answer") or ""), limit=240),
+                "missing_evidence": _string_values(data.get("missing_evidence"))[:8],
+            }
+        )
+    elif record.kind == "guard":
+        base.update({"stop_reason": data.get("stop_reason"), "data": _compact_json(data, limit=160)})
+    elif record.kind == "agent_failure_report":
+        base.update(
+            {
+                "reason": data.get("reason"),
+                "missing_evidence": _string_values(data.get("missing_evidence"))[:8],
+                "next_possible_action": data.get("next_possible_action"),
+            }
+        )
+    elif record.kind in {"agent_final_answer", "semantic_task_plan_final_answer"}:
+        base.update(
+            {
+                "answer_preview": _preview(str(data.get("answer") or ""), limit=360),
+                "citation_refs": _string_values(data.get("citation_refs"))[:8],
+            }
+        )
+    return base
+
+
+def _compact_json(value, *, limit: int):
+    if isinstance(value, str):
+        return _preview(value, limit=limit)
+    if isinstance(value, list):
+        return [_compact_json(item, limit=limit) for item in value[:8]]
+    if isinstance(value, dict):
+        return {str(key): _compact_json(item, limit=limit) for key, item in list(value.items())[:16]}
+    return value
 
 
 def _pending_memory_proposals(journal: JournalStore, *, task_id: str) -> list[LedgerRecord]:

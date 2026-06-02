@@ -436,9 +436,13 @@ def render_chat_activity(records: list[object], *, color: bool) -> str:
 
 def chat_activity_line(kind: str, data: JsonObject, *, color: bool) -> str | None:
     if kind == "context":
+        state = data.get("state")
+        sections = data.get("packs") or data.get("sections")
+        if not sections and isinstance(state, dict):
+            sections = state.get("sections")
         return activity_line(
             "context",
-            f"context compiled id={data.get('context_id')} sections={len(data.get('packs') or data.get('sections') or [])}",
+            f"context compiled id={data.get('context_id')} sections={len(sections or [])}",
             color=color,
         )
     if kind == "chat_routing_decision":
