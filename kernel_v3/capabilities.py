@@ -40,6 +40,7 @@ SAFE_SEMANTIC_CAPABILITIES = frozenset(
         "finance.competitive_landscape",
         "finance.source_directory",
         "retrieval.run",
+        "workspace.list",
         "workspace.search",
         "file.read",
         "workspace.write",
@@ -506,7 +507,7 @@ def semantic_capability_catalog() -> JsonObject:
                 "personal_assistant.coordinate",
                 "preference.apply",
             ],
-            "workspace": ["workspace.search", "workspace.file.read", "workspace.file.write"],
+            "workspace": ["workspace.list", "workspace.search", "workspace.file.read", "workspace.file.write"],
             "retrieval": ["retrieval.run", "research.plan", "web.research", "web.search", "web.fetch", "web.crawl", "browser.page.open"],
             "finance": [
                 "finance.fundamentals_research",
@@ -545,8 +546,8 @@ def semantic_capability_catalog() -> JsonObject:
         "executable_tools_by_recipe": {
             "semantic_answer": [],
             "retrieval_answer": ["retrieval.run"],
-            "workspace_answer": ["workspace.search", "file.read"],
-            "workspace_write": ["workspace.search", "file.read", "workspace.write"],
+            "workspace_answer": ["workspace.list", "workspace.search", "file.read"],
+            "workspace_write": ["workspace.list", "workspace.search", "file.read", "workspace.write"],
             "system_answer": ["system.time"],
             "direct_answer": [],
             "clarify_first": [],
@@ -1279,6 +1280,7 @@ def _tool_capabilities(
     result: list[CapabilitySpec] = []
     mappings = {
         "retrieval.run": ("retrieval.run", "retrieval", "Run bounded retrieval FSM and produce evidence/citations."),
+        "workspace.list": ("workspace.list", "workspace", "List workspace directory entries."),
         "workspace.search": ("workspace.search", "workspace", "Search workspace files."),
         "file.read": ("workspace.file.read", "workspace", "Read a workspace file."),
         "workspace.write": ("workspace.file.write", "workspace", "Write a workspace file under host policy."),

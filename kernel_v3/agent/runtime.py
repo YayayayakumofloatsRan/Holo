@@ -196,6 +196,7 @@ class AgentRuntime:
             selected_mode == "workspace_answer"
             and _workspace_target(goal, task_plan) is None
             and not _task_plan_has_workspace_read_actions(task_plan)
+            and _ambiguous_workspace_file_read(goal)
         ):
             selected_mode = "clarify_first"
         if selected_mode == "workspace_write" and planner_mode != "model" and _workspace_write_target(goal, task_plan) is None:
@@ -472,7 +473,11 @@ class AgentRuntime:
         report = _latest_retrieval_report(self.journal, task_id, run_id)
         evidence = _retrieval_evidence(self.journal, task_id, run_id)
         citations = _retrieval_citations(self.journal, task_id, run_id)
-        terminal_reason = _latest_termination_failure_reason(self.journal, task_id, run_id) or loop_stop_reason
+        terminal_reason = (
+            _latest_guard_stop_reason(self.journal, task_id, run_id)
+            or _latest_termination_failure_reason(self.journal, task_id, run_id)
+            or loop_stop_reason
+        )
         if report is None:
             reason = terminal_reason if terminal_reason in LOOP_GUARD_STOP_REASONS else "missing_retrieval_report"
             return None, self._failure(
@@ -1161,10 +1166,19 @@ class _RecipeEvaluator:
         run_id = str(context.state["run_id"])
         if observation.status == "needs_user_input":
             return _feedback(run_id, self.calls, "needs_user_input", "needs_user_input", None, [])
+        if observation.source == "loop_guard" and observation.status == "blocked":
+            content = observation.content if isinstance(observation.content, dict) else {}
+            reason = content.get("reason")
+            stop_reason = reason if isinstance(reason, str) and reason else "loop_guard"
+            return _feedback(run_id, self.calls, "step_limit_exceeded", stop_reason, None, [stop_reason])
         if observation.status == "blocked":
             return _feedback(run_id, self.calls, "blocked", "blocked", None, ["policy_block"])
-        if self.recipe.mode == "workspace_answer" and observation.source == "tool:workspace.search":
-            return _feedback(run_id, self.calls, "continue", None, None, ["file.read observation"])
+        if (
+            self.recipe.mode == "workspace_answer"
+            and observation.source in {"tool:workspace.list", "tool:workspace.search"}
+            and self.expected_action_count > self.calls
+        ):
+            return _feedback(run_id, self.calls, "continue", None, None, ["remaining_plan_actions"])
         if self.recipe.mode == "workspace_write" and observation.source in {"tool:workspace.search", "tool:file.read"}:
             return _feedback(run_id, self.calls, "continue", None, None, ["workspace.write observation"])
         if self.recipe.mode == "workspace_write" and observation.source == "tool:workspace.write" and observation.status == "ok":
@@ -1248,9 +1262,9 @@ def task_recipe(
     if normalized == "workspace_answer":
         return TaskRecipe(
             recipe_id="recipe-workspace-answer",
-            allowed_tools=["workspace.search", "file.read"],
+            allowed_tools=["workspace.list", "workspace.search", "file.read"],
             max_steps=4,
-            max_tool_calls=2,
+            max_tool_calls=3,
             max_network_fetches=0,
             max_total_artifact_bytes=1_000_000,
             permission_profile="read_write",
@@ -1264,7 +1278,7 @@ def task_recipe(
         recipe_metadata = _with_allowed_permission(recipe_metadata, "workspace:write")
         return TaskRecipe(
             recipe_id="recipe-workspace-write",
-            allowed_tools=["workspace.search", "file.read", "workspace.write"],
+            allowed_tools=["workspace.list", "workspace.search", "file.read", "workspace.write"],
             max_steps=8,
             max_tool_calls=6,
             max_network_fetches=0,
@@ -1339,6 +1353,8 @@ def task_recipe(
 
 def _with_planned_action_count(goal: str, recipe: TaskRecipe) -> TaskRecipe:
     actions = _actions_from_task_plan(goal, recipe)
+    if not actions and recipe.mode in {"workspace_answer", "workspace_write"}:
+        actions = _recipe_actions(goal, recipe)
     if not actions:
         return recipe
     metadata = dict(recipe.metadata)
@@ -1444,7 +1460,21 @@ def _recipe_actions(goal: str, recipe: TaskRecipe) -> list[CandidateAction]:
     if recipe.mode == "workspace_answer":
         target = _workspace_target(goal, _task_execution_plan_metadata(recipe))
         if target is None:
-            return _recipe_actions(goal, task_recipe("clarify_first"))
+            if _ambiguous_workspace_file_read(goal):
+                return _recipe_actions(goal, task_recipe("clarify_first"))
+            list_path = _workspace_list_target(goal, _task_execution_plan_metadata(recipe))
+            return [
+                CandidateAction(
+                    action_id="act-agent-workspace-list",
+                    kind="tool",
+                    name="workspace.list",
+                    description="list workspace directory",
+                    score=1.0,
+                    payload={"path": list_path},
+                    reasons=["workspace_answer recipe"],
+                    side_effect_class="read",
+                )
+            ]
         query, path = target
         return [
             CandidateAction(
@@ -1652,6 +1682,30 @@ def _actions_from_plan_step(goal: str, recipe: TaskRecipe, step: JsonObject) -> 
                 side_effect_class="read",
             ),
         ]
+    if tool_name == "workspace.list":
+        payloads = _capability_payloads_from_step(step, "workspace.list")
+        if not payloads:
+            payloads = [{"path": _workspace_list_target(goal, {"steps": [step]})}]
+        actions = []
+        for item_index, args in enumerate(payloads, start=1):
+            path = _string_value(args.get("path")) or "."
+            payload: JsonObject = {"path": path}
+            max_entries = args.get("max_entries")
+            if isinstance(max_entries, int):
+                payload["max_entries"] = max_entries
+            actions.append(
+                CandidateAction(
+                    action_id=f"act-plan-{sequence}-{item_index}-workspace-list",
+                    kind="tool",
+                    name="workspace.list",
+                    description=str(step.get("goal") or "list workspace directory"),
+                    score=1.0,
+                    payload=payload,
+                    reasons=["semantic_task_plan"],
+                    side_effect_class="read",
+                )
+            )
+        return actions
     if tool_name == "workspace.search":
         payloads = _capability_payloads_from_step(step, "workspace.search")
         if not payloads:
@@ -1829,18 +1883,30 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     if recipe.mode == "workspace_answer":
         return {
             "mode": recipe.mode,
-            "required_sequence": [
+            "tool_selection": [
+                {
+                    "kind": "tool",
+                    "name": "workspace.list",
+                    "side_effect_class": "read",
+                    "use_when": "the user asks to list, inspect, or read a directory/workspace root rather than a specific file body",
+                    "payload_requirements": ["path: workspace-relative directory path; use . for workspace root"],
+                    "sufficient_for_final": True,
+                },
                 {
                     "kind": "tool",
                     "name": "workspace.search",
                     "side_effect_class": "read",
+                    "use_when": "the user asks to locate files or search workspace content before reading a specific file",
                     "payload_requirements": ["query: non-empty string; use the target path as query when known"],
+                    "sufficient_for_final": True,
                 },
                 {
                     "kind": "tool",
                     "name": "file.read",
                     "side_effect_class": "read",
+                    "use_when": "the user asks for the content of a known file or search results identify a file that must be read",
                     "payload_requirements": ["path: non-empty workspace-relative file path"],
+                    "sufficient_for_final": True,
                 },
             ],
             "allowed_tools": list(recipe.allowed_tools),
@@ -3301,6 +3367,23 @@ def _workspace_target(goal: str, plan: TaskExecutionPlan | JsonObject | None) ->
     return query or path, path
 
 
+def _workspace_list_target(goal: str, plan: TaskExecutionPlan | JsonObject | None) -> str:
+    capability_args = _workspace_capability_args(plan)
+    list_args = _nested_json(capability_args, "workspace.list")
+    search_args = _nested_json(capability_args, "workspace.search")
+    path = _string_value(list_args.get("path")) or _string_value(search_args.get("path"))
+    if path is not None:
+        return path
+    return "."
+
+
+def _ambiguous_workspace_file_read(goal: str) -> bool:
+    if _file_target(goal) is not None:
+        return False
+    normalized = goal.lower()
+    return "file" in normalized or "文件" in normalized
+
+
 def _task_plan_has_workspace_read_actions(plan: TaskExecutionPlan | JsonObject | None) -> bool:
     if plan is None:
         return False
@@ -3312,7 +3395,7 @@ def _task_plan_has_workspace_read_actions(plan: TaskExecutionPlan | JsonObject |
             continue
         if str(raw_step.get("status") or "") != "ready":
             continue
-        if str(raw_step.get("tool_name") or "") in {"workspace.search", "file.read", "workspace.search,file.read"}:
+        if str(raw_step.get("tool_name") or "") in {"workspace.list", "workspace.search", "file.read", "workspace.search,file.read"}:
             return True
     return False
 
@@ -3335,7 +3418,7 @@ def _workspace_capability_args(plan: TaskExecutionPlan | JsonObject | None) -> J
     return _capability_args_from_plan(
         plan,
         None,
-        capability_markers={"workspace.search", "file.read", "workspace:read"},
+        capability_markers={"workspace.list", "workspace.search", "file.read", "workspace:read"},
     )
 
 
@@ -3773,13 +3856,20 @@ def _workspace_grounding(
     ]
     for index, record in enumerate(observations, start=1):
         data = record.data
-        if data.get("source") != "tool:file.read" or data.get("status") != "ok":
+        if data.get("source") not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read"} or data.get("status") != "ok":
             continue
         content = data.get("content", {})
         if not isinstance(content, dict):
             continue
-        path = str(content.get("path", "workspace"))
-        text = _workspace_observation_text(content, artifact_store=artifact_store, evidence_char_limit=evidence_char_limit)
+        text = _workspace_observation_text(
+            content,
+            artifact_store=artifact_store,
+            evidence_char_limit=evidence_char_limit,
+            source=str(data.get("source") or ""),
+        )
+        if not text.strip():
+            continue
+        path = _workspace_observation_title(content, source=str(data.get("source") or ""))
         evidence_id = f"workspace-evidence-{index}"
         citation_id = f"workspace-cite-{index}"
         artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or evidence_id}"
@@ -3795,7 +3885,7 @@ def _workspace_grounding(
             text=text,
             score=1.0,
             payload_hash=str(data.get("payload_hash") or record.payload_hash),
-            diagnostics={"record_ref": record.record_id},
+            diagnostics={"record_ref": record.record_id, "source": str(data.get("source") or "")},
         )
         evidence.append(item)
         citations.append(
@@ -3812,6 +3902,9 @@ def _workspace_grounding(
                 metadata={"record_ref": record.record_id},
             )
         )
+    evidence = sorted(evidence, key=_workspace_evidence_priority)
+    citation_by_evidence = {item.evidence_id: item for item in citations}
+    citations = [citation_by_evidence[item.evidence_id] for item in evidence if item.evidence_id in citation_by_evidence]
     report = RetrievalReport(
         report_id="workspace-report",
         goal_id="goal-workspace",
@@ -3836,6 +3929,15 @@ def _workspace_grounding(
     return evidence, citations, report
 
 
+def _workspace_evidence_priority(item: EvidenceItem) -> tuple[int, str]:
+    source = str(item.diagnostics.get("source") or "")
+    if source == "tool:file.read":
+        return 0, item.evidence_id
+    if source == "tool:workspace.list":
+        return 1, item.evidence_id
+    return 2, item.evidence_id
+
+
 def _workspace_write_observations(journal: JournalStore, task_id: str, run_id: str):
     return [
         record
@@ -3856,7 +3958,17 @@ def _system_time_observations(journal: JournalStore, task_id: str, run_id: str):
     ]
 
 
-def _workspace_observation_text(content: JsonObject, *, artifact_store: ArtifactStore, evidence_char_limit: int) -> str:
+def _workspace_observation_text(
+    content: JsonObject,
+    *,
+    artifact_store: ArtifactStore,
+    evidence_char_limit: int,
+    source: str = "",
+) -> str:
+    if source == "tool:workspace.list":
+        return _workspace_listing_text(content)[:evidence_char_limit]
+    if source == "tool:workspace.search":
+        return _workspace_search_text(content)[:evidence_char_limit]
     artifact_id = content.get("artifact_id")
     if isinstance(artifact_id, str) and artifact_store.has_blob(artifact_id):
         payload = artifact_store.read_blob(artifact_id)
@@ -3866,6 +3978,51 @@ def _workspace_observation_text(content: JsonObject, *, artifact_store: Artifact
     preview_value = content.get("text_preview")
     text = str(text_value if isinstance(text_value, str) else preview_value if isinstance(preview_value, str) else "")
     return text[:evidence_char_limit]
+
+
+def _workspace_observation_title(content: JsonObject, *, source: str) -> str:
+    if source == "tool:workspace.search":
+        query = content.get("query")
+        return f"workspace search: {query}" if isinstance(query, str) and query else "workspace search"
+    path = content.get("path")
+    return str(path) if isinstance(path, str) and path else "workspace"
+
+
+def _workspace_listing_text(content: JsonObject) -> str:
+    path = str(content.get("path") or ".")
+    entries = content.get("entries")
+    lines = [f"Workspace directory `{path}`:"]
+    if isinstance(entries, list):
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            item_path = str(item.get("path") or "")
+            if not item_path:
+                continue
+            kind = str(item.get("kind") or "entry")
+            size = item.get("size_bytes")
+            suffix = f" ({size} bytes)" if isinstance(size, int) else ""
+            lines.append(f"- {kind}: {item_path}{suffix}")
+    return "\n".join(lines)
+
+
+def _workspace_search_text(content: JsonObject) -> str:
+    query = str(content.get("query") or "")
+    matches = content.get("matches")
+    lines = [f"Workspace search `{query}`:"]
+    if isinstance(matches, list):
+        for item in matches:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "")
+            if not path:
+                continue
+            preview = str(item.get("text_preview") or "")
+            if preview:
+                lines.append(f"- {path}: {preview}")
+            else:
+                lines.append(f"- {path}")
+    return "\n".join(lines)
 
 
 def _grounded_answer(*, report: RetrievalReport, evidence: list[EvidenceItem], citations: list[CitationItem]) -> str:
@@ -3980,6 +4137,16 @@ def _latest_termination_failure_reason(journal: JournalStore, task_id: str, run_
             continue
         if record.data.get("decision") == "failure_report" and isinstance(record.data.get("reason"), str):
             return str(record.data["reason"])
+    return None
+
+
+def _latest_guard_stop_reason(journal: JournalStore, task_id: str, run_id: str) -> str | None:
+    for record in reversed(journal.records(task_id=task_id, kind="guard")):
+        if record.run_id != run_id:
+            continue
+        reason = record.data.get("stop_reason")
+        if isinstance(reason, str) and reason:
+            return reason
     return None
 
 

@@ -232,21 +232,8 @@ class LoopControllerV3:
                 artifact_refs=[artifact.artifact_id for artifact in artifact_refs],
             )
             if observation.status == "blocked" and observation.content == {"reason": "max_tool_calls"}:
-                current_feedback = self._limit_feedback(task.run_id, "max_tool_calls")
-                self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
                 self._append_guard(task, "max_tool_calls", step_id=step_id, data={"tool_calls": tool_calls})
-                current_feedback = self._finalize_guard_feedback(
-                    context,
-                    observation,
-                    current_feedback,
-                    task=task,
-                    action=action,
-                    step_id=step_id,
-                )
-                return self._result(task, current_feedback, step_id=step_id)
-            if observation.status == "blocked" and observation.content == {"reason": "max_network_fetches"}:
-                current_feedback = self._limit_feedback(task.run_id, "max_network_fetches")
-                self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+            elif observation.status == "blocked" and observation.content == {"reason": "max_network_fetches"}:
                 requested_network_fetches = self._network_action_cost(action, manifest=manifest)
                 self._append_guard(
                     task,
@@ -259,17 +246,13 @@ class LoopControllerV3:
                         "max_network_fetches": self.max_network_fetches,
                     },
                 )
-                current_feedback = self._finalize_guard_feedback(
-                    context,
-                    observation,
-                    current_feedback,
-                    task=task,
-                    action=action,
-                    step_id=step_id,
-                )
-                return self._result(task, current_feedback, step_id=step_id)
             current_feedback = self.evaluator.evaluate(context, observation)
             self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+            guard_reason = self._guard_stop_reason(observation)
+            if guard_reason is not None and not callable(getattr(self.evaluator, "finalize_guard", None)):
+                current_feedback = self._limit_feedback(task.run_id, guard_reason)
+                self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
+                return self._result(task, current_feedback, step_id=step_id)
             resource_guard = self._resource_guard(total_artifact_bytes=total_artifact_bytes)
             if resource_guard is not None:
                 stop_reason, data = resource_guard
@@ -365,6 +348,15 @@ class LoopControllerV3:
             action_id=action.action_id,
             tool_call_id=None,
         )
+
+    def _guard_stop_reason(self, observation: Observation) -> str | None:
+        if observation.status != "blocked" or observation.source != "loop_guard":
+            return None
+        content = observation.content
+        if not isinstance(content, dict):
+            return None
+        reason = content.get("reason")
+        return reason if isinstance(reason, str) and reason else None
 
     def _limit_feedback(self, run_id: str, stop_reason: str) -> Feedback:
         return Feedback(

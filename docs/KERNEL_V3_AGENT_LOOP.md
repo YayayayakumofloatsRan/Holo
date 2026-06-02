@@ -107,21 +107,26 @@ Planner output is not trusted as executable tool input merely because the tool
 name is allowlisted. `ToolRegistry` validates payloads against each
 `ToolManifest.input_schema` after policy binding and before executor dispatch.
 Schemas can define required fields, simple types, bounds, and safe aliases. For
-example, `workspace.search` requires a non-empty `query` and may canonicalize a
-model-proposed `path` alias into that query; `file.read` requires a non-empty
-workspace-relative `path`.
+example, `workspace.list` accepts a workspace-relative directory `path`,
+`workspace.search` requires a non-empty `query` and may canonicalize a
+model-proposed `path` alias into that query, and `file.read` requires a
+non-empty workspace-relative file `path`.
 
 This boundary is what lets live model planning remain broad without turning
 minor JSON-shape mistakes into runaway side effects. Invalid payloads become a
 blocked observation with `reason=invalid_tool_payload`, which re-enters the
 normal evaluator/workloop path instead of bypassing host control.
 
-Workspace search is intentionally lightweight. It skips internal runtime and
-VCS directories, caps matches, and stores only preview artifacts for search
-results. Full file bodies are collected only by `file.read`, where the
-workspace finalizer can turn the read observation into evidence and citations.
-This keeps the multi-step loop from exhausting artifact budgets before the
-agent can perform the follow-up read.
+Workspace directory listing is a first-class read tool. `workspace.list` returns
+bounded directory entries without invoking shell commands, so a request such as
+"read/list the local directory" can complete as `workspace.list -> evaluator ->
+synthesizer -> final answer`. Workspace search remains lightweight: it skips
+internal runtime and VCS directories, caps matches, and stores only preview
+artifacts for search results. Directory listings, search matches, and file
+reads can all become workspace evidence/citations, but full file bodies are
+collected only by `file.read`. If the evaluator explicitly reports that a
+`file.read` observation is still needed, the workloop continues instead of
+finalizing from a search preview alone.
 
 Workspace writes are now first-class host tools, not side effects hidden in a
 planner response. `workspace.write` requires a workspace-relative `path` and a
@@ -629,11 +634,15 @@ fields such as `max_fetches` / `network_fetch_count`, or from the manifest's
 `default_network_fetch_cost`. The loop does not branch on concrete tool names;
 this lets a future live retrieval/search operator declare bounded page-fetch
 cost without getting a special path in `LoopControllerV3`.
-When a guard is hit, the guard observation and `step_limit_exceeded` feedback
-are still finalized through the workloop evaluator. The loop records progress,
+When a guard is hit, the guard is recorded as a `loop_guard` observation and is
+still passed through the evaluator/workloop path. The loop records progress,
 repetition, evidence sufficiency, and a termination decision before producing
-the result, so a stalled tool or exhausted budget becomes normal loop evidence
-rather than an unreviewed controller abort.
+the agent result, so a stalled tool or exhausted budget becomes normal loop
+evidence rather than an unreviewed controller abort. The bare low-level
+`LoopControllerV3` still preserves hard budget result semantics for callers
+without a `WorkloopEvaluator`; the agent runtime path uses the workloop to turn
+guard observations into a final answer or failure report that is visible to the
+user.
 An empty retrieval report is also not treated as meaningful progress merely
 because it produced a report artifact. If the latest `retrieval.run`
 observation has zero evidence and zero citations, the workloop records the

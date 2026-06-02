@@ -27,12 +27,12 @@ _RETRIEVAL_CAPABILITIES = {
     "web.crawl",
     "browser.page.open",
 }
-_WORKSPACE_READ_CAPABILITIES = {"workspace.search", "file.read", "workspace:read"}
+_WORKSPACE_READ_CAPABILITIES = {"workspace.list", "workspace.search", "file.read", "workspace:read"}
 _WORKSPACE_WRITE_CAPABILITIES = {"workspace.write", "workspace:write"}
 _SYSTEM_TOOL_CAPABILITIES = {"system.time"}
 _SYSTEM_HOST_CAPABILITIES = {"system.environment"}
 _SYSTEM_CAPABILITIES = _SYSTEM_TOOL_CAPABILITIES | _SYSTEM_HOST_CAPABILITIES | {"system.process"}
-_EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace.write", "system.time"}
+_EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.list", "workspace.search", "file.read", "workspace.write", "system.time"}
 
 
 def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
@@ -346,6 +346,8 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
         return "retrieval.run"
     if capabilities & _WORKSPACE_WRITE_CAPABILITIES:
         return "workspace.write"
+    if "workspace.list" in capabilities:
+        return "workspace.list"
     if {"workspace.search", "file.read"}.issubset(capabilities):
         return "workspace.search,file.read"
     if "workspace.search" in capabilities:
@@ -358,6 +360,8 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
         return "retrieval.run"
     if node.kind == "workspace_read":
         return "workspace.search,file.read"
+    if node.kind in {"directory_list", "workspace_list"}:
+        return "workspace.list"
     return None
 
 

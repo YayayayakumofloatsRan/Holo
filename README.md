@@ -82,6 +82,8 @@ Kernel v3 currently contains the infrastructure for:
   decisions;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
+- workspace directory listing through `workspace.list`, separate from file
+  search/read and without shell execution;
 - workspace write flows with manifest validation and journal redaction of raw
   file bodies;
 - non-workspace system-state flows such as `system.time`, where the model
@@ -386,9 +388,12 @@ synthesis; `fast` is the explicit low-latency path. Use
 `--generation-mode manual` or explicit `--thinking/--temperature` overrides
 when a run needs fixed generation behavior.
 Tool calls remain host-validated after model planning: every tool payload is
-checked against the tool manifest schema before execution, and workspace search
-is bounded to preview matches so a bad query cannot exhaust the loop's artifact
-budget before a follow-up `file.read`.
+checked against the tool manifest schema before execution. `workspace.list`
+returns bounded directory entries without shell execution, `workspace.search`
+returns bounded preview matches, and `file.read` collects full file evidence
+only for explicit file-body reads. Tool or guard failures are journaled as
+observations that re-enter evaluator/workloop handling; the agent runtime still
+produces a final answer or failure report for the user.
 The current DeepSeek V4 router defaults to provider output-token limits for live
 interactive routes, so Holo does not clamp capable long-context models unless
 the operator explicitly passes an integer `--max-output-tokens`. The processor

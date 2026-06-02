@@ -185,6 +185,86 @@ def test_phase61_workspace_search_then_file_read_counts_as_progress():
     assert "new_file_read" in progress_types
 
 
+def test_phase61_workspace_directory_listing_is_sufficient_without_file_read():
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(
+        journal=journal,
+        workspace_files={
+            "README.md": "Holo Kernel v3 readme",
+            "docs/loop.md": "Agent loop notes",
+        },
+    )
+
+    result = runtime.run("list the workspace directory", mode="workspace")
+
+    assert result.status == "completed"
+    assert result.final_answer is not None
+    assert [record.data["name"] for record in journal.records(task_id=result.task_id, kind="action")] == [
+        "workspace.list"
+    ]
+    sufficiency = journal.records(task_id=result.task_id, kind="evidence_sufficiency")[0].data
+    assert sufficiency["sufficient"] is True
+    assert sufficiency["reason"] == "sufficient"
+    assert sufficiency["diagnostics"]["workspace_listing_count"] == 1
+    assert "file_read_observation" not in sufficiency["missing"]
+    assert result.final_answer["citation_refs"] == ["workspace-cite-1"]
+
+
+def test_phase61_processor_failure_cannot_override_sufficient_workspace_evidence():
+    decision = decide_termination(
+        feedback=Feedback(
+            feedback_id="fb-processor-failed",
+            run_id="run-1",
+            status="failed",
+            stop_reason="processor_failed",
+            answer=None,
+            missing_evidence=["model_evaluator_failed", "processor_failed"],
+        ),
+        progress=ProgressAssessment(
+            assessment_id="progress-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            made_progress=True,
+            progress_score=0.8,
+            progress_type="new_workspace_listing",
+            new_refs=["."],
+            signals=[],
+        ),
+        repetition=RepetitionSignal(
+            signal_id="repeat-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            repeated=False,
+            repeat_type=None,
+            repeat_count=0,
+            threshold=2,
+            repeated_refs=[],
+        ),
+        evidence=EvidenceSufficiency(
+            sufficiency_id="evidence-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            sufficient=True,
+            citations_required=False,
+            evidence_count=1,
+            citation_count=1,
+            valid_citation_refs=["workspace-cite-1"],
+            missing=[],
+            reason="sufficient",
+        ),
+        recipe=_workspace_recipe(),
+        no_progress_count=0,
+        config=WorkloopConfig(),
+    )
+
+    assert decision.decision == "final_answer"
+    assert decision.reason == "evidence_sufficient_overrode_processor_failure"
+    assert decision.override is True
+
+
 def test_phase61_context_budget_can_be_raised_for_large_live_prompts():
     journal = JournalStore.in_memory()
 
@@ -446,6 +526,22 @@ def _retrieval_recipe() -> TaskRecipe:
         finalizer="synthesizer",
         context_budget_mode="standard",
         mode="retrieval_answer",
+    )
+
+
+def _workspace_recipe() -> TaskRecipe:
+    return TaskRecipe(
+        recipe_id="recipe-workspace-test",
+        allowed_tools=["workspace.list", "workspace.search", "file.read"],
+        max_steps=4,
+        max_tool_calls=3,
+        max_network_fetches=0,
+        max_total_artifact_bytes=128_000,
+        permission_profile="read_only",
+        citations_required=False,
+        finalizer="workspace_synthesizer",
+        context_budget_mode="standard",
+        mode="workspace_answer",
     )
 
 

@@ -24,6 +24,7 @@ WORKSPACE_SEARCH_SKIP_DIRS = {
     "__pycache__",
     "node_modules",
 }
+WORKSPACE_LIST_MAX_ENTRIES = 200
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,11 @@ class ToolRegistry:
         registry = cls.with_builtin_respond()
         fake_files = dict(files or {})
         registry.register(
+            "workspace.list",
+            _fake_workspace_list(fake_files),
+            manifest=_workspace_manifest("workspace.list", "list", "read"),
+        )
+        registry.register(
             "workspace.search",
             _fake_workspace_search(fake_files, artifact_store=artifact_store),
             manifest=_workspace_manifest("workspace.search", "search", "read"),
@@ -105,6 +111,7 @@ class ToolRegistry:
     ) -> "ToolRegistry":
         registry = cls.with_builtin_respond()
         workspace = _Workspace(root, artifact_store=artifact_store)
+        registry.register("workspace.list", workspace.list, manifest=_workspace_manifest("workspace.list", "list", "read"))
         registry.register("workspace.search", workspace.search, manifest=_workspace_manifest("workspace.search", "search", "read"))
         registry.register("file.read", workspace.read, manifest=_workspace_manifest("file.read", "read", "read"))
         registry.register("workspace.write", workspace.write, manifest=_workspace_manifest("workspace.write", "write", "write"))
@@ -348,6 +355,16 @@ def _workspace_manifest(name: str, operator_kind: str, side_effect_class: str) -
 
 
 def _workspace_input_schema(name: str) -> JsonObject:
+    if name == "workspace.list":
+        return {
+            "path": {
+                "type": "str",
+                "required": False,
+                "min_length": 1,
+                "description": "Workspace-relative directory path. Defaults to the workspace root.",
+            },
+            "max_entries": {"type": "int", "required": False, "min": 1, "max": WORKSPACE_LIST_MAX_ENTRIES},
+        }
     if name == "workspace.search":
         return {
             "query": {
@@ -660,10 +677,67 @@ def _fake_blocked_external_write(action: CandidateAction) -> Observation:
     return _tool_observation(action, "blocked", {"reason": "external_write_blocked_in_fake_tool"})
 
 
+def _fake_workspace_list(files: dict[str, str]) -> ToolExecutor:
+    def execute(action: CandidateAction) -> Observation:
+        rel = _workspace_list_path(action.payload)
+        limit = _list_limit(action.payload.get("max_entries"))
+        entries = _fake_workspace_entries(files, rel, limit=limit)
+        return _tool_observation(
+            action,
+            "ok",
+            {
+                "path": rel,
+                "entry_count": len(entries),
+                "entries": entries,
+            },
+            kind="workspace_directory_listing",
+        )
+
+    return execute
+
+
 class _Workspace:
     def __init__(self, root: Path | str, *, artifact_store: ArtifactStore | None = None) -> None:
         self.root = Path(root).resolve()
         self.artifact_store = artifact_store
+
+    def list(self, action: CandidateAction) -> Observation:
+        rel = _workspace_list_path(action.payload)
+        limit = _list_limit(action.payload.get("max_entries"))
+        path = self._resolve(rel)
+        if path is None or not path.exists():
+            return _tool_observation(
+                action,
+                "failed",
+                {"path": rel, "error": "path_not_found"},
+                kind="workspace_directory_listing",
+            )
+        if path.is_file():
+            entry = _workspace_entry(path, path.relative_to(self.root))
+            return _tool_observation(
+                action,
+                "ok",
+                {"path": rel, "entry_count": 1, "entries": [entry]},
+                kind="workspace_directory_listing",
+            )
+        entries: list[JsonObject] = []
+        for child in sorted(path.iterdir(), key=lambda item: item.name.lower()):
+            rel_path = child.relative_to(self.root)
+            if _skip_workspace_path(rel_path):
+                continue
+            entries.append(_workspace_entry(child, rel_path))
+            if len(entries) >= limit:
+                break
+        return _tool_observation(
+            action,
+            "ok",
+            {
+                "path": rel,
+                "entry_count": len(entries),
+                "entries": entries,
+            },
+            kind="workspace_directory_listing",
+        )
 
     def search(self, action: CandidateAction) -> ToolResult:
         query = str(action.payload.get("query", "")).strip()
@@ -925,6 +999,53 @@ def _search_limit(value: object) -> int:
     if parsed is None:
         return WORKSPACE_SEARCH_MAX_MATCHES
     return max(1, min(WORKSPACE_SEARCH_MAX_MATCHES, parsed))
+
+
+def _list_limit(value: object) -> int:
+    parsed = _optional_int(value)
+    if parsed is None:
+        return WORKSPACE_LIST_MAX_ENTRIES
+    return max(1, min(WORKSPACE_LIST_MAX_ENTRIES, parsed))
+
+
+def _workspace_list_path(payload: JsonObject) -> str:
+    path = payload.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return "."
+    stripped = path.strip()
+    return "." if stripped in {"/", "./"} else stripped
+
+
+def _workspace_entry(path: Path, rel_path: Path) -> JsonObject:
+    try:
+        stat = path.stat()
+    except OSError:
+        stat = None
+    return {
+        "path": rel_path.as_posix(),
+        "kind": "directory" if path.is_dir() else "file",
+        "size_bytes": stat.st_size if stat is not None and path.is_file() else None,
+    }
+
+
+def _fake_workspace_entries(files: dict[str, str], rel: str, *, limit: int) -> list[JsonObject]:
+    normalized = "" if rel in {"", "."} else rel.strip("/").rstrip("/")
+    seen: dict[str, JsonObject] = {}
+    for path, text in files.items():
+        path = path.strip("/")
+        if normalized and not (path == normalized or path.startswith(normalized + "/")):
+            continue
+        remainder = path[len(normalized):].lstrip("/") if normalized else path
+        if not remainder:
+            seen[path] = {"path": path, "kind": "file", "size_bytes": len(text.encode("utf-8"))}
+            continue
+        first = remainder.split("/", 1)[0]
+        entry_path = f"{normalized}/{first}".strip("/")
+        if "/" in remainder:
+            seen.setdefault(entry_path, {"path": entry_path, "kind": "directory", "size_bytes": None})
+        else:
+            seen[entry_path] = {"path": entry_path, "kind": "file", "size_bytes": len(text.encode("utf-8"))}
+    return sorted(seen.values(), key=lambda item: str(item["path"]).lower())[:limit]
 
 
 def _skip_workspace_path(path: Path) -> bool:

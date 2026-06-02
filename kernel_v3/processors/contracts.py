@@ -183,6 +183,10 @@ planning; they do not authorize tools.
 For host-state questions such as current time, environment facts, or runtime status, use
 suggested_mode=system_answer and required_capabilities such as ["system.time"]; put
 optional arguments under metadata.capability_args, for example {"system.time":{"timezone":"Asia/Shanghai"}}.
+For workspace directory listing, use suggested_mode=workspace_answer and required_capabilities
+["workspace.list"]; put optional arguments under metadata.capability_args, for example
+{"workspace.list":{"path":"."}}. For known file content, use file.read. For locating
+unknown files, use workspace.search.
 The model classifies and proposes structure only. The host validates capabilities, policy, execution, memory, and stop.
 Do not request live transports, direct tool execution, memory writes, or unavailable tools as executable actions."""
 
@@ -199,6 +203,8 @@ Example retrieval strategy proposal:
 {"action_id":"act-retrieval-fresh-1","kind":"tool","name":"retrieval.run","description":"retry with fresh live sources after cache evidence was insufficient","payload":{"query":"AAPL 2024 10-K revenue","metadata":{"search_strategy":"fresh_live"}},"score":0.88,"reasons":["previous feedback requested primary or fresher evidence"],"side_effect_class":"network"}
 Example workspace write proposal:
 {"action_id":"act-write-1","kind":"tool","name":"workspace.write","description":"write a host-validated workspace artifact","payload":{"path":"reports/summary.md","text":"# Summary\n..."},"score":0.86,"reasons":["user requested a local file artifact"],"side_effect_class":"write"}
+Example workspace directory proposal:
+{"action_id":"act-list-1","kind":"tool","name":"workspace.list","description":"list a workspace directory","payload":{"path":"."},"score":0.9,"reasons":["the user asked to inspect the local directory"],"side_effect_class":"read"}
 Example clarification:
 {"action_id":"act-clarify-1","kind":"ask_user","name":null,"description":"ask for missing scope","payload":{"question":"Which market, region, and time range should I research?"},"score":0.82,"reasons":["research scope is underspecified"],"side_effect_class":"none"}
 For user-visible respond/ask_user payload text, match the user's language when it is clear.

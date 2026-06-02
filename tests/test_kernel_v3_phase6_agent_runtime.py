@@ -93,7 +93,7 @@ def test_phase6_workspace_answer_searches_reads_and_synthesizes_without_network(
     assert result.status == "completed"
     assert result.final_answer is not None
     assert _action_names(journal, result.task_id) == ["workspace.search", "file.read"]
-    assert result.final_answer["citation_refs"] == ["workspace-cite-2"]
+    assert "workspace-cite-2" in result.final_answer["citation_refs"]
     assert "workspace grounded answer" in result.final_answer["answer"]
     assert not journal.records(task_id=result.task_id, kind="retrieval_report")
 

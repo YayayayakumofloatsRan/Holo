@@ -6,6 +6,7 @@ from kernel_v3.contracts import JsonObject
 
 
 _CAPABILITY_ALIASES = {
+    "workspace.list": "workspace.list",
     "file.read": "workspace.file.read",
     "workspace.write": "workspace.file.write",
     "workspace:read": "workspace.file.read",
@@ -971,6 +972,8 @@ def _status_for(capability: str) -> str:
 def _tool_for(capability: str) -> str | None:
     if capability in {"retrieval.run", "web.research"}:
         return "retrieval.run"
+    if capability == "workspace.list":
+        return "workspace.list"
     if capability in {"file.read", "workspace.file.read"}:
         return "file.read"
     if capability in {"workspace.write", "workspace.file.write", "workspace:write"}:
