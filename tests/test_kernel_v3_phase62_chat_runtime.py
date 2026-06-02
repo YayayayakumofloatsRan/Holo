@@ -6,6 +6,7 @@ from pathlib import Path
 
 from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.contracts import AgentRuntimeResult
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.chat.console import handle_chat_line, render_chat_activity, render_chat_result
 from kernel_v3.chat.contracts import ChatRuntimeResult
@@ -1036,10 +1037,57 @@ def test_phase62_human_console_failure_report_renders_actionable_details():
 
     rendered = render_chat_result(payload, color=False)
 
+    assert "[answer] 我这次没有完成目标" in rendered
     assert "failure: planned_retrieval_subgoals_incomplete" in rendered
     assert "missing: [sufficient_retrieval_evidence, retrieval_subgoal:goal-1]" in rendered
     assert "attempted: [retrieval.run, retrieval.run]" in rendered
     assert "next: refine_failed_retrieval_subgoals" in rendered
+
+
+def test_phase62_failed_agent_result_still_returns_user_visible_answer():
+    class FailedAgent:
+        def __init__(self) -> None:
+            self.journal = JournalStore.in_memory()
+
+        def run(self, goal: str, **kwargs) -> AgentRuntimeResult:
+            return AgentRuntimeResult(
+                status="failed",
+                task_id="task-failed",
+                run_id="run-1",
+                mode="retrieval_answer",
+                recipe_id="recipe-retrieval-answer",
+                final_answer=None,
+                failure_report={
+                    "reason": "planned_retrieval_subgoals_incomplete",
+                    "attempted_actions": ["retrieval.run"],
+                    "attempted_sources": [],
+                    "missing_evidence": ["sufficient_retrieval_evidence"],
+                    "last_observations": [
+                        {
+                            "content": {
+                                "reason": "retrieval source not configured",
+                            }
+                        }
+                    ],
+                    "user_help_needed": False,
+                    "next_possible_action": "enable_live_retrieval",
+                    "task_id": "task-failed",
+                    "run_id": "run-1",
+                    "trace_refs": ["ledger-1"],
+                },
+                trace_refs=["ledger-1"],
+            )
+
+    journal = JournalStore.in_memory()
+    chat = ChatRuntime(journal=journal, agent_runtime=FailedAgent())  # type: ignore[arg-type]
+
+    result = chat.receive("查一下 NVIDIA 基本面", thread_id="thread-failed")
+
+    assert result.status == "failed"
+    assert result.answer is not None
+    assert "我这次没有拿到足够证据" in result.answer
+    assert "retrieval.run" in result.answer
+    assert result.failure_report is not None
 
 
 def test_phase62_human_console_streams_activity_before_final_result(capsys):

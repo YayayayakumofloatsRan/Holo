@@ -629,7 +629,28 @@ def chat_answer_text(data: JsonObject) -> str | None:
         preview = summary.get("last_answer_preview")
         if isinstance(preview, str) and preview:
             return preview
+    failure = data.get("failure_report")
+    if isinstance(failure, dict) and failure:
+        return failure_answer_text(failure)
     return None
+
+
+def failure_answer_text(failure: JsonObject) -> str:
+    reason = str(failure.get("reason") or "failed")
+    attempted = failure.get("attempted_actions")
+    missing = failure.get("missing_evidence")
+    next_action = failure.get("next_possible_action")
+    lines = ["我这次没有完成目标，因为没有拿到足够可靠的结果。"]
+    if isinstance(attempted, list) and attempted:
+        lines.append(f"我已经尝试过：{', '.join(str(item) for item in attempted[:4])}。")
+    if reason:
+        lines.append(f"停止原因：{reason}。")
+    if isinstance(missing, list) and missing:
+        lines.append(f"缺少：{', '.join(str(item) for item in missing[:4])}。")
+    if isinstance(next_action, str) and next_action:
+        lines.append(f"下一步：{next_action}。")
+    lines.append("我不会把没有证据的内容编成答案。")
+    return "\n".join(lines)
 
 
 def parse_history_limit(args: list[str], *, default: int) -> int | None:

@@ -75,6 +75,10 @@ user input. The failing packet remains visible in the journal, but AgentRuntime
 collapses the turn to a `FailureReport` with missing evidence, attempted
 actions, and a suggested next action rather than leaving the thread behind a
 spurious pending clarification.
+ChatRuntime still produces user-visible text for failed agent results. A
+`FailureReport` remains the audit object, but the chat result derives a plain
+answer that explains what was attempted, what evidence/tool result was missing,
+and why Holo will not invent an unsupported answer.
 
 ## Adaptive Processor Generation
 

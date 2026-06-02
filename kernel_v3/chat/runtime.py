@@ -971,6 +971,8 @@ class ChatRuntime:
         answer = None
         if agent_result.final_answer is not None and isinstance(agent_result.final_answer.get("answer"), str):
             answer = str(agent_result.final_answer["answer"])
+        elif agent_result.failure_report is not None:
+            answer = _failure_answer_text(agent_result.failure_report, user_goal=turn.text)
         pending = None
         if agent_result.status == "needs_user_input":
             pending = _pending_for_task(
@@ -2127,6 +2129,51 @@ def _summary_text(summary: ThreadSummary) -> str:
         previews = [str(turn.get("text_preview", "")) for turn in summary.recent_turns if turn.get("text_preview")]
         parts.append("最近输入: " + " | ".join(previews))
     return "\n".join(parts)
+
+
+def _failure_answer_text(failure_report: JsonObject, *, user_goal: str) -> str:
+    reason = str(failure_report.get("reason") or "failed")
+    attempted = _string_list(failure_report.get("attempted_actions"))
+    missing = _string_list(failure_report.get("missing_evidence"))
+    next_action = failure_report.get("next_possible_action")
+    observations = failure_report.get("last_observations")
+    observed_reasons = _failure_observation_reasons(observations if isinstance(observations, list) else [])
+
+    lines = [f"我这次没有拿到足够证据来完成“{_preview(user_goal, limit=80)}”。"]
+    if attempted:
+        lines.append(f"我已经尝试过：{', '.join(attempted[:4])}。")
+    if observed_reasons:
+        lines.append(f"工具返回的问题是：{'; '.join(observed_reasons[:3])}。")
+    elif reason:
+        lines.append(f"当前停止原因是：{reason}。")
+    if missing:
+        lines.append(f"缺少的关键材料是：{', '.join(missing[:4])}。")
+    if isinstance(next_action, str) and next_action:
+        lines.append(f"下一步应当是：{next_action}。")
+    lines.append("所以我不能编造结论；如果你允许 live retrieval 或配置可用检索源，我可以继续查。")
+    return "\n".join(lines)
+
+
+def _failure_observation_reasons(observations: list[object]) -> list[str]:
+    reasons: list[str] = []
+    for item in observations:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, dict):
+            continue
+        for key in ("reason", "error", "status"):
+            value = content.get(key)
+            if isinstance(value, str) and value:
+                reasons.append(value)
+                break
+    return _ordered_unique(reasons)
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
 
 
 def _exception_reason(exc: Exception) -> str:

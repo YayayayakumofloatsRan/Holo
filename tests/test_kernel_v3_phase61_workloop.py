@@ -265,6 +265,61 @@ def test_phase61_processor_failure_cannot_override_sufficient_workspace_evidence
     assert decision.override is True
 
 
+def test_phase61_evaluator_blocked_without_host_block_retries_when_evidence_missing():
+    decision = decide_termination(
+        feedback=Feedback(
+            feedback_id="fb-model-blocked",
+            run_id="run-1",
+            status="blocked",
+            stop_reason="policy_or_tool_blocked",
+            answer=None,
+            missing_evidence=["retrieval_evidence", "citation_refs"],
+        ),
+        progress=ProgressAssessment(
+            assessment_id="progress-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            made_progress=False,
+            progress_score=0.0,
+            progress_type="none",
+            new_refs=[],
+            signals=[],
+        ),
+        repetition=RepetitionSignal(
+            signal_id="repeat-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            repeated=False,
+            repeat_type=None,
+            repeat_count=0,
+            threshold=2,
+            repeated_refs=[],
+        ),
+        evidence=EvidenceSufficiency(
+            sufficiency_id="evidence-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            sufficient=False,
+            citations_required=True,
+            evidence_count=0,
+            citation_count=0,
+            valid_citation_refs=[],
+            missing=["retrieval_evidence"],
+            reason="insufficient_evidence",
+        ),
+        recipe=_retrieval_recipe(),
+        no_progress_count=1,
+        config=WorkloopConfig(),
+    )
+
+    assert decision.decision == "continue"
+    assert decision.reason == "blocked_feedback_without_host_block_retry"
+    assert decision.override is True
+
+
 def test_phase61_context_budget_can_be_raised_for_large_live_prompts():
     journal = JournalStore.in_memory()
 

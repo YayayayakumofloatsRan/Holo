@@ -567,8 +567,13 @@ def decide_termination(
         decision = "ask_user"
         reason = "user_input_required"
     elif feedback.status == "blocked":
-        decision = "blocked"
-        reason = "policy_or_tool_blocked"
+        if not _feedback_indicates_host_block(feedback) and not evidence.sufficient and recipe.allowed_tools:
+            decision = "continue"
+            reason = "blocked_feedback_without_host_block_retry"
+            override = True
+        else:
+            decision = "blocked"
+            reason = "policy_or_tool_blocked"
     elif feedback.status in {"failed", "step_limit_exceeded"}:
         if evidence.sufficient and feedback.status == "failed" and feedback.stop_reason == "processor_failed":
             decision = "final_answer"
@@ -621,6 +626,20 @@ def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: Repet
 def _feedback_requires_workspace_file_read(feedback: Feedback) -> bool:
     normalized = {str(item).lower().replace("_", " ") for item in feedback.missing_evidence}
     return "file.read observation" in normalized or "file read observation" in normalized
+
+
+def _feedback_indicates_host_block(feedback: Feedback) -> bool:
+    stop_reason = str(feedback.stop_reason or "").lower()
+    missing = {str(item).lower() for item in feedback.missing_evidence}
+    return (
+        "policy_block" in missing
+        or "tool_disabled" in missing
+        or "missing_permissions" in missing
+        or "blocked_side_effect_in_read_only_mode" in missing
+        or stop_reason.startswith("missing_permissions")
+        or stop_reason == "tool_disabled"
+        or stop_reason == "blocked_side_effect_in_read_only_mode"
+    )
 
 
 def _feedback_from_decision(base: Feedback, decision: TerminationDecision, *, run_id: str, index: int) -> Feedback:
