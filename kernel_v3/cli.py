@@ -76,6 +76,7 @@ from kernel_v3.retrieval.live_config import (
     LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS_ENV,
     LIVE_CRAWL_SEED_URLS_ENV,
     LIVE_CRAWL_SOURCE_DIRECTORY_ENV,
+    LIVE_FETCH_DISCOVERED_SEARCH_HOSTS_ENV,
     LIVE_FETCH_ALLOWED_HOSTS_ENV,
     LIVE_MAX_BYTES_ENV,
     LIVE_RETRIEVAL_ENV,
@@ -85,6 +86,8 @@ from kernel_v3.retrieval.live_config import (
     LIVE_SEARCH_STRATEGY_ENV,
     LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV,
     LIVE_TIMEOUT_SECONDS_ENV,
+    LIVE_WEB_SEARCH_MAX_RESULTS_PER_ENGINE_ENV,
+    LIVE_WEB_SEARCH_PROVIDERS_ENV,
 )
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
 from kernel_v3.resident.projection import resident_doctor_event, resident_inbox_event, resident_outbox_event
@@ -118,6 +121,25 @@ def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
         help="Explicitly bypass live retrieval host allowlists for this run. Use only for trusted smoke tests.",
     )
     command_parser.add_argument("--live-search-endpoint", default=None)
+    command_parser.add_argument(
+        "--live-web-search-provider",
+        action="append",
+        default=None,
+        help="Enable a live HTML web search provider for this run. Repeat or comma-separate values such as duckduckgo_html,bing_html.",
+    )
+    command_parser.add_argument("--live-web-search-max-results-per-engine", type=int, default=None)
+    command_parser.add_argument(
+        "--live-fetch-discovered-search-hosts",
+        dest="live_fetch_discovered_search_hosts",
+        action="store_true",
+        default=None,
+        help="Allow live HTTP fetch of safe URLs returned by live_web_search, still bounded by policy and budgets.",
+    )
+    command_parser.add_argument(
+        "--no-live-fetch-discovered-search-hosts",
+        dest="live_fetch_discovered_search_hosts",
+        action="store_false",
+    )
     command_parser.add_argument("--live-search-allowed-host", action="append", default=None)
     command_parser.add_argument("--live-fetch-allowed-host", action="append", default=None)
     command_parser.add_argument("--live-crawl-seed-url", action="append", default=None)
@@ -1173,6 +1195,17 @@ def _live_retrieval_config_from_args(args, *, enable: bool) -> LiveRetrievalConf
     if bool(getattr(args, "live_allow_all_hosts", False)):
         env[LIVE_ALLOW_ALL_HOSTS_ENV] = "1"
     _set_optional_env(env, LIVE_SEARCH_ENDPOINT_ENV, getattr(args, "live_search_endpoint", None))
+    _merge_csv_env(env, LIVE_WEB_SEARCH_PROVIDERS_ENV, _cli_csv_values(getattr(args, "live_web_search_provider", None)))
+    _set_positive_env(
+        env,
+        LIVE_WEB_SEARCH_MAX_RESULTS_PER_ENGINE_ENV,
+        getattr(args, "live_web_search_max_results_per_engine", None),
+    )
+    fetch_discovered = getattr(args, "live_fetch_discovered_search_hosts", None)
+    if fetch_discovered is True:
+        env[LIVE_FETCH_DISCOVERED_SEARCH_HOSTS_ENV] = "1"
+    elif fetch_discovered is False:
+        env[LIVE_FETCH_DISCOVERED_SEARCH_HOSTS_ENV] = "0"
     _merge_csv_env(env, LIVE_SEARCH_ALLOWED_HOSTS_ENV, _cli_csv_values(getattr(args, "live_search_allowed_host", None)))
     _merge_csv_env(env, LIVE_FETCH_ALLOWED_HOSTS_ENV, _cli_csv_values(getattr(args, "live_fetch_allowed_host", None)))
     _merge_csv_env(env, LIVE_CRAWL_SEED_URLS_ENV, _cli_csv_values(getattr(args, "live_crawl_seed_url", None)))
@@ -1297,6 +1330,16 @@ def _live_retrieval_allowed_host_issues(config: LiveRetrievalConfig) -> list[Jso
                 "provider_kind": "search",
             }
         )
+    if config.web_search.configured and not config.web_search.allow_all_hosts and not config.web_search.allowed_hosts:
+        issues.append(
+            {
+                "component": "retrieval",
+                "severity": "error",
+                "code": "live_provider_without_allowed_hosts",
+                "provider_id": "live_web_search",
+                "provider_kind": "search",
+            }
+        )
     if config.crawl.configured and not config.crawl.allow_all_hosts and not config.crawl.allowed_hosts:
         issues.append(
             {
@@ -1307,7 +1350,11 @@ def _live_retrieval_allowed_host_issues(config: LiveRetrievalConfig) -> list[Jso
                 "provider_kind": "search",
             }
         )
-    if not config.fetch.allow_all_hosts and not config.fetch.allowed_hosts:
+    if (
+        not config.fetch.allow_all_hosts
+        and not config.fetch.allowed_hosts
+        and not config.fetch.allow_discovered_search_hosts
+    ):
         issues.append(
             {
                 "component": "retrieval",

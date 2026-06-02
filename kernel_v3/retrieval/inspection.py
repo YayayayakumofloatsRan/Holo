@@ -123,7 +123,8 @@ def _live_provider_configuration_issues(capabilities: list[JsonObject]) -> list[
             continue
         allow_all_hosts = bool(diagnostics.get("allow_all_hosts", False))
         allowed_host_count = int(diagnostics.get("allowed_host_count") or 0)
-        if allow_all_hosts or allowed_host_count > 0:
+        allow_discovered_search_hosts = bool(diagnostics.get("allow_discovered_search_hosts", False))
+        if allow_all_hosts or allowed_host_count > 0 or allow_discovered_search_hosts:
             continue
         issues.append(
             {

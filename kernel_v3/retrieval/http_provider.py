@@ -65,6 +65,8 @@ class HttpFetchProvider:
         enabled: bool = False,
         allowed_hosts: list[str] | None = None,
         allow_all_hosts: bool = False,
+        allow_discovered_search_hosts: bool = False,
+        discovered_search_provider_ids: list[str] | None = None,
         allowed_schemes: list[str] | None = None,
         timeout_seconds: int = 20,
         max_bytes: int = 1_000_000,
@@ -74,6 +76,12 @@ class HttpFetchProvider:
         self.default_enabled = bool(enabled)
         self.allowed_hosts = _normalize_hosts(allowed_hosts or [])
         self.allow_all_hosts = bool(allow_all_hosts)
+        self.allow_discovered_search_hosts = bool(allow_discovered_search_hosts)
+        self.discovered_search_provider_ids = tuple(
+            str(item).strip()
+            for item in (discovered_search_provider_ids or ["live_web_search"])
+            if str(item).strip()
+        )
         self.allowed_schemes = _normalize_schemes(allowed_schemes or ["https"])
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.max_bytes = max(1, int(max_bytes))
@@ -84,6 +92,8 @@ class HttpFetchProvider:
             "enabled": self.default_enabled,
             "allow_all_hosts": self.allow_all_hosts,
             "allowed_host_count": len(self.allowed_hosts),
+            "allow_discovered_search_hosts": self.allow_discovered_search_hosts,
+            "discovered_search_provider_ids": list(self.discovered_search_provider_ids),
             "allowed_schemes": list(self.allowed_schemes),
             "timeout_seconds": self.timeout_seconds,
             "max_bytes": self.max_bytes,
@@ -104,7 +114,7 @@ class HttpFetchProvider:
             source.uri,
             allowed_schemes=self.allowed_schemes,
             allowed_hosts=self.allowed_hosts,
-            allow_all_hosts=self.allow_all_hosts,
+            allow_all_hosts=self.allow_all_hosts or self._allows_discovered_search_host(source),
         )
         if validation.get("status") != "ok":
             return FetchResponse(status="failed", body="", diagnostics=validation)
@@ -122,6 +132,7 @@ class HttpFetchProvider:
                     "reason": "http_transport_error",
                     "error": type(exc).__name__,
                     **_safe_url_diagnostics(source.uri),
+                    **self._source_discovery_diagnostics(source),
                 },
             )
         if response.status_code < 200 or response.status_code >= 300:
@@ -132,6 +143,7 @@ class HttpFetchProvider:
                     "reason": "http_status_error",
                     "status_code": response.status_code,
                     **_safe_url_diagnostics(source.uri),
+                    **self._source_discovery_diagnostics(source),
                 },
             )
         if len(response.body) > self.max_bytes:
@@ -142,6 +154,7 @@ class HttpFetchProvider:
                     "reason": "http_body_too_large",
                     "max_bytes": self.max_bytes,
                     **_safe_url_diagnostics(source.uri),
+                    **self._source_discovery_diagnostics(source),
                 },
             )
         return FetchResponse(
@@ -153,8 +166,28 @@ class HttpFetchProvider:
                 "status_code": response.status_code,
                 "byte_count": len(response.body),
                 **_safe_url_diagnostics(source.uri),
+                **self._source_discovery_diagnostics(source),
             },
         )
+
+    def _allows_discovered_search_host(self, source: SearchSource) -> bool:
+        if not self.allow_discovered_search_hosts:
+            return False
+        if source.provider not in self.discovered_search_provider_ids:
+            return False
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        return (
+            metadata.get("source_kind") == "web_search_result"
+            and metadata.get("search_result_fetch_allowed") is True
+        )
+
+    def _source_discovery_diagnostics(self, source: SearchSource) -> JsonObject:
+        if not self._allows_discovered_search_host(source):
+            return {}
+        return {
+            "host_allowed_by": "web_search_result",
+            "source_provider": source.provider,
+        }
 
 
 class JsonHttpSearchProvider:

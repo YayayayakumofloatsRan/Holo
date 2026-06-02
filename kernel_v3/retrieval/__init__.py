@@ -22,7 +22,13 @@ from kernel_v3.retrieval.fiscaldata_provider import FiscalDataSearchProvider
 from kernel_v3.retrieval.fred_provider import FredSearchProvider
 from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportResponse, JsonHttpSearchProvider
 from kernel_v3.retrieval.inspection import inspect_retrieval_providers
-from kernel_v3.retrieval.live_config import LiveCrawlSearchConfig, LiveHttpFetchConfig, LiveJsonHttpSearchConfig, LiveRetrievalConfig
+from kernel_v3.retrieval.live_config import (
+    LiveCrawlSearchConfig,
+    LiveHttpFetchConfig,
+    LiveJsonHttpSearchConfig,
+    LiveRetrievalConfig,
+    LiveWebSearchConfig,
+)
 from kernel_v3.retrieval.operator import RetrievalOperator, register_retrieval_tool
 from kernel_v3.retrieval.providers import (
     FakeFetchProvider,
@@ -34,6 +40,7 @@ from kernel_v3.retrieval.providers import (
 )
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
 from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
+from kernel_v3.retrieval.web_search_provider import LiveWebSearchProvider, supported_web_search_engines
 
 __all__ = [
     "CitationItem",
@@ -61,6 +68,8 @@ __all__ = [
     "LiveHttpFetchConfig",
     "LiveJsonHttpSearchConfig",
     "LiveRetrievalConfig",
+    "LiveWebSearchConfig",
+    "LiveWebSearchProvider",
     "QueryPlan",
     "RankedSource",
     "RankSources",
@@ -80,4 +89,5 @@ __all__ = [
     "inspect_retrieval_providers",
     "provider_capability",
     "register_retrieval_tool",
+    "supported_web_search_engines",
 ]

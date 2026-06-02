@@ -443,6 +443,13 @@ The live retrieval chain is now broader than a single search endpoint:
 
 - `direct_url_search` extracts safe user/host supplied URLs without network
   access;
+- `live_web_search` can be enabled with
+  `HOLO_V3_LIVE_WEB_SEARCH_PROVIDERS` or `--live-web-search-provider`. It uses
+  bounded HTML search discovery providers such as `duckduckgo_html`,
+  `duckduckgo_lite`, and `bing_html` to produce safe `SearchSource` candidates.
+  Search-result pages are not treated as evidence by themselves; the existing
+  fetch, artifact, extraction, evidence, citation, and sufficiency pipeline must
+  still validate the discovered pages;
 - `bounded_crawl_search` can discover links from explicit seed URLs only when
   live retrieval is enabled by `--live-retrieval` or
   `HOLO_V3_LIVE_RETRIEVAL=1`, crawl seeds, and host allowlists are configured;
@@ -489,6 +496,13 @@ The live retrieval chain is now broader than a single search endpoint:
   filings, issuer materials, official statistics, central-bank data, Treasury
   data, or fund disclosures;
 - configured JSON HTTP search providers can sit in the same fallback chain.
+- `live_http_fetch` can optionally allow safe URLs discovered by
+  `live_web_search` via `HOLO_V3_LIVE_FETCH_DISCOVERED_SEARCH_HOSTS=1` or
+  `--live-fetch-discovered-search-hosts`. This is narrower than
+  `--live-allow-all-hosts`: only URLs marked as web-search results are eligible,
+  and normal scheme, credential, secret-like URL, size, timeout, artifact, and
+  network-budget checks still apply. The CLI enables this dynamic fetch mode by
+  default when a live web search provider is explicitly configured;
 - `aggregate_search` can be enabled for live retrieval to collect candidates
   from multiple providers, rank them by query relevance and source authority,
   and only then apply the source budget. This is useful for longer research
@@ -512,6 +526,30 @@ holo-v3 retrieval-providers --mode live-http \
   --live-crawl-seed-url https://api-docs.deepseek.com/ \
   --live-search-allowed-host api-docs.deepseek.com \
   --live-fetch-allowed-host api-docs.deepseek.com
+```
+
+For general web search discovery without a JSON search API:
+
+```bash
+holo-v3 retrieval-providers --mode live-http \
+  --live-retrieval \
+  --live-web-search-provider default \
+  --live-search-strategy aggregate
+```
+
+For a model-backed general web lookup, keep the model in the planner/evaluator
+role and let the host execute the web search/fetch/evidence pipeline:
+
+```bash
+holo-v3 agent "搜索一下今天的热点新闻，并给出来源" \
+  --mode retrieval \
+  --online \
+  --planner model \
+  --evaluator model \
+  --synthesizer model \
+  --live-retrieval \
+  --live-web-search-provider default \
+  --live-search-strategy aggregate
 ```
 
 For finance-profile crawl seeded by the curated source directory:
@@ -557,12 +595,11 @@ holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方式" \
   --live-max-network-fetches 2
 ```
 
-Current live crawl is intentionally basic: it can prove the loop, permissions,
-artifact storage, evidence, citations, and synthesis path. It now strips
-script/style/head/nav/header/footer markup before evidence extraction, so
-journaled spans prefer readable page body while raw fetched HTML remains in
-`ArtifactStore`. Richer web search APIs, deeper readability heuristics, and
-finance-specific source adapters are still the next capability layer.
+Current live crawl/search is still bounded by design: it can prove the loop,
+permissions, artifact storage, evidence, citations, and synthesis path. It now
+has both open web search discovery and seed/sitemap crawl discovery, while raw
+fetched HTML remains in `ArtifactStore`. Deeper readability heuristics and
+more finance-specific source adapters remain future capability layers.
 
 Retrieval sufficiency is stricter than "any citation exists". The retrieval
 evaluator derives explicit query facets such as model, authentication, pricing,
