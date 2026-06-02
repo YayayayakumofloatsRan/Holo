@@ -110,13 +110,23 @@ from kernel_v3.trace import TraceRenderer
 DEFAULT_LIVE_NETWORK_FETCH_BUDGET = 4096
 DEFAULT_RESEARCH_DEPTH = "deep"
 DEFAULT_LIVE_CONTEXT_PROFILE = "provider"
+DEFAULT_LIVE_WEB_SEARCH_PROVIDERS = "bing_html,duckduckgo_html"
+DEFAULT_LIVE_SEARCH_STRATEGY = "aggregate"
 
 
 def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument(
         "--live-retrieval",
+        dest="live_retrieval",
         action="store_true",
+        default=None,
         help="Enable live retrieval for this command. Network use still requires PolicyGate permission and host allowlists.",
+    )
+    command_parser.add_argument(
+        "--no-live-retrieval",
+        dest="live_retrieval",
+        action="store_false",
+        help="Disable live retrieval for this command, even when online chat/agent mode would enable bounded web discovery.",
     )
     command_parser.add_argument("--live-max-network-fetches", type=int, default=DEFAULT_LIVE_NETWORK_FETCH_BUDGET)
     command_parser.add_argument(
@@ -1203,7 +1213,7 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
         }
         for key, value in research_depth_defaults(research_profile, research_depth).items():
             retrieval.setdefault(key, value)
-    if bool(getattr(args, "live_retrieval", False)):
+    if _live_retrieval_requested(args):
         retrieval = metadata.setdefault("retrieval", {})
         retrieval["allow_network"] = True
         total_budget = _positive_limit(getattr(args, "live_max_network_fetches", 3), default=3)
@@ -1221,8 +1231,28 @@ def _response_language_for_args(args) -> str:
     return normalize_response_language(getattr(args, "response_language", None) or os.environ.get("HOLO_V3_RESPONSE_LANGUAGE"))
 
 
+def _live_retrieval_requested(args) -> bool:
+    explicit = getattr(args, "live_retrieval", None)
+    if explicit is not None:
+        return bool(explicit)
+    return _live_retrieval_auto_enabled(args)
+
+
+def _live_retrieval_explicitly_enabled(args) -> bool:
+    return getattr(args, "live_retrieval", None) is True
+
+
+def _live_retrieval_auto_enabled(args) -> bool:
+    command = str(getattr(args, "command", "") or "")
+    if command in {"agent", "chat"}:
+        return _agent_uses_live_model(args)
+    if command == "resident" and str(getattr(args, "resident_command", "") or "") in {"run", "run-once"}:
+        return _agent_uses_live_model(args)
+    return False
+
+
 def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | None:
-    if not bool(getattr(args, "live_retrieval", False)):
+    if not _live_retrieval_requested(args):
         return None
     config = _live_retrieval_config_from_args(args, enable=True)
     allowed_host_issues = _live_retrieval_allowed_host_issues(config)
@@ -1240,6 +1270,12 @@ def _live_retrieval_config_from_args(args, *, enable: bool) -> LiveRetrievalConf
     env = dict(os.environ)
     if enable:
         env[LIVE_RETRIEVAL_ENV] = "1"
+    if enable and _live_retrieval_needs_default_web_discovery(args, env):
+        env[LIVE_WEB_SEARCH_PROVIDERS_ENV] = DEFAULT_LIVE_WEB_SEARCH_PROVIDERS
+        env.setdefault(LIVE_SEARCH_STRATEGY_ENV, DEFAULT_LIVE_SEARCH_STRATEGY)
+        env.setdefault(LIVE_FETCH_DISCOVERED_SEARCH_HOSTS_ENV, "1")
+    if enable and getattr(args, "research_profile", None) == FINANCE_FUNDAMENTALS_PROFILE_ID:
+        env.setdefault(LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV, "1")
     if bool(getattr(args, "live_allow_all_hosts", False)):
         env[LIVE_ALLOW_ALL_HOSTS_ENV] = "1"
     _set_optional_env(env, LIVE_SEARCH_ENDPOINT_ENV, getattr(args, "live_search_endpoint", None))
@@ -1280,6 +1316,31 @@ def _live_retrieval_config_from_args(args, *, enable: bool) -> LiveRetrievalConf
     _set_positive_env(env, LIVE_TIMEOUT_SECONDS_ENV, getattr(args, "live_timeout_seconds", None))
     _set_positive_env(env, LIVE_MAX_BYTES_ENV, getattr(args, "live_max_bytes", None))
     return LiveRetrievalConfig.from_env(env)
+
+
+def _live_retrieval_needs_default_web_discovery(args, env: dict[str, str]) -> bool:
+    if _env_optional(env.get(LIVE_SEARCH_ENDPOINT_ENV)) or _env_optional(getattr(args, "live_search_endpoint", None)):
+        return False
+    if _env_csv(env.get(LIVE_WEB_SEARCH_PROVIDERS_ENV)) or _cli_csv_values(getattr(args, "live_web_search_provider", None)):
+        return False
+    if _env_csv(env.get(LIVE_CRAWL_SEED_URLS_ENV)) or _cli_csv_values(getattr(args, "live_crawl_seed_url", None)):
+        return False
+    if _env_truthy(env.get(LIVE_CRAWL_SOURCE_DIRECTORY_ENV)) or bool(getattr(args, "live_crawl_source_directory", False)):
+        return False
+    return True
+
+
+def _env_optional(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _env_csv(value: object) -> list[str]:
+    text = str(value or "")
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _env_truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _set_optional_env(env: dict[str, str], name: str, value: object) -> None:
@@ -1340,7 +1401,7 @@ def _build_live_retrieval_operator(
 
 
 def _live_retrieval_doctor_config(args) -> JsonObject:
-    if not bool(getattr(args, "live_retrieval", False)):
+    if not _live_retrieval_requested(args):
         return {"requested": False, "config": None, "issues": [], "operator": None}
     config = _live_retrieval_config_from_args(args, enable=True)
     issues: list[JsonObject] = []
@@ -1912,7 +1973,7 @@ def _agent_mode(args) -> str:
 
 
 def _chat_default_mode(args) -> str:
-    if bool(getattr(args, "live_retrieval", False)) or getattr(args, "research_profile", None):
+    if _live_retrieval_explicitly_enabled(args) or getattr(args, "research_profile", None):
         return "retrieval"
     return "auto"
 
@@ -2172,7 +2233,7 @@ def _packet_prompt(task_type: str, goal: str) -> str:
 
 def _retrieval_provider_command(args) -> dict[str, object]:
     if args.mode == "live-http":
-        config = _live_retrieval_config_from_args(args, enable=bool(getattr(args, "live_retrieval", False)))
+        config = _live_retrieval_config_from_args(args, enable=_live_retrieval_requested(args))
         operator = config.build_operator()
         inspection = inspect_retrieval_providers(operator, research_profile_id=args.profile)
         return {

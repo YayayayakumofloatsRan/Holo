@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
@@ -144,13 +145,12 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_allowed_hosts(tmp_path:
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
-def test_phase92_cli_agent_live_retrieval_blocks_structured_path_without_fetch_allowed_hosts(
+def test_phase92_cli_live_retrieval_defaults_to_web_discovery_without_allowed_hosts(
     tmp_path: Path,
     capsys,
     monkeypatch,
 ) -> None:
     _clear_live_env(monkeypatch)
-    monkeypatch.setenv("HOLO_V3_LIVE_RETRIEVAL", "1")
     journal_path = tmp_path / "journal.jsonl"
     index_path = tmp_path / "journal.sqlite"
 
@@ -161,24 +161,23 @@ def test_phase92_cli_agent_live_retrieval_blocks_structured_path_without_fetch_a
                 str(journal_path),
                 "--index",
                 str(index_path),
-                "agent",
-                "AAPL revenue",
+                "retrieval-providers",
                 "--mode",
-                "retrieval",
+                "live-http",
                 "--live-retrieval",
             ]
         )
-        == 1
+        == 0
     )
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
-    issue_keys = {
-        (issue["code"], issue["provider_id"], issue["provider_kind"])
-        for issue in payload["issues"]
-    }
-    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
+    assert payload["status"] == "attention"
+    assert payload["network_access"] is True
+    assert payload["live_config"]["web_search"]["configured"] is True
+    assert payload["live_config"]["web_search"]["providers"] == ["bing_html", "duckduckgo_html"]
+    assert payload["live_config"]["search_strategy"] == "aggregate"
+    assert payload["live_config"]["fetch"]["allow_discovered_search_hosts"] is True
+    assert payload["live_config"]["fetch"]["allow_all_hosts"] is False
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
@@ -271,64 +270,49 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_allowed_hosts(tmp_path:
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
-def test_phase92_cli_chat_live_retrieval_blocks_without_allowed_hosts(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_phase92_online_chat_defaults_to_bounded_live_retrieval_metadata(monkeypatch) -> None:
     _clear_live_env(monkeypatch)
-    journal_path = tmp_path / "journal.jsonl"
-    index_path = tmp_path / "journal.sqlite"
+    args = _runtime_args(command="chat", online=True, live_retrieval=None)
 
-    assert (
-        cli.main(
-            [
-                "--journal",
-                str(journal_path),
-                "--index",
-                str(index_path),
-                "chat",
-                "--offline",
-                "--thread",
-                "live-chat",
-                "--once",
-                "research AAPL revenue",
-                "--live-retrieval",
-            ]
-        )
-        == 1
-    )
-    payload = json.loads(capsys.readouterr().out)
+    config = cli._live_retrieval_config_for_args(args)
+    metadata = cli._runtime_execution_metadata(args)
 
-    assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
-    assert payload["live_config"]["enabled"] is True
-    assert JournalStore(journal_path, index_path=index_path).records() == []
+    assert not isinstance(config, dict)
+    assert config is not None
+    assert config.web_search.providers == ["bing_html", "duckduckgo_html"]
+    assert config.fetch.allow_discovered_search_hosts is True
+    assert metadata is not None
+    assert metadata["retrieval"]["allow_network"] is True
+    assert metadata["retrieval"]["max_network_fetches"] == cli.DEFAULT_LIVE_NETWORK_FETCH_BUDGET
 
 
-def test_phase92_cli_resident_live_retrieval_blocks_without_allowed_hosts(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_phase92_online_chat_can_opt_out_of_live_retrieval(monkeypatch) -> None:
     _clear_live_env(monkeypatch)
-    journal_path = tmp_path / "journal.jsonl"
-    index_path = tmp_path / "journal.sqlite"
-    resident_db = tmp_path / "resident.sqlite"
-    base = [
-        "--journal",
-        str(journal_path),
-        "--index",
-        str(index_path),
-        "--resident-db",
-        str(resident_db),
-    ]
+    args = _runtime_args(command="chat", online=True, live_retrieval=False)
 
-    assert cli.main([*base, "resident", "enqueue", "research AAPL revenue", "--thread", "live-resident"]) == 0
-    capsys.readouterr()
-    assert cli.main([*base, "resident", "run-once", "--worker-id", "worker-live", "--live-retrieval"]) == 1
-    payload = json.loads(capsys.readouterr().out)
+    config = cli._live_retrieval_config_for_args(args)
+    metadata = cli._runtime_execution_metadata(args)
 
-    assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
-    assert payload["live_config"]["enabled"] is True
-    records = JournalStore(journal_path, index_path=index_path).records()
-    assert [record.kind for record in records] == ["resident_inbox_enqueued"]
+    assert config is None
+    assert metadata is not None
+    assert "retrieval" not in metadata
 
 
-def test_phase92_cli_resident_doctor_reports_live_retrieval_config_gap(
+def test_phase92_online_resident_defaults_to_bounded_live_retrieval_metadata(monkeypatch) -> None:
+    _clear_live_env(monkeypatch)
+    args = _runtime_args(command="resident", resident_command="run-once", online=True, live_retrieval=None)
+
+    config = cli._live_retrieval_config_for_args(args)
+    metadata = cli._runtime_execution_metadata(args)
+
+    assert not isinstance(config, dict)
+    assert config is not None
+    assert config.web_search.configured is True
+    assert metadata is not None
+    assert metadata["retrieval"]["allow_network"] is True
+
+
+def test_phase92_cli_resident_doctor_reports_default_live_web_retrieval(
     tmp_path: Path,
     capsys,
     monkeypatch,
@@ -352,20 +336,21 @@ def test_phase92_cli_resident_doctor_reports_live_retrieval_config_gap(
                 "--live-retrieval",
             ]
         )
-        == 1
+        == 0
     )
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["status"] == "error"
-    issue_codes = {issue["code"] for issue in payload["live_retrieval_issues"]}
-    assert {"live_provider_without_allowed_hosts"}.issubset(issue_codes)
+    assert payload["status"] == "attention"
+    assert payload["live_retrieval_issues"] == []
     assert payload["live_retrieval_config"]["enabled"] is True
+    assert payload["live_retrieval_config"]["web_search"]["providers"] == ["bing_html", "duckduckgo_html"]
+    assert payload["live_retrieval_config"]["fetch"]["allow_discovered_search_hosts"] is True
     assert payload["doctor"]["retrieval_provider_inspection"] is not None
     event = _resident_doctor_record(journal_path, index_path)
-    assert event["status"] == "error"
+    assert event["status"] == "attention"
     assert event["doctor_status"] == payload["doctor"]["status"]
-    assert event["live_retrieval"]["status"] == "error"
-    assert {"live_provider_without_allowed_hosts"}.issubset({issue["code"] for issue in event["live_retrieval"]["issues"]})
+    assert event["live_retrieval"]["status"] == "ok"
+    assert event["live_retrieval"]["issue_count"] == 0
     assert event["live_retrieval"]["config"]["enabled"] is True
 
 
@@ -783,6 +768,53 @@ def test_phase92_cli_resident_live_retrieval_processes_retrieval_task(
     assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
 
 
+def _runtime_args(**overrides: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        "command": "chat",
+        "resident_command": None,
+        "online": True,
+        "planner": "fake",
+        "evaluator": "fake",
+        "synthesizer": "fake",
+        "semantic_intake": "fake",
+        "turn_router": "fake",
+        "live_retrieval": None,
+        "live_allow_all_hosts": False,
+        "live_search_endpoint": None,
+        "live_web_search_provider": None,
+        "live_web_search_max_results_per_engine": None,
+        "live_fetch_discovered_search_hosts": None,
+        "live_search_allowed_host": None,
+        "live_fetch_allowed_host": None,
+        "live_crawl_seed_url": None,
+        "live_crawl_source_directory": False,
+        "live_source_directory_allowlist": False,
+        "live_crawl_include_sitemaps": True,
+        "live_crawl_max_pages": None,
+        "live_crawl_max_links_per_page": None,
+        "live_crawl_max_sitemap_urls": None,
+        "live_crawl_max_source_directory_seeds": None,
+        "live_search_strategy": None,
+        "live_search_max_sources_per_provider": None,
+        "live_timeout_seconds": None,
+        "live_max_bytes": None,
+        "live_max_network_fetches": cli.DEFAULT_LIVE_NETWORK_FETCH_BUDGET,
+        "response_language": None,
+        "context_profile": "provider",
+        "context_token_budget": None,
+        "context_section_budget": None,
+        "workspace_evidence_chars": None,
+        "synthesis_evidence_preview_chars": None,
+        "max_agent_steps": None,
+        "max_agent_tool_calls": None,
+        "max_agent_artifact_bytes": None,
+        "research_profile": None,
+        "research_depth": "deep",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 class _Transport:
     def __init__(self, response: HttpTransportResponse) -> None:
         self.response = response
@@ -882,6 +914,12 @@ def _clear_live_env(monkeypatch) -> None:
         "HOLO_V3_LIVE_SEARCH_API_KEY_ENV",
         "HOLO_V3_LIVE_SEARCH_API_KEY_HEADER",
         "HOLO_V3_LIVE_SEARCH_API_KEY_PREFIX",
+        "HOLO_V3_LIVE_WEB_SEARCH_PROVIDERS",
+        "HOLO_V3_LIVE_WEB_SEARCH_MAX_RESULTS_PER_ENGINE",
+        "HOLO_V3_LIVE_FETCH_DISCOVERED_SEARCH_HOSTS",
+        "HOLO_V3_LIVE_SEARCH_STRATEGY",
+        "HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER",
+        "HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST",
         "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS",
         "HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES",
         "HOLO_V3_LIVE_CRAWL_SEED_URLS",
@@ -889,5 +927,7 @@ def _clear_live_env(monkeypatch) -> None:
         "HOLO_V3_LIVE_CRAWL_MAX_LINKS_PER_PAGE",
         "HOLO_V3_LIVE_CRAWL_INCLUDE_SITEMAPS",
         "HOLO_V3_LIVE_CRAWL_MAX_SITEMAP_URLS",
+        "HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY",
+        "HOLO_V3_LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS",
     ]:
         monkeypatch.delenv(name, raising=False)

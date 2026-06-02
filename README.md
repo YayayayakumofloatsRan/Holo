@@ -239,7 +239,9 @@ Kernel v3 currently contains the infrastructure for:
   independently inside each provider.
 - Non-US official disclosure entry points for finance retrieval, including
   CNINFO, HKEX, ASX, EDINET, and SGX source-query templates. These remain
-  candidate source URLs; network fetch still requires explicit host allowlists.
+  candidate source URLs; network fetch still requires live retrieval permission
+  plus either curated/source-search allowlists, discovered web-search result
+  permission, or an explicit smoke-test override.
 - empty retrieval observations with zero evidence and zero citations no longer
   count as loop progress. The failed/empty fact is journaled and re-enters the
   workloop, but progress, repetition, evidence sufficiency, and termination are
@@ -249,8 +251,12 @@ Kernel v3 currently contains the infrastructure for:
   guards, so model-supplied payload fields such as `network_fetch_count` cannot
   exaggerate or bypass the configured budget.
 
-Live model and live retrieval surfaces are opt-in. They are not default unit-test
-dependencies.
+Live model and live retrieval are not default unit-test dependencies. Online
+`chat`, `agent`, and resident `run/run-once` now get bounded live web-discovery
+permission by default so retrieval tasks do not look read-only; pass
+`--no-live-retrieval` to disable that surface. Low-level `retrieve` and
+`retrieval-providers` commands remain explicit because they are debugging and
+index-building tools.
 
 ## Legacy Boundary
 
@@ -424,12 +430,16 @@ HOLO_V3_LIVE_MODEL=1 holo-v3 agent "inspect a large workspace file" \
   --temperature 0.2
 ```
 
-Live retrieval is also explicit and host-allowlisted. `--live-retrieval`
-is now a per-command authorization surface: it enables the live retrieval
-operator for that run without requiring `HOLO_V3_LIVE_RETRIEVAL=1`, while
-network fetches still require `PolicyGate` permission, fetch budgets, and
-either host allowlists or the explicit `--live-allow-all-hosts` smoke-test
-override. Do not add fake sources to make a live run look successful.
+Live retrieval is host-owned and bounded. Online `chat`, `agent`, and resident
+`run/run-once` automatically enable a safe web-discovery surface with
+`bing_html,duckduckgo_html`, aggregate search, and fetch permission only for
+URLs returned by those search providers. `--live-retrieval` is still available
+as a per-command authorization surface, and `--no-live-retrieval` disables live
+retrieval even in online chat. Network fetches still require `PolicyGate`
+permission, fetch budgets, and either host allowlists, discovered web-search
+result permission, curated source-directory allowlists, or the explicit
+`--live-allow-all-hosts` smoke-test override. Do not add fake sources to make a
+live run look successful.
 
 For real research work, live defaults are intentionally roomy rather than
 demo-sized: live network budget defaults to `4096`, the finance fundamentals
