@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,19 +70,78 @@ def handle_chat_line(
     if local is not None:
         return local
     start_index = len(runtime.journal.records())
-    if output_mode == "human":
-        print(style("processing...", "dim", color=color))
-        sys.stdout.flush()
-    payload = runtime.receive(stripped, thread_id=thread_id)
     if output_mode == "json":
+        payload = runtime.receive(stripped, thread_id=thread_id)
         print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
     else:
+        print(style("processing...", "dim", color=color))
+        sys.stdout.flush()
+        payload = receive_with_live_activity(runtime, stripped, thread_id=thread_id, start_index=start_index, color=color)
         print(render_chat_result(payload, color=color))
-        activity = render_chat_activity(runtime.journal.records()[start_index:], color=color)
-        if activity:
-            print(activity)
     sys.stdout.flush()
     return False, thread_id, output_mode, color
+
+
+def receive_with_live_activity(
+    runtime: ChatRuntime,
+    text: str,
+    *,
+    thread_id: str,
+    start_index: int,
+    color: bool,
+):
+    payload_holder: dict[str, object] = {}
+    error_holder: dict[str, BaseException] = {}
+
+    def run_receive() -> None:
+        try:
+            payload_holder["payload"] = runtime.receive(text, thread_id=thread_id)
+        except BaseException as exc:  # pragma: no cover - re-raised on caller thread.
+            error_holder["error"] = exc
+
+    worker = threading.Thread(target=run_receive, name="holo-v3-chat-turn", daemon=True)
+    worker.start()
+    next_index = start_index
+    printed_header = False
+    while worker.is_alive():
+        next_index, printed_header = stream_new_activity(
+            runtime,
+            next_index=next_index,
+            printed_header=printed_header,
+            color=color,
+        )
+        worker.join(0.12)
+    next_index, printed_header = stream_new_activity(
+        runtime,
+        next_index=next_index,
+        printed_header=printed_header,
+        color=color,
+    )
+    if "error" in error_holder:
+        raise error_holder["error"]
+    return payload_holder["payload"]
+
+
+def stream_new_activity(runtime: ChatRuntime, *, next_index: int, printed_header: bool, color: bool) -> tuple[int, bool]:
+    records = runtime.journal.records()
+    if len(records) <= next_index:
+        return next_index, printed_header
+    lines = []
+    for record in records[next_index:]:
+        data = getattr(record, "data", {})
+        if not isinstance(data, dict):
+            continue
+        line = chat_activity_line(str(getattr(record, "kind", "") or ""), data, color=color)
+        if line:
+            lines.append(line)
+    if lines:
+        if not printed_header:
+            print(style("steps", "dim", color=color))
+            printed_header = True
+        for line in lines:
+            print(line)
+        sys.stdout.flush()
+    return len(records), printed_header
 
 
 def handle_chat_local_command(
@@ -326,6 +386,15 @@ def render_chat_result(payload: object, *, color: bool) -> str:
     if isinstance(failure, dict) and failure:
         reason = failure.get("reason") or failure.get("status") or "failed"
         lines.append(style("failure:", "red", color=color) + f" {reason}")
+        missing = failure.get("missing_evidence")
+        if isinstance(missing, list) and missing:
+            lines.append(style("missing:", "yellow", color=color) + f" {compact_list(missing, limit=6)}")
+        attempted = failure.get("attempted_actions")
+        if isinstance(attempted, list) and attempted:
+            lines.append(style("attempted:", "dim", color=color) + f" {compact_list(attempted, limit=6)}")
+        next_action = failure.get("next_possible_action")
+        if isinstance(next_action, str) and next_action:
+            lines.append(style("next:", "dim", color=color) + f" {next_action}")
     if data.get("command_result") and not answer:
         lines.append(json.dumps(data["command_result"], ensure_ascii=False, sort_keys=True))
     trace_refs = data.get("trace_refs")
@@ -351,6 +420,8 @@ def render_chat_activity(records: list[object], *, color: bool) -> str:
 
 def chat_activity_line(kind: str, data: JsonObject, *, color: bool) -> str | None:
     prefix = style("·", "dim", color=color)
+    if kind == "context":
+        return f"{prefix} context compiled id={data.get('context_id')} sections={len(data.get('packs') or data.get('sections') or [])}"
     if kind == "chat_routing_decision":
         return f"{prefix} route {data.get('route')} reasons={compact_list(data.get('reasons'))}"
     if kind == "processor_request":
@@ -368,15 +439,37 @@ def chat_activity_line(kind: str, data: JsonObject, *, color: bool) -> str | Non
     if kind == "semantic_intake":
         return f"{prefix} semantic intent={data.get('primary_intent')} mode={data.get('suggested_mode')} blocked={compact_list(data.get('blocked_capabilities'))}"
     if kind == "semantic_task_plan":
-        return f"{prefix} task plan status={data.get('status')} mode={data.get('selected_mode')} blocked={compact_list(data.get('blocked_capabilities'))}"
+        return f"{prefix} task plan status={data.get('status')} mode={data.get('selected_mode')} steps={len(data.get('steps') or [])} blocked={compact_list(data.get('blocked_capabilities'))}"
     if kind == "action":
         action = data.get("name") or data.get("kind")
-        return f"{prefix} action {action} side_effect={data.get('side_effect_class')}"
+        return f"{prefix} action {action} side_effect={data.get('side_effect_class')} reasons={compact_list(data.get('reasons'))}"
     if kind == "policy_decision":
         return f"{prefix} policy allowed={data.get('allowed')} reason={data.get('reason')}"
     if kind == "observation":
         source = data.get("source") or data.get("kind")
         return f"{prefix} observation source={source} status={data.get('status')}"
+    if kind == "feedback":
+        return f"{prefix} evaluator feedback status={data.get('status')} missing={compact_list(data.get('missing_evidence'))} stop={data.get('stop_reason')}"
+    if kind == "retrieval_query_plan":
+        diagnostics = data.get("diagnostics")
+        query_count = diagnostics.get("query_count") if isinstance(diagnostics, dict) else None
+        return f"{prefix} retrieval query plan queries={query_count or len(data.get('queries') or [])} max_sources={data.get('max_sources')} max_fetches={data.get('max_fetches')}"
+    if kind == "retrieval_search_attempt":
+        return f"{prefix} retrieval search query={preview_history_text(str(data.get('query') or ''), limit=80)} status={data.get('status')} sources={len(data.get('sources') or [])}"
+    if kind == "retrieval_rank_sources":
+        return f"{prefix} retrieval rank sources={len(data.get('ranked_sources') or [])}"
+    if kind == "retrieval_fetch_attempt":
+        return f"{prefix} retrieval fetch source={data.get('source_id')} status={data.get('status')} bytes={data.get('size_bytes')}"
+    if kind == "retrieval_extraction":
+        diagnostics = data.get("diagnostics")
+        span_count = diagnostics.get("span_count") if isinstance(diagnostics, dict) else len(data.get("spans") or [])
+        document = data.get("document")
+        title = document.get("title") if isinstance(document, dict) else None
+        return f"{prefix} retrieval extract spans={span_count} doc={preview_history_text(str(title or ''), limit=80)}"
+    if kind == "retrieval_evidence":
+        return f"{prefix} evidence {data.get('evidence_id')} score={data.get('score')} source={data.get('source_id')}"
+    if kind == "retrieval_citation":
+        return f"{prefix} citation {data.get('citation_id')} evidence={data.get('evidence_id')}"
     if kind == "retrieval_report":
         return f"{prefix} retrieval report status={data.get('status')} evidence={data.get('evidence_count')} citations={data.get('citation_count')}"
     if kind == "progress_assessment":

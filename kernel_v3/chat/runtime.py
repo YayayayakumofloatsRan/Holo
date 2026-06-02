@@ -274,6 +274,7 @@ class ChatRuntime:
             outcome.parsed,
             state=state,
             turn_id=turn_id,
+            user_turn=message,
             continuable_plan=plan_record,
             pending_plan=pending_plan_record,
         )
@@ -1160,12 +1161,13 @@ def _chat_route_prompt(
             "Use answer_pending_question only when the turn directly answers the pending question or explicitly approves/rejects a pending plan.",
             "Use answer_pending_question for missing slots or parameters of the same task, such as a filename, target, date range, approval, or rejection.",
             "If the pending task is broad clarify_first and the new turn is a complete standalone goal, use new_task instead of resuming the old clarification task.",
+            "A broad clarification pending from a vague turn such as 'I do not understand' should not capture a later tool-bearing goal such as search, retrieval, research, file read/write, time, or system-state work.",
             "If the new turn changes domain, tool surface, or objective from the pending task, use new_task.",
             "Use new_task when the turn is a clear fresh request, even if an older pending question exists.",
             "If pending_plan_confirmation is true, set command to approve_plan or reject_plan when the turn semantically approves or rejects.",
             "Use continue_plan only when the user wants to advance an unfinished approved task plan.",
             "Use continue_task only when the user wants to resume an active task.",
-            "Use summary only when the user asks about prior conversation, recap, or what was discussed.",
+            "Use summary only when the user explicitly asks about prior conversation, recap, history, or what was discussed. A bare confusion turn such as 'I do not understand' is not a summary request.",
             "For current thread, host, agent, or runtime state queries, use new_task unless the user used a slash command.",
             "Use new_task when the turn is a fresh request or when continuation is vague but no active or continuable task exists.",
             "The host will validate route feasibility against thread state before acting.",
@@ -1214,6 +1216,7 @@ def _decision_from_route_proposal(
     *,
     state: ThreadState,
     turn_id: str,
+    user_turn: str,
     continuable_plan: LedgerRecord | None,
     pending_plan: LedgerRecord | None,
 ) -> TurnRoutingDecision:
@@ -1233,6 +1236,16 @@ def _decision_from_route_proposal(
                 reasons=reasons,
             )
         if route == "answer_pending_question":
+            if _pending_answer_should_start_new_task(state=state, pending_plan=pending_plan, user_turn=user_turn):
+                return TurnRoutingDecision(
+                    decision_id=f"route-{turn_id}",
+                    thread_id=state.thread_id,
+                    turn_id=turn_id,
+                    route="new_task",
+                    task_id=None,
+                    command=None,
+                    reasons=_ordered_unique([*reasons, "standalone_goal_overrode_pending_question"]),
+                )
             return TurnRoutingDecision(
                 decision_id=f"route-{turn_id}",
                 thread_id=state.thread_id,
@@ -1243,6 +1256,16 @@ def _decision_from_route_proposal(
                 reasons=_ordered_unique([*reasons, "pending_user_input"]),
             )
     if route == "summary":
+        if not _looks_like_recap_request(user_turn):
+            return TurnRoutingDecision(
+                decision_id=f"route-{turn_id}",
+                thread_id=state.thread_id,
+                turn_id=turn_id,
+                route="new_task",
+                task_id=None,
+                command=None,
+                reasons=_ordered_unique([*reasons, "summary_without_recap_request"]),
+            )
         return TurnRoutingDecision(
             decision_id=f"route-{turn_id}",
             thread_id=state.thread_id,
@@ -1301,6 +1324,99 @@ def _decision_from_route_proposal(
         command=None,
         reasons=_ordered_unique([*reasons, "fresh_or_invalid_model_route"]),
     )
+
+
+def _pending_answer_should_start_new_task(
+    *,
+    state: ThreadState,
+    pending_plan: LedgerRecord | None,
+    user_turn: str,
+) -> bool:
+    if state.pending_question is None:
+        return False
+    if not _pending_plan_is_broad_clarification(pending_plan):
+        return False
+    return _looks_like_standalone_operational_goal(user_turn)
+
+
+def _pending_plan_is_broad_clarification(plan_record: LedgerRecord | None) -> bool:
+    if plan_record is None:
+        return True
+    plan = dict(plan_record.data)
+    if str(plan.get("selected_mode") or "") == "clarify_first":
+        return True
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return False
+    return any(isinstance(step, dict) and str(step.get("mode") or "") == "clarify_first" for step in steps)
+
+
+def _looks_like_standalone_operational_goal(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    if not normalized:
+        return False
+    operational_markers = (
+        "search",
+        "retrieve",
+        "research",
+        "look up",
+        "browse",
+        "web",
+        "internet",
+        "read file",
+        "write file",
+        "搜",
+        "搜索",
+        "检索",
+        "查询",
+        "调研",
+        "研究",
+        "上网",
+        "联网",
+        "网页",
+        "网站",
+        "基本面",
+        "市场",
+        "行情",
+        "读文件",
+        "读取",
+        "写到",
+        "写入",
+        "保存",
+        "现在几点",
+        "几点钟",
+        "状态",
+    )
+    return any(marker in normalized for marker in operational_markers)
+
+
+def _looks_like_recap_request(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    if not normalized:
+        return False
+    recap_markers = (
+        "recap",
+        "summary",
+        "summarize our",
+        "what did we",
+        "what have we",
+        "previous conversation",
+        "chat history",
+        "conversation so far",
+        "thread so far",
+        "chat so far",
+        "之前",
+        "刚才",
+        "前面",
+        "上次",
+        "历史",
+        "记录",
+        "说了什么",
+        "聊了什么",
+        "总结一下",
+        "回顾",
+    )
+    return any(marker in normalized for marker in recap_markers)
 
 
 def _plan_confirmation_from_decision(decision: TurnRoutingDecision) -> str | None:

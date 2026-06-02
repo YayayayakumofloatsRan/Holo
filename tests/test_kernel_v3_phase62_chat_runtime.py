@@ -7,7 +7,8 @@ from pathlib import Path
 from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.chat import ChatRuntime
-from kernel_v3.chat.console import render_chat_activity, render_chat_result
+from kernel_v3.chat.console import handle_chat_line, render_chat_activity, render_chat_result
+from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 
@@ -117,6 +118,41 @@ def test_phase62_pending_question_does_not_swallow_model_routed_new_task():
     route = journal.records(kind="chat_routing_decision")[-1].data
     assert route["route"] == "new_task"
     assert "fresh_request_despite_pending_question" in route["reasons"]
+
+
+def test_phase62_broad_pending_clarification_does_not_swallow_operational_goal_even_if_model_misroutes():
+    journal = JournalStore.in_memory()
+    pending_chat = _chat_with_semantic(journal, [_clarify_intake()])
+    pending = pending_chat.receive("我不明白", thread_id="thread-pending-operational")
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "answer_pending_question",
+                "command": None,
+                "target_task_id": pending.task_id,
+                "confidence": 0.91,
+                "reasons": ["model_thought_this_answered_the_pending_question"],
+            },
+            "semantic.intake": _direct_intake(),
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+        turn_router_mode="model",
+    )
+
+    fresh = chat.receive("你能去搜一下 apple inc 的基本面吗", thread_id="thread-pending-operational")
+
+    assert pending.status == "needs_user_input"
+    assert fresh.route == "new_task"
+    assert fresh.task_id != pending.task_id
+    assert not journal.records(task_id=pending.task_id, kind="resume")
+    route = journal.records(kind="chat_routing_decision")[-1].data
+    assert route["route"] == "new_task"
+    assert "standalone_goal_overrode_pending_question" in route["reasons"]
 
 
 def test_phase62_continue_after_completed_task_asks_for_clarification_not_resume():
@@ -314,6 +350,35 @@ def test_phase62_summary_route_is_thread_level_and_does_not_reprint_pending_prom
     assert result.pending_question is None
     assert "待补充:" in (result.answer or "")
     assert "needs input:" not in rendered
+
+
+def test_phase62_summary_route_requires_explicit_recap_request():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "summary",
+                "command": None,
+                "target_task_id": None,
+                "confidence": 0.88,
+                "reasons": ["model_misread_confusion_as_recap"],
+            },
+            "semantic.intake": _direct_intake(),
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+        turn_router_mode="model",
+    )
+
+    result = chat.receive("我不明白", thread_id="thread-summary-guard")
+
+    assert result.route == "new_task"
+    route = journal.records(kind="chat_routing_decision")[-1].data
+    assert "summary_without_recap_request" in route["reasons"]
 
 
 def test_phase62_no_durable_memory_is_written():
@@ -877,6 +942,94 @@ def test_phase62_human_console_activity_renders_processor_action_and_termination
     assert "final answer confidence=" in activity
 
 
+def test_phase62_human_console_failure_report_renders_actionable_details():
+    payload = ChatRuntimeResult(
+        status="failed",
+        thread_id="thread-failure",
+        turn_id="turn-failure",
+        route="new_task",
+        task_id="task-failure",
+        run_id="run-1",
+        answer=None,
+        final_answer=None,
+        failure_report={
+            "reason": "planned_retrieval_subgoals_incomplete",
+            "attempted_actions": ["retrieval.run", "retrieval.run"],
+            "attempted_sources": ["https://example.test/source"],
+            "missing_evidence": ["sufficient_retrieval_evidence", "retrieval_subgoal:goal-1"],
+            "last_observations": [],
+            "user_help_needed": False,
+            "next_possible_action": "refine_failed_retrieval_subgoals",
+            "task_id": "task-failure",
+            "run_id": "run-1",
+            "trace_refs": ["ledger-1"],
+        },
+        pending_question=None,
+        command_result=None,
+        summary=None,
+        trace_refs=["ledger-1"],
+    )
+
+    rendered = render_chat_result(payload, color=False)
+
+    assert "failure: planned_retrieval_subgoals_incomplete" in rendered
+    assert "missing: [sufficient_retrieval_evidence, retrieval_subgoal:goal-1]" in rendered
+    assert "attempted: [retrieval.run, retrieval.run]" in rendered
+    assert "next: refine_failed_retrieval_subgoals" in rendered
+
+
+def test_phase62_human_console_streams_activity_before_final_result(capsys):
+    class StreamingRuntime:
+        def __init__(self) -> None:
+            self.journal = JournalStore.in_memory()
+
+        def receive(self, text: str, *, thread_id: str = "default") -> ChatRuntimeResult:
+            self.journal.append(
+                task_id="task-stream",
+                run_id="run-1",
+                step_id=None,
+                kind="processor_request",
+                data={"task_type": "planner.propose", "provider": "fake", "model": "fake"},
+            )
+            self.journal.append(
+                task_id="task-stream",
+                run_id="run-1",
+                step_id="step-1",
+                kind="action",
+                data={"name": "respond", "side_effect_class": "none"},
+            )
+            return ChatRuntimeResult(
+                status="completed",
+                thread_id=thread_id,
+                turn_id="turn-stream",
+                route="new_task",
+                task_id="task-stream",
+                run_id="run-1",
+                answer="done",
+                final_answer=None,
+                failure_report=None,
+                pending_question=None,
+                command_result=None,
+                summary=None,
+                trace_refs=["ledger-1"],
+            )
+
+    handle_chat_line(
+        StreamingRuntime(),  # type: ignore[arg-type]
+        "hello",
+        thread_id="thread-stream",
+        output_mode="human",
+        color=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "processing..." in output
+    assert "steps" in output
+    assert "model request planner.propose" in output
+    assert "action respond" in output
+    assert output.index("model request planner.propose") < output.index("completed task=task-stream")
+
+
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "kernel_v3.cli", *args],
@@ -944,4 +1097,28 @@ def _direct_intake() -> dict:
         "warnings": [],
         "response_hint": None,
         "clarification_question": None,
+    }
+
+
+def _clarify_intake() -> dict:
+    return {
+        "primary_intent": "clarification",
+        "suggested_mode": "clarify_first",
+        "compound": False,
+        "requires_clarification": True,
+        "intents": [
+            {
+                "kind": "clarification",
+                "text": "vague help request",
+                "sequence_index": 1,
+                "required_capabilities": [],
+                "risk": "none",
+                "status": "needs_user_input",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": [],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": "请问您对什么内容不太明白？",
     }

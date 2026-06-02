@@ -253,6 +253,29 @@ class AgentRuntime:
         )
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
         if result.status == "needs_user_input":
+            if _latest_action_has_reason(self.journal, result.task_id, result.run_id, "processor_failed"):
+                failure = self._failure(
+                    result.task_id,
+                    result.run_id,
+                    "model_planner_processor_failed",
+                    missing_evidence=_ordered_unique(
+                        [
+                            *_missing_evidence(self.journal, result.task_id, result.run_id),
+                            "planner_action",
+                        ]
+                    ),
+                    next_action="retry_model_planner_or_reduce_context",
+                )
+                return AgentRuntimeResult(
+                    status="failed",
+                    task_id=result.task_id,
+                    run_id=result.run_id,
+                    mode=recipe.mode,
+                    recipe_id=recipe.recipe_id,
+                    final_answer=None,
+                    failure_report=failure.to_dict(),
+                    trace_refs=_trace_refs(self.journal, result.task_id),
+                )
             if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
                 planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id, recipe)
                 failure = self._failure(
@@ -3476,6 +3499,17 @@ def _latest_action_is_no_planned_action(journal: JournalStore, task_id: str, run
         return False
     reasons = records[-1].data.get("reasons")
     return isinstance(reasons, list) and "no_planned_action" in reasons
+
+
+def _latest_action_has_reason(journal: JournalStore, task_id: str, run_id: str, reason: str) -> bool:
+    records = [
+        record for record in journal.records(task_id=task_id, kind="action")
+        if record.run_id == run_id
+    ]
+    if not records:
+        return False
+    reasons = records[-1].data.get("reasons")
+    return isinstance(reasons, list) and reason in reasons
 
 
 def _retrieval_evidence(journal: JournalStore, task_id: str, run_id: str) -> list[EvidenceItem]:

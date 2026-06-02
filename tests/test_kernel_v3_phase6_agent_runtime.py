@@ -6,7 +6,7 @@ from pathlib import Path
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
-from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
+from kernel_v3.processors import FakeJsonProvider, FakeMalformedJsonProvider, ProcessorFabric, ProcessorRouter
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
 from kernel_v3.trace import TraceRenderer
 
@@ -214,6 +214,29 @@ def test_phase6_failed_retrieval_returns_failure_report_not_invented_answer():
     assert result.failure_report is not None
     assert result.failure_report["attempted_actions"] == ["retrieval.run", "retrieval.run"]
     assert result.failure_report["next_possible_action"] == "refine_query_or_add_sources"
+
+
+def test_phase6_model_planner_failure_returns_failure_report_not_user_prompt():
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={"fake_malformed_json": FakeMalformedJsonProvider("not-json")},
+        router=ProcessorRouter(default_provider="fake_malformed_json", default_model="fake-malformed-json"),
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "answer directly",
+        mode="direct",
+        planner_mode="model",
+    )
+
+    assert result.status == "failed"
+    assert result.failure_report is not None
+    assert result.failure_report["reason"] == "model_planner_processor_failed"
+    assert result.failure_report["user_help_needed"] is False
+    assert result.failure_report["next_possible_action"] == "retry_model_planner_or_reduce_context"
+    assert "planner_action" in result.failure_report["missing_evidence"]
+    assert _action_names(journal, result.task_id) == ["ask_user"]
 
 
 def test_phase6_trace_evidence_artifacts_and_retrieval_trace_render_complete_path():

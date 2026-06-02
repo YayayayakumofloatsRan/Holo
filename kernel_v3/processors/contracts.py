@@ -134,7 +134,11 @@ Pending user input is context, not a forced route. Use answer_pending_question o
 when the turn directly supplies the missing information, approval, rejection, or
 parameter for the pending task. Use new_task for a complete standalone goal, even
 when an older broad clarification is pending. Use summary only for prior
-conversation recap, not current agent/runtime state.
+conversation recap, not current agent/runtime state. A broad pending clarification
+from a vague turn such as "I do not understand" must not capture later operational
+goals such as search, retrieval, research, file read/write, time, or system-state
+requests; classify those as new_task. Use summary only for explicit recap/history
+requests; a bare confusion turn such as "I do not understand" is not a summary request.
 The model only classifies the turn. The host validates state, policy, pending questions,
 unfinished plans, and execution. Never request tool execution or memory writes here."""
 

@@ -55,6 +55,20 @@ pending question as a new `needs input` prompt. Direct `/history` output reads
 recent `chat_turn` and `chat_agent_result` journal rows and renders them in the
 terminal without invoking a model or starting an agent loop.
 
+Human chat output streams public journal events while the turn is still running.
+The console polls the same `JournalStore` that the agent loop writes to, so users
+can see processor requests, route decisions, public model-provided reasons,
+actions, policy decisions, tool observations, retrieval search/fetch/extract
+records, evaluator feedback, and workloop termination decisions before the final
+answer is rendered. This is an inspectable event stream, not hidden
+chain-of-thought, and it does not give the model any extra execution authority.
+
+Processor/provider failures inside model planning are not treated as missing
+user input. The failing packet remains visible in the journal, but AgentRuntime
+collapses the turn to a `FailureReport` with missing evidence, attempted
+actions, and a suggested next action rather than leaving the thread behind a
+spurious pending clarification.
+
 ## Adaptive Processor Generation
 
 Live processor calls pass through a host-owned generation policy before the
