@@ -266,6 +266,8 @@ a TTY: colored status headers, compact task/run refs, and the current
 Use `/thread switch <id>` or `/thread new <id>` inside the interactive console
 to move between journal-backed chat threads, `/threads` to list known threads,
 `/json on|off` to toggle raw JSON, and `/color on|off` for ANSI styling.
+`/thread new <id>` writes a `chat_thread_event`, so an empty thread is visible
+in `/threads` before the first user turn.
 Console colors live in `kernel_v3/chat/theme.py`, separate from command
 routing and chat runtime logic.
 

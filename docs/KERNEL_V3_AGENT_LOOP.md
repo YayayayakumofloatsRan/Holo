@@ -43,6 +43,8 @@ The interactive console has local commands for thread and display management:
 `/color on|off`, and `/quit`. These commands only select the journal-backed
 thread or change rendering; runtime commands such as `/status`, `/summary`,
 `/trace`, `/plan`, and `/memory` are still handled by `ChatRuntime`.
+Thread creation and switching are journaled as `chat_thread_event` records, so
+empty created threads are inspectable before the first user turn.
 ANSI color choices are centralized in `kernel_v3/chat/theme.py`.
 
 ## Adaptive Processor Generation

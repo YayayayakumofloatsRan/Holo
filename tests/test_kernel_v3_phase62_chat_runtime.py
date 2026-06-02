@@ -408,6 +408,41 @@ def test_phase62_cli_chat_human_mode_can_switch_threads(tmp_path: Path, capsys, 
     assert thread_ids == {"cli-beta"}
 
 
+def test_phase62_cli_chat_can_create_empty_thread_and_list_it(tmp_path: Path, capsys, monkeypatch):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    monkeypatch.setattr(sys, "stdin", io.StringIO("/thread new cli-empty\n/thread list\n/quit\n"))
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--offline",
+            "--thread",
+            "cli-alpha",
+            "--output",
+            "human",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    store = JournalStore(journal, index_path=index)
+    events = store.records(kind="chat_thread_event")
+    turns = store.records(kind="chat_turn")
+    assert status == 0
+    assert "thread: cli-empty" in output
+    assert "created: true" in output
+    assert "* cli-empty turns=0 status=None" in output
+    assert len(events) == 1
+    assert events[0].data["thread_id"] == "cli-empty"
+    assert events[0].data["action"] == "created"
+    assert events[0].data["created"] is True
+    assert turns == []
+
+
 def test_phase62_cli_chat_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)

@@ -103,6 +103,7 @@ def handle_chat_local_command(
         result = {
             "commands": [
                 "/thread",
+                "/thread list",
                 "/thread switch <thread_id>",
                 "/thread new <thread_id>",
                 "/threads",
@@ -116,21 +117,54 @@ def handle_chat_local_command(
         threads = known_chat_threads(runtime)
         result = {"current_thread": thread_id, "threads": threads}
     elif command == "/thread":
-        if not args or args[0].lower() in {"status", "show", "current"}:
+        if args and args[0].lower() in {"list", "ls", "threads"}:
+            threads = known_chat_threads(runtime)
+            result = {"current_thread": thread_id, "threads": threads}
+        elif not args or args[0].lower() in {"status", "show", "current"}:
             state = runtime.build_thread_state(thread_id).to_dict()
             result = {"current_thread": thread_id, "state": state}
-        elif args[0].lower() in {"switch", "use", "new"}:
+        elif args[0].lower() in {"create", "new", "switch", "use"}:
             if len(args) < 2 or not args[1].strip():
                 status = "failed"
-                result = {"error": "missing_thread_id", "usage": "/thread switch <thread_id>"}
+                result = {"error": "missing_thread_id", "usage": "/thread new <thread_id>"}
             else:
+                command_action = args[0].lower()
                 new_thread = args[1].strip()
+                already_exists = thread_known(runtime, new_thread)
+                action = "created" if command_action in {"create", "new"} and not already_exists else "switched"
+                record = append_thread_event(
+                    runtime,
+                    thread_id=new_thread,
+                    action=action,
+                    previous_thread_id=thread_id,
+                    created=not already_exists,
+                )
                 state = runtime.build_thread_state(new_thread).to_dict()
-                result = {"current_thread": new_thread, "state": state}
+                result = {
+                    "current_thread": new_thread,
+                    "previous_thread": thread_id,
+                    "created": not already_exists,
+                    "event_ref": record.record_id,
+                    "state": state,
+                }
         else:
             new_thread = args[0].strip()
+            already_exists = thread_known(runtime, new_thread)
+            record = append_thread_event(
+                runtime,
+                thread_id=new_thread,
+                action="switched",
+                previous_thread_id=thread_id,
+                created=not already_exists,
+            )
             state = runtime.build_thread_state(new_thread).to_dict()
-            result = {"current_thread": new_thread, "state": state}
+            result = {
+                "current_thread": new_thread,
+                "previous_thread": thread_id,
+                "created": not already_exists,
+                "event_ref": record.record_id,
+                "state": state,
+            }
     elif command == "/json":
         if not args:
             result = {"output": new_output}
@@ -194,7 +228,7 @@ def stream_is_tty(stream: object) -> bool:
 
 def chat_banner(thread_id: str, *, color: bool) -> str:
     title = style("Holo Kernel v3 chat", "bold_cyan", color=color)
-    hint = "Commands: /thread switch <id>, /threads, /json on, /color off, /quit"
+    hint = "Commands: /thread new <id>, /thread switch <id>, /threads, /json on, /color off, /quit"
     return f"{title}\n{style('Thread', 'dim', color=color)}: {thread_id}\n{style(hint, 'dim', color=color)}"
 
 
@@ -223,6 +257,10 @@ def print_chat_local_result(payload: JsonObject, *, output_mode: str, color: boo
             lines.append("No chat threads recorded yet.")
     elif isinstance(result, dict) and "current_thread" in result:
         lines.append(f"thread: {result['current_thread']}")
+        if "created" in result:
+            lines.append(f"created: {str(bool(result['created'])).lower()}")
+        if result.get("event_ref"):
+            lines.append(f"event_ref: {result['event_ref']}")
         state = result.get("state")
         if isinstance(state, dict):
             lines.append(thread_state_line(state))
@@ -320,6 +358,33 @@ def known_chat_threads(runtime: ChatRuntime) -> list[JsonObject]:
             }
         )
     return payload
+
+
+def thread_known(runtime: ChatRuntime, thread_id: str) -> bool:
+    return any(item.get("thread_id") == thread_id for item in known_chat_threads(runtime))
+
+
+def append_thread_event(
+    runtime: ChatRuntime,
+    *,
+    thread_id: str,
+    action: str,
+    previous_thread_id: str | None,
+    created: bool,
+):
+    return runtime.journal.append(
+        task_id=None,
+        run_id=f"chat-thread-{thread_id}",
+        step_id=None,
+        kind="chat_thread_event",
+        data={
+            "thread_id": thread_id,
+            "action": action,
+            "previous_thread_id": previous_thread_id,
+            "created": created,
+        },
+        state_delta={"thread_id": thread_id, "chat_thread_action": action},
+    )
 
 
 def thread_state_line(state: JsonObject) -> str:
