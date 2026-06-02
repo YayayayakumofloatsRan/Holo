@@ -621,7 +621,7 @@ def test_phase92_cli_retrieve_live_retrieval_uses_configured_operator(
     assert payload["report"]["status"] == "sufficient"
 
 
-def test_phase92_cli_agent_live_research_depth_counts_query_and_fetch_budget(
+def test_phase92_cli_agent_live_research_depth_uses_manifest_fetch_budget_not_bound_query_count(
     tmp_path: Path,
     capsys,
     monkeypatch,
@@ -666,14 +666,15 @@ def test_phase92_cli_agent_live_research_depth_counts_query_and_fetch_budget(
     journal = JournalStore(journal_path, index_path=index_path)
 
     assert payload["status"] == "failed"
-    assert search_transport.calls == []
-    assert fetch_transport.calls == []
+    assert search_transport.calls
+    assert fetch_transport.calls
     action = journal.records(task_id=payload["task_id"], kind="action")[0].data
-    guard = journal.records(task_id=payload["task_id"], kind="guard")[-1].data
     assert action["payload"]["network_fetch_count"] == 65
-    assert guard["stop_reason"] == "max_network_fetches"
-    assert guard["requested_network_fetches"] == 65
-    assert guard["max_network_fetches"] == 3
+    assert action["payload"]["max_fetches"] == 1
+    assert not journal.records(task_id=payload["task_id"], kind="guard")
+    reports = journal.records(task_id=payload["task_id"], kind="retrieval_report")
+    assert reports
+    assert reports[-1].data["diagnostics"]["reason"] == "no_primary_source_for_research_profile"
 
 
 def test_phase92_cli_chat_live_retrieval_forces_retrieval_recipe(

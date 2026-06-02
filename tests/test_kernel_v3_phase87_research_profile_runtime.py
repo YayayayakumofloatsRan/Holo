@@ -26,9 +26,16 @@ def test_phase87_agent_execution_metadata_applies_research_profile_to_retrieval(
     assert action["payload"]["max_queries"] == 128
     assert action["payload"]["max_sources"] == 5000
     assert action["payload"]["max_fetches"] == 2048
+    context = journal.records(task_id=result.task_id, kind="context")[0].data
+    capability = context["state"]["retrieval_capability_state"]
+    assert capability["available"] is True
+    assert capability["network_budget_available"] is False
+    assert "fallback_search" in capability["search_provider_ids"]
+    assert "sec_edgar_structured_search" in capability["search_provider_ids"]
+    assert capability["profile_aware_search_available"] is True
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert report["diagnostics"]["reason"] == "insufficient_evidence"
-    assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "unconfigured_search"
+    assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "fallback_search"
     assert journal.records(task_id=result.task_id, kind="retrieval_source_assessment")
 
 
@@ -98,7 +105,7 @@ def test_phase87_cli_agent_exposes_research_profile_flag(tmp_path: Path) -> None
     assert action["payload"]["max_fetches"] == 2048
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert report["diagnostics"]["reason"] == "insufficient_evidence"
-    assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "unconfigured_search"
+    assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "fallback_search"
 
 
 def _retrieval_intake() -> dict[str, object]:

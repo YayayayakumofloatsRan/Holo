@@ -36,12 +36,18 @@ from kernel_v3.research import (
     FINANCE_FUNDAMENTALS_PROFILE_ID,
     ResearchCorpusStore,
     research_depth_defaults,
+    resolve_issuer_identity,
     source_directory_for_profile,
 )
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
+    DirectUrlSearchProvider,
+    FallbackSearchProvider,
+    ResearchSourceQuerySearchProvider,
     RetrievalOperator,
+    SecEdgarSearchProvider,
+    SourceDirectorySearchProvider,
     UnconfiguredFetchProvider,
     UnconfiguredSearchProvider,
     register_retrieval_tool,
@@ -352,6 +358,7 @@ class AgentRuntime:
                 registry,
                 operator=self.retrieval_operator or _default_retrieval_operator(
                     goal,
+                    recipe=recipe,
                     artifact_store=self.artifact_store,
                     corpus_store=self.research_corpus_store,
                 ),
@@ -496,7 +503,11 @@ class AgentRuntime:
                 run_id,
                 reason,
                 missing_evidence=["sufficient_retrieval_evidence"],
-                next_action="refine_query_or_add_sources",
+                next_action=(
+                    "increase_network_budget_or_enable_live_retrieval"
+                    if reason in LOOP_GUARD_STOP_REASONS
+                    else "refine_query_or_add_sources"
+                ),
             )
         if recipe.citations_required and not citations:
             return None, self._failure(
@@ -942,6 +953,10 @@ class _AgentContextCompiler:
                 "semantic_state_profiles": semantic_profiles,
                 "semantic_state_profile_summary": semantic_profile_summary,
                 "research_source_directory": _research_source_directory_metadata(self.recipe),
+                "retrieval_capability_state": _retrieval_capability_state(
+                    self.tool_manifests,
+                    recipe=self.recipe,
+                ),
                 "agent_runtime_directive": _planner_directive(self.recipe),
                 "agent_retrieval_plan_state": _agent_retrieval_plan_state(
                     journal,
@@ -2068,6 +2083,13 @@ def _retrieval_replan_hints(
         run_id=run_id,
         recipe=recipe,
     )
+    suggested_sec_structured_sources = _suggested_sec_structured_sources(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+        report_data=report_data,
+    )
     suggested_macro_series = _suggested_fred_series(
         journal,
         task_id=task_id,
@@ -2096,6 +2118,7 @@ def _retrieval_replan_hints(
         "suggested_query_hints": query_hints,
         "suggested_source_targets": source_targets,
         "suggested_filing_documents": suggested_filing_documents,
+        "suggested_sec_structured_sources": suggested_sec_structured_sources,
         "suggested_macro_series": suggested_macro_series,
         "suggested_fiscaldata_endpoints": suggested_fiscaldata_endpoints,
         "attempted_queries": _ordered_unique([item["query"] for item in attempts if isinstance(item.get("query"), str)]),
@@ -2113,6 +2136,132 @@ def _retrieval_replan_hints(
         "attempts": attempts[-6:],
         "do_not_finalize_until": _do_not_finalize_until(missing=missing, requirement=requirement),
     }
+
+
+def _suggested_sec_structured_sources(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+    report_data: JsonObject,
+) -> list[JsonObject]:
+    if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID:
+        return []
+    identity = resolve_issuer_identity(
+        " ".join(
+            item
+            for item in [
+                _string_value(report_data.get("preview")),
+                _string_value(_json_object(report_data.get("diagnostics")).get("goal_query")),
+                *_action_retrieval_queries(journal, task_id=task_id, run_id=run_id),
+            ]
+            if item
+        )
+    )
+    target_ticker = identity.ticker
+    if not target_ticker:
+        return []
+    candidates: list[JsonObject] = []
+    seen: set[str] = set()
+    for record in journal.records(task_id=task_id, kind="retrieval_extraction"):
+        if record.run_id != run_id:
+            continue
+        document = _json_object(record.data.get("document"))
+        uri = _string_value(document.get("uri"))
+        if "company_tickers" not in uri and "company_tickers_exchange" not in uri:
+            continue
+        spans = record.data.get("spans")
+        span_text = " ".join(
+            str(span.get("text") or "")
+            for span in (spans if isinstance(spans, list) else [])
+            if isinstance(span, dict)
+        )
+        for ticker, cik in _sec_ticker_cik_pairs_from_text(span_text):
+            if ticker.upper() != target_ticker.upper():
+                continue
+            key = f"{ticker.upper()}:{cik}"
+            if key in seen:
+                continue
+            seen.add(key)
+            query = f"{ticker.upper()} SEC CIK {cik} companyfacts submissions fundamentals"
+            payload_metadata = {
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "ticker": ticker.upper(),
+                "sec_cik": cik,
+                "source_authority_requirement": "primary",
+                "search_strategy": "structured",
+            }
+            candidates.append(
+                {
+                    "source": "sec_ticker_cik_directory",
+                    "source_record_id": record.record_id,
+                    "source_uri": uri,
+                    "ticker": ticker.upper(),
+                    "sec_cik": cik,
+                    "query": query,
+                    "suggested_payload": {
+                        "query": query,
+                        "metadata": payload_metadata,
+                    },
+                }
+            )
+            if len(candidates) >= 3:
+                return candidates
+    return candidates
+
+
+def _action_retrieval_queries(journal: JournalStore, *, task_id: str, run_id: str) -> list[str]:
+    queries: list[str] = []
+    for record in journal.records(task_id=task_id, kind="action"):
+        if record.run_id != run_id:
+            continue
+        if record.data.get("name") != "retrieval.run":
+            continue
+        payload = record.data.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        query = _string_value(payload.get("query"))
+        if query:
+            queries.append(query)
+    return queries
+
+
+def _sec_ticker_cik_pairs_from_text(text: str) -> list[tuple[str, str]]:
+    if not text:
+        return []
+    pairs: list[tuple[str, str]] = []
+    patterns = [
+        re.compile(r"cik_str=(?P<cik>\d{1,10})\b.{0,160}?\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b", re.IGNORECASE),
+        re.compile(r"\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b.{0,160}?\bcik_str=(?P<cik>\d{1,10})\b", re.IGNORECASE),
+        re.compile(r"\bcik=(?P<cik>\d{1,10})\b.{0,160}?\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b", re.IGNORECASE),
+        re.compile(r"\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b.{0,160}?\bcik=(?P<cik>\d{1,10})\b", re.IGNORECASE),
+    ]
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            ticker = match.group("ticker").strip().upper()
+            cik = _pad_sec_cik(match.group("cik"))
+            if ticker and cik:
+                pairs.append((ticker, cik))
+    return _ordered_unique_pairs(pairs)
+
+
+def _pad_sec_cik(value: object) -> str | None:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if not digits:
+        return None
+    return digits[-10:].zfill(10)
+
+
+def _ordered_unique_pairs(values: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    result: list[tuple[str, str]] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _suggested_sec_filing_documents(
@@ -2731,6 +2880,67 @@ def _research_source_directory_metadata(recipe: TaskRecipe) -> list[JsonObject]:
     return [entry.to_dict() for entry in source_directory_for_profile(profile_id)]
 
 
+def _retrieval_capability_state(tool_manifests: list[ToolManifest], *, recipe: TaskRecipe) -> JsonObject:
+    manifest = next((item for item in tool_manifests if item.name == "retrieval.run"), None)
+    if manifest is None:
+        return {
+            "available": False,
+            "reason": "retrieval_tool_not_registered",
+            "allowed": "retrieval.run" in recipe.allowed_tools,
+            "max_network_fetches": recipe.max_network_fetches,
+            "provider_capabilities": [],
+        }
+    schema = manifest.input_schema if isinstance(manifest.input_schema, dict) else {}
+    provider_capabilities = schema.get("_provider_capabilities")
+    if not isinstance(provider_capabilities, list):
+        provider_capabilities = []
+    search_providers = [
+        item for item in provider_capabilities
+        if isinstance(item, dict) and item.get("provider_kind") == "search"
+    ]
+    fetch_providers = [
+        item for item in provider_capabilities
+        if isinstance(item, dict) and item.get("provider_kind") == "fetch"
+    ]
+    network_access = bool(schema.get("_network_access") or manifest.side_effect_class == "network")
+    return {
+        "available": manifest.enabled,
+        "tool_name": manifest.name,
+        "side_effect_class": manifest.side_effect_class,
+        "network_access": network_access,
+        "network_permission_required": "network:fetch" in manifest.permissions_required,
+        "network_budget_available": recipe.max_network_fetches > 0,
+        "max_network_fetches": recipe.max_network_fetches,
+        "max_tool_calls": recipe.max_tool_calls,
+        "max_steps": recipe.max_steps,
+        "provider_capabilities": provider_capabilities,
+        "search_provider_ids": _provider_ids(search_providers),
+        "fetch_provider_ids": _provider_ids(fetch_providers),
+        "live_search_available": any(bool(item.get("live_network")) for item in search_providers),
+        "live_fetch_available": any(bool(item.get("live_network")) for item in fetch_providers),
+        "profile_aware_search_available": any(bool(item.get("profile_aware")) for item in search_providers),
+        "diagnostics": {
+            "required_permissions": list(manifest.permissions_required),
+            "has_search_provider": bool(search_providers),
+            "has_fetch_provider": bool(fetch_providers),
+        },
+    }
+
+
+def _provider_ids(items: list[JsonObject]) -> list[str]:
+    ids: list[str] = []
+    for item in items:
+        provider_id = item.get("provider_id")
+        if isinstance(provider_id, str) and provider_id:
+            ids.append(provider_id)
+        diagnostics = item.get("diagnostics")
+        diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+        nested = diagnostics.get("providers")
+        if isinstance(nested, list):
+            ids.extend(_provider_ids([entry for entry in nested if isinstance(entry, dict)]))
+    return _ordered_unique(ids)
+
+
 def _research_profile_id(recipe: TaskRecipe) -> str | None:
     metadata = _execution_metadata(recipe)
     retrieval = metadata.get("retrieval")
@@ -2866,6 +3076,7 @@ def _next_run_id(journal: JournalStore, task_id: str) -> str:
 def _default_retrieval_operator(
     goal: str,
     *,
+    recipe: TaskRecipe,
     artifact_store: ArtifactStore,
     corpus_store: ResearchCorpusStore | None,
 ) -> RetrievalOperator:
@@ -2874,6 +3085,18 @@ def _default_retrieval_operator(
             search_provider=CorpusSearchProvider(corpus_store),
             fetch_provider=CorpusFetchProvider(artifact_store),
             corpus_store=corpus_store,
+        )
+    if _research_profile_id(recipe) == FINANCE_FUNDAMENTALS_PROFILE_ID:
+        return RetrievalOperator(
+            search_provider=FallbackSearchProvider(
+                [
+                    DirectUrlSearchProvider(),
+                    SecEdgarSearchProvider(),
+                    ResearchSourceQuerySearchProvider(),
+                    SourceDirectorySearchProvider(),
+                ]
+            ),
+            fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
         )
     return RetrievalOperator(
         search_provider=UnconfiguredSearchProvider(reason="retrieval_source_not_configured"),

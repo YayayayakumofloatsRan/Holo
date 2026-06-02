@@ -62,6 +62,9 @@ def test_phase61_retrieval_without_new_evidence_continues_once_then_fails():
     decisions = [record.data for record in journal.records(task_id=result.task_id, kind="termination_decision")]
     assert [item["decision"] for item in decisions] == ["continue", "failure_report"]
     assert decisions[0]["reason"] == "insufficient_evidence_retry"
+    progress = [record.data for record in journal.records(task_id=result.task_id, kind="progress_assessment")]
+    assert progress[0]["made_progress"] is False
+    assert progress[0]["progress_type"] == "none"
 
 
 def test_phase61_retrieval_resume_gets_fresh_repetition_budget_and_unique_action_ids():

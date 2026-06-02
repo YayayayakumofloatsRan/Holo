@@ -230,7 +230,8 @@ def assess_progress(
     current_action = _latest_record(journal, task_id=task_id, kind="action")
     action_ref = current_action.action_ref if current_action is not None else None
     signals: list[ProgressSignal] = []
-    if observation.status == "ok":
+    empty_retrieval_observation = _is_empty_retrieval_observation(observation.to_dict())
+    if observation.status == "ok" and not empty_retrieval_observation:
         signals.append(ProgressSignal(signal_type="new_observation", ref=observation.observation_id, weight=0.15))
     current_records = [
         record for record in journal.records(task_id=task_id)
@@ -238,6 +239,8 @@ def assess_progress(
     ]
     for record in current_records:
         for artifact_id in record.artifact_refs:
+            if _is_empty_retrieval_observation(record.data):
+                continue
             if not _seen_artifact_before(journal, task_id=task_id, record_id=record.record_id, artifact_id=artifact_id):
                 signals.append(ProgressSignal(signal_type="new_artifact", ref=artifact_id, weight=0.2))
         if record.kind == "retrieval_evidence":
@@ -256,7 +259,12 @@ def assess_progress(
             signals.append(ProgressSignal(signal_type="new_system_observation", ref=record.record_id, weight=0.35))
         elif record.kind == "retrieval_search_attempt" and record.data.get("status") == "failed":
             signals.append(ProgressSignal(signal_type="new_failure_diagnostic", ref=record.record_id, weight=0.1))
-    if observation.status not in {"blocked", "failed"} and current_action is not None and _action_narrows_scope(current_action.data):
+    if (
+        observation.status not in {"blocked", "failed"}
+        and not empty_retrieval_observation
+        and current_action is not None
+        and _action_narrows_scope(current_action.data)
+    ):
         signals.append(ProgressSignal(signal_type="narrowed_scope", ref=current_action.record_id, weight=0.1))
     if observation.status == "needs_user_input":
         signals.append(ProgressSignal(signal_type="new_user_input_requirement", ref=observation.observation_id, weight=0.1))
@@ -774,6 +782,33 @@ def _action_narrows_scope(data: JsonObject) -> bool:
         if isinstance(value, str) and value.strip():
             return True
     return False
+
+
+def _is_empty_retrieval_observation(data: JsonObject) -> bool:
+    if data.get("source") != "tool:retrieval.run":
+        return False
+    content = data.get("content")
+    if not isinstance(content, dict):
+        return False
+    report = content.get("report")
+    if not isinstance(report, dict):
+        return False
+    diagnostics = report.get("diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    return (
+        report.get("status") != "sufficient"
+        and _int_or_zero(diagnostics.get("evidence_count")) == 0
+        and _int_or_zero(diagnostics.get("citation_count")) == 0
+    )
+
+
+def _int_or_zero(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _strongest_signal(signals: list[ProgressSignal]) -> str:

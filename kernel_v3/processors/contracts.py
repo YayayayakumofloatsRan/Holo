@@ -213,6 +213,11 @@ present, prefer one of its suggested_payload objects for the next
 retrieval.run. These are host-derived SEC filing continuations from previously
 fetched submissions metadata; still emit a normal tool proposal and let the
 host validate it.
+When context.state.agent_replan_hints.retrieval.suggested_sec_structured_sources
+is present, prefer one of its suggested_payload objects for the next
+retrieval.run. These are host-derived SEC companyfacts/submissions
+continuations from a fetched SEC ticker-CIK directory; still emit a normal tool
+proposal and let the host validate it.
 When context.state.agent_replan_hints.retrieval.suggested_macro_series is
 present, prefer one of its suggested_payload objects for the next
 retrieval.run. These are host-derived official macro/FRED series continuations
@@ -223,6 +228,13 @@ is present, prefer one of its suggested_payload objects for the next
 retrieval.run. These are host-derived US Treasury FiscalData endpoint
 continuations from extracted spans, not raw fetched bodies; still emit a normal
 tool proposal and let the host validate it.
+Inspect context.state.retrieval_capability_state before proposing retrieval.run.
+If network_budget_available is false or live_fetch_available is false, do not
+pretend live retrieval can run; propose only a configured read/structured
+retrieval path, or respond with the precise missing capability/configuration.
+If provider_capabilities expose SEC/source-directory/profile-aware providers,
+prefer their structured payload hints for finance fundamentals before generic
+web queries.
 For retrieval.run, payload.metadata.search_strategy may propose one of fallback, aggregate, corpus_only, fresh_live, structured, or crawl when the context exposes an adaptive search provider. This only selects among host-configured providers; it does not grant network or tool permission.
 For long tasks, continue one bounded action at a time; the host owns loop budgets, progress detection, repetition detection, and final termination.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.

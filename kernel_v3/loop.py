@@ -474,11 +474,13 @@ class LoopControllerV3:
     def _network_action_cost(self, action: CandidateAction, *, manifest) -> int:
         if not self._is_network_action(action, manifest=manifest):
             return 0
-        payload_cost = _network_cost_from_payload(action.payload)
-        if payload_cost is not None:
-            return max(1, payload_cost)
         manifest_schema = getattr(manifest, "input_schema", {})
         if isinstance(manifest_schema, dict):
+            cost_field = manifest_schema.get("network_fetch_cost_field")
+            if isinstance(cost_field, str) and cost_field:
+                payload_cost = _network_cost_from_payload_field(action.payload, cost_field)
+                if payload_cost is not None:
+                    return max(1, payload_cost)
             default_cost = _positive_int(manifest_schema.get("default_network_fetch_cost"))
             if default_cost is not None:
                 return max(1, default_cost)
@@ -533,16 +535,15 @@ class LoopControllerV3:
         return None
 
 
-def _network_cost_from_payload(payload: object) -> int | None:
+def _network_cost_from_payload_field(payload: object, field: str) -> int | None:
     if not isinstance(payload, dict):
         return None
-    for key in ("network_fetch_count", "max_network_fetches", "max_fetches", "fetch_count"):
-        value = _positive_int(payload.get(key))
-        if value is not None:
-            return value
+    value = _positive_int(payload.get(field))
+    if value is not None:
+        return value
     goal = payload.get("goal")
     if isinstance(goal, dict):
-        return _network_cost_from_payload(goal)
+        return _network_cost_from_payload_field(goal, field)
     return None
 
 

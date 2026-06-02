@@ -516,6 +516,53 @@ def test_phase4_network_budget_uses_manifest_default_fetch_cost_when_payload_omi
     assert fetch_provider.called is False
 
 
+def test_phase4_network_budget_ignores_model_supplied_network_fetch_count_when_manifest_declares_cost_field():
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    registry = ToolRegistry()
+    fetch_provider = LiveNetworkFetchProvider()
+    operator = RetrievalOperator(
+        search_provider=LiveNetworkSearchProvider(),
+        fetch_provider=fetch_provider,
+    )
+    register_retrieval_tool(
+        registry,
+        operator=operator,
+        journal=journal,
+        artifact_store=artifacts,
+    )
+    action = CandidateAction(
+        action_id="act-live-retrieval-host-cost",
+        kind="tool",
+        name="retrieval.run",
+        description="run live-capable retrieval with host-owned cost",
+        score=1.0,
+        payload={
+            "query": "Kernel v3 retrieval",
+            "goal_id": "goal-live-budget-host-cost",
+            "max_fetches": 1,
+            "network_fetch_count": 999,
+        },
+        reasons=["network-capable retrieval"],
+        side_effect_class="read",
+    )
+    loop = LoopControllerV3(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=FakePlanner([action]),
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("retrieval executed"),
+        max_network_fetches=2,
+    )
+
+    result = loop.run("retrieve live evidence")
+
+    assert result.status == "completed"
+    assert fetch_provider.called is True
+    assert not journal.records(task_id=result.task_id, kind="guard")
+
+
 def _operator(*, body: str) -> RetrievalOperator:
     return RetrievalOperator(
         search_provider=FakeSearchProvider(

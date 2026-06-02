@@ -437,6 +437,120 @@ def test_phase103_model_planner_uses_sec_filing_continuation_hint_for_next_loop(
     assert result.final_answer["citation_refs"]
 
 
+def test_phase103_model_planner_gets_sec_structured_hint_from_ticker_directory() -> None:
+    query = "NVDA fundamentals"
+    directory_query = "NVDA SEC ticker CIK directory"
+    structured_query = "NVDA SEC CIK 0001045810 companyfacts submissions fundamentals"
+    journal = JournalStore.in_memory()
+    semantic = _finance_semantic_intake(query)
+    semantic["intents"][0]["metadata"] = {
+        "capability_args": {
+            "retrieval.run": [
+                {
+                    "goal_id": "goal-plan-1-1",
+                    "query": directory_query,
+                    "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+                },
+                {
+                    "goal_id": "goal-plan-1-2",
+                    "query": structured_query,
+                    "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+                },
+            ]
+        }
+    }
+    hinted_payload = {
+        "goal_id": "goal-plan-1-2",
+        "query": structured_query,
+        "max_fetches": 5,
+        "metadata": {
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "ticker": "NVDA",
+            "sec_cik": "0001045810",
+            "source_authority_requirement": "primary",
+            "search_strategy": "structured",
+        },
+    }
+    fabric = fake_fabric(
+        {
+            "semantic.intake": semantic,
+            "planner.propose": [
+                {
+                    "action_id": "act-model-sec-directory",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "retrieve SEC ticker directory first",
+                    "payload": {
+                        "goal_id": "goal-plan-1-1",
+                        "query": directory_query,
+                        "max_fetches": 1,
+                        "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+                    },
+                    "score": 0.9,
+                    "reasons": ["need CIK before companyfacts"],
+                    "side_effect_class": "read",
+                },
+                {
+                    "action_id": "act-model-sec-structured",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "use host SEC structured source hint",
+                    "payload": hinted_payload,
+                    "score": 0.94,
+                    "reasons": ["context exposed suggested_sec_structured_sources"],
+                    "side_effect_class": "read",
+                },
+            ],
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([SecEdgarSearchProvider()]),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/files/company_tickers_exchange.json": (
+                    '{"0":{"cik_str":1045810,"ticker":"NVDA","title":"NVIDIA CORP"}}'
+                ),
+                "https://data.sec.gov/submissions/CIK0001045810.json": (
+                    "NVIDIA SEC submissions metadata includes 10-K and 10-Q reports."
+                ),
+                "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json": (
+                    "NVIDIA SEC companyfacts fundamentals revenue evidence with filing provenance."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(
+        query,
+        mode="auto",
+        semantic_mode="model",
+        planner_mode="model",
+    )
+
+    assert result.status == "completed"
+    contexts = journal.records(task_id=result.task_id, kind="context")
+    structured_hints = contexts[1].data["state"]["agent_replan_hints"]["retrieval"]["suggested_sec_structured_sources"]
+    assert structured_hints
+    assert structured_hints[0]["ticker"] == "NVDA"
+    assert structured_hints[0]["sec_cik"] == "0001045810"
+    assert structured_hints[0]["suggested_payload"]["metadata"] == hinted_payload["metadata"]
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["payload"]["goal_id"] for record in actions] == ["goal-plan-1-1", "goal-plan-1-2"]
+    assert actions[1].data["payload"]["metadata"] == hinted_payload["metadata"]
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")
+    ]
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json" in fetch_uris
+    assert result.final_answer["citation_refs"]
+
+
 def _finance_semantic_intake(query: str) -> dict:
     return {
         "primary_intent": "finance_fundamentals",

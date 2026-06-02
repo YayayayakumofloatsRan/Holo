@@ -146,6 +146,11 @@ Kernel v3 currently contains the infrastructure for:
   repeating, suggested next search strategies/query hints, ranked
   source-directory targets for profiled research, and `do_not_finalize_until`
   rules for the next model planner call;
+- planner-visible `retrieval_capability_state`, which exposes whether
+  `retrieval.run` is registered, which search/fetch provider ids are configured,
+  whether live fetch is available, whether network budget exists, and which
+  profile-aware structured providers are visible. This is model input for
+  planning, while PolicyGate and loop guards still own execution;
 - dynamic planner retries for planned retrieval subgoals: semantic task plans
   can declare multiple `goal-plan-*` retrieval subgoals, and
   `agent_replan_hints` reports incomplete subgoal ids even when the latest
@@ -171,6 +176,12 @@ Kernel v3 currently contains the infrastructure for:
   ticker, CIK, or injected ticker-to-CIK map, Holo can generate official SEC
   submissions, companyfacts, EDGAR search, browse, and ticker-directory
   candidates without doing network search itself.
+- SEC ticker-CIK continuation hints for finance fundamentals. When an earlier
+  retrieval step extracts a ticker/CIK pair from the official SEC ticker
+  directory, the next planner context includes a host-built
+  `suggested_sec_structured_sources` payload for SEC submissions/companyfacts
+  retrieval. Raw fetched bodies stay in artifacts; the hint is derived from
+  extracted spans and still requires a normal `retrieval.run` proposal.
 - SEC Archives filing-document candidate generation. When a host/model
   retrieval payload carries CIK plus accession number and optional
   `primaryDocument`, Holo derives the official primary filing document,
@@ -199,6 +210,14 @@ Kernel v3 currently contains the infrastructure for:
 - Non-US official disclosure entry points for finance retrieval, including
   CNINFO, HKEX, ASX, EDINET, and SGX source-query templates. These remain
   candidate source URLs; network fetch still requires explicit host allowlists.
+- empty retrieval observations with zero evidence and zero citations no longer
+  count as loop progress. The failed/empty fact is journaled and re-enters the
+  workloop, but progress, repetition, evidence sufficiency, and termination are
+  still evaluated before the agent answers or fails.
+- network retrieval cost is host-owned. `LoopControllerV3` uses the tool
+  manifest's `network_fetch_cost_field` and default cost when checking network
+  guards, so model-supplied payload fields such as `network_fetch_count` cannot
+  exaggerate or bypass the configured budget.
 
 Live model and live retrieval surfaces are opt-in. They are not default unit-test
 dependencies.

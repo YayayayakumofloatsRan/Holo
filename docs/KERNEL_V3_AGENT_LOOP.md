@@ -357,6 +357,15 @@ structured provider to the official Archives filing document. The model still
 only proposes that payload; the host validates, fetches, stores artifacts, and
 decides whether the evidence is enough.
 
+If the first SEC step only finds the official ticker directory rather than a
+filing body, the replan packet may instead include
+`retrieval.suggested_sec_structured_sources`. This is derived from extracted
+directory spans such as `ticker=NVDA` and `cik_str=1045810`. The hint carries a
+normal suggested `retrieval.run` payload with `ticker`, padded `sec_cik`, primary
+source authority, and `search_strategy="structured"` so the next planner packet
+can move to SEC submissions/companyfacts without inventing SEC URL rules. The
+hint is not executable by itself and does not include raw fetched bodies.
+
 For macro-data loops, `retrieval.suggested_macro_series` follows the same
 boundary. It is derived from extraction spans such as `series_id=CPIAUCSL`, then
 offers a normal `retrieval.run` payload carrying `fred_series_id`, primary
@@ -625,6 +634,12 @@ are still finalized through the workloop evaluator. The loop records progress,
 repetition, evidence sufficiency, and a termination decision before producing
 the result, so a stalled tool or exhausted budget becomes normal loop evidence
 rather than an unreviewed controller abort.
+An empty retrieval report is also not treated as meaningful progress merely
+because it produced a report artifact. If the latest `retrieval.run`
+observation has zero evidence and zero citations, the workloop records the
+failure/diagnostic but suppresses `new_observation`, `new_artifact`, and
+`narrowed_scope` progress signals for that step. This prevents an agent from
+spending a long loop pretending that repeated empty searches are progress.
 Tool executors are also exception-contained at the registry boundary. If a
 tool raises, including a timeout from a tool-specific timeout implementation,
 `ToolRegistry` returns a `failed` tool observation with the error type instead
@@ -648,6 +663,18 @@ a `4096` network-fetch ceiling by default, and the finance profile's default
 `deep` depth expands to `128` queries, `5000` sources, `2048` fetches, and `64`
 spans per document. These values are ceilings; ranking, provider availability,
 evidence sufficiency, repetition checks, and loop guards determine actual work.
+Planner context also exposes `state.retrieval_capability_state`. It includes
+the configured search/fetch provider ids, provider capability diagnostics,
+whether live fetch is available, whether network budget remains, and whether
+profile-aware structured search providers are present. The model can use this
+to avoid proposing unavailable live retrieval, but the host still validates the
+action and budgets before execution.
+Network-budget accounting is also manifest-owned. For `retrieval.run`, the tool
+manifest declares `network_fetch_cost_field=max_fetches`; the loop uses that
+field, or the manifest default when it is absent, before execution. Payload
+fields such as `network_fetch_count` are still journal-visible diagnostics, but
+they cannot override the manifest's cost rule. This prevents a live model packet
+from blocking itself or bypassing a guard by inventing a cost number.
 
 The finance source directory is not a content database. It is a structured map
 of where an agent should search for fundamentals evidence: SEC filings and
@@ -926,6 +953,52 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_kernel_v3*.py -q
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m compileall -q kernel_v3
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_public_release_hygiene.py -q -p no:cacheprovider
 git diff --check
+```
+
+## Iteration 2026-06-02
+
+Agent-loop retrieval hardening completed in this iteration:
+
+- exposed `retrieval_capability_state` in planner context so live models can see
+  configured search/fetch providers, live-fetch availability, network budget,
+  and finance structured-search capability before proposing `retrieval.run`;
+- changed the default finance-profile retrieval search surface from a purely
+  unconfigured search provider to a bounded structured fallback chain containing
+  direct URL, SEC EDGAR structured search, source-query templates, and the
+  curated source directory. Fetch still remains host-configured and
+  allowlisted;
+- added SEC ticker-directory continuation hints:
+  `agent_replan_hints.retrieval.suggested_sec_structured_sources` can derive a
+  padded CIK from extracted SEC directory spans and offer the next planner
+  packet a normal SEC companyfacts/submissions payload;
+- stopped counting empty retrieval reports with zero evidence and zero
+  citations as loop progress;
+- made network-fetch cost calculation manifest-owned, so `retrieval.run` costs
+  are derived from the manifest-declared `max_fetches` field rather than a
+  model/diagnostic `network_fetch_count` payload value;
+- converted loop-guard retrieval exhaustion into a normal workloop failure
+  report with a more accurate next action:
+  `increase_network_budget_or_enable_live_retrieval`;
+- kept `LoopControllerV3` tool-name-agnostic and kept all execution behind
+  PolicyGate and ToolRegistry.
+
+Validation used:
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase61_workloop.py \
+  tests/test_kernel_v3_phase87_research_profile_runtime.py \
+  tests/test_kernel_v3_phase103_model_retrieval_feedback.py \
+  tests/test_kernel_v3_phase98_sec_edgar_provider.py \
+  tests/test_kernel_v3_phase100_issuer_identity.py \
+  tests/test_kernel_v3_phase92_agent_live_retrieval_permission.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3*.py
+env HOLO_V3_LIVE_MODEL=1 \
+  .venv/bin/python -m kernel_v3.cli model-smoke --provider deepseek \
+  --generation-mode auto --latency-target balanced \
+  --max-output-tokens provider --temperature 0.0
+timeout 360 env HOLO_V3_LIVE_FINANCE=1 HOLO_V3_LIVE_MODEL=1 \
+  .venv/bin/python -m pytest -q tests/live/test_kernel_v3_phase101_live_finance_retrieval.py
 ```
 
 ## Iteration 2026-06-01

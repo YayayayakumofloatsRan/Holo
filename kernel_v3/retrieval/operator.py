@@ -487,6 +487,8 @@ def register_retrieval_tool(
                 "max_fetches": "int optional",
                 "max_spans_per_document": "int optional",
                 "metadata": "object optional",
+                "_provider_capabilities": operator.provider_capabilities(),
+                "_network_access": operator.network_access,
                 "network_fetch_cost_field": "max_fetches",
                 "default_network_fetch_cost": 3,
             },
