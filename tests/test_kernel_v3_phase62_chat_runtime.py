@@ -1064,6 +1064,90 @@ def test_phase62_cli_chat_online_mode_uses_model_backed_processors(tmp_path: Pat
     assert any(record.kind == "processor_request" and record.data.get("task_type") == "chat.route" for record in JournalStore(journal, index_path=index).records())
 
 
+def test_phase62_successful_semantic_response_is_not_converted_to_generic_pending_input(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    response_text = "语言的边界确实会影响思想的边界，但这不等于沉默本身没有意义。"
+    monkeypatch.setattr(
+        cli,
+        "_live_processor_fabric",
+        lambda _provider, journal, **_kwargs: fake_fabric(
+            {
+                "chat.route": {
+                    "route": "new_task",
+                    "command": None,
+                    "target_task_id": None,
+                    "confidence": 0.95,
+                    "reasons": ["semantic_discussion"],
+                },
+                "semantic.intake": {
+                    "primary_intent": "philosophical_discussion",
+                    "suggested_mode": "semantic_answer",
+                    "compound": False,
+                    "requires_clarification": False,
+                    "intents": [
+                        {
+                            "kind": "philosophical_discussion",
+                            "text": "语言极限与维特根斯坦",
+                            "sequence_index": 1,
+                            "required_capabilities": [],
+                            "risk": "none",
+                            "status": "ready",
+                            "metadata": {},
+                        }
+                    ],
+                    "blocked_capabilities": [],
+                    "warnings": [],
+                    "response_hint": None,
+                    "clarification_question": None,
+                },
+                "planner.propose": {
+                    "action_id": "act-philosophy-response",
+                    "kind": "respond",
+                    "name": None,
+                    "description": "continue philosophical discussion",
+                    "payload": {"text": response_text},
+                    "score": 0.92,
+                    "reasons": ["semantic answer is available"],
+                    "side_effect_class": "none",
+                },
+                "evaluator.assess": {
+                    "status": "needs_user_input",
+                    "answer": None,
+                    "stop_reason": "needs_user_input",
+                    "missing_evidence": ["clarification_required"],
+                },
+            },
+            journal=journal,
+        ),
+    )
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--thread",
+            "cli-philosophy-thread",
+            "--once",
+            "语言是存在着它固有的极限的",
+            "--online",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    decisions = JournalStore(journal, index_path=index).records(task_id=payload["task_id"], kind="termination_decision")
+    assert status == 0
+    assert payload["status"] == "completed"
+    assert payload["pending_question"] is None
+    assert payload["answer"] == response_text
+    assert decisions[-1].data["decision"] == "final_answer"
+    assert decisions[-1].data["reason"] == "successful_response_overrode_spurious_user_input"
+
+
 def test_phase62_human_console_activity_renders_processor_action_and_termination():
     journal = JournalStore.in_memory()
     result = AgentRuntime(journal=journal).run("explain Holo briefly", mode="direct")

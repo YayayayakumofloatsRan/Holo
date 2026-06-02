@@ -182,6 +182,7 @@ class WorkloopEvaluator:
         )
         decision = decide_termination(
             feedback=base,
+            observation=observation,
             progress=progress,
             repetition=repetition,
             evidence=evidence,
@@ -521,6 +522,7 @@ def assess_evidence_sufficiency(
 def decide_termination(
     *,
     feedback: Feedback,
+    observation: Observation | None = None,
     progress: ProgressAssessment,
     repetition: RepetitionSignal,
     evidence: EvidenceSufficiency,
@@ -564,8 +566,13 @@ def decide_termination(
             decision = "continue"
             reason = "evaluator_continue"
     elif feedback.status == "needs_user_input":
-        decision = "ask_user"
-        reason = "user_input_required"
+        if _successful_response_can_finalize(observation=observation, evidence=evidence, recipe=recipe):
+            decision = "final_answer"
+            reason = "successful_response_overrode_spurious_user_input"
+            override = True
+        else:
+            decision = "ask_user"
+            reason = "user_input_required"
     elif feedback.status == "blocked":
         if not _feedback_indicates_host_block(feedback) and not evidence.sufficient and recipe.allowed_tools:
             decision = "continue"
@@ -626,6 +633,25 @@ def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: Repet
 def _feedback_requires_workspace_file_read(feedback: Feedback) -> bool:
     normalized = {str(item).lower().replace("_", " ") for item in feedback.missing_evidence}
     return "file.read observation" in normalized or "file read observation" in normalized
+
+
+def _successful_response_can_finalize(
+    *,
+    observation: Observation | None,
+    evidence: EvidenceSufficiency,
+    recipe: TaskRecipe,
+) -> bool:
+    if observation is None:
+        return False
+    if observation.source != "respond" or observation.status != "ok":
+        return False
+    if recipe.mode not in {"direct_answer", "semantic_answer"}:
+        return False
+    if recipe.citations_required or not evidence.sufficient:
+        return False
+    content = observation.content
+    text = content.get("text") if isinstance(content, dict) else None
+    return isinstance(text, str) and bool(text.strip())
 
 
 def _feedback_indicates_host_block(feedback: Feedback) -> bool:

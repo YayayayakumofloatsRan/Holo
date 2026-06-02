@@ -258,6 +258,10 @@ answer string or null, stop_reason string or null, missing_evidence string array
 Example:
 {"status":"continue","answer":null,"stop_reason":null,"missing_evidence":["official source citation"]}
 Evaluate whether the latest observation is enough and whether the host should continue.
+If the latest observation is a successful respond with user-visible text and no required evidence/tool work remains,
+return final_answer_ready. Return needs_user_input only when the latest observation explicitly asks the user,
+a critical missing argument prevents any safe next action, or host context marks user input as required.
+Do not turn philosophical discussion, casual chat, roleplay, or a completed direct response into a generic clarification request.
 For any user-visible answer text, match the user's language when it is clear.
 If a response_language preference is present in context, use it as the default when the user's requested language is unclear or mixed."""
 

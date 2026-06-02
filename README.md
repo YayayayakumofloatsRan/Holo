@@ -355,6 +355,10 @@ Model planner/provider failures are internal runtime failures, not user
 clarifications. AgentRuntime journals the failed processor packet and returns a
 `FailureReport` with missing evidence, attempted actions, and a suggested next
 action instead of creating a fake pending `needs_user_input` prompt.
+Likewise, a successful direct/semantic `respond` with user-visible text is a
+valid terminal answer when no citation/tool requirement remains; the workloop
+does not turn that completed response into a generic "please provide more
+information" prompt merely because the evaluator suggested clarification.
 
 `model-packet` is the no-network way to inspect the exact provider envelope:
 

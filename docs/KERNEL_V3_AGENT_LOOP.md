@@ -646,6 +646,9 @@ state.
 The agent stops when one of these host-visible conditions is reached:
 
 - sufficient evidence exists and evaluator feedback is terminal
+- a successful direct/semantic `respond` produced user-visible text and no
+  citation/tool requirement remains, even if evaluator feedback mistakenly asks
+  for generic clarification
 - citations are required but missing and no allowed action can repair them
 - the same action/query/path/observation/missing-evidence/failure repeats
 - consecutive steps make no host-derived progress
