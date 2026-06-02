@@ -56,6 +56,7 @@ SAFE_SEMANTIC_CAPABILITIES = frozenset(
         "project.status",
         "workflow.automation.plan",
         "system.time",
+        "system.environment",
     }
 )
 
@@ -1216,9 +1217,10 @@ def _base_capabilities() -> list[CapabilitySpec]:
         CapabilitySpec(
             capability_id="system.environment",
             family="system",
-            status="planned",
-            description="Safe environment diagnostics with secret redaction.",
+            status="enabled",
+            description="Safe run/thread/context state already exposed by the host, with secrets redacted.",
             side_effect_class="read",
+            enabled_by_default=True,
         ),
         CapabilitySpec(
             capability_id="system.process",

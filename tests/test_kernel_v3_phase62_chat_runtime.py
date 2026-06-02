@@ -601,6 +601,76 @@ def test_phase62_cli_chat_deepseek_key_enables_default_live_without_holo_gate(tm
     assert payload["answer"] == "key-enabled-live-response"
 
 
+def test_phase62_cli_agent_deepseek_key_enables_online_without_holo_gate(tmp_path: Path, capsys, monkeypatch):
+    monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-present")
+    monkeypatch.setattr(
+        cli,
+        "_live_processor_fabric",
+        lambda _provider, journal, **_kwargs: fake_fabric(
+            {
+                "semantic.intake": {
+                    "primary_intent": "direct_answer",
+                    "suggested_mode": "direct_answer",
+                    "compound": False,
+                    "requires_clarification": False,
+                    "intents": [
+                        {
+                            "kind": "direct_answer",
+                            "text": "hello",
+                            "sequence_index": 1,
+                            "required_capabilities": [],
+                            "risk": "none",
+                            "status": "ready",
+                            "metadata": {},
+                        }
+                    ],
+                    "blocked_capabilities": [],
+                    "warnings": [],
+                    "response_hint": None,
+                    "clarification_question": None,
+                },
+                "planner.propose": {
+                    "action_id": "act-agent-key-live",
+                    "kind": "respond",
+                    "name": None,
+                    "description": "key-enabled agent online answer",
+                    "payload": {"text": "agent-key-enabled-live-response"},
+                    "score": 0.95,
+                    "reasons": ["key_enabled_agent_live"],
+                    "side_effect_class": "none",
+                },
+                "evaluator.assess": {
+                    "status": "final_answer_ready",
+                    "answer": None,
+                    "stop_reason": "completed",
+                    "missing_evidence": [],
+                },
+            },
+            journal=journal,
+        ),
+    )
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "agent",
+            "hello",
+            "--online",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 0
+    assert payload["status"] == "completed"
+    assert payload["final_answer"]["answer"] == "agent-key-enabled-live-response"
+
+
 def test_phase62_cli_chat_online_mode_uses_model_backed_processors(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
     model_action_text = "online-model-smoke-response"

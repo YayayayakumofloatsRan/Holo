@@ -102,14 +102,18 @@ preview/hash/length metadata while the raw body belongs to the artifact/write
 path. The write recipe may read/search first, then writes once and stops after
 the host observes the write.
 
-System-state tools are a separate capability family from workspace. For
-example, a live semantic processor may return a packet with
-`suggested_mode="system_answer"`, `required_capabilities=["system.time"]`, and
-`metadata.capability_args={"system.time":{"timezone":"UTC"}}`. The host turns
+System-state capabilities are separate from workspace. Executable system-state
+tools remain narrow: for example, a live semantic processor may return a packet
+with `suggested_mode="system_answer"`,
+`required_capabilities=["system.time"]`, and
+`metadata.capability_args={"system.time":{"timezone":"UTC"}}`; the host turns
 that into a `system.time` tool call, journals a `system_time` observation,
 counts it as `new_system_observation`, and finalizes from that observation.
-This makes host state explicit without giving the model shell access or hidden
-environment reads.
+Safe context state that the host already exposes, such as thread/task/run
+identity, is represented as `system.environment`. It is a safe semantic
+capability, not a tool, and it must not be misrouted to `system.time`.
+`system.process`, shell, device control, credentials, and hidden environment
+reads remain blocked or future explicit tools.
 
 ## Context Redaction Boundary
 
@@ -648,16 +652,18 @@ same Phase5 execution modes used by `holo-v3 agent`:
 - `semantic_mode`
 - `turn_router_mode`
 
-The default remains fully offline fake mode. CLI model modes for
-`holo-v3 agent`, `holo-v3 chat`, and `holo-v3 resident run/run-once` are gated
-by `HOLO_V3_LIVE_MODEL=1`, then use the configured provider fabric. Operators
-can either enable individual model-backed pieces with `--planner model`,
-`--semantic-intake model`, `--turn-router model`, and related flags, or use
-`--online` / `--live-model` to enable the model-backed semantic stack for an
-interactive run. This lets a resident worker use model-backed semantic intake,
-turn routing, or planner/evaluator/synthesizer behavior without letting the
-worker execute tools directly, bypass PolicyGate, or become a transport-level
-decision maker.
+Offline fake mode remains explicit for tests and operator diagnostics. CLI
+model modes for `holo-v3 agent`, `holo-v3 chat`, and
+`holo-v3 resident run/run-once` use the configured provider fabric when
+`DEEPSEEK_API_KEY` is present; `HOLO_V3_LIVE_MODEL=1` remains a compatible
+explicit live-smoke marker, but the product CLI does not require it when the
+provider key exists. Operators can either enable individual model-backed pieces
+with `--planner model`, `--semantic-intake model`, `--turn-router model`, and
+related flags, or use `--online` / `--live-model` to enable the model-backed
+semantic stack for an interactive run. This lets a resident worker use
+model-backed semantic intake, turn routing, or planner/evaluator/synthesizer
+behavior without letting the worker execute tools directly, bypass PolicyGate,
+or become a transport-level decision maker.
 
 `holo-v3 model-packet` renders the exact OpenAI-compatible request envelope the
 host would send for a processor task without performing a network call. It

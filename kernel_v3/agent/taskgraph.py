@@ -29,7 +29,9 @@ _RETRIEVAL_CAPABILITIES = {
 }
 _WORKSPACE_READ_CAPABILITIES = {"workspace.search", "file.read", "workspace:read"}
 _WORKSPACE_WRITE_CAPABILITIES = {"workspace.write", "workspace:write"}
-_SYSTEM_CAPABILITIES = {"system.time", "system.environment", "system.process"}
+_SYSTEM_TOOL_CAPABILITIES = {"system.time"}
+_SYSTEM_HOST_CAPABILITIES = {"system.environment"}
+_SYSTEM_CAPABILITIES = _SYSTEM_TOOL_CAPABILITIES | _SYSTEM_HOST_CAPABILITIES | {"system.process"}
 _EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.search", "file.read", "workspace.write", "system.time"}
 
 
@@ -311,8 +313,10 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         "clarify_first",
     }:
         return requested
-    if _has_any(capabilities, _SYSTEM_CAPABILITIES):
+    if _has_any(capabilities, _SYSTEM_TOOL_CAPABILITIES):
         return "system_answer"
+    if _has_any(capabilities, _SYSTEM_HOST_CAPABILITIES):
+        return "semantic_answer"
     if _has_any(capabilities, _RETRIEVAL_CAPABILITIES):
         return "retrieval_answer"
     if _has_any(capabilities, _WORKSPACE_WRITE_CAPABILITIES):
@@ -348,7 +352,7 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
         return "workspace.search"
     if "file.read" in capabilities:
         return "file.read"
-    if capabilities & _SYSTEM_CAPABILITIES:
+    if capabilities & _SYSTEM_TOOL_CAPABILITIES:
         return "system.time"
     if node.kind in {"retrieval_research", "web_research", "market_news_research", "market_data_research", "macro_data_research"}:
         return "retrieval.run"
@@ -468,7 +472,7 @@ def _is_non_tool_semantic_node(capabilities: list[str]) -> bool:
         _RETRIEVAL_CAPABILITIES
         | _WORKSPACE_READ_CAPABILITIES
         | _WORKSPACE_WRITE_CAPABILITIES
-        | _SYSTEM_CAPABILITIES
+        | _SYSTEM_TOOL_CAPABILITIES
     )
     return not any(capability in tool_capabilities for capability in capabilities)
 

@@ -1664,6 +1664,7 @@ def test_phase73_cli_resident_requeue_dead_letter_and_journals(tmp_path: Path, c
 
 def test_phase73_cli_resident_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
     resident_db = tmp_path / "resident.sqlite"

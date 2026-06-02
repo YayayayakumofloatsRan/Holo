@@ -62,6 +62,9 @@ Kernel v3 currently contains the infrastructure for:
   file bodies;
 - non-workspace system-state flows such as `system.time`, where the model
   proposes a host capability and the host reads the current time;
+- safe host context state such as thread/task/run identity through
+  `system.environment`; this is model-visible context for response planning, not
+  shell access, process inspection, or a time-tool alias;
 - semantic work plans that can expand one model-proposed capability into many
   ordered tool actions, including 10+ iteration workspace loops;
 - semantic research plans that can expand one model-proposed `retrieval.run`
@@ -271,11 +274,16 @@ in `/threads` before the first user turn.
 Console colors live in `kernel_v3/chat/theme.py`, separate from command
 routing and chat runtime logic.
 
-Live model calls are gated:
+`model-packet` is the no-network way to inspect the exact provider envelope:
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 holo-v3 model-packet --provider deepseek --task-type semantic.intake --goal "search today's news" --show-prompt
+holo-v3 model-packet --provider deepseek --task-type semantic.intake --goal "search today's news" --show-prompt
 ```
+
+Live `chat`, `agent --online`, and resident model runs use
+`DEEPSEEK_API_KEY` from the environment. `HOLO_V3_LIVE_MODEL=1` remains
+accepted for explicit live-smoke workflows, but it is not required when the
+provider key is already configured.
 
 `--mode semantic` is the broad safe non-tool recipe for roleplay, professional
 framing, strategy, project planning, communication drafting, product/risk
@@ -288,7 +296,7 @@ does not clearly request another language. Override this per run with
 `--response-language en` or set `HOLO_V3_RESPONSE_LANGUAGE=en`.
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 holo-v3 agent "read README.md and summarize it" --online --response-language zh
+holo-v3 agent "read README.md and summarize it" --online --response-language zh
 ```
 
 Live agent/chat/resident runs expose both input/context and output-generation

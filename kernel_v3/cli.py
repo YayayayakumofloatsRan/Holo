@@ -471,8 +471,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "agent":
-        if _agent_uses_live_model(args) and os.environ.get("HOLO_V3_LIVE_MODEL") != "1":
-            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+        live_block = _chat_live_model_block(args)
+        if live_block is not None:
+            print(json.dumps(live_block, sort_keys=True))
             return 1
         live_retrieval = _live_retrieval_config_for_args(args)
         if isinstance(live_retrieval, dict):
@@ -620,12 +621,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload.get("status") != "failed" else 1
 
     if args.command == "resident":
-        if (
-            getattr(args, "resident_command", None) in {"run", "run-once"}
-            and _agent_uses_live_model(args)
-            and os.environ.get("HOLO_V3_LIVE_MODEL") != "1"
-        ):
-            print(json.dumps({"status": "blocked", "reason": "live_model_not_enabled"}, sort_keys=True))
+        live_block = _chat_live_model_block(args) if getattr(args, "resident_command", None) in {"run", "run-once"} else None
+        if live_block is not None:
+            print(json.dumps(live_block, sort_keys=True))
             return 1
         payload = _resident_command(args, journal)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))

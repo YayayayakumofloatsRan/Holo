@@ -969,6 +969,78 @@ def test_phase94_agent_executes_system_time_as_non_workspace_capability():
     assert "UTC" in result.final_answer["answer"]
 
 
+def test_phase94_system_environment_is_safe_context_not_time_tool():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "system_state_query",
+                "suggested_mode": "semantic_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "system_state_query",
+                        "text": "current thread information",
+                        "sequence_index": 1,
+                        "required_capabilities": ["system.environment"],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {
+                            "domain": "system_observation",
+                            "resource": "thread_information",
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            },
+            "planner.propose": {
+                "action_id": "act-thread-state",
+                "kind": "respond",
+                "name": None,
+                "description": "answer from host-provided thread context",
+                "payload": {"text": "当前所在 thread 是 thread-env。"},
+                "score": 0.9,
+                "reasons": ["thread_id is already present in host context"],
+                "side_effect_class": "none",
+            },
+            "evaluator.assess": {
+                "status": "final_answer_ready",
+                "answer": "当前所在 thread 是 thread-env。",
+                "stop_reason": "task_completed",
+                "missing_evidence": [],
+            },
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "说明你现在在哪个 thread",
+        thread_id="thread-env",
+        mode="auto",
+        semantic_mode="model",
+        planner_mode="model",
+        evaluator_mode="model",
+    )
+
+    assert result.status == "completed"
+    assert result.mode == "semantic_answer"
+    assert result.final_answer is not None
+    assert result.final_answer["answer"] == "当前所在 thread 是 thread-env。"
+    graph = journal.records(task_id=result.task_id, kind="semantic_task_graph")[0].data
+    assert graph["validation"]["status"] == "ready"
+    assert graph["validation"]["blocked_capabilities"] == []
+    plan = journal.records(task_id=result.task_id, kind="semantic_task_plan")[0].data
+    assert plan["selected_mode"] == "semantic_answer"
+    assert plan["steps"][0]["tool_name"] is None
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [(record.data["kind"], record.data["name"]) for record in actions] == [("respond", None)]
+    assert not journal.records(task_id=result.task_id, kind="system_time")
+
+
 def test_phase94_agent_can_execute_more_than_ten_planned_loop_actions(tmp_path):
     for index in range(12):
         path = tmp_path / "docs" / f"part-{index:02d}.md"
