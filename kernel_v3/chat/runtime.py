@@ -1004,12 +1004,12 @@ class ChatRuntime:
             thread_id=turn.thread_id,
             turn_id=turn.turn_id,
             route=decision.route,
-            task_id=state.active_task_id,
+            task_id=None,
             run_id=None,
             answer=_summary_text(summary),
             final_answer=None,
             failure_report=None,
-            pending_question=state.pending_question,
+            pending_question=None,
             command_result=None,
             summary=summary.to_dict(),
             trace_refs=[summary.summary_id],
@@ -1987,20 +1987,20 @@ def _status_text(state: ThreadState) -> str:
 
 
 def _summary_text(summary: ThreadSummary) -> str:
-    parts = [f"Thread {summary.thread_id}"]
+    parts = [f"线程 {summary.thread_id} 的最近记录："]
     if summary.active_task_id:
-        parts.append(f"active task: {summary.active_task_id}")
+        parts.append(f"当前任务: {summary.active_task_id}")
     if summary.last_result_status:
-        parts.append(f"last status: {summary.last_result_status}")
+        parts.append(f"最近状态: {summary.last_result_status}")
     if summary.pending_question:
-        parts.append(f"pending: {summary.pending_question.get('question')}")
+        parts.append(f"待补充: {summary.pending_question.get('question')}")
     if summary.last_answer_preview:
-        parts.append(f"last answer: {summary.last_answer_preview}")
+        parts.append(f"上一条回答: {summary.last_answer_preview}")
     if summary.last_failure_reason:
-        parts.append(f"last failure: {summary.last_failure_reason}")
+        parts.append(f"最近失败原因: {summary.last_failure_reason}")
     if summary.recent_turns:
         previews = [str(turn.get("text_preview", "")) for turn in summary.recent_turns if turn.get("text_preview")]
-        parts.append("recent turns: " + " | ".join(previews))
+        parts.append("最近输入: " + " | ".join(previews))
     return "\n".join(parts)
 
 

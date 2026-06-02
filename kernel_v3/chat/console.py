@@ -95,7 +95,7 @@ def handle_chat_local_command(
     parts = text.split()
     command = parts[0].lower()
     args = parts[1:]
-    if command not in {"/thread", "/threads", "/color", "/json", "/quit", "/exit", "/help", "/?"}:
+    if command not in {"/thread", "/threads", "/history", "/color", "/json", "/quit", "/exit", "/help", "/?"}:
         return None
     status = "ok"
     result: JsonObject
@@ -114,6 +114,7 @@ def handle_chat_local_command(
                 "/thread switch <thread_id>",
                 "/thread new <thread_id>",
                 "/threads",
+                "/history [limit]",
                 "/json on|off",
                 "/color on|off",
                 "/quit",
@@ -123,6 +124,13 @@ def handle_chat_local_command(
     elif command == "/threads":
         threads = known_chat_threads(runtime)
         result = {"current_thread": thread_id, "threads": threads}
+    elif command == "/history":
+        limit = parse_history_limit(args, default=12)
+        if limit is None:
+            status = "failed"
+            result = {"error": "invalid_history_limit", "usage": "/history [limit]"}
+        else:
+            result = {"current_thread": thread_id, "limit": limit, "history": thread_history(runtime, thread_id, limit=limit)}
     elif command == "/thread":
         if args and args[0].lower() in {"list", "ls", "threads"}:
             threads = known_chat_threads(runtime)
@@ -235,7 +243,7 @@ def stream_is_tty(stream: object) -> bool:
 
 def chat_banner(thread_id: str, *, color: bool) -> str:
     title = style("Holo Kernel v3 chat", "bold_cyan", color=color)
-    hint = "Commands: /thread new <id>, /thread switch <id>, /threads, /json on, /color off, /quit"
+    hint = "Commands: /thread new <id>, /thread switch <id>, /threads, /history, /json on, /color off, /quit"
     return f"{title}\n{style('Thread', 'dim', color=color)}: {thread_id}\n{style(hint, 'dim', color=color)}"
 
 
@@ -262,6 +270,21 @@ def print_chat_local_result(payload: JsonObject, *, output_mode: str, color: boo
                     )
         else:
             lines.append("No chat threads recorded yet.")
+    elif isinstance(result, dict) and "history" in result:
+        lines.append(f"thread: {result.get('current_thread')}")
+        history = result.get("history")
+        if isinstance(history, list) and history:
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or "event")
+                label = style(role, "cyan" if role == "user" else "green", color=color)
+                meta = str(item.get("meta") or "")
+                text = str(item.get("text") or "")
+                suffix = f" {style(meta, 'dim', color=color)}" if meta else ""
+                lines.append(f"{item.get('index')}. {label}{suffix}: {text}")
+        else:
+            lines.append("No history for this thread yet.")
     elif isinstance(result, dict) and "current_thread" in result:
         lines.append(f"thread: {result['current_thread']}")
         if "created" in result:
@@ -408,6 +431,70 @@ def chat_answer_text(data: JsonObject) -> str | None:
         if isinstance(preview, str) and preview:
             return preview
     return None
+
+
+def parse_history_limit(args: list[str], *, default: int) -> int | None:
+    if not args:
+        return default
+    try:
+        value = int(args[0])
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return min(value, 100)
+
+
+def thread_history(runtime: ChatRuntime, thread_id: str, *, limit: int) -> list[JsonObject]:
+    entries: list[JsonObject] = []
+    for record in runtime.journal.records():
+        data = record.data if isinstance(record.data, dict) else {}
+        if data.get("thread_id") != thread_id:
+            continue
+        if record.kind == "chat_turn":
+            entries.append(
+                {
+                    "record_id": record.record_id,
+                    "recorded_at_ms": record.recorded_at_ms,
+                    "role": str(data.get("role") or "user"),
+                    "text": str(data.get("text") or ""),
+                    "meta": str(data.get("task_id") or ""),
+                }
+            )
+        elif record.kind == "chat_agent_result":
+            text = chat_answer_text(data) or _chat_result_status_text(data)
+            entries.append(
+                {
+                    "record_id": record.record_id,
+                    "recorded_at_ms": record.recorded_at_ms,
+                    "role": "assistant",
+                    "text": text,
+                    "meta": f"status={data.get('status')} route={data.get('route')}",
+                }
+            )
+    recent = entries[-limit:]
+    start = len(entries) - len(recent) + 1
+    return [{**entry, "index": start + offset, "text": preview_history_text(str(entry.get("text") or ""))} for offset, entry in enumerate(recent)]
+
+
+def _chat_result_status_text(data: JsonObject) -> str:
+    failure = data.get("failure_report")
+    if isinstance(failure, dict) and failure.get("reason"):
+        return f"failure: {failure['reason']}"
+    pending = data.get("pending_question")
+    if isinstance(pending, dict) and pending.get("question"):
+        return f"needs input: {pending['question']}"
+    command_result = data.get("command_result")
+    if isinstance(command_result, dict):
+        return json.dumps(command_result, ensure_ascii=False, sort_keys=True)
+    return str(data.get("status") or "completed")
+
+
+def preview_history_text(text: str, *, limit: int = 260) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3] + "..."
 
 
 def known_chat_threads(runtime: ChatRuntime) -> list[JsonObject]:

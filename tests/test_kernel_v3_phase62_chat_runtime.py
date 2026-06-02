@@ -7,7 +7,7 @@ from pathlib import Path
 from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.chat import ChatRuntime
-from kernel_v3.chat.console import render_chat_activity
+from kernel_v3.chat.console import render_chat_activity, render_chat_result
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 
@@ -283,6 +283,39 @@ def test_phase62_thread_summary_includes_last_answer_and_pending_question():
     assert summary.pending_question["question"]
 
 
+def test_phase62_summary_route_is_thread_level_and_does_not_reprint_pending_prompt():
+    journal = JournalStore.in_memory()
+    pending_chat = _chat_with_semantic(journal, [_workspace_read_intake()])
+    pending = pending_chat.receive("read the file", thread_id="thread-summary-route")
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "summary",
+                "command": None,
+                "target_task_id": None,
+                "confidence": 0.96,
+                "reasons": ["user_requested_conversation_recap"],
+            },
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        turn_router_mode="model",
+    )
+
+    result = chat.receive("我们之前说了什么？", thread_id="thread-summary-route")
+    rendered = render_chat_result(result, color=False)
+
+    assert pending.status == "needs_user_input"
+    assert result.route == "summary"
+    assert result.task_id is None
+    assert result.pending_question is None
+    assert "待补充:" in (result.answer or "")
+    assert "needs input:" not in rendered
+
+
 def test_phase62_no_durable_memory_is_written():
     journal = JournalStore.in_memory()
     chat = ChatRuntime(journal=journal, agent_runtime=AgentRuntime(journal=journal))
@@ -477,6 +510,38 @@ def test_phase62_cli_chat_can_create_empty_thread_and_list_it(tmp_path: Path, ca
     assert events[0].data["action"] == "created"
     assert events[0].data["created"] is True
     assert turns == []
+
+
+def test_phase62_cli_chat_history_displays_current_thread_records(tmp_path: Path, capsys, monkeypatch):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello history\n/history 4\n/quit\n"))
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--offline",
+            "--thread",
+            "cli-history",
+            "--output",
+            "human",
+            "--color",
+            "never",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert status == 0
+    assert "/history ok" in output
+    assert "thread: cli-history" in output
+    assert "user" in output
+    assert "assistant" in output
+    assert "hello history" in output
+    assert "status=completed route=new_task" in output
 
 
 def test_phase62_cli_chat_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):

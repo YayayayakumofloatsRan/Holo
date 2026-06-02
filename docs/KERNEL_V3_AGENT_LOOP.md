@@ -39,13 +39,21 @@ Offline/fake execution is an explicit operator choice via
 `holo-v3 chat --offline ...`.
 
 The interactive console has local commands for thread and display management:
-`/thread switch <id>`, `/thread new <id>`, `/threads`, `/json on|off`,
-`/color on|off`, and `/quit`. These commands only select the journal-backed
-thread or change rendering; runtime commands such as `/status`, `/summary`,
-`/trace`, `/plan`, and `/memory` are still handled by `ChatRuntime`.
+`/thread switch <id>`, `/thread new <id>`, `/threads`, `/history [limit]`,
+`/json on|off`, `/color on|off`, and `/quit`. These commands only select the
+journal-backed thread, show current-thread history, or change rendering; runtime
+commands such as `/status`, `/summary`, `/trace`, `/plan`, and `/memory` are
+still handled by `ChatRuntime`.
 Thread creation and switching are journaled as `chat_thread_event` records, so
 empty created threads are inspectable before the first user turn.
 ANSI color choices are centralized in `kernel_v3/chat/theme.py`.
+
+Conversation recap is a thread-level response, not a continuation of the active
+task. A summary can mention pending user input as historical state, but the
+result header does not bind to the old task and the console does not reprint that
+pending question as a new `needs input` prompt. Direct `/history` output reads
+recent `chat_turn` and `chat_agent_result` journal rows and renders them in the
+terminal without invoking a model or starting an agent loop.
 
 ## Adaptive Processor Generation
 

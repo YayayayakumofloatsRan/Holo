@@ -268,7 +268,8 @@ a TTY: colored status headers, compact task/run refs, and the current
 `--once` and piped stdin still emit JSON unless `--output human` is requested.
 Use `/thread switch <id>` or `/thread new <id>` inside the interactive console
 to move between journal-backed chat threads, `/threads` to list known threads,
-`/json on|off` to toggle raw JSON, and `/color on|off` for ANSI styling.
+`/history [limit]` to show recent user/assistant records for the current
+thread, `/json on|off` to toggle raw JSON, and `/color on|off` for ANSI styling.
 `/thread new <id>` writes a `chat_thread_event`, so an empty thread is visible
 in `/threads` before the first user turn.
 Human output prints a `processing...` marker and then a compact `steps` block for
@@ -281,7 +282,10 @@ Pending `ask_user` state does not force the next turn to resume the old task in
 model-routed chat. The route packet receives the pending task summary, but a
 complete standalone request starts a `new_task`; `answer_pending_question` is
 reserved for turns that actually provide the missing slot, approval, rejection,
-or parameter for the pending task.
+or parameter for the pending task. Conversation recap routes are thread-level
+introspection results: they can mention an existing pending task in the recap,
+but they do not bind the response header to that task or reprint it as a fresh
+`needs input` prompt.
 
 `model-packet` is the no-network way to inspect the exact provider envelope:
 
