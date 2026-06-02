@@ -646,6 +646,9 @@ def parse_history_limit(args: list[str], *, default: int) -> int | None:
 
 def thread_history(runtime: ChatRuntime, thread_id: str, *, limit: int) -> list[JsonObject]:
     entries: list[JsonObject] = []
+    transcript_store = getattr(runtime, "thread_store", None)
+    if transcript_store is not None:
+        entries.extend(_thread_history_entries_from_transcript(transcript_store.records(thread_id)))
     for record in runtime.journal.records():
         data = record.data if isinstance(record.data, dict) else {}
         if data.get("thread_id") != thread_id:
@@ -671,6 +674,10 @@ def thread_history(runtime: ChatRuntime, thread_id: str, *, limit: int) -> list[
                     "meta": f"status={data.get('status')} route={data.get('route')}",
                 }
             )
+    entries = sorted(
+        _dedupe_history_entries(entries),
+        key=lambda item: (int(item.get("recorded_at_ms") or 0), str(item.get("record_id") or "")),
+    )
     recent = entries[-limit:]
     start = len(entries) - len(recent) + 1
     return [{**entry, "index": start + offset, "text": preview_history_text(str(entry.get("text") or ""))} for offset, entry in enumerate(recent)]
@@ -697,6 +704,34 @@ def preview_history_text(text: str, *, limit: int = 260) -> str:
 
 
 def known_chat_threads(runtime: ChatRuntime) -> list[JsonObject]:
+    payload_by_thread = {item["thread_id"]: item for item in _known_chat_threads_from_journal(runtime)}
+    transcript_store = getattr(runtime, "thread_store", None)
+    if transcript_store is not None:
+        for item in transcript_store.threads():
+            thread_id = str(item.get("thread_id") or "")
+            if not thread_id:
+                continue
+            state = runtime.build_thread_state(thread_id).to_dict()
+            existing = dict(payload_by_thread.get(thread_id) or {})
+            payload_by_thread[thread_id] = {
+                "thread_id": thread_id,
+                "turn_count": max(int(existing.get("turn_count") or 0), int(item.get("turn_count") or 0)),
+                "active_task_id": state.get("active_task_id") or existing.get("active_task_id"),
+                "pending_question": bool(state.get("pending_question") or item.get("pending_question") or existing.get("pending_question")),
+                "last_result_status": state.get("last_result_status") or item.get("last_result_status") or existing.get("last_result_status"),
+                "last_recorded_at_ms": max(int(existing.get("last_recorded_at_ms") or 0), int(item.get("last_recorded_at_ms") or 0)),
+                "transcript_path": item.get("transcript_path") or existing.get("transcript_path"),
+            }
+    ordered = sorted(
+        payload_by_thread.values(),
+        key=lambda item: (-int(item.get("last_recorded_at_ms") or 0), str(item.get("thread_id") or "")),
+    )
+    for item in ordered:
+        item.pop("last_recorded_at_ms", None)
+    return ordered
+
+
+def _known_chat_threads_from_journal(runtime: ChatRuntime) -> list[JsonObject]:
     latest: dict[str, int] = {}
     turns: dict[str, int] = {}
     for record in runtime.journal.records():
@@ -718,6 +753,7 @@ def known_chat_threads(runtime: ChatRuntime) -> list[JsonObject]:
                 "active_task_id": state.get("active_task_id"),
                 "pending_question": bool(state.get("pending_question")),
                 "last_result_status": state.get("last_result_status"),
+                "last_recorded_at_ms": latest[thread_id],
             }
         )
     return payload
@@ -735,7 +771,7 @@ def append_thread_event(
     previous_thread_id: str | None,
     created: bool,
 ):
-    return runtime.journal.append(
+    record = runtime.journal.append(
         task_id=None,
         run_id=f"chat-thread-{thread_id}",
         step_id=None,
@@ -748,6 +784,10 @@ def append_thread_event(
         },
         state_delta={"thread_id": thread_id, "chat_thread_action": action},
     )
+    transcript_store = getattr(runtime, "thread_store", None)
+    if transcript_store is not None:
+        transcript_store.append_journal_record(record)
+    return record
 
 
 def thread_state_line(state: JsonObject) -> str:
@@ -758,3 +798,54 @@ def thread_state_line(state: JsonObject) -> str:
         f"recent_tasks={len(state.get('recent_task_refs') or [])}",
     ]
     return " ".join(parts)
+
+
+def _thread_history_entries_from_transcript(records: list[JsonObject]) -> list[JsonObject]:
+    entries: list[JsonObject] = []
+    for record in records:
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        if record.get("kind") == "chat_turn":
+            entries.append(
+                {
+                    "record_id": record.get("record_id"),
+                    "recorded_at_ms": record.get("recorded_at_ms"),
+                    "role": str(data.get("role") or "user"),
+                    "text": str(data.get("text") or ""),
+                    "meta": str(data.get("task_id") or ""),
+                }
+            )
+        elif record.get("kind") == "chat_agent_result":
+            text = chat_answer_text(data) or _chat_result_status_text(data)
+            entries.append(
+                {
+                    "record_id": record.get("record_id"),
+                    "recorded_at_ms": record.get("recorded_at_ms"),
+                    "role": "assistant",
+                    "text": text,
+                    "meta": f"status={data.get('status')} route={data.get('route')}",
+                }
+            )
+    return entries
+
+
+def _dedupe_history_entries(entries: list[JsonObject]) -> list[JsonObject]:
+    seen: set[str] = set()
+    deduped: list[JsonObject] = []
+    for entry in entries:
+        key = str(entry.get("record_id") or "")
+        if not key:
+            key = json.dumps(
+                {
+                    "recorded_at_ms": entry.get("recorded_at_ms"),
+                    "role": entry.get("role"),
+                    "text": entry.get("text"),
+                    "meta": entry.get("meta"),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+    return deduped

@@ -1,9 +1,11 @@
 __pycache__/
 *.pyc
+*.swp
 .venv/
 kernel_v3/.holo-v3-journal.*
 .holo_host.toml
 .holo_runtime/
+.state/
 .subject.local.md
 *.sqlite3
 .vendor/pywechat-upstream/.git/

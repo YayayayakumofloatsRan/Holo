@@ -36,6 +36,30 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/research/`: research profiles, local corpus, and source policy for
   domain-directed retrieval.
 
+## Storage Layout
+
+Kernel v3 now separates full audit logs from user-facing thread transcripts.
+The global journal remains the authoritative execution ledger, but interactive
+thread history is mirrored into per-thread files so users do not need to inspect
+one large JSONL blob.
+
+Default paths are rooted at `.state/kernel_v3/`:
+
+- `.state/kernel_v3/journal/global.jsonl`: full audit ledger for tasks, model
+  calls, tools, policy decisions, retrieval, chat events, and final results.
+- `.state/kernel_v3/journal/global.sqlite`: SQLite index for the global ledger.
+- `.state/kernel_v3/threads/<thread_id>/thread.jsonl`: user-facing transcript
+  for one chat thread. This contains chat turns, routing summaries, commands,
+  assistant results, and thread summaries, not raw fetched bodies.
+- `.state/kernel_v3/memory/memory.jsonl`: durable memory event log, created once
+  memory proposals/items exist.
+- `.state/kernel_v3/memory/memory.sqlite`: durable memory metadata/index.
+
+`HOLO_V3_STATE_DIR` can override the `.state/kernel_v3` root. Legacy files such
+as `kernel_v3/.holo-v3-journal.jsonl` are not deleted automatically; they are old
+single-ledger state files and should be treated as migration input, not the
+normal thread-history surface.
+
 ## Hard Invariants
 
 - The model proposes; the host validates, executes, records, and verifies.

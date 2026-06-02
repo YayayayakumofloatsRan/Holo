@@ -25,6 +25,7 @@ from kernel_v3.chat.memory_admin import (
     memory_recall_command_result,
     proposal_list_text,
 )
+from kernel_v3.chat.thread_store import ThreadTranscriptStore
 from kernel_v3.contracts import JsonObject, LedgerRecord
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
@@ -67,6 +68,7 @@ class ChatRuntime:
         turn_router_mode: str = "fake",
         default_mode: str = "auto",
         execution_metadata: JsonObject | None = None,
+        thread_store: ThreadTranscriptStore | None = None,
     ) -> None:
         self.journal = journal or JournalStore.in_memory()
         self.agent_runtime = agent_runtime or AgentRuntime(journal=self.journal, workspace_root=Path.cwd())
@@ -79,6 +81,7 @@ class ChatRuntime:
         self.turn_router_mode = turn_router_mode
         self.default_mode = _normalize_default_mode(default_mode)
         self.execution_metadata = dict(execution_metadata or {})
+        self.thread_store = thread_store
 
     def receive(self, message: str, *, thread_id: str = "default") -> ChatRuntimeResult:
         normalized_thread = _normalize_thread_id(thread_id)
@@ -93,7 +96,7 @@ class ChatRuntime:
             linked_turn_id=_latest_turn_ref(self.journal, normalized_thread),
             created_at_ms=len(self.journal.records()) + 1,
         )
-        self.journal.append(
+        self._append_record(
             task_id=before.active_task_id,
             run_id=_chat_run_id(normalized_thread),
             step_id=None,
@@ -102,7 +105,7 @@ class ChatRuntime:
             state_delta={"thread_id": normalized_thread, "chat_role": "user"},
         )
         decision = self.route_turn(message, state=before, turn_id=turn.turn_id)
-        self.journal.append(
+        self._append_record(
             task_id=decision.task_id,
             run_id=_chat_run_id(normalized_thread),
             step_id=None,
@@ -118,7 +121,7 @@ class ChatRuntime:
             result = self._execute_plan_command(args=["run"], state=before, turn=turn, decision=decision)
         elif decision.route == "answer_pending_question":
             pending = PendingUserInput.from_dict(before.pending_question or {})
-            self.journal.append(
+            self._append_record(
                 task_id=pending.task_id,
                 run_id=_chat_run_id(normalized_thread),
                 step_id=None,
@@ -190,7 +193,7 @@ class ChatRuntime:
                 execution_metadata=self._execution_metadata(),
             )
             result = self._agent_result(turn=turn, decision=decision, agent_result=agent_result)
-        self.journal.append(
+        self._append_record(
             task_id=result.task_id,
             run_id=result.run_id or _chat_run_id(normalized_thread),
             step_id=None,
@@ -799,7 +802,7 @@ class ChatRuntime:
         if failure is not None:
             return None, None, failure, False
         assert final_answer is not None
-        record = self.journal.append(
+        record = self._append_record(
             task_id=plan_record.task_id,
             run_id=plan_record.run_id,
             step_id=None,
@@ -832,7 +835,7 @@ class ChatRuntime:
             "spawned_run_id": agent_result.run_id if agent_result is not None else None,
             "spawned_status": agent_result.status if agent_result is not None else None,
         }
-        return self.journal.append(
+        return self._append_record(
             task_id=plan_record.task_id,
             run_id=plan_record.run_id,
             step_id=None,
@@ -1063,7 +1066,7 @@ class ChatRuntime:
             status=status,
             result=result,
         )
-        self.journal.append(
+        self._append_record(
             task_id=turn.task_id,
             run_id=_chat_run_id(turn.thread_id),
             step_id=None,
@@ -1075,7 +1078,7 @@ class ChatRuntime:
 
     def _append_thread_summary(self, thread_id: str) -> ThreadSummary:
         summary = self.summarize_thread(thread_id)
-        record = self.journal.append(
+        record = self._append_record(
             task_id=summary.active_task_id,
             run_id=_chat_run_id(summary.thread_id),
             step_id=None,
@@ -1094,6 +1097,12 @@ class ChatRuntime:
             recent_turns=summary.recent_turns,
             recent_task_refs=summary.recent_task_refs,
         )
+
+    def _append_record(self, **kwargs) -> LedgerRecord:
+        record = self.journal.append(**kwargs)
+        if self.thread_store is not None:
+            self.thread_store.append_journal_record(record)
+        return record
 
     def thread(self, thread_id: str) -> ChatThread:
         state = self.build_thread_state(thread_id)

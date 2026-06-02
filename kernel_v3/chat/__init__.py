@@ -10,6 +10,7 @@ from kernel_v3.chat.contracts import (
     TurnRoutingDecision,
 )
 from kernel_v3.chat.runtime import ChatRuntime
+from kernel_v3.chat.thread_store import ThreadTranscriptStore
 
 __all__ = [
     "ChatCommand",
@@ -20,6 +21,7 @@ __all__ = [
     "PendingUserInput",
     "ThreadState",
     "ThreadSummary",
+    "ThreadTranscriptStore",
     "TurnRouteProposal",
     "TurnRoutingDecision",
 ]

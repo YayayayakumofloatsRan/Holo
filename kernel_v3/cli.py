@@ -20,6 +20,7 @@ from kernel_v3.chat.console import (
     render_status_notice,
     run_chat_console,
 )
+from kernel_v3.chat.thread_store import ThreadTranscriptStore
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler, merge_context_budget
 from kernel_v3.contracts import JsonObject, ProcessorRequest
 from kernel_v3.interaction import DEFAULT_RESPONSE_LANGUAGE, normalize_response_language
@@ -87,6 +88,13 @@ from kernel_v3.retrieval.live_config import (
 )
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
 from kernel_v3.resident.projection import resident_doctor_event, resident_inbox_event, resident_outbox_event
+from kernel_v3.storage import (
+    default_journal_index_path,
+    default_journal_path,
+    default_memory_index_path,
+    default_memory_log_path,
+    default_thread_root,
+)
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
@@ -187,13 +195,14 @@ def _add_agent_loop_args(command_parser: argparse.ArgumentParser) -> None:
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     parser = argparse.ArgumentParser(prog="holo-v3")
-    parser.add_argument("--journal", default="kernel_v3/.holo-v3-journal.jsonl")
-    parser.add_argument("--index", default="kernel_v3/.holo-v3-journal.sqlite")
+    parser.add_argument("--journal", default=str(default_journal_path()))
+    parser.add_argument("--index", default=str(default_journal_index_path()))
     parser.add_argument("--artifact-log", default=None)
     parser.add_argument("--corpus-log", default=None)
     parser.add_argument("--corpus-index", default=None)
     parser.add_argument("--memory-log", default=None)
     parser.add_argument("--memory-index", default=None)
+    parser.add_argument("--thread-store-root", default=None)
     parser.add_argument("--resident-db", default=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -545,7 +554,7 @@ def main(argv: list[str] | None = None) -> int:
             latency_target=args.latency_target,
             response_language=_response_language_for_args(args),
             artifact_store=artifact_store,
-            memory_store=_memory_store(args, create_default=False),
+            memory_store=_memory_store(args, create_default=True),
             research_corpus_store=research_corpus_store,
             retrieval_operator=_build_live_retrieval_operator(
                 live_retrieval,
@@ -574,7 +583,7 @@ def main(argv: list[str] | None = None) -> int:
             live_model=False,
             response_language=_response_language_for_args(args),
             artifact_store=_runtime_artifact_store(args),
-            memory_store=_memory_store(args, create_default=False),
+            memory_store=_memory_store(args, create_default=True),
             research_corpus_store=_runtime_corpus_store(args),
         )
         payload = runtime.run(
@@ -611,7 +620,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime = _chat_runtime(
             journal,
             artifact_store=artifact_store,
-            memory_store=_memory_store(args, create_default=False),
+            memory_store=_memory_store(args, create_default=True),
             research_corpus_store=research_corpus_store,
             retrieval_operator=_build_live_retrieval_operator(
                 live_retrieval,
@@ -620,6 +629,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if live_retrieval is not None
             else None,
+            thread_store=_thread_store(args, create_default=True),
             live_model=_agent_uses_live_model(args),
             model=args.model,
             profile=args.profile,
@@ -661,12 +671,20 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "chat-status":
-        runtime = _chat_runtime(journal, memory_store=_memory_store(args, create_default=False))
+        runtime = _chat_runtime(
+            journal,
+            memory_store=_memory_store(args, create_default=True),
+            thread_store=_thread_store(args, create_default=True),
+        )
         print(json.dumps(runtime.build_thread_state(args.thread_id).to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
 
     if args.command == "chat-summary":
-        runtime = _chat_runtime(journal, memory_store=_memory_store(args, create_default=False))
+        runtime = _chat_runtime(
+            journal,
+            memory_store=_memory_store(args, create_default=True),
+            thread_store=_thread_store(args, create_default=True),
+        )
         summary = runtime.summarize_thread(args.thread_id)
         print(json.dumps(summary.to_dict(), ensure_ascii=False, sort_keys=True))
         return 0
@@ -997,6 +1015,7 @@ def _chat_runtime(
     memory_store: MemoryStore | None = None,
     research_corpus_store: ResearchCorpusStore | None = None,
     retrieval_operator: RetrievalOperator | None = None,
+    thread_store: ThreadTranscriptStore | None = None,
     live_model: bool = False,
     model: str | None = None,
     profile: str = "balanced",
@@ -1042,6 +1061,7 @@ def _chat_runtime(
         turn_router_mode=turn_router_mode,
         default_mode=default_mode,
         execution_metadata=execution_metadata,
+        thread_store=thread_store,
     )
 
 
@@ -1050,9 +1070,21 @@ def _memory_store(args, *, create_default: bool) -> MemoryStore | None:
     memory_index = getattr(args, "memory_index", None)
     if memory_log is None and not create_default:
         return None
-    log_path = Path(memory_log or "kernel_v3/.holo-v3-memory.jsonl")
-    index_path = Path(memory_index) if memory_index is not None else log_path.with_suffix(".sqlite")
+    log_path = Path(memory_log) if memory_log is not None else default_memory_log_path()
+    index_path = Path(memory_index) if memory_index is not None else default_memory_index_path()
     return MemoryStore(log_path, index_path=index_path)
+
+
+def _thread_store(args, *, create_default: bool) -> ThreadTranscriptStore | None:
+    root = getattr(args, "thread_store_root", None)
+    if root is None and not create_default:
+        return None
+    if root is not None:
+        return ThreadTranscriptStore(root)
+    journal_path = Path(getattr(args, "journal", default_journal_path()))
+    if journal_path != default_journal_path():
+        return ThreadTranscriptStore(journal_path.parent / "threads")
+    return ThreadTranscriptStore(default_thread_root())
 
 
 def _runtime_artifact_store(args) -> ArtifactStore | None:
@@ -1629,7 +1661,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         live_retrieval = _live_retrieval_config_for_args(args)
         if isinstance(live_retrieval, dict):
             return live_retrieval
-        memory_store = _memory_store(args, create_default=False)
+        memory_store = _memory_store(args, create_default=True)
         artifact_store = _runtime_artifact_store(args)
         research_corpus_store = _runtime_corpus_store(args)
         runtime = ResidentRuntime(
@@ -1646,6 +1678,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
                 )
                 if live_retrieval is not None
                 else None,
+                thread_store=_thread_store(args, create_default=True),
                 live_model=_agent_uses_live_model(args),
                 model=getattr(args, "model", None),
                 profile=getattr(args, "profile", "balanced"),
