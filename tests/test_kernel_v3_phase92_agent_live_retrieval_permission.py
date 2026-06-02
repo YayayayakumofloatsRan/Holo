@@ -110,7 +110,7 @@ def test_phase92_live_retrieval_operator_runs_with_host_network_permission_and_b
     assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
 
 
-def test_phase92_cli_agent_live_retrieval_blocks_without_env_gate(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_phase92_cli_agent_live_retrieval_blocks_without_allowed_hosts(tmp_path: Path, capsys, monkeypatch) -> None:
     _clear_live_env(monkeypatch)
     journal_path = tmp_path / "journal.jsonl"
     index_path = tmp_path / "journal.sqlite"
@@ -134,8 +134,13 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_env_gate(tmp_path: Path
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_retrieval_not_enabled"
-    assert "HOLO_V3_LIVE_RETRIEVAL" in payload["live_config"]["env_gate"]
+    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
+    assert payload["live_config"]["enabled"] is True
+    issue_keys = {
+        (issue["code"], issue["provider_id"], issue["provider_kind"])
+        for issue in payload["issues"]
+    }
+    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
@@ -266,7 +271,7 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_allowed_hosts(tmp_path:
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
-def test_phase92_cli_chat_live_retrieval_blocks_without_env_gate(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_phase92_cli_chat_live_retrieval_blocks_without_allowed_hosts(tmp_path: Path, capsys, monkeypatch) -> None:
     _clear_live_env(monkeypatch)
     journal_path = tmp_path / "journal.jsonl"
     index_path = tmp_path / "journal.sqlite"
@@ -292,11 +297,12 @@ def test_phase92_cli_chat_live_retrieval_blocks_without_env_gate(tmp_path: Path,
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_retrieval_not_enabled"
+    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
+    assert payload["live_config"]["enabled"] is True
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
-def test_phase92_cli_resident_live_retrieval_blocks_without_env_gate(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_phase92_cli_resident_live_retrieval_blocks_without_allowed_hosts(tmp_path: Path, capsys, monkeypatch) -> None:
     _clear_live_env(monkeypatch)
     journal_path = tmp_path / "journal.jsonl"
     index_path = tmp_path / "journal.sqlite"
@@ -316,7 +322,8 @@ def test_phase92_cli_resident_live_retrieval_blocks_without_env_gate(tmp_path: P
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "blocked"
-    assert payload["reason"] == "live_retrieval_not_enabled"
+    assert payload["reason"] == "live_retrieval_allowed_hosts_not_configured"
+    assert payload["live_config"]["enabled"] is True
     records = JournalStore(journal_path, index_path=index_path).records()
     assert [record.kind for record in records] == ["resident_inbox_enqueued"]
 
@@ -351,17 +358,15 @@ def test_phase92_cli_resident_doctor_reports_live_retrieval_config_gap(
 
     assert payload["status"] == "error"
     issue_codes = {issue["code"] for issue in payload["live_retrieval_issues"]}
-    assert {"live_retrieval_not_enabled", "live_provider_without_allowed_hosts"}.issubset(issue_codes)
-    assert payload["live_retrieval_config"]["enabled"] is False
+    assert {"live_provider_without_allowed_hosts"}.issubset(issue_codes)
+    assert payload["live_retrieval_config"]["enabled"] is True
     assert payload["doctor"]["retrieval_provider_inspection"] is not None
     event = _resident_doctor_record(journal_path, index_path)
     assert event["status"] == "error"
     assert event["doctor_status"] == payload["doctor"]["status"]
     assert event["live_retrieval"]["status"] == "error"
-    assert {"live_retrieval_not_enabled", "live_provider_without_allowed_hosts"}.issubset(
-        {issue["code"] for issue in event["live_retrieval"]["issues"]}
-    )
-    assert event["live_retrieval"]["config"]["enabled"] is False
+    assert {"live_provider_without_allowed_hosts"}.issubset({issue["code"] for issue in event["live_retrieval"]["issues"]})
+    assert event["live_retrieval"]["config"]["enabled"] is True
 
 
 def test_phase92_cli_resident_doctor_inspects_live_retrieval_without_network(
@@ -525,6 +530,95 @@ def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
     recipe = journal.records(task_id=payload["task_id"], kind="agent_recipe")[-1].data
     assert recipe["max_network_fetches"] == 1
     assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
+
+
+def test_phase92_cli_agent_live_retrieval_allow_all_is_explicit_cli_authorization(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    search_transport, fetch_transport = _live_success_transports()
+    monkeypatch.setattr(
+        cli.LiveRetrievalConfig,
+        "build_operator",
+        lambda _self: _live_operator(search_transport=search_transport, fetch_transport=fetch_transport),
+    )
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "agent",
+                "AAPL revenue",
+                "--mode",
+                "retrieval",
+                "--live-retrieval",
+                "--live-allow-all-hosts",
+                "--live-max-network-fetches",
+                "1",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    journal = JournalStore(journal_path, index_path=index_path)
+
+    assert payload["status"] == "completed"
+    assert len(search_transport.calls) == 1
+    assert len(fetch_transport.calls) == 1
+    recipe = journal.records(task_id=payload["task_id"], kind="agent_recipe")[-1].data
+    assert recipe["metadata"]["allowed_permissions"] == ["network:fetch"]
+
+
+def test_phase92_cli_retrieve_live_retrieval_uses_configured_operator(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    search_transport, fetch_transport = _live_success_transports()
+    monkeypatch.setattr(
+        cli.LiveRetrievalConfig,
+        "build_operator",
+        lambda _self, **_kwargs: _live_operator(search_transport=search_transport, fetch_transport=fetch_transport),
+    )
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+    artifact_log = tmp_path / "artifacts.jsonl"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "--artifact-log",
+                str(artifact_log),
+                "retrieve",
+                "AAPL revenue",
+                "--live-retrieval",
+                "--live-allow-all-hosts",
+                "--max-fetches",
+                "1",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "ok"
+    assert payload["mode"] == "live-http"
+    assert payload["network_access"] is True
+    assert len(search_transport.calls) == 1
+    assert len(fetch_transport.calls) == 1
+    assert payload["report"]["status"] == "sufficient"
 
 
 def test_phase92_cli_agent_live_research_depth_counts_query_and_fetch_budget(

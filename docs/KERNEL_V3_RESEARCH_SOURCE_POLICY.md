@@ -289,8 +289,9 @@ wrap a regulator, exchange, vendor, or local gateway endpoint behind this
 surface while still letting the retrieval operator apply the same source
 authority policy, corpus indexing, artifact storage, and citation rules.
 
-Live HTTP retrieval configuration is centralized in `LiveRetrievalConfig` and
-read from environment variables only:
+Live HTTP retrieval configuration is centralized in `LiveRetrievalConfig`.
+Defaults are read from environment variables, and CLI live flags can override
+them for one command:
 
 ```text
 HOLO_V3_LIVE_RETRIEVAL=1
@@ -310,10 +311,12 @@ HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS=20
 HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES=1000000
 ```
 
-`HOLO_V3_LIVE_RETRIEVAL=1` is the enable gate. Without it, the configured
-provider can still be inspected but reports `default_enabled=false`. API key
-values are read only by the provider at call time, and provider inspection
-reports only booleans, host hashes, counts, and bounds.
+`HOLO_V3_LIVE_RETRIEVAL=1` remains the environment enable gate. The CLI
+`--live-retrieval` flag is an equivalent per-command enable gate. Without
+either, configured live providers can still be inspected but report
+`default_enabled=false`. API key values are read only by the provider at call
+time, and provider inspection reports only booleans, host hashes, counts, and
+bounds.
 
 The live search side is a fallback chain, not a single hard-coded provider:
 
@@ -376,13 +379,13 @@ manifest default. The journaled action records the merged payload for audit.
 The CLI exposes this as an explicit live agent flag:
 
 ```bash
-HOLO_V3_LIVE_RETRIEVAL=1 \
-HOLO_V3_LIVE_SEARCH_ENDPOINT=https://... \
-HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api.example.com \
-HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=www.sec.gov,docs.example.com \
 holo-v3 agent "AAPL 2024 revenue" \
   --mode retrieval \
   --live-retrieval \
+  --live-search-endpoint https://... \
+  --live-search-allowed-host api.example.com \
+  --live-fetch-allowed-host www.sec.gov \
+  --live-fetch-allowed-host docs.example.com \
   --live-max-network-fetches 1 \
   --research-profile finance_fundamentals
 ```
@@ -401,10 +404,12 @@ holo-v3 resident run-once \
   --live-max-network-fetches 1
 ```
 
-If the env gate, endpoint, or live provider host allowlists are missing, the
-command returns a blocked payload before constructing a live retrieval operator
-or starting the agent loop. `HOLO_V3_LIVE_RETRIEVAL_ALLOW_ALL_HOSTS=1` remains
-an explicit operator override; otherwise live search and fetch providers require
+`--live-retrieval` is a per-command live retrieval authorization surface. It
+sets the live retrieval config enabled for that run without requiring
+`HOLO_V3_LIVE_RETRIEVAL=1`. The command still returns a blocked payload before
+starting the agent loop when live provider host allowlists are missing.
+`--live-allow-all-hosts` and `HOLO_V3_LIVE_RETRIEVAL_ALLOW_ALL_HOSTS=1` remain
+explicit smoke-test overrides; otherwise live search and fetch providers require
 bounded `allowed_hosts`.
 For chat and resident runs, `--live-retrieval` or `--research-profile` also
 sets the host-owned default new-task mode to retrieval. This avoids a resident
@@ -419,9 +424,9 @@ holo-v3 resident doctor --live-retrieval --research-profile finance_fundamentals
 ```
 
 The doctor output includes `live_retrieval_config`,
-`live_retrieval_issues`, and normal retrieval provider inspection. Missing live
-env gates, endpoints, or live provider host allowlists are reported before a
-worker is started. A live provider with no `allowed_hosts` and no
+`live_retrieval_issues`, and normal retrieval provider inspection. Missing
+endpoints or live provider host allowlists are reported before a worker is
+started. A live provider with no `allowed_hosts` and no
 `allow_all_hosts` setting is considered unusable and is reported as an error.
 
 Provider inspection is also available before a run starts:

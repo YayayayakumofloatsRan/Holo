@@ -352,14 +352,19 @@ HOLO_V3_LIVE_MODEL=1 holo-v3 agent "inspect a large workspace file" \
   --temperature 0.2
 ```
 
-Live retrieval is also explicit and host-allowlisted. Do not make network
-retrieval a default path.
+Live retrieval is also explicit and host-allowlisted. `--live-retrieval`
+is now a per-command authorization surface: it enables the live retrieval
+operator for that run without requiring `HOLO_V3_LIVE_RETRIEVAL=1`, while
+network fetches still require `PolicyGate` permission, fetch budgets, and
+either host allowlists or the explicit `--live-allow-all-hosts` smoke-test
+override. Do not add fake sources to make a live run look successful.
 
 The live retrieval chain is now broader than a single search endpoint:
 
 - `direct_url_search` extracts safe user/host supplied URLs without network
   access;
 - `bounded_crawl_search` can discover links from explicit seed URLs only when
+  live retrieval is enabled by `--live-retrieval` or
   `HOLO_V3_LIVE_RETRIEVAL=1`, crawl seeds, and host allowlists are configured;
   it can also inspect same-host `sitemap.xml` within bounded limits;
 - `research_source_directory_search` exposes domain source directories such as
@@ -422,28 +427,33 @@ The live retrieval chain is now broader than a single search endpoint:
 For crawl-only live inspection:
 
 ```bash
-HOLO_V3_LIVE_RETRIEVAL=1 \
-HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
-HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-holo-v3 retrieval-providers --mode live-http
+holo-v3 retrieval-providers --mode live-http \
+  --live-retrieval \
+  --live-crawl-seed-url https://api-docs.deepseek.com/ \
+  --live-search-allowed-host api-docs.deepseek.com \
+  --live-fetch-allowed-host api-docs.deepseek.com
 ```
 
 For finance-profile crawl seeded by the curated source directory:
 
 ```bash
-HOLO_V3_LIVE_RETRIEVAL=1
-HOLO_V3_LIVE_SEARCH_STRATEGY=adaptive
-HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1
-HOLO_V3_LIVE_SOURCE_DIRECTORY_ALLOWLIST=1
-HOLO_V3_LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS=4
+holo-v3 retrieval-providers --mode live-http \
+  --profile finance_fundamentals \
+  --live-retrieval \
+  --live-search-strategy adaptive \
+  --live-crawl-source-directory \
+  --live-source-directory-allowlist \
+  --live-crawl-max-source-directory-seeds 4
 ```
 
 For multi-provider research, set:
 
 ```bash
-HOLO_V3_LIVE_SEARCH_STRATEGY=aggregate
-HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER=3
+holo-v3 retrieval-providers --mode live-http \
+  --live-retrieval \
+  --live-search-strategy aggregate \
+  --live-search-max-sources-per-provider 3 \
+  --live-allow-all-hosts
 ```
 
 The default remains `fallback` to preserve narrow live-smoke behavior.
@@ -454,11 +464,6 @@ For a model-backed live retrieval run, the model still only proposes
 before `PolicyGate` and loop guards see the action:
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 \
-HOLO_V3_LIVE_RETRIEVAL=1 \
-HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
-HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方式" \
   --mode retrieval \
   --online \
@@ -466,6 +471,9 @@ holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方式" \
   --evaluator model \
   --synthesizer model \
   --live-retrieval \
+  --live-crawl-seed-url https://api-docs.deepseek.com/ \
+  --live-search-allowed-host api-docs.deepseek.com \
+  --live-fetch-allowed-host api-docs.deepseek.com \
   --live-max-network-fetches 2
 ```
 
@@ -487,11 +495,6 @@ Recent live smoke, using real DeepSeek model calls and real
 `api-docs.deepseek.com` crawling, completed this path:
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 \
-HOLO_V3_LIVE_RETRIEVAL=1 \
-HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
-HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 holo-v3 agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
   --mode retrieval \
   --online \
@@ -500,6 +503,9 @@ holo-v3 agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
   --synthesizer model \
   --semantic-intake model \
   --live-retrieval \
+  --live-crawl-seed-url https://api-docs.deepseek.com/ \
+  --live-search-allowed-host api-docs.deepseek.com \
+  --live-fetch-allowed-host api-docs.deepseek.com \
   --live-max-network-fetches 4 \
   --thinking enabled \
   --reasoning-effort high \

@@ -65,6 +65,25 @@ from kernel_v3.retrieval import (
     UnconfiguredSearchProvider,
     inspect_retrieval_providers,
 )
+from kernel_v3.retrieval.live_config import (
+    LIVE_ALLOW_ALL_HOSTS_ENV,
+    LIVE_CRAWL_INCLUDE_SITEMAPS_ENV,
+    LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV,
+    LIVE_CRAWL_MAX_PAGES_ENV,
+    LIVE_CRAWL_MAX_SITEMAP_URLS_ENV,
+    LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS_ENV,
+    LIVE_CRAWL_SEED_URLS_ENV,
+    LIVE_CRAWL_SOURCE_DIRECTORY_ENV,
+    LIVE_FETCH_ALLOWED_HOSTS_ENV,
+    LIVE_MAX_BYTES_ENV,
+    LIVE_RETRIEVAL_ENV,
+    LIVE_SEARCH_ALLOWED_HOSTS_ENV,
+    LIVE_SEARCH_ENDPOINT_ENV,
+    LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV,
+    LIVE_SEARCH_STRATEGY_ENV,
+    LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV,
+    LIVE_TIMEOUT_SECONDS_ENV,
+)
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
 from kernel_v3.resident.projection import resident_doctor_event, resident_inbox_event, resident_outbox_event
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
@@ -73,8 +92,32 @@ from kernel_v3.trace import TraceRenderer
 
 
 def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
-    command_parser.add_argument("--live-retrieval", action="store_true")
+    command_parser.add_argument(
+        "--live-retrieval",
+        action="store_true",
+        help="Enable live retrieval for this command. Network use still requires PolicyGate permission and host allowlists.",
+    )
     command_parser.add_argument("--live-max-network-fetches", type=int, default=3)
+    command_parser.add_argument(
+        "--live-allow-all-hosts",
+        action="store_true",
+        help="Explicitly bypass live retrieval host allowlists for this run. Use only for trusted smoke tests.",
+    )
+    command_parser.add_argument("--live-search-endpoint", default=None)
+    command_parser.add_argument("--live-search-allowed-host", action="append", default=None)
+    command_parser.add_argument("--live-fetch-allowed-host", action="append", default=None)
+    command_parser.add_argument("--live-crawl-seed-url", action="append", default=None)
+    command_parser.add_argument("--live-crawl-source-directory", action="store_true")
+    command_parser.add_argument("--live-source-directory-allowlist", action="store_true")
+    command_parser.add_argument("--live-crawl-max-pages", type=int, default=None)
+    command_parser.add_argument("--live-crawl-max-links-per-page", type=int, default=None)
+    command_parser.add_argument("--live-crawl-max-sitemap-urls", type=int, default=None)
+    command_parser.add_argument("--live-crawl-max-source-directory-seeds", type=int, default=None)
+    command_parser.add_argument("--no-live-crawl-sitemaps", dest="live_crawl_include_sitemaps", action="store_false")
+    command_parser.add_argument("--live-search-strategy", choices=["fallback", "aggregate", "adaptive"], default=None)
+    command_parser.add_argument("--live-search-max-sources-per-provider", type=int, default=None)
+    command_parser.add_argument("--live-timeout-seconds", type=int, default=None)
+    command_parser.add_argument("--live-max-bytes", type=int, default=None)
 
 
 def _add_online_model_arg(command_parser: argparse.ArgumentParser) -> None:
@@ -364,10 +407,12 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("--max-spans-per-document", type=int, default=1)
     retrieve_parser.add_argument("--index-corpus", action="store_true")
     retrieve_parser.add_argument("--from-corpus", action="store_true")
+    _add_live_retrieval_args(retrieve_parser)
 
     retrieval_providers_parser = sub.add_parser("retrieval-providers")
     retrieval_providers_parser.add_argument("--mode", choices=["default", "corpus", "live-http"], default="default")
     retrieval_providers_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    _add_live_retrieval_args(retrieval_providers_parser)
 
     corpus_parser = sub.add_parser("corpus")
     corpus_sub = corpus_parser.add_subparsers(dest="corpus_command", required=True)
@@ -662,19 +707,32 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload else 1
 
     if args.command == "retrieve":
+        live_retrieval = _live_retrieval_config_for_args(args)
+        if isinstance(live_retrieval, dict):
+            print(json.dumps(live_retrieval, ensure_ascii=False, sort_keys=True))
+            return 1
+        artifact_store = _artifact_store(
+            args,
+            create_default=bool(args.artifact_log or args.index_corpus or args.from_corpus or live_retrieval is not None),
+        )
+        corpus_store = _corpus_store(
+            args,
+            create_default=bool(args.corpus_log or args.index_corpus or args.from_corpus),
+        )
         payload = _run_retrieve(
             journal,
             query=args.query,
             body=args.body,
             synthesizer_mode=args.synthesizer,
-            artifact_store=_artifact_store(
-                args,
-                create_default=bool(args.artifact_log or args.index_corpus or args.from_corpus),
-            ),
-            corpus_store=_corpus_store(
-                args,
-                create_default=bool(args.corpus_log or args.index_corpus or args.from_corpus),
-            ),
+            artifact_store=artifact_store,
+            corpus_store=corpus_store,
+            retrieval_operator=_build_live_retrieval_operator(
+                live_retrieval,
+                artifact_store=artifact_store,
+                corpus_store=corpus_store,
+            )
+            if live_retrieval is not None
+            else None,
             source_uri=args.uri,
             source_title=args.title,
             research_profile_id=args.profile,
@@ -1053,13 +1111,7 @@ def _response_language_for_args(args) -> str:
 def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | None:
     if not bool(getattr(args, "live_retrieval", False)):
         return None
-    config = LiveRetrievalConfig.from_env()
-    if not config.enabled:
-        return {
-            "status": "blocked",
-            "reason": "live_retrieval_not_enabled",
-            "live_config": config.safe_diagnostics(),
-        }
+    config = _live_retrieval_config_from_args(args, enable=True)
     allowed_host_issues = _live_retrieval_allowed_host_issues(config)
     if allowed_host_issues:
         return {
@@ -1069,6 +1121,83 @@ def _live_retrieval_config_for_args(args) -> LiveRetrievalConfig | JsonObject | 
             "issues": allowed_host_issues,
         }
     return config
+
+
+def _live_retrieval_config_from_args(args, *, enable: bool) -> LiveRetrievalConfig:
+    env = dict(os.environ)
+    if enable:
+        env[LIVE_RETRIEVAL_ENV] = "1"
+    if bool(getattr(args, "live_allow_all_hosts", False)):
+        env[LIVE_ALLOW_ALL_HOSTS_ENV] = "1"
+    _set_optional_env(env, LIVE_SEARCH_ENDPOINT_ENV, getattr(args, "live_search_endpoint", None))
+    _merge_csv_env(env, LIVE_SEARCH_ALLOWED_HOSTS_ENV, _cli_csv_values(getattr(args, "live_search_allowed_host", None)))
+    _merge_csv_env(env, LIVE_FETCH_ALLOWED_HOSTS_ENV, _cli_csv_values(getattr(args, "live_fetch_allowed_host", None)))
+    _merge_csv_env(env, LIVE_CRAWL_SEED_URLS_ENV, _cli_csv_values(getattr(args, "live_crawl_seed_url", None)))
+    if bool(getattr(args, "live_crawl_source_directory", False)):
+        env[LIVE_CRAWL_SOURCE_DIRECTORY_ENV] = "1"
+    if bool(getattr(args, "live_source_directory_allowlist", False)):
+        env[LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV] = "1"
+    if bool(getattr(args, "live_crawl_include_sitemaps", True)) is False:
+        env[LIVE_CRAWL_INCLUDE_SITEMAPS_ENV] = "0"
+    _set_positive_env(env, LIVE_CRAWL_MAX_PAGES_ENV, getattr(args, "live_crawl_max_pages", None))
+    _set_positive_env(env, LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV, getattr(args, "live_crawl_max_links_per_page", None))
+    _set_positive_env(env, LIVE_CRAWL_MAX_SITEMAP_URLS_ENV, getattr(args, "live_crawl_max_sitemap_urls", None))
+    _set_positive_env(
+        env,
+        LIVE_CRAWL_MAX_SOURCE_DIRECTORY_SEEDS_ENV,
+        getattr(args, "live_crawl_max_source_directory_seeds", None),
+    )
+    _set_optional_env(env, LIVE_SEARCH_STRATEGY_ENV, getattr(args, "live_search_strategy", None))
+    _set_positive_env(
+        env,
+        LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV,
+        getattr(args, "live_search_max_sources_per_provider", None),
+    )
+    _set_positive_env(env, LIVE_TIMEOUT_SECONDS_ENV, getattr(args, "live_timeout_seconds", None))
+    _set_positive_env(env, LIVE_MAX_BYTES_ENV, getattr(args, "live_max_bytes", None))
+    return LiveRetrievalConfig.from_env(env)
+
+
+def _set_optional_env(env: dict[str, str], name: str, value: object) -> None:
+    text = str(value or "").strip()
+    if text:
+        env[name] = text
+
+
+def _set_positive_env(env: dict[str, str], name: str, value: object) -> None:
+    try:
+        parsed = int(str(value or "").strip())
+    except ValueError:
+        return
+    if parsed > 0:
+        env[name] = str(parsed)
+
+
+def _merge_csv_env(env: dict[str, str], name: str, values: list[str]) -> None:
+    if not values:
+        return
+    existing = [part.strip() for part in str(env.get(name, "") or "").split(",") if part.strip()]
+    env[name] = ",".join(_ordered_unique([*existing, *values]))
+
+
+def _cli_csv_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values: list[str] = []
+    for item in value:
+        values.extend(part.strip() for part in str(item or "").split(",") if part.strip())
+    return values
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _build_live_retrieval_operator(
@@ -1089,17 +1218,9 @@ def _build_live_retrieval_operator(
 def _live_retrieval_doctor_config(args) -> JsonObject:
     if not bool(getattr(args, "live_retrieval", False)):
         return {"requested": False, "config": None, "issues": [], "operator": None}
-    config = LiveRetrievalConfig.from_env()
+    config = _live_retrieval_config_from_args(args, enable=True)
     issues: list[JsonObject] = []
     operator: RetrievalOperator | None = None
-    if not config.enabled:
-        issues.append(
-            {
-                "component": "retrieval",
-                "severity": "attention",
-                "code": "live_retrieval_not_enabled",
-            }
-        )
     issues.extend(_live_retrieval_allowed_host_issues(config))
     operator = config.build_operator()
     return {
@@ -1878,7 +1999,7 @@ def _packet_prompt(task_type: str, goal: str) -> str:
 
 def _retrieval_provider_command(args) -> dict[str, object]:
     if args.mode == "live-http":
-        config = LiveRetrievalConfig.from_env()
+        config = _live_retrieval_config_from_args(args, enable=bool(getattr(args, "live_retrieval", False)))
         operator = config.build_operator()
         inspection = inspect_retrieval_providers(operator, research_profile_id=args.profile)
         return {
@@ -1948,6 +2069,7 @@ def _run_retrieve(
     synthesizer_mode: str,
     artifact_store: ArtifactStore | None = None,
     corpus_store: ResearchCorpusStore | None = None,
+    retrieval_operator: RetrievalOperator | None = None,
     source_uri: str = "inline://holo-v3-cli",
     source_title: str = "Holo v3 CLI evidence",
     research_profile_id: str | None = None,
@@ -1975,6 +2097,10 @@ def _run_retrieve(
             fetch_provider=CorpusFetchProvider(artifacts),
             corpus_store=active_corpus,
         )
+        mode = "corpus"
+    elif retrieval_operator is not None:
+        operator = retrieval_operator
+        mode = "live-http"
     else:
         if body is None:
             return {"status": "failed", "reason": "retrieval_source_not_configured"}
@@ -1990,6 +2116,7 @@ def _run_retrieve(
             fetch_provider=_InlineFetchProvider(source.uri, body),
             corpus_store=active_corpus,
         )
+        mode = "inline"
     report = operator.run(
         goal,
         journal=journal,
@@ -2000,7 +2127,7 @@ def _run_retrieve(
     )
     payload: dict[str, object] = {
         "status": "ok",
-        "mode": "corpus" if from_corpus else "inline",
+        "mode": mode,
         "network_access": operator.network_access,
         "provider_capabilities": operator.provider_capabilities(),
         "report": report.to_dict(),

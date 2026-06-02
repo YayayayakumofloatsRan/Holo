@@ -120,6 +120,51 @@ def test_phase91_cli_live_retrieval_preflight_accepts_explicit_allow_all_hosts()
     assert cli._live_retrieval_allowed_host_issues(config) == []
 
 
+def test_phase91_cli_live_retrieval_flags_are_explicit_config_without_env_gate(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    _clear_live_env(monkeypatch)
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+
+    assert (
+        cli.main(
+            [
+                "--journal",
+                str(journal_path),
+                "--index",
+                str(index_path),
+                "retrieval-providers",
+                "--mode",
+                "live-http",
+                "--live-retrieval",
+                "--live-allow-all-hosts",
+                "--live-search-endpoint",
+                "https://api.example.com/search",
+                "--live-crawl-seed-url",
+                "https://docs.example.com/index.html",
+                "--live-search-strategy",
+                "adaptive",
+                "--live-crawl-max-pages",
+                "2",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "attention"
+    assert payload["live_config"]["enabled"] is True
+    assert payload["live_config"]["search"]["enabled"] is True
+    assert payload["live_config"]["search"]["allow_all_hosts"] is True
+    assert payload["live_config"]["crawl"]["seed_count"] == 1
+    assert payload["live_config"]["crawl"]["max_pages"] == 2
+    assert payload["live_config"]["search_strategy"] == "adaptive"
+    assert JournalStore(journal_path, index_path=index_path).records() == []
+
+
 def test_phase91_cli_live_http_provider_inspection_allows_structured_search_without_endpoint(
     tmp_path: Path,
     capsys,

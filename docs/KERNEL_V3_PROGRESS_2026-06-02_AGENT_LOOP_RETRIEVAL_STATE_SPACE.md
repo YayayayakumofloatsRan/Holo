@@ -418,11 +418,6 @@ Result:
 Live agent retrieval smoke:
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 \
-HOLO_V3_LIVE_RETRIEVAL=1 \
-HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
-HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 .venv/bin/python -m kernel_v3.cli agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
   --mode retrieval \
   --online \
@@ -431,6 +426,9 @@ HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
   --synthesizer model \
   --semantic-intake model \
   --live-retrieval \
+  --live-crawl-seed-url https://api-docs.deepseek.com/ \
+  --live-search-allowed-host api-docs.deepseek.com \
+  --live-fetch-allowed-host api-docs.deepseek.com \
   --live-max-network-fetches 4 \
   --thinking enabled \
   --reasoning-effort high \
