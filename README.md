@@ -221,16 +221,25 @@ surface for this branch.
 Run from the repository root:
 
 ```bash
-python3 holo-v3 tools
-python3 holo-v3 agent "explain kernel v3" --mode direct
-python3 holo-v3 agent "扮演一个谨慎的初级律师，说明你会怎么做" --mode semantic
-python3 holo-v3 agent "what time is it in UTC?" --mode system
-python3 holo-v3 chat --thread demo --once "what can you do?"
-python3 holo-v3 providers
-python3 holo-v3 provider-smoke --fake
-python3 holo-v3 retrieve "sample topic"
-python3 holo-v3 memory inspect --memory-log kernel_v3/.holo-v3-memory.jsonl
-python3 holo-v3 resident status
+chmod +x holo-v3 scripts/install-holo-v3-cli.sh
+scripts/install-holo-v3-cli.sh
+```
+
+After installation, `holo-v3` is available on the WSL user PATH through
+`~/.local/bin/holo-v3`. The launcher resolves the repository root and uses
+`.venv/bin/python` when the local virtualenv exists.
+
+```bash
+holo-v3 tools
+holo-v3 agent "explain kernel v3" --mode direct
+holo-v3 agent "扮演一个谨慎的初级律师，说明你会怎么做" --mode semantic
+holo-v3 agent "what time is it in UTC?" --mode system
+holo-v3 chat --thread demo --once "what can you do?"
+holo-v3 providers
+holo-v3 provider-smoke --fake
+holo-v3 retrieve "sample topic"
+holo-v3 memory inspect --memory-log kernel_v3/.holo-v3-memory.jsonl
+holo-v3 resident status
 ```
 
 Interactive `holo-v3 chat` uses a human-readable terminal view when attached to
@@ -244,7 +253,7 @@ to move between journal-backed chat threads, `/threads` to list known threads,
 Live model calls are gated:
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 python3 holo-v3 model-packet --provider deepseek --task-type semantic.intake --goal "search today's news" --show-prompt
+HOLO_V3_LIVE_MODEL=1 holo-v3 model-packet --provider deepseek --task-type semantic.intake --goal "search today's news" --show-prompt
 ```
 
 `--mode semantic` is the broad safe non-tool recipe for roleplay, professional
@@ -258,7 +267,7 @@ does not clearly request another language. Override this per run with
 `--response-language en` or set `HOLO_V3_RESPONSE_LANGUAGE=en`.
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "read README.md and summarize it" --online --response-language zh
+HOLO_V3_LIVE_MODEL=1 holo-v3 agent "read README.md and summarize it" --online --response-language zh
 ```
 
 Live agent/chat/resident runs expose both input/context and output-generation
@@ -286,7 +295,7 @@ system prompt also tells the model to optimize for task completion and answer
 usefulness rather than token minimization.
 
 ```bash
-HOLO_V3_LIVE_MODEL=1 python3 holo-v3 agent "inspect a large workspace file" \
+HOLO_V3_LIVE_MODEL=1 holo-v3 agent "inspect a large workspace file" \
   --online \
   --context-profile huge \
   --latency-target thorough \
@@ -368,7 +377,7 @@ HOLO_V3_LIVE_RETRIEVAL=1 \
 HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
 HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-python3 holo-v3 retrieval-providers --mode live-http
+holo-v3 retrieval-providers --mode live-http
 ```
 
 For finance-profile crawl seeded by the curated source directory:
@@ -401,7 +410,7 @@ HOLO_V3_LIVE_RETRIEVAL=1 \
 HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
 HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-python3 holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方式" \
+holo-v3 agent "上网检索DeepSeek API文档，概括模型和鉴权方式" \
   --mode retrieval \
   --online \
   --planner model \
@@ -434,7 +443,7 @@ HOLO_V3_LIVE_RETRIEVAL=1 \
 HOLO_V3_LIVE_CRAWL_SEED_URLS=https://api-docs.deepseek.com/ \
 HOLO_V3_LIVE_SEARCH_ALLOWED_HOSTS=api-docs.deepseek.com \
 HOLO_V3_LIVE_FETCH_ALLOWED_HOSTS=api-docs.deepseek.com \
-python3 holo-v3 agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
+holo-v3 agent "上网检索DeepSeek API文档，说明模型和鉴权方式" \
   --mode retrieval \
   --online \
   --planner model \

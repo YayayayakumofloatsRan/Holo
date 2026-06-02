@@ -315,6 +315,22 @@ def test_phase62_cli_chat_once_status_and_summary(tmp_path: Path):
     assert "hello cli" in summary_payload["recent_turns"][-1]["text_preview"]
 
 
+def test_phase62_root_holo_v3_launcher_executes_cli():
+    root = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [str(root / "holo-v3"), "--help"],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    assert "usage: holo-v3" in result.stdout
+    assert "chat" in result.stdout
+
+
 def test_phase62_cli_chat_pipe_mode_stays_json(tmp_path: Path, capsys, monkeypatch):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
