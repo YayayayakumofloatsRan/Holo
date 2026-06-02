@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 import sys
@@ -312,6 +313,58 @@ def test_phase62_cli_chat_once_status_and_summary(tmp_path: Path):
     summary = _run_cli("--journal", str(journal), "--index", str(index), "chat-summary", "cli-thread")
     summary_payload = json.loads(summary.stdout)
     assert "hello cli" in summary_payload["recent_turns"][-1]["text_preview"]
+
+
+def test_phase62_cli_chat_pipe_mode_stays_json(tmp_path: Path, capsys, monkeypatch):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello through pipe\n"))
+
+    status = cli.main(["--journal", str(journal), "--index", str(index), "chat", "--thread", "cli-pipe"])
+
+    output = capsys.readouterr().out.strip()
+    payload = json.loads(output)
+    assert status == 0
+    assert payload["thread_id"] == "cli-pipe"
+    assert payload["status"] == "completed"
+    assert "\x1b[" not in output
+
+
+def test_phase62_cli_chat_human_mode_can_switch_threads(tmp_path: Path, capsys, monkeypatch):
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO("/thread switch cli-beta\nhello beta\n/threads\n/quit\n"),
+    )
+
+    status = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "chat",
+            "--thread",
+            "cli-alpha",
+            "--output",
+            "human",
+            "--color",
+            "always",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    thread_ids = {
+        record.data["thread_id"]
+        for record in JournalStore(journal, index_path=index).records(kind="chat_turn")
+    }
+    assert status == 0
+    assert "\x1b[" in output
+    assert "thread: cli-beta" in output
+    assert "cli-beta" in output
+    assert thread_ids == {"cli-beta"}
 
 
 def test_phase62_cli_chat_model_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):

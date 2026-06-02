@@ -22,6 +22,20 @@ One agent task runs through this chain:
 retrieval and workspace answering are configured by recipes, registries, and
 operators outside the controller.
 
+## Interactive Chat CLI
+
+`holo-v3 chat` is the human entry point over the same journal-backed
+`ChatRuntime`; it does not add another decision layer. In a terminal, chat
+renders compact colored status headers, task/run refs, answers, pending
+questions, and trace counts. Machine paths stay stable: `--once` and piped
+stdin emit JSON by default unless `--output human` is requested.
+
+The interactive console has local commands for thread and display management:
+`/thread switch <id>`, `/thread new <id>`, `/threads`, `/json on|off`,
+`/color on|off`, and `/quit`. These commands only select the journal-backed
+thread or change rendering; runtime commands such as `/status`, `/summary`,
+`/trace`, `/plan`, and `/memory` are still handled by `ChatRuntime`.
+
 ## Adaptive Processor Generation
 
 Live processor calls pass through a host-owned generation policy before the

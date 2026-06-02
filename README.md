@@ -233,6 +233,14 @@ python3 holo-v3 memory inspect --memory-log kernel_v3/.holo-v3-memory.jsonl
 python3 holo-v3 resident status
 ```
 
+Interactive `holo-v3 chat` uses a human-readable terminal view when attached to
+a TTY: colored status headers, compact task/run refs, and the current
+`holo[thread]>` prompt. Scripted use stays machine-readable by default:
+`--once` and piped stdin still emit JSON unless `--output human` is requested.
+Use `/thread switch <id>` or `/thread new <id>` inside the interactive console
+to move between journal-backed chat threads, `/threads` to list known threads,
+`/json on|off` to toggle raw JSON, and `/color on|off` for ANSI styling.
+
 Live model calls are gated:
 
 ```bash

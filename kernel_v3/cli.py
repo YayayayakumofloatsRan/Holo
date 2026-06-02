@@ -11,6 +11,13 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.capabilities import semantic_capability_catalog
 from kernel_v3.chat import ChatRuntime
+from kernel_v3.chat.console import (
+    ChatConsoleOptions,
+    chat_color_enabled,
+    chat_output_mode,
+    render_chat_result,
+    run_chat_console,
+)
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler, merge_context_budget
 from kernel_v3.contracts import JsonObject, ProcessorRequest
 from kernel_v3.interaction import DEFAULT_RESPONSE_LANGUAGE, normalize_response_language
@@ -180,6 +187,14 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser = sub.add_parser("chat")
     chat_parser.add_argument("--thread", default="default")
     chat_parser.add_argument("--once", default=None)
+    chat_parser.add_argument(
+        "--output",
+        choices=["auto", "human", "json"],
+        default="auto",
+        help="Chat output format. auto keeps --once and pipes machine-readable, while terminal chat is human-readable.",
+    )
+    chat_parser.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+    chat_parser.add_argument("--no-color", action="store_true", help="Alias for --color never.")
     chat_parser.add_argument("--planner", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--evaluator", choices=["fake", "model"], default="fake")
     chat_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
@@ -553,16 +568,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.once is not None:
             payload = runtime.receive(args.once, thread_id=args.thread)
-            print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+            if chat_output_mode(args, once=True) == "human":
+                print(render_chat_result(payload, color=chat_color_enabled(args)))
+            else:
+                print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
             return 0 if payload.status not in {"failed", "blocked"} else 1
-        for line in sys.stdin:
-            text = line.strip()
-            if not text:
-                continue
-            payload = runtime.receive(text, thread_id=args.thread)
-            print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
-            sys.stdout.flush()
-        return 0
+        return run_chat_console(
+            runtime,
+            ChatConsoleOptions(
+                thread=args.thread,
+                output=args.output,
+                color=args.color,
+                no_color=args.no_color,
+            ),
+        )
 
     if args.command == "chat-status":
         runtime = _chat_runtime(journal, memory_store=_memory_store(args, create_default=False))
@@ -2041,16 +2060,19 @@ def _providers_payload() -> list[dict[str, object]]:
             "default_model": DeepSeekProvider().model,
             "profiles": {
                 "fast": {
+                    "semantic.intake": "deepseek-v4-flash",
                     "planner.propose": "deepseek-v4-flash",
                     "evaluator.assess": "deepseek-v4-flash",
                     "synthesizer.answer": "deepseek-v4-flash",
                 },
                 "balanced": {
-                    "planner.propose": "deepseek-v4-flash",
+                    "semantic.intake": "deepseek-v4-pro",
+                    "planner.propose": "deepseek-v4-pro",
                     "evaluator.assess": "deepseek-v4-pro",
                     "synthesizer.answer": "deepseek-v4-pro",
                 },
                 "quality": {
+                    "semantic.intake": "deepseek-v4-pro",
                     "planner.propose": "deepseek-v4-pro",
                     "evaluator.assess": "deepseek-v4-pro",
                     "synthesizer.answer": "deepseek-v4-pro",
